@@ -100,7 +100,7 @@ export function createPhysicsState() {
     // Thrust state
     thrustActive: false,
     thrustLevel: 0,      // 0 to 1 (fraction of max)
-    maxThrust: 2.0,      // Maximum G the engine can produce
+    maxThrust: 10.0,     // Maximum G the engine can produce
 
     // Per-crew physics state
     crewStates: {},      // crewId -> CrewState

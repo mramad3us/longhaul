@@ -741,6 +741,33 @@ html, body {
   animation: pausePulse 2s infinite;
 }
 
+/* ---- DEV MODE ---- */
+
+.dev-only {
+  display: none !important;
+}
+
+body.dev-mode .dev-only {
+  display: flex !important;
+}
+
+/* Info sections use column flex */
+body.dev-mode .info-section.dev-only {
+  display: flex !important;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting-row-dev {
+  border-top: 1px solid var(--hull-primary);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.setting-row-dev .setting-label {
+  color: var(--warm);
+}
+
 /* ---- THRUST BUTTON ---- */
 
 .thrust-btn {
@@ -849,6 +876,60 @@ html, body {
 }
 
 /* ---- RESOURCE PANEL (LEFT) ---- */
+/* ---- TACTICAL VIEW ---- */
+
+.tac-view {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--hull-primary);
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+}
+
+.tac-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 2px 6px 2px;
+}
+
+.tac-label {
+  font-family: var(--font-pixel);
+  font-size: 0.35rem;
+  color: var(--accent-dim);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.tac-range {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-dim);
+}
+
+.tac-screen {
+  width: 100%;
+  aspect-ratio: 1 / 1.2;
+  background: var(--bg-void);
+  border: 1px solid var(--hull-primary);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Scanline effect on tac screen */
+.tac-screen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.08) 2px,
+    rgba(0, 0, 0, 0.08) 4px
+  );
+  pointer-events: none;
+}
+
 .resource-panel {
   width: var(--panel-width);
   background: var(--bg-deep);
@@ -1134,6 +1215,244 @@ html, body {
 
 .crew-stat-fill.health { background: var(--ok); }
 .crew-stat-fill.morale { background: var(--info); }
+
+/* ---- THRUST SLIDER ---- */
+
+.thrust-slider-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.thrust-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--bg-void);
+  border: 1px solid var(--hull-primary);
+  outline: none;
+  cursor: pointer;
+}
+
+.thrust-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 16px;
+  background: var(--text-dim);
+  border: 1px solid var(--hull-accent);
+  cursor: pointer;
+  transition: background 0.1s, box-shadow 0.1s;
+}
+
+.thrust-slider::-webkit-slider-thumb:hover {
+  background: var(--accent);
+}
+
+.thrust-slider.active::-webkit-slider-thumb {
+  background: #FFFFFF;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+  border-color: #FFFFFF;
+}
+
+.thrust-slider::-moz-range-thumb {
+  width: 10px;
+  height: 16px;
+  background: var(--text-dim);
+  border: 1px solid var(--hull-accent);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.thrust-slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-pixel);
+  font-size: 0.25rem;
+  color: var(--text-dim);
+}
+
+.thrust-slider-value {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  transition: color 0.15s;
+}
+
+.thrust-slider-value.active {
+  color: #FFFFFF;
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.6);
+}
+
+.thrust-slider-value.danger {
+  color: var(--danger);
+  text-shadow: 0 0 6px var(--danger-glow);
+}
+
+.thrust-g-zones {
+  display: flex;
+  height: 2px;
+  gap: 1px;
+}
+
+.g-zone {
+  height: 100%;
+}
+
+.g-zone-safe { background: var(--ok); opacity: 0.4; }
+.g-zone-high { background: var(--warning); opacity: 0.4; }
+.g-zone-danger { background: var(--danger); opacity: 0.4; }
+
+/* ---- SHIP'S LOG ---- */
+
+.info-section-log {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: default;
+}
+
+.log-count {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  background: var(--bg-void);
+  padding: 1px 5px;
+  border: 1px solid var(--hull-primary);
+  min-width: 20px;
+  text-align: center;
+}
+
+.log-container {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  transition: max-height 0.3s ease;
+  max-height: 90px; /* ~3 entries collapsed */
+}
+
+.log-container.expanded {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.log-container.expanded::-webkit-scrollbar {
+  width: 3px;
+}
+
+.log-container.expanded::-webkit-scrollbar-track {
+  background: var(--bg-void);
+}
+
+.log-container.expanded::-webkit-scrollbar-thumb {
+  background: var(--hull-primary);
+}
+
+/* Fade-out mask when collapsed */
+.log-container:not(.expanded)::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  background: linear-gradient(transparent, var(--bg-deep));
+  pointer-events: none;
+}
+
+.log-entries {
+  display: flex;
+  flex-direction: column;
+}
+
+.log-entry {
+  display: flex;
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(22, 32, 48, 0.6);
+  font-size: 0.65rem;
+  line-height: 1.3;
+  animation: logSlideIn 0.2s ease;
+}
+
+@keyframes logSlideIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.log-entry-time {
+  font-family: var(--font-pixel);
+  font-size: 0.22rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 34px;
+  padding-top: 2px;
+  line-height: 1.6;
+}
+
+.log-entry-icon {
+  font-size: 0.5rem;
+  line-height: 1.2;
+  flex-shrink: 0;
+  width: 10px;
+  text-align: center;
+}
+
+.log-entry-msg {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+/* Log entry categories */
+.log-entry.log-thrust .log-entry-icon { color: #FFFFFF; }
+.log-entry.log-thrust .log-entry-msg { color: var(--warm-bright); }
+
+.log-entry.log-danger .log-entry-icon { color: var(--danger); }
+.log-entry.log-danger .log-entry-msg { color: var(--danger); }
+
+.log-entry.log-warn .log-entry-icon { color: var(--warning); }
+.log-entry.log-warn .log-entry-msg { color: var(--warning); }
+
+.log-entry.log-ok .log-entry-icon { color: var(--ok); }
+.log-entry.log-ok .log-entry-msg { color: var(--ok); }
+
+.log-entry.log-crew .log-entry-icon { color: var(--info); }
+.log-entry.log-crew .log-entry-msg { color: var(--text-primary); }
+
+.log-entry.log-system .log-entry-icon { color: var(--accent); }
+
+.log-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: none;
+  border: 1px solid var(--hull-primary);
+  border-top: none;
+  color: var(--text-dim);
+  font-family: var(--font-pixel);
+  font-size: 0.22rem;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.log-expand-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: var(--accent-glow);
+}
 
 /* ---- TOAST NOTIFICATIONS ---- */
 .toast-container {

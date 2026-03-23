@@ -110,6 +110,10 @@
               <option value="0">Off</option>
             </select>
           </div>
+          <div class="setting-row setting-row-dev">
+            <span class="setting-label">Dev Mode</span>
+            <button class="setting-toggle" id="setting-devmode">OFF</button>
+          </div>
         </div>
         <div class="form-actions">
           <button class="btn btn-secondary" data-action="back">Back</button>
@@ -141,8 +145,8 @@
             <button class="speed-btn" data-speed="2" title="1 hr/s">2x</button>
             <button class="speed-btn" data-speed="3" title="1 day/s">3x</button>
           </div>
-          <div class="hud-divider"></div>
-          <button class="thrust-btn" id="thrust-toggle" title="Toggle Torch Engine (T)">
+          <div class="hud-divider dev-only"></div>
+          <button class="thrust-btn dev-only" id="thrust-toggle" title="Toggle Torch Engine (T)">
             <span class="thrust-btn-icon" id="icon-thrust"></span>
             <span class="thrust-btn-label">THRUST</span>
             <span class="thrust-btn-status" id="thrust-status">OFF</span>
@@ -167,6 +171,15 @@
       <!-- Ship View -->
       <main class="game-main">
         <aside class="resource-panel" id="resource-panel">
+          <div class="tac-view" id="tac-view">
+            <div class="tac-header">
+              <span class="tac-label">TAC</span>
+              <span class="tac-range" id="tac-range">50km</span>
+            </div>
+            <div class="tac-screen" id="tac-screen">
+              <!-- Tactical SVG rendered by JS -->
+            </div>
+          </div>
           <div class="panel-header">Systems</div>
           <!-- Resources populated by JS -->
         </aside>
@@ -195,11 +208,37 @@
               <p class="info-line info-dim">No crew selected</p>
             </div>
           </div>
-          <div class="info-section">
-            <h3 class="info-title">Alerts</h3>
-            <div class="info-content" id="alerts-list">
-              <p class="info-line alert-ok">All systems nominal</p>
+          <div class="info-section dev-only">
+            <h3 class="info-title">Thrust Control</h3>
+            <div class="info-content">
+              <div class="thrust-slider-group">
+                <input type="range" class="thrust-slider" id="thrust-slider" min="0" max="100" value="0" step="1">
+                <div class="thrust-slider-labels">
+                  <span>0G</span>
+                  <span class="thrust-slider-value" id="thrust-slider-value">0.0G</span>
+                  <span>10G</span>
+                </div>
+                <div class="thrust-g-zones">
+                  <span class="g-zone g-zone-safe" style="width:25%"></span>
+                  <span class="g-zone g-zone-high" style="width:15%"></span>
+                  <span class="g-zone g-zone-danger" style="width:60%"></span>
+                </div>
+              </div>
             </div>
+          </div>
+          <div class="info-section info-section-log">
+            <h3 class="info-title log-header" id="log-header">
+              <span>Ship's Log</span>
+              <span class="log-count" id="log-count">0</span>
+            </h3>
+            <div class="log-container" id="log-container">
+              <div class="log-entries" id="log-entries">
+                <!-- Log entries populated by JS -->
+              </div>
+            </div>
+            <button class="log-expand-btn" id="log-expand-btn">
+              <span class="log-expand-text" id="log-expand-text">SHOW FULL LOG</span>
+            </button>
           </div>
         </aside>
       </main>

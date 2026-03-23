@@ -13,9 +13,9 @@ import {
 
 import { initStorage, saveGame, loadGame, listSaves, deleteSave } from './storage.js';
 import { createGameState, formatDate, formatTime, GameLoop } from './game.js';
-import { renderShip } from './ship.js';
+import { renderShip, renderTacView } from './ship.js';
 import { VERSION } from './version.js';
-import { toggleThrust, CrewState } from './physics.js';
+import { toggleThrust, setThrustLevel, CrewState } from './physics.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -25,6 +25,78 @@ let crewCount = 4;
 let selectedCrew = null;
 let particleInterval = null;
 let lastCrewStateKey = null;
+let lastThrustActive = null;
+
+// ---- SHIP'S LOG ----
+const MAX_LOG_ENTRIES = 200;
+let logEntries = [];
+let logExpanded = false;
+
+// Log categories with icons (pixel-art style Unicode)
+const LOG_ICONS = {
+  thrust:  '\u25B2', // ▲
+  danger:  '\u2716', // ✖
+  warn:    '\u26A0', // ⚠
+  ok:      '\u2714', // ✔
+  crew:    '\u263A', // ☺
+  system:  '\u25C8', // ◈
+  nav:     '\u25C6', // ◆
+};
+
+function addLogEntry(message, category = 'system') {
+  if (!gameState) return;
+  const time = formatTime(gameState.time);
+  const entry = { time, message, category };
+  logEntries.unshift(entry); // newest first
+  if (logEntries.length > MAX_LOG_ENTRIES) logEntries.pop();
+  renderLogEntries();
+}
+
+function renderLogEntries() {
+  const container = document.getElementById('log-entries');
+  const countEl = document.getElementById('log-count');
+  if (!container) return;
+
+  // Only render visible entries
+  const visibleCount = logExpanded ? logEntries.length : Math.min(3, logEntries.length);
+  const entries = logEntries.slice(0, visibleCount);
+
+  container.innerHTML = entries.map(e =>
+    `<div class="log-entry log-${e.category}">
+      <span class="log-entry-time">${e.time}</span>
+      <span class="log-entry-icon">${LOG_ICONS[e.category] || LOG_ICONS.system}</span>
+      <span class="log-entry-msg">${escapeHtml(e.message)}</span>
+    </div>`
+  ).join('');
+
+  if (countEl) countEl.textContent = logEntries.length;
+}
+
+function initLog() {
+  const expandBtn = document.getElementById('log-expand-btn');
+  const logContainer = document.getElementById('log-container');
+
+  expandBtn.addEventListener('click', () => {
+    logExpanded = !logExpanded;
+    logContainer.classList.toggle('expanded', logExpanded);
+    document.getElementById('log-expand-text').textContent =
+      logExpanded ? 'COLLAPSE' : 'SHOW FULL LOG';
+    renderLogEntries();
+    if (logExpanded) {
+      logContainer.scrollTop = 0;
+    }
+  });
+}
+
+function clearLog() {
+  logEntries = [];
+  logExpanded = false;
+  const logContainer = document.getElementById('log-container');
+  if (logContainer) logContainer.classList.remove('expanded');
+  const expandText = document.getElementById('log-expand-text');
+  if (expandText) expandText.textContent = 'SHOW FULL LOG';
+  renderLogEntries();
+}
 
 // ---- SCREEN MANAGEMENT ----
 
@@ -201,16 +273,75 @@ function initHud() {
   document.getElementById('icon-hud-exit').appendChild(iconHudExit());
   document.getElementById('icon-thrust').appendChild(iconThrust());
 
-  // Thrust toggle button
+  // Thrust toggle button — toggles between off and last slider value
   document.getElementById('thrust-toggle').addEventListener('click', () => {
     if (!gameState) return;
-    const isActive = toggleThrust(gameState.physics);
-    if (isActive) {
-      showToast(`Torch engine firing — ${gameState.physics.maxThrust}G thrust`, 'warn');
+    const phys = gameState.physics;
+    const slider = document.getElementById('thrust-slider');
+
+    if (phys.thrustActive) {
+      // Turn off
+      setThrustLevel(phys, 0);
+      slider.value = 0;
+      updateThrustSliderUI(0);
+      addLogEntry('Torch engine shutdown — entering micro-G', 'thrust');
     } else {
-      showToast('Torch engine off — entering micro-G');
+      // Turn on to slider value or default 20% (2G)
+      const level = parseFloat(slider.value) / 100 || 0.2;
+      setThrustLevel(phys, level);
+      slider.value = level * 100;
+      updateThrustSliderUI(level);
+      const gVal = (level * phys.maxThrust).toFixed(1);
+      addLogEntry(`Torch engine firing at ${gVal}G`, 'thrust');
     }
   });
+
+  // Thrust slider
+  const slider = document.getElementById('thrust-slider');
+  slider.addEventListener('input', () => {
+    if (!gameState) return;
+    const level = parseFloat(slider.value) / 100;
+    setThrustLevel(gameState.physics, level);
+    updateThrustSliderUI(level);
+  });
+
+  // Log on slider release for significant changes
+  let lastLoggedG = 0;
+  slider.addEventListener('change', () => {
+    if (!gameState) return;
+    const gVal = gameState.physics.thrustLevel * gameState.physics.maxThrust;
+    if (Math.abs(gVal - lastLoggedG) > 0.3) {
+      if (gVal === 0) {
+        addLogEntry('Torch engine shutdown — entering micro-G', 'thrust');
+      } else {
+        addLogEntry(`Thrust adjusted to ${gVal.toFixed(1)}G`, 'thrust');
+      }
+      lastLoggedG = gVal;
+    }
+  });
+
+  initLog();
+}
+
+function updateThrustSliderUI(level) {
+  const phys = gameState ? gameState.physics : null;
+  const maxG = phys ? phys.maxThrust : 10;
+  const gVal = level * maxG;
+  const valueEl = document.getElementById('thrust-slider-value');
+  const sliderEl = document.getElementById('thrust-slider');
+
+  valueEl.textContent = `${gVal.toFixed(1)}G`;
+
+  // Style based on G-force danger
+  valueEl.classList.remove('active', 'danger');
+  sliderEl.classList.remove('active');
+  if (gVal >= 2.5) {
+    valueEl.classList.add('danger');
+    sliderEl.classList.add('active');
+  } else if (gVal > 0) {
+    valueEl.classList.add('active');
+    sliderEl.classList.add('active');
+  }
 }
 
 // ---- CREW SELECTION ----
@@ -322,10 +453,11 @@ function updateResourcePanel(state) {
       hasCritical = true;
       alerts.push(`${cfg.name} critical: ${Math.round(pct)}%`);
 
-      // Toast on first entry to critical
+      // Toast + log on first entry to critical
       const prevPct = prevResourceLevels[cfg.key] || 100;
       if (prevPct >= 15 && pct < 15) {
         showToast(`${cfg.name} CRITICAL`, 'danger');
+        addLogEntry(`${cfg.name} critical — ${Math.round(pct)}% remaining`, 'danger');
       }
     } else if (pct < 30) {
       itemEl.classList.add('warning');
@@ -334,6 +466,7 @@ function updateResourcePanel(state) {
       const prevPct = prevResourceLevels[cfg.key] || 100;
       if (prevPct >= 30 && pct < 30) {
         showToast(`${cfg.name} running low`, 'warn');
+        addLogEntry(`${cfg.name} low — ${Math.round(pct)}% remaining`, 'warn');
       }
     }
 
@@ -350,18 +483,7 @@ function updateResourcePanel(state) {
     }
   }
 
-  // Update alerts list
-  const alertsList = document.getElementById('alerts-list');
-  if (alertsList) {
-    if (alerts.length === 0) {
-      alertsList.innerHTML = '<p class="info-line alert-ok">All systems nominal</p>';
-    } else {
-      alertsList.innerHTML = alerts.map(a => {
-        const isDanger = a.includes('critical');
-        return `<p class="info-line" style="color: ${isDanger ? 'var(--danger)' : 'var(--warning)'}; font-family: var(--font-pixel); font-size: 0.3rem; line-height: 2;">${a}</p>`;
-      }).join('');
-    }
-  }
+  // Alerts are now shown in the ship's log — no separate alerts list needed
 }
 
 // ---- SPEED CONTROLS ----
@@ -423,9 +545,10 @@ function updateHud(state) {
   document.getElementById('info-mass').textContent =
     `${(phys.shipMass / 1000).toFixed(1)} t`;
 
-  // Thrust button state
+  // Thrust button + slider state
   const thrustBtn = document.getElementById('thrust-toggle');
   const thrustStatus = document.getElementById('thrust-status');
+  const thrustSlider = document.getElementById('thrust-slider');
   if (phys.thrustActive) {
     thrustBtn.classList.add('active');
     thrustStatus.textContent = `${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G`;
@@ -433,11 +556,25 @@ function updateHud(state) {
     thrustBtn.classList.remove('active');
     thrustStatus.textContent = 'OFF';
   }
+  // Sync slider if physics changed thrust externally (fuel out, etc.)
+  if (thrustSlider && !thrustSlider.matches(':active')) {
+    thrustSlider.value = phys.thrustLevel * 100;
+    updateThrustSliderUI(phys.thrustLevel);
+  }
 
   // Engine plume visibility
   const plume = document.getElementById('engine-plume');
   if (plume) {
     plume.setAttribute('display', phys.thrustActive ? 'inline' : 'none');
+  }
+
+  // Update tactical view when thrust state changes
+  if (phys.thrustActive !== lastThrustActive) {
+    lastThrustActive = phys.thrustActive;
+    const tacScreen = document.getElementById('tac-screen');
+    if (tacScreen) {
+      renderTacView(state.ship, tacScreen, phys.thrustActive);
+    }
   }
 
   // Update crew visual states from physics
@@ -477,10 +614,29 @@ function startGame() {
     selectCrew(member);
   });
 
+  // Render tactical view
+  const tacScreen = document.getElementById('tac-screen');
+  if (tacScreen) {
+    renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive);
+  }
+
   // Set initial gravity state (thrust=0 at start = micro-G)
   const hasGravity = gameState.navigation.thrust > 0;
   lastCrewStateKey = null;
   setCrewGravity(shipContainer, hasGravity, gameState.physics.crewStates);
+
+  // Init log and add launch entry
+  clearLog();
+  addLogEntry(`Mission started — ${gameState.ship.name}`, 'system');
+  addLogEntry(`Crew complement: ${gameState.ship.crew.length}`, 'crew');
+  addLogEntry(`Ship mass: ${(gameState.physics.shipMass / 1000).toFixed(1)}t`, 'nav');
+
+  // Sync thrust slider to physics state
+  const slider = document.getElementById('thrust-slider');
+  if (slider) {
+    slider.value = gameState.physics.thrustLevel * 100;
+    updateThrustSliderUI(gameState.physics.thrustLevel);
+  }
 
   // Start particles
   initParticles();
@@ -500,10 +656,16 @@ function startGame() {
       data.forEach(({ member, oldState, newState }) => {
         if (newState === CrewState.PRONE) {
           showToast(`${member.name} crushed under high-G!`, 'danger');
+          addLogEntry(`${member.name} (${member.role}) crushed — ${gameState.physics.gForce.toFixed(1)}G without crash couch`, 'danger');
         } else if (newState === CrewState.STRAINED) {
-          showToast(`${member.name} struggling under ${gameState.physics.gForce.toFixed(1)}G`, 'warn');
+          addLogEntry(`${member.name} straining under ${gameState.physics.gForce.toFixed(1)}G`, 'warn');
+        } else if (newState === CrewState.FLOATING && oldState === CrewState.STANDING) {
+          addLogEntry(`${member.name} entering micro-G`, 'crew');
+        } else if (newState === CrewState.STANDING && oldState === CrewState.FLOATING) {
+          addLogEntry(`${member.name} on feet — gravity restored`, 'crew');
         } else if (oldState === CrewState.PRONE && newState !== CrewState.PRONE) {
           showToast(`${member.name} recovering from high-G`, 'ok');
+          addLogEntry(`${member.name} recovering from high-G exposure`, 'ok');
         }
       });
     }
@@ -526,6 +688,7 @@ function initHudActions() {
     await saveGame(gameState, name);
     document.getElementById('dialog-save').style.display = 'none';
     showToast('Mission saved', 'ok');
+    addLogEntry(`Mission saved: "${name}"`, 'system');
   });
 
   document.querySelector('[data-action="cancel-save"]').addEventListener('click', () => {
@@ -576,6 +739,31 @@ function initSettings() {
     toggle.classList.toggle('active');
     toggle.textContent = toggle.classList.contains('active') ? 'ON' : 'OFF';
   });
+
+  // Dev mode toggle
+  const devToggle = document.getElementById('setting-devmode');
+  devToggle.addEventListener('click', () => {
+    devToggle.classList.toggle('active');
+    const isActive = devToggle.classList.contains('active');
+    devToggle.textContent = isActive ? 'ON' : 'OFF';
+    document.body.classList.toggle('dev-mode', isActive);
+
+    // Persist dev mode setting
+    import('./storage.js').then(s => s.saveSetting('devMode', isActive));
+  });
+}
+
+async function loadDevMode() {
+  const { loadSetting } = await import('./storage.js');
+  const devMode = await loadSetting('devMode', false);
+  if (devMode) {
+    document.body.classList.add('dev-mode');
+    const toggle = document.getElementById('setting-devmode');
+    if (toggle) {
+      toggle.classList.add('active');
+      toggle.textContent = 'ON';
+    }
+  }
 }
 
 // ---- START GAME FROM NEW GAME SCREEN ----
@@ -626,13 +814,9 @@ function initKeyboard() {
         break;
       case 't':
       case 'T':
-        if (gameState) {
-          const isActive = toggleThrust(gameState.physics);
-          if (isActive) {
-            showToast(`Torch engine firing — ${gameState.physics.maxThrust}G thrust`, 'warn');
-          } else {
-            showToast('Torch engine off — entering micro-G');
-          }
+        // Dev mode only: toggle thrust
+        if (document.body.classList.contains('dev-mode')) {
+          document.getElementById('thrust-toggle').click();
         }
         break;
       case 'Escape':
@@ -660,6 +844,7 @@ async function init() {
   initSettings();
   initStartGame();
   initKeyboard();
+  await loadDevMode();
 
   // Set version in landing screen
   const versionEl = document.querySelector('.landing-version');

@@ -419,108 +419,255 @@ export function renderShip(ship, container, onCrewClick) {
   svgEl.appendChild(crewLayer);
 
   // --- TORCH ENGINE PLUME (below reactor) ---
-  // Epic Epstein drive plume: blindingly white core, blue-white corona
-  // Completely dark when off, supernova-bright when firing
+  // Massive Epstein drive plume: 30% wider than ship, extends way past viewport
+  // The ship cross-section shows only the base of the plume — the rest is clipped.
+  // Tactical view will show the full scale.
   const exhaustY = offsetY + (currentY - deckGap) * TILE_SIZE;
-  const exhaustX = offsetX + 3 * TILE_SIZE;
-  const nozzleCenterX = exhaustX + 3 * TILE_SIZE / 2; // center of 3-tile reactor base
-  const plumeW = TILE_SIZE * 3;
+  const shipWidth = maxWidth * TILE_SIZE;
+  const nozzleCenterX = offsetX + maxWidth * TILE_SIZE / 2;
 
-  // Add plume glow filter to defs
-  const plumeFilter = document.createElementNS(SVG_NS, 'filter');
-  plumeFilter.id = 'torch-glow';
-  plumeFilter.setAttribute('x', '-100%');
-  plumeFilter.setAttribute('y', '-50%');
-  plumeFilter.setAttribute('width', '300%');
-  plumeFilter.setAttribute('height', '300%');
-  plumeFilter.innerHTML = `
-    <feGaussianBlur stdDeviation="8" result="blur1"/>
-    <feGaussianBlur stdDeviation="16" result="blur2"/>
-    <feMerge>
-      <feMergeNode in="blur2"/>
-      <feMergeNode in="blur1"/>
-      <feMergeNode in="SourceGraphic"/>
-    </feMerge>
+  // Plume is 30% wider than the ship on each side
+  const plumeHalfW = shipWidth * 0.65; // 130% of ship width / 2
+  const plumeLength = shipWidth * 4;   // 4x ship width long (mostly clipped)
+
+  // Add plume glow filters to defs
+  defs.innerHTML += `
+    <filter id="torch-glow" x="-100%" y="-50%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="12" result="blur1"/>
+      <feGaussianBlur stdDeviation="28" result="blur2"/>
+      <feMerge>
+        <feMergeNode in="blur2"/>
+        <feMergeNode in="blur1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="torch-bloom" x="-200%" y="-100%" width="500%" height="400%">
+      <feGaussianBlur stdDeviation="40"/>
+    </filter>
   `;
-  defs.appendChild(plumeFilter);
 
   const exhaust = document.createElementNS(SVG_NS, 'g');
   exhaust.setAttribute('class', 'engine-exhaust');
   exhaust.setAttribute('id', 'engine-plume');
   exhaust.setAttribute('display', 'none'); // OFF by default
 
-  // Nozzle opening (always dark metallic)
-  const nozzleY = exhaustY - 2;
-  exhaust.innerHTML = `
-    <!-- Nozzle ring -->
-    <rect x="${nozzleCenterX - 20}" y="${nozzleY}" width="40" height="4" fill="#1A2A3A"/>
+  // Build the plume as expanding cone sections
+  const sections = [];
+  const numSections = 20;
+  for (let i = 0; i < numSections; i++) {
+    const t = i / numSections;
+    const y = exhaustY + t * plumeLength;
+    const h = plumeLength / numSections;
+    // Cone expands: starts at nozzle width, reaches plumeHalfW
+    const nozzleHalfW = 16;
+    const w = nozzleHalfW + (plumeHalfW - nozzleHalfW) * Math.pow(t, 0.6);
+    // Opacity decreases, color shifts from white to blue
+    const opacity = Math.max(0.03, 1.0 - t * 0.9);
+    // Color: white core fades to blue-white
+    const r = Math.round(255 - t * 80);
+    const g = Math.round(255 - t * 50);
+    const b = 255;
+    const color = `rgb(${r},${g},${b})`;
 
-    <!-- PLUME CORE: pure white, maximum intensity -->
-    <rect x="${nozzleCenterX - 12}" y="${exhaustY}" width="24" height="8" fill="#FFFFFF" opacity="1">
-      <animate attributeName="opacity" values="0.95;1;0.95" dur="0.08s" repeatCount="indefinite"/>
-    </rect>
-    <!-- Core taper -->
-    <rect x="${nozzleCenterX - 10}" y="${exhaustY + 8}" width="20" height="8" fill="#FFFFFF" opacity="0.95">
-      <animate attributeName="opacity" values="0.85;0.95;0.85" dur="0.1s" repeatCount="indefinite"/>
-    </rect>
-    <rect x="${nozzleCenterX - 8}" y="${exhaustY + 16}" width="16" height="8" fill="#FFFFFF" opacity="0.9">
-      <animate attributeName="opacity" values="0.8;0.95;0.8" dur="0.12s" repeatCount="indefinite"/>
-    </rect>
-    <rect x="${nozzleCenterX - 6}" y="${exhaustY + 24}" width="12" height="8" fill="#F0F4FF" opacity="0.85">
-      <animate attributeName="opacity" values="0.7;0.9;0.7" dur="0.15s" repeatCount="indefinite"/>
-      <animate attributeName="height" values="8;12;8" dur="0.2s" repeatCount="indefinite"/>
-    </rect>
+    sections.push(`<rect x="${nozzleCenterX - w}" y="${y}" width="${w * 2}" height="${h + 2}"
+      fill="${color}" opacity="${opacity.toFixed(3)}">
+      <animate attributeName="opacity"
+        values="${(opacity * 0.85).toFixed(3)};${opacity.toFixed(3)};${(opacity * 0.85).toFixed(3)}"
+        dur="${(0.06 + t * 0.15).toFixed(2)}s" repeatCount="indefinite"/>
+    </rect>`);
+  }
 
-    <!-- INNER CORONA: blue-white -->
-    <rect x="${nozzleCenterX - 16}" y="${exhaustY + 2}" width="4" height="14" fill="#D0E8FF" opacity="0.8">
-      <animate attributeName="opacity" values="0.6;0.9;0.6" dur="0.12s" repeatCount="indefinite"/>
-    </rect>
-    <rect x="${nozzleCenterX + 12}" y="${exhaustY + 2}" width="4" height="14" fill="#D0E8FF" opacity="0.8">
-      <animate attributeName="opacity" values="0.7;0.95;0.7" dur="0.1s" repeatCount="indefinite"/>
-    </rect>
+  // Inner core: very narrow, pure white, hottest part
+  const coreH = plumeLength * 0.4;
+  for (let i = 0; i < 8; i++) {
+    const t = i / 8;
+    const y = exhaustY + t * coreH;
+    const h = coreH / 8;
+    const w = 10 + t * 6;
+    const op = 1.0 - t * 0.3;
+    sections.push(`<rect x="${nozzleCenterX - w}" y="${y}" width="${w * 2}" height="${h + 1}"
+      fill="#FFFFFF" opacity="${op.toFixed(2)}">
+      <animate attributeName="opacity"
+        values="${(op * 0.9).toFixed(2)};${op.toFixed(2)};${(op * 0.9).toFixed(2)}"
+        dur="${(0.04 + t * 0.08).toFixed(2)}s" repeatCount="indefinite"/>
+    </rect>`);
+  }
 
-    <!-- OUTER CORONA: spreading blue glow -->
-    <rect x="${nozzleCenterX - 20}" y="${exhaustY + 4}" width="4" height="10" fill="#8ECAFF" opacity="0.5">
-      <animate attributeName="opacity" values="0.3;0.6;0.3" dur="0.15s" repeatCount="indefinite"/>
-    </rect>
-    <rect x="${nozzleCenterX + 16}" y="${exhaustY + 4}" width="4" height="10" fill="#8ECAFF" opacity="0.5">
-      <animate attributeName="opacity" values="0.35;0.65;0.35" dur="0.13s" repeatCount="indefinite"/>
-    </rect>
+  // Exhaust particles — streaking out from nozzle
+  for (let i = 0; i < 8; i++) {
+    const px = nozzleCenterX + (Math.random() - 0.5) * 30;
+    const startY = exhaustY + 10;
+    const endY = exhaustY + 100 + Math.random() * 120;
+    const dur = (0.3 + Math.random() * 0.4).toFixed(2);
+    const begin = (Math.random() * 0.5).toFixed(2);
+    const size = 2;
+    const colors = ['#FFFFFF', '#D0E8FF', '#8ECAFF', '#FFFFFF'];
+    const col = colors[i % colors.length];
+    sections.push(`<rect x="${px}" y="${startY}" width="${size}" height="${size}" fill="${col}" opacity="0">
+      <animate attributeName="opacity" values="0;0.9;0.4;0" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
+      <animate attributeName="y" values="${startY};${endY}" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
+    </rect>`);
+  }
 
-    <!-- PLUME TAIL: fading blue-white tendrils -->
-    <rect x="${nozzleCenterX - 4}" y="${exhaustY + 32}" width="8" height="6" fill="#B0D8FF" opacity="0.6">
-      <animate attributeName="opacity" values="0.3;0.7;0.3" dur="0.2s" repeatCount="indefinite"/>
-      <animate attributeName="height" values="6;14;6" dur="0.3s" repeatCount="indefinite"/>
-    </rect>
-    <rect x="${nozzleCenterX - 2}" y="${exhaustY + 40}" width="4" height="4" fill="#80B8FF" opacity="0.4">
-      <animate attributeName="opacity" values="0.1;0.5;0.1" dur="0.25s" repeatCount="indefinite"/>
-      <animate attributeName="height" values="4;10;4" dur="0.35s" repeatCount="indefinite"/>
-    </rect>
+  // Massive bloom glow behind everything
+  sections.push(`<rect x="${nozzleCenterX - plumeHalfW}" y="${exhaustY - 20}"
+    width="${plumeHalfW * 2}" height="${plumeLength * 0.6}"
+    fill="#FFFFFF" opacity="0.08" filter="url(#torch-bloom)">
+    <animate attributeName="opacity" values="0.05;0.1;0.05" dur="0.2s" repeatCount="indefinite"/>
+  </rect>`);
 
-    <!-- EXHAUST PARTICLES: white-hot sparks shooting out -->
-    <rect x="${nozzleCenterX - 1}" y="${exhaustY + 46}" width="2" height="2" fill="#FFFFFF" opacity="0">
-      <animate attributeName="opacity" values="0;0.9;0.5;0" dur="0.4s" repeatCount="indefinite"/>
-      <animate attributeName="y" values="${exhaustY + 46};${exhaustY + 70}" dur="0.4s" repeatCount="indefinite"/>
-    </rect>
-    <rect x="${nozzleCenterX + 3}" y="${exhaustY + 44}" width="2" height="2" fill="#D0E8FF" opacity="0">
-      <animate attributeName="opacity" values="0;0.7;0.3;0" dur="0.5s" begin="0.15s" repeatCount="indefinite"/>
-      <animate attributeName="y" values="${exhaustY + 44};${exhaustY + 68}" dur="0.5s" begin="0.15s" repeatCount="indefinite"/>
-    </rect>
-    <rect x="${nozzleCenterX - 5}" y="${exhaustY + 48}" width="2" height="2" fill="#FFFFFF" opacity="0">
-      <animate attributeName="opacity" values="0;0.8;0.2;0" dur="0.35s" begin="0.08s" repeatCount="indefinite"/>
-      <animate attributeName="y" values="${exhaustY + 48};${exhaustY + 72}" dur="0.35s" begin="0.08s" repeatCount="indefinite"/>
-    </rect>
-    <rect x="${nozzleCenterX + 5}" y="${exhaustY + 42}" width="2" height="2" fill="#8ECAFF" opacity="0">
-      <animate attributeName="opacity" values="0;0.6;0" dur="0.6s" begin="0.25s" repeatCount="indefinite"/>
-      <animate attributeName="y" values="${exhaustY + 42};${exhaustY + 66}" dur="0.6s" begin="0.25s" repeatCount="indefinite"/>
-    </rect>
+  // Nozzle ring (on top)
+  sections.push(`<rect x="${nozzleCenterX - 22}" y="${exhaustY - 3}" width="44" height="5" fill="#1A2A3A"/>`);
 
-    <!-- GLOW: massive bloom effect behind everything -->
-    <rect x="${nozzleCenterX - 24}" y="${exhaustY - 4}" width="48" height="56" fill="#FFFFFF" opacity="0.15" filter="url(#torch-glow)">
-      <animate attributeName="opacity" values="0.1;0.2;0.1" dur="0.15s" repeatCount="indefinite"/>
+  exhaust.innerHTML = sections.join('\n');
+  svgEl.appendChild(exhaust);
+
+  container.appendChild(svgEl);
+}
+
+// ---- TACTICAL VIEW RENDERER ----
+// Shows the ship as a tiny outline with a massive plume when thrusting.
+// The plume dwarfs the ship 10-20:1 — true Epstein drive scale.
+
+export function renderTacView(ship, container, thrustActive) {
+  container.innerHTML = '';
+
+  const viewW = container.clientWidth || 186;
+  const viewH = container.clientHeight || 220;
+
+  const svgEl = document.createElementNS(SVG_NS, 'svg');
+  svgEl.setAttribute('width', viewW);
+  svgEl.setAttribute('height', viewH);
+  svgEl.setAttribute('viewBox', `0 0 ${viewW} ${viewH}`);
+  svgEl.setAttribute('shape-rendering', 'crispEdges');
+
+  // Grid lines (subtle)
+  const gridGroup = document.createElementNS(SVG_NS, 'g');
+  gridGroup.setAttribute('opacity', '0.08');
+  const gridSpacing = 20;
+  for (let x = gridSpacing; x < viewW; x += gridSpacing) {
+    gridGroup.innerHTML += `<line x1="${x}" y1="0" x2="${x}" y2="${viewH}" stroke="#4FD1C5" stroke-width="0.5"/>`;
+  }
+  for (let y = gridSpacing; y < viewH; y += gridSpacing) {
+    gridGroup.innerHTML += `<line x1="0" y1="${y}" x2="${viewW}" y2="${y}" stroke="#4FD1C5" stroke-width="0.5"/>`;
+  }
+  svgEl.appendChild(gridGroup);
+
+  // Range rings (concentric from ship center)
+  const cx = viewW / 2;
+  const shipY = viewH * 0.25; // ship sits in upper quarter
+  const ringGroup = document.createElementNS(SVG_NS, 'g');
+  ringGroup.setAttribute('opacity', '0.06');
+  [40, 80].forEach(r => {
+    ringGroup.innerHTML += `<ellipse cx="${cx}" cy="${shipY}" rx="${r}" ry="${r}" fill="none" stroke="#4FD1C5" stroke-width="0.5"/>`;
+  });
+  svgEl.appendChild(ringGroup);
+
+  // Ship outline — tiny simplified silhouette
+  const shipW = 8; // pixels wide
+  const shipH = 20; // pixels tall
+  const shipX = cx - shipW / 2;
+
+  // Simplified ship body
+  const shipGroup = document.createElementNS(SVG_NS, 'g');
+  shipGroup.innerHTML = `
+    <!-- Bow (pointed top) -->
+    <polygon points="${cx},${shipY - shipH / 2} ${shipX},${shipY - shipH / 2 + 4} ${shipX + shipW},${shipY - shipH / 2 + 4}" fill="#2D5A6A" stroke="#3D7A8A" stroke-width="0.5"/>
+    <!-- Hull body -->
+    <rect x="${shipX}" y="${shipY - shipH / 2 + 4}" width="${shipW}" height="${shipH - 6}" fill="#1A2A3A" stroke="#2D5A6A" stroke-width="0.5"/>
+    <!-- Stern (slightly tapered) -->
+    <polygon points="${shipX},${shipY + shipH / 2 - 2} ${shipX + 1},${shipY + shipH / 2} ${shipX + shipW - 1},${shipY + shipH / 2} ${shipX + shipW},${shipY + shipH / 2 - 2}" fill="#1A2A3A" stroke="#2D5A6A" stroke-width="0.5"/>
+    <!-- Ship label dot -->
+    <rect x="${cx - 1}" y="${shipY - 1}" width="2" height="2" fill="#4FD1C5" opacity="0.8">
+      <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
     </rect>
   `;
-  svgEl.appendChild(exhaust);
+  svgEl.appendChild(shipGroup);
+
+  // PLUME — massive, dwarfs the ship
+  const plumeGroup = document.createElementNS(SVG_NS, 'g');
+  plumeGroup.setAttribute('id', 'tac-plume');
+  plumeGroup.setAttribute('display', thrustActive ? 'inline' : 'none');
+
+  if (thrustActive) {
+    const plumeStartY = shipY + shipH / 2;
+    const plumeEndY = viewH + 40; // extends past viewport
+    const plumeLen = plumeEndY - plumeStartY;
+    const maxPlumeW = viewW * 0.7; // plume fills most of the tac view width
+
+    // Defs for tac plume glow
+    const tacDefs = document.createElementNS(SVG_NS, 'defs');
+    tacDefs.innerHTML = `
+      <filter id="tac-glow" x="-100%" y="-50%" width="300%" height="300%">
+        <feGaussianBlur stdDeviation="6"/>
+      </filter>
+      <filter id="tac-bloom" x="-200%" y="-100%" width="500%" height="400%">
+        <feGaussianBlur stdDeviation="14"/>
+      </filter>
+    `;
+    svgEl.appendChild(tacDefs);
+
+    // Outer bloom
+    plumeGroup.innerHTML += `<ellipse cx="${cx}" cy="${plumeStartY + plumeLen * 0.3}"
+      rx="${maxPlumeW * 0.4}" ry="${plumeLen * 0.4}"
+      fill="#FFFFFF" opacity="0.04" filter="url(#tac-bloom)">
+      <animate attributeName="opacity" values="0.02;0.06;0.02" dur="0.3s" repeatCount="indefinite"/>
+    </ellipse>`;
+
+    // Build expanding cone sections
+    const numSections = 16;
+    for (let i = 0; i < numSections; i++) {
+      const t = i / numSections;
+      const y = plumeStartY + t * plumeLen;
+      const h = plumeLen / numSections + 1;
+      const halfW = 2 + (maxPlumeW / 2 - 2) * Math.pow(t, 0.5);
+      const opacity = Math.max(0.02, 0.8 - t * 0.7);
+      const r = Math.round(255 - t * 100);
+      const g = Math.round(255 - t * 60);
+      const color = `rgb(${r},${g},255)`;
+
+      plumeGroup.innerHTML += `<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
+        fill="${color}" opacity="${opacity.toFixed(3)}">
+        <animate attributeName="opacity"
+          values="${(opacity * 0.8).toFixed(3)};${opacity.toFixed(3)};${(opacity * 0.8).toFixed(3)}"
+          dur="${(0.08 + t * 0.2).toFixed(2)}s" repeatCount="indefinite"/>
+      </rect>`;
+    }
+
+    // White-hot inner core
+    const coreLen = plumeLen * 0.3;
+    for (let i = 0; i < 6; i++) {
+      const t = i / 6;
+      const y = plumeStartY + t * coreLen;
+      const h = coreLen / 6 + 1;
+      const halfW = 1.5 + t * 3;
+      const op = 1.0 - t * 0.4;
+      plumeGroup.innerHTML += `<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
+        fill="#FFFFFF" opacity="${op.toFixed(2)}">
+        <animate attributeName="opacity"
+          values="${(op * 0.85).toFixed(2)};${op.toFixed(2)};${(op * 0.85).toFixed(2)}"
+          dur="0.06s" repeatCount="indefinite"/>
+      </rect>`;
+    }
+
+    // Glow halo around nozzle
+    plumeGroup.innerHTML += `<ellipse cx="${cx}" cy="${plumeStartY + 4}"
+      rx="12" ry="8" fill="#FFFFFF" opacity="0.2" filter="url(#tac-glow)">
+      <animate attributeName="opacity" values="0.15;0.3;0.15" dur="0.15s" repeatCount="indefinite"/>
+    </ellipse>`;
+  }
+
+  svgEl.appendChild(plumeGroup);
+
+  // Ship label
+  const label = document.createElementNS(SVG_NS, 'text');
+  label.setAttribute('x', cx + shipW / 2 + 4);
+  label.setAttribute('y', shipY + 2);
+  label.setAttribute('font-family', '"Press Start 2P", monospace');
+  label.setAttribute('font-size', '4');
+  label.setAttribute('fill', '#3A4E62');
+  label.textContent = ship.name.substring(0, 10).toUpperCase();
+  svgEl.appendChild(label);
 
   container.appendChild(svgEl);
 }

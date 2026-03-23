@@ -1007,7 +1007,7 @@ function buildCrewSprite(def) {
         '...B........B...',
       ],
     ],
-    // Prone: crushed flat under heavy G, face down on deck
+    // Prone: crew member collapsed on deck, on knees/face, arms out
     prone: [
       '................',
       '................',
@@ -1017,14 +1017,14 @@ function buildCrewSprite(def) {
       '................',
       '................',
       '................',
-      '................',
-      '................',
-      '................',
-      '..BBBBBBBBBBbb..',
-      '..BuuUUUUUUuBb..',
-      '..ssuuUUUUuuss..',
-      '..sdhhhhhhhhds..',
-      '..ssddddddddss..',
+      '......hhhh......',
+      '.....hhhhss.....',
+      '...ssuusdds.....',
+      '..ssuuUUuuuu....',
+      '..s.uuUUUUuu....',
+      '....uuUUUUuu....',
+      '...BBuuuuuuBB...',
+      '...B..BBBB..B...',
     ],
   };
 }
