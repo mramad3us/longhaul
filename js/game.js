@@ -20,7 +20,7 @@ export function createGameState(shipName, captainName, crewCount) {
   ship.crew[0].role = 'Captain';
 
   return {
-    version: '0.1.0',
+    version: '0.1.1',
     ship,
     // Game time: start date far future
     time: {
@@ -142,7 +142,7 @@ export class GameLoop {
   _processMinute() {
     advanceTime(this.state.time, 1);
 
-    // Resource consumption per game-minute (very basic for v0.1.0)
+    // Resource consumption per game-minute (basic)
     const crewCount = this.state.ship.crew.length;
     const res = this.state.resources;
 

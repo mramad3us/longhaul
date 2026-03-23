@@ -61,7 +61,7 @@ export async function saveGame(gameState, saveName = 'Quicksave') {
     id: `save_${Date.now()}`,
     name: saveName,
     timestamp: Date.now(),
-    version: '0.1.0',
+    version: '0.1.1',
     state: structuredClone(gameState),
   };
   await promisify(tx(STORE_SAVES, 'readwrite').put(saveData));

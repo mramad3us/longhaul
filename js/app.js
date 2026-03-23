@@ -576,7 +576,7 @@ async function init() {
   initStartGame();
   initKeyboard();
 
-  console.log('[LONGHAUL] v0.1.0 initialized');
+  console.log('[LONGHAUL] v0.1.1 initialized');
 }
 
 init();
