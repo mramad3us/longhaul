@@ -976,6 +976,51 @@ function selectTile(tileType, deckIdx, tx, ty) {
   });
 }
 
+// ---- TILE PANEL LIVE UPDATE ----
+// Update dynamic values in the tile info panel without re-rendering (preserves click handlers)
+function updateTilePanel() {
+  if (!selectedTile || !gameState) return;
+  const { tileType, deckIdx, tx, ty } = selectedTile;
+
+  // Update status text
+  const statusFn = TILE_STATUS_FN[tileType];
+  if (statusFn) {
+    const status = statusFn(deckIdx, tx, ty);
+    const statusEls = document.querySelectorAll('#crew-info .tile-status-value');
+    if (statusEls.length > 0 && status) {
+      const lines = status.split('\n');
+      statusEls.forEach((el, i) => {
+        if (lines[i] !== undefined) el.textContent = lines[i];
+      });
+    }
+  }
+
+  // Update atmosphere readout
+  const atmo = gameState.ship.decks[deckIdx]?.atmosphere;
+  if (atmo) {
+    const readout = document.querySelector('#crew-info .atmo-readout');
+    if (readout) {
+      const spans = readout.querySelectorAll('span');
+      if (spans.length >= 4) {
+        spans[0].textContent = `${atmo.pressure.toFixed(1)} kPa`;
+        spans[1].textContent = `O2 ${atmo.o2Pct.toFixed(1)}%`;
+        spans[2].textContent = `N2 ${atmo.n2Pct.toFixed(1)}%`;
+        spans[3].textContent = `CO2 ${atmo.co2Pct.toFixed(2)}%`;
+      }
+      // Update status class
+      const atmoStatus = getAtmoStatus(atmo);
+      readout.classList.remove('atmo-ok', 'atmo-warn', 'atmo-danger');
+      readout.classList.add(atmoStatus === 'nominal' ? 'atmo-ok'
+        : (atmoStatus === 'warning' ? 'atmo-warn' : 'atmo-danger'));
+    }
+    // Update EVA suit count
+    const metaEl = document.querySelector('#crew-info .atmo-meta');
+    if (metaEl) {
+      metaEl.textContent = `EVA suits available: ${countSuitsOnDeck(gameState, deckIdx)}`;
+    }
+  }
+}
+
 // ---- COMPARTMENT CONTEXT MENU ----
 
 function showCompartmentMenu(x, y, deckIdx) {
@@ -1191,12 +1236,17 @@ function updateSpeedUI(speed) {
   // Pause/unpause all animations
   const gameScreen = document.getElementById('screen-game');
   const shipSvg = document.querySelector('#ship-container svg');
+  const shipContainer = document.getElementById('ship-container');
   if (speed === 0) {
     gameScreen.classList.add('game-paused');
     if (shipSvg) shipSvg.pauseAnimations();
   } else {
     gameScreen.classList.remove('game-paused');
     if (shipSvg) shipSvg.unpauseAnimations();
+  }
+  // Hide ship interior when not at normal speed (animations don't match)
+  if (shipContainer) {
+    shipContainer.classList.toggle('ship-fast-forward', speed !== 1);
   }
 }
 
@@ -1418,8 +1468,8 @@ function startGame() {
     updateAtmosphereIndicators(state);
     // Refresh crew panel so vitals/conditions update live
     if (selectedCrew) selectCrew(selectedCrew);
-    // Don't re-render tile panel every tick — it destroys click handlers
-    // Tile panel updates when user clicks a tile or toggles LS
+    // Update tile panel dynamic values (atmo, status) without re-rendering
+    if (selectedTile) updateTilePanel();
 
     // Check for critical/death events
     state.ship.crew.forEach(member => {

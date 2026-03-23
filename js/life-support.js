@@ -484,6 +484,13 @@ export function lifeSupportTick(gameState) {
     } else {
       removeCondition(member, 'decompression');
     }
+
+    // Unconscious state from atmosphere effects
+    if (member.consciousness <= 10) {
+      addCondition(member, 'unconscious');
+    } else {
+      removeCondition(member, 'unconscious');
+    }
   });
 
   // 9. UPDATE LEGACY O2 RESOURCE (for resource panel display — shows hours remaining)

@@ -2496,3 +2496,13 @@ body.dev-mode .info-section.dev-only {
 .game-paused .particle {
   animation-play-state: paused !important;
 }
+
+/* ---- FAST-FORWARD: HIDE SHIP INTERIOR ---- */
+.ship-fast-forward .deck-group,
+.ship-fast-forward .crew-layer {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.ship-fast-forward .deck-highlight {
+  display: none;
+}
