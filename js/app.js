@@ -14,6 +14,7 @@ import {
 import { initStorage, saveGame, loadGame, listSaves, deleteSave } from './storage.js';
 import { createGameState, formatDate, formatTime, GameLoop } from './game.js';
 import { renderShip } from './ship.js';
+import { VERSION } from './version.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -576,7 +577,11 @@ async function init() {
   initStartGame();
   initKeyboard();
 
-  console.log('[LONGHAUL] v0.1.1 initialized');
+  // Set version in landing screen
+  const versionEl = document.querySelector('.landing-version');
+  if (versionEl) versionEl.textContent = `v${VERSION}`;
+
+  console.log(`[LONGHAUL] v${VERSION} initialized`);
 }
 
 init();

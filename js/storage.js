@@ -3,6 +3,8 @@
 // Persistent save game storage for the long haul
 // ============================================================
 
+import { VERSION } from './version.js';
+
 const DB_NAME = 'longhaul_db';
 const DB_VERSION = 1;
 const STORE_SAVES = 'saves';
@@ -61,7 +63,7 @@ export async function saveGame(gameState, saveName = 'Quicksave') {
     id: `save_${Date.now()}`,
     name: saveName,
     timestamp: Date.now(),
-    version: '0.1.1',
+    version: VERSION,
     state: structuredClone(gameState),
   };
   await promisify(tx(STORE_SAVES, 'readwrite').put(saveData));

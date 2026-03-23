@@ -4,6 +4,7 @@
 // ============================================================
 
 import { createDefaultShip } from './ship.js';
+import { VERSION } from './version.js';
 
 // Speed multipliers: game-minutes per real-second
 const SPEED_MULTIPLIERS = {
@@ -20,7 +21,7 @@ export function createGameState(shipName, captainName, crewCount) {
   ship.crew[0].role = 'Captain';
 
   return {
-    version: '0.1.1',
+    version: VERSION,
     ship,
     // Game time: start date far future
     time: {

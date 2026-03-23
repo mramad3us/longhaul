@@ -3,7 +3,8 @@
 PORT=${1:-8090}
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "🚀 LONGHAUL v0.1.1 — launching on http://localhost:$PORT"
+VERSION=$(grep -oP "(?<=').*(?=')" "$DIR/js/version.js")
+echo "LONGHAUL v$VERSION — launching on http://localhost:$PORT"
 
 # Kill any existing server on this port
 lsof -ti:$PORT | xargs kill 2>/dev/null
