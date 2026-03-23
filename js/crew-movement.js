@@ -114,6 +114,9 @@ export function initCrewMovement(ship) {
       waypoints: corners,
       wpIdx: startIdx,
       pause: 1 + Math.random() * 4, // stagger initial movement
+      segDist: 0,   // total distance of current segment
+      traveled: 0,  // distance traveled along current segment
+      walkPhase: Math.random() * Math.PI * 2, // walk bob phase offset
     });
   });
 }
@@ -147,7 +150,13 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
     const dy = target.y - ms.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (dist < 0.08) {
+    // Compute total segment distance on first frame of this segment
+    if (ms.segDist === 0) {
+      ms.segDist = dist;
+      ms.traveled = 0;
+    }
+
+    if (dist < 0.06) {
       // Arrived — snap and pick next waypoint
       ms.x = target.x;
       ms.y = target.y;
@@ -155,20 +164,35 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
       member.y = target.y;
       ms.wpIdx = (ms.wpIdx + 1) % ms.waypoints.length;
       ms.pause = 1.5 + Math.random() * 3;
+      ms.segDist = 0;
+      ms.traveled = 0;
       return;
     }
 
-    // Move toward target
-    const step = Math.min(speed * dt, dist);
+    // Ease-in-out: smooth acceleration and deceleration
+    const t = ms.segDist > 0 ? ms.traveled / ms.segDist : 0;
+    const easeMultiplier = t < 0.15
+      ? 0.3 + (t / 0.15) * 0.7           // ease-in: ramp up over first 15%
+      : t > 0.8
+        ? 0.3 + ((1 - t) / 0.2) * 0.7    // ease-out: ramp down over last 20%
+        : 1.0;                              // full speed in the middle
+
+    const step = Math.min(speed * easeMultiplier * dt, dist);
     ms.x += (dx / dist) * step;
     ms.y += (dy / dist) * step;
+    ms.traveled += step;
+
+    // Walk bob: subtle vertical bounce while moving (2px amplitude, ~3 steps/sec)
+    ms.walkPhase += dt * 6.5;
+    const isFloating = gState === 'floating';
+    const bobAmount = isFloating ? 0 : Math.sin(ms.walkPhase) * 2;
 
     // Update SVG transform
     const el = document.querySelector(`[data-crew-id="${member.id}"]`);
     if (el) {
       const dsy = deckStartY(ship, ms.deckIdx);
       const px = OFFSET_X + ms.x * TILE_SIZE;
-      const py = OFFSET_Y + (dsy + ms.y) * TILE_SIZE;
+      const py = OFFSET_Y + (dsy + ms.y) * TILE_SIZE + bobAmount;
       el.setAttribute('transform', `translate(${px}, ${py})`);
     }
   });
