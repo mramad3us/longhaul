@@ -217,6 +217,18 @@ export function lifeSupportTick(gameState) {
   const res = gameState.resources;
   const lsEquip = gameState.lsEquipment;
 
+  // --- SHIP-WIDE LS CHECK ---
+  // Any working LS module services the entire ship's atmosphere
+  let shipHasWorkingLS = false;
+  let bestLSEfficiency = 0;
+  for (const [, eq] of Object.entries(lsEquip)) {
+    if (eq.enabled !== false && (eq.status === 'operational' || eq.status === 'patched')) {
+      shipHasWorkingLS = true;
+      const eff = eq.status === 'patched' ? PATCH_EFFICIENCY : 1.0;
+      if (eff > bestLSEfficiency) bestLSEfficiency = eff;
+    }
+  }
+
   // --- PER-COMPARTMENT PROCESSING ---
   ship.decks.forEach((deck, di) => {
     const atmo = deck.atmosphere;
@@ -270,29 +282,11 @@ export function lifeSupportTick(gameState) {
     }
 
     // 4. LIFE SUPPORT EQUIPMENT — scrub CO2, inject O2/N2
-    // Find LS equipment serving this deck (on this deck, or connected deck)
+    // Any working LS module on the ship services all compartments
     const eq = lsEquip[di];
-    const isOperational = eq && eq.enabled !== false && (eq.status === 'operational' || eq.status === 'patched');
-    const efficiency = eq && eq.status === 'patched' ? PATCH_EFFICIENCY : 1.0;
 
-    // LS also serves connected decks that don't have their own LS
-    // (handled by processing each deck and checking if ANY connected LS is working)
-    let hasWorkingLS = isOperational;
-    if (!hasWorkingLS && gameState.deckConnections) {
-      for (const [a, b] of gameState.deckConnections) {
-        if (a === di || b === di) {
-          const otherDeck = a === di ? b : a;
-          const otherEq = lsEquip[otherDeck];
-          if (otherEq && otherEq.enabled !== false && (otherEq.status === 'operational' || otherEq.status === 'patched')) {
-            hasWorkingLS = true;
-            break;
-          }
-        }
-      }
-    }
-
-    if (hasWorkingLS && !atmo.breached && !atmo.depressurized) {
-      const eff = isOperational ? efficiency : PATCH_EFFICIENCY;
+    if (shipHasWorkingLS && !atmo.breached && !atmo.depressurized) {
+      const eff = bestLSEfficiency;
 
       // CO2 scrubbing
       if (atmo.co2Pct > TARGET_CO2_PCT) {
