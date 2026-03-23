@@ -59,9 +59,23 @@ function promisify(request) {
 
 export async function saveGame(gameState, saveName = 'Quicksave') {
   await openDB();
+  const isAutosave = saveName === 'Autosave';
+
+  // Clean up any stale autosave entries with old save_<timestamp> IDs
+  if (isAutosave) {
+    try {
+      const old = await promisify(tx(STORE_SAVES).index('name').getAll('Autosave'));
+      const stale = old.filter(e => e.id !== 'autosave');
+      if (stale.length > 0) {
+        const delStore = tx(STORE_SAVES, 'readwrite');
+        stale.forEach(e => delStore.delete(e.id));
+      }
+    } catch (_) { /* not critical */ }
+  }
+
   const saveData = {
     // Autosaves use a fixed ID so put() overwrites the previous one
-    id: saveName === 'Autosave' ? 'autosave' : `save_${Date.now()}`,
+    id: isAutosave ? 'autosave' : `save_${Date.now()}`,
     name: saveName,
     timestamp: Date.now(),
     version: VERSION,

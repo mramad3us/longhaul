@@ -39,6 +39,12 @@ let tacZoomLevel = 0;
 let flipAnimFrame = null;
 let crewMoveFrame = null;
 
+// ---- FPS COUNTER ----
+let fpsEnabled = false;
+let _fpsFrames = 0;
+let _fpsLastSample = 0;
+let _fpsTickCounter = 0; // throttle counter for heavy per-frame work
+
 // ---- ROUTE PLANNING ----
 let routePanelOpen = false;
 let computedRoutes = [];
@@ -2239,155 +2245,171 @@ function startGame() {
   const alertedConditions = new Set();
 
   gameLoop = new GameLoop(gameState, (state) => {
+    // FPS measurement
+    _fpsFrames++;
+    const now = performance.now();
+    if (now - _fpsLastSample >= 1000) {
+      const fps = Math.round(_fpsFrames * 1000 / (now - _fpsLastSample));
+      _fpsFrames = 0;
+      _fpsLastSample = now;
+      const fpsEl = document.getElementById('hud-fps');
+      if (fpsEl && fpsEnabled) fpsEl.textContent = `${fps} FPS`;
+    }
+
     updateHud(state);
     updateResourcePanel(state);
-    updateAtmosphereIndicators(state);
-    // Refresh crew panel so vitals/conditions update live
-    if (selectedCrew) selectCrew(selectedCrew);
-    // Update tile panel dynamic values (atmo, status) without re-rendering
-    if (selectedTile) updateTilePanel();
 
-    // Check for critical/death events
-    state.ship.crew.forEach(member => {
-      const deathKey = `dead-${member.id}`;
-      const critKey = `critical-${member.id}`;
-      const brainKey = `brain-damage-${member.id}`;
+    // Throttle heavier work to every 15 ticks (~4 Hz at 60fps)
+    _fpsTickCounter++;
+    const slowTick = _fpsTickCounter % 15 === 0;
 
-      if (member.dead && !alertedConditions.has(deathKey)) {
-        alertedConditions.add(deathKey);
-        showToast(`${member.name} has died`, 'danger');
-        addLogEntry(`${member.name} (${member.role}) — DECEASED`, 'danger');
-      } else if (member.conditions.includes('critical') && !alertedConditions.has(critKey)) {
-        alertedConditions.add(critKey);
-        showToast(`${member.name} is in critical condition!`, 'danger');
-        addLogEntry(`${member.name} (${member.role}) — cardiac arrest, critical condition`, 'danger');
-      }
+    if (slowTick) {
+      updateAtmosphereIndicators(state);
+      // Refresh crew panel so vitals/conditions update live
+      if (selectedCrew) selectCrew(selectedCrew);
+      // Update tile panel dynamic values (atmo, status) without re-rendering
+      if (selectedTile) updateTilePanel();
+    }
 
-      if (member.conditions.includes('brain-damage') && !alertedConditions.has(brainKey)) {
-        alertedConditions.add(brainKey);
-        showToast(`${member.name} has suffered brain damage`, 'danger');
-        addLogEntry(`${member.name} (${member.role}) — severe head trauma, brain damage`, 'danger');
-      }
-    });
+    // Check for critical/death events (every 15 ticks)
+    if (slowTick) {
+      state.ship.crew.forEach(member => {
+        const deathKey = `dead-${member.id}`;
+        const critKey = `critical-${member.id}`;
+        const brainKey = `brain-damage-${member.id}`;
+
+        if (member.dead && !alertedConditions.has(deathKey)) {
+          alertedConditions.add(deathKey);
+          showToast(`${member.name} has died`, 'danger');
+          addLogEntry(`${member.name} (${member.role}) — DECEASED`, 'danger');
+        } else if (member.conditions.includes('critical') && !alertedConditions.has(critKey)) {
+          alertedConditions.add(critKey);
+          showToast(`${member.name} is in critical condition!`, 'danger');
+          addLogEntry(`${member.name} (${member.role}) — cardiac arrest, critical condition`, 'danger');
+        }
+
+        if (member.conditions.includes('brain-damage') && !alertedConditions.has(brainKey)) {
+          alertedConditions.add(brainKey);
+          showToast(`${member.name} has suffered brain damage`, 'danger');
+          addLogEntry(`${member.name} (${member.role}) — severe head trauma, brain damage`, 'danger');
+        }
+      });
+    }
 
     // Route execution now handled in _processMinute via onPhysicsEvent("routeEvents")
 
-    // Jobs system tick — generate and assign jobs
-    const devMode = document.body.classList.contains('dev-mode');
-    const jobLogs = generateAutoJobs(state.ship, state.physics, devMode, state.lsEquipment, state);
-    if (devMode) {
-      jobLogs.forEach(log => addLogEntry(log, 'debug'));
+    // Jobs system tick — run every 60 ticks (~1 Hz)
+    if (_fpsTickCounter % 60 === 0) {
+      const devMode = document.body.classList.contains('dev-mode');
+      const jobLogs = generateAutoJobs(state.ship, state.physics, devMode, state.lsEquipment, state);
+      if (devMode) {
+        jobLogs.forEach(log => addLogEntry(log, 'debug'));
+      }
     }
 
-    // Secure-for-burn: dispatch crew to crash couches under high-G
-    // Skip auto-release during active route secure/burn phases
-    const routePhase = getRouteProgress()?.currentPhase?.type;
-    const routeHoldingCrew = routePhase === 'secure' || routePhase === 'burn' || routePhase === 'orient' || routePhase === 'flip';
-    const gForce = state.physics.gForce || 0;
-    if (gForce >= 1.5) {
+    // Secure-for-burn & crew dispatch — every 15 ticks
+    if (slowTick) {
+      const routePhase = getRouteProgress()?.currentPhase?.type;
+      const routeHoldingCrew = routePhase === 'secure' || routePhase === 'burn' || routePhase === 'orient' || routePhase === 'flip';
+      const gForce = state.physics.gForce || 0;
+      if (gForce >= 1.5) {
+        state.ship.crew.forEach(member => {
+          if (member.dead || member.consciousness <= 10) return;
+          const mission = getCrewMission(member.id);
+          if (!mission || mission === 'patrol') {
+            assignSecureBurnMission(state.ship, member);
+          }
+        });
+      } else if (!routeHoldingCrew) {
+        state.ship.crew.forEach(member => {
+          if (getCrewMission(member.id) === 'secure-burn') {
+            releaseSecureBurn(member.id);
+            cancelMission(member.id, state.ship);
+          }
+        });
+      }
+
+      // Dispatch and complete LS repair missions
       state.ship.crew.forEach(member => {
         if (member.dead || member.consciousness <= 10) return;
         const mission = getCrewMission(member.id);
-        if (!mission || mission === 'patrol') {
-          assignSecureBurnMission(state.ship, member);
+
+        if (!mission) {
+          const jobs = getCrewJobs(member.id);
+          const lsJob = jobs.find(j => j.type === JobType.REPAIR_LS);
+          if (lsJob && lsJob.target) {
+            assignRepairLSMission(state.ship, member, lsJob.target.deckIdx, lsJob.target.x, lsJob.target.y);
+          }
+        }
+
+        if (mission === 'repair-ls' && isRepairComplete(member.id)) {
+          const jobs = getCrewJobs(member.id);
+          const lsJob = jobs.find(j => j.type === JobType.REPAIR_LS);
+          if (lsJob) {
+            const deckName = state.ship.decks[lsJob.target.deckIdx]?.name || 'Unknown';
+            const repairResult = quickPatchLS(state, lsJob.target.deckIdx, member.skills.engineering);
+            completeJob(lsJob.id);
+            cancelMission(member.id);
+            if (repairResult.success) {
+              const verb = repairResult.repairType === 'full' ? 'repaired' : 'patched';
+              showToast(`${member.name} ${verb} ${deckName} LS`, 'ok');
+              addLogEntry(`${member.name} ${verb} life support on ${deckName} — ${repairResult.message}`, 'ok');
+            } else {
+              showToast(`${member.name}: repair failed`, 'warn');
+              addLogEntry(`${member.name} failed to repair ${deckName} life support — will retry`, 'warn');
+            }
+          }
         }
       });
-    } else if (!routeHoldingCrew) {
-      // Release crew from crash couches when G normalises (and no route holding them)
+
+      // Dispatch and complete EVA suit missions
       state.ship.crew.forEach(member => {
-        if (getCrewMission(member.id) === 'secure-burn') {
-          releaseSecureBurn(member.id);
-          cancelMission(member.id, state.ship);
+        if (member.dead || member.consciousness <= 10) return;
+        const mission = getCrewMission(member.id);
+
+        if (!mission) {
+          const jobs = getCrewJobs(member.id);
+          const evaJob = jobs.find(j => j.type === JobType.EQUIP_EVA);
+          if (evaJob && evaJob.target) {
+            assignEquipSuitMission(state.ship, member, evaJob.target.x, evaJob.target.y, evaJob.target.deckIdx);
+          }
+        }
+
+        if (mission === 'equip-suit' && isSuitDonned(member.id)) {
+          const jobs = getCrewJobs(member.id);
+          const evaJob = jobs.find(j => j.type === JobType.EQUIP_EVA);
+          if (evaJob) {
+            const locker = state.suitLockers?.find(l =>
+              l.deckIdx === evaJob.target.deckIdx && l.x === evaJob.target.x && l.y === evaJob.target.y
+            );
+            if (locker) {
+              donEvaSuit(state, member, locker);
+              showToast(`${member.name} donned EVA suit`, 'ok');
+              addLogEntry(`${member.name} donned EVA suit on ${state.ship.decks[member.deck]?.name || 'unknown deck'}`, 'ok');
+            }
+            completeJob(evaJob.id);
+          }
+          cancelMission(member.id);
         }
       });
+
+      // Remove EVA suits when atmosphere is safe again
+      state.ship.crew.forEach(member => {
+        if (member.dead) return;
+        if (!member.evaSuit || !member.evaSuit.wearing) return;
+        const deck = state.ship.decks[member.deck];
+        if (!deck || !deck.atmosphere) return;
+        const atmoStatus = getAtmoStatus(deck.atmosphere);
+        if (atmoStatus === 'nominal') {
+          removeEvaSuit(state, member);
+          addLogEntry(`${member.name} removed EVA suit — atmosphere safe`, 'crew');
+        }
+      });
+
+      updateJobsCount();
+      const jobsDlg = document.getElementById('dialog-jobs');
+      if (jobsDlg && jobsDlg.style.display !== 'none') renderJobsDialog();
     }
-
-    // Dispatch and complete LS repair missions
-    state.ship.crew.forEach(member => {
-      if (member.dead || member.consciousness <= 10) return;
-      const mission = getCrewMission(member.id);
-
-      // Dispatch: engineer has REPAIR_LS job but no mission yet
-      if (!mission) {
-        const jobs = getCrewJobs(member.id);
-        const lsJob = jobs.find(j => j.type === JobType.REPAIR_LS);
-        if (lsJob && lsJob.target) {
-          assignRepairLSMission(state.ship, member, lsJob.target.deckIdx, lsJob.target.x, lsJob.target.y);
-        }
-      }
-
-      // Complete: repair-ls mission finished (crew arrived and timer elapsed)
-      if (mission === 'repair-ls' && isRepairComplete(member.id)) {
-        const jobs = getCrewJobs(member.id);
-        const lsJob = jobs.find(j => j.type === JobType.REPAIR_LS);
-        if (lsJob) {
-          const deckName = state.ship.decks[lsJob.target.deckIdx]?.name || 'Unknown';
-          const repairResult = quickPatchLS(state, lsJob.target.deckIdx, member.skills.engineering);
-          completeJob(lsJob.id);
-          cancelMission(member.id);
-          if (repairResult.success) {
-            const verb = repairResult.repairType === 'full' ? 'repaired' : 'patched';
-            showToast(`${member.name} ${verb} ${deckName} LS`, 'ok');
-            addLogEntry(`${member.name} ${verb} life support on ${deckName} — ${repairResult.message}`, 'ok');
-          } else {
-            showToast(`${member.name}: repair failed`, 'warn');
-            addLogEntry(`${member.name} failed to repair ${deckName} life support — will retry`, 'warn');
-          }
-        }
-      }
-    });
-
-    // Dispatch and complete EVA suit missions
-    state.ship.crew.forEach(member => {
-      if (member.dead || member.consciousness <= 10) return;
-      const mission = getCrewMission(member.id);
-
-      // Dispatch: crew has EQUIP_EVA job but no mission yet
-      if (!mission) {
-        const jobs = getCrewJobs(member.id);
-        const evaJob = jobs.find(j => j.type === JobType.EQUIP_EVA);
-        if (evaJob && evaJob.target) {
-          assignEquipSuitMission(state.ship, member, evaJob.target.x, evaJob.target.y, evaJob.target.deckIdx);
-        }
-      }
-
-      // Complete: suit donned
-      if (mission === 'equip-suit' && isSuitDonned(member.id)) {
-        const jobs = getCrewJobs(member.id);
-        const evaJob = jobs.find(j => j.type === JobType.EQUIP_EVA);
-        if (evaJob) {
-          // Find the locker at the target position
-          const locker = state.suitLockers?.find(l =>
-            l.deckIdx === evaJob.target.deckIdx && l.x === evaJob.target.x && l.y === evaJob.target.y
-          );
-          if (locker) {
-            donEvaSuit(state, member, locker);
-            showToast(`${member.name} donned EVA suit`, 'ok');
-            addLogEntry(`${member.name} donned EVA suit on ${state.ship.decks[member.deck]?.name || 'unknown deck'}`, 'ok');
-          }
-          completeJob(evaJob.id);
-        }
-        cancelMission(member.id);
-      }
-    });
-
-    // Remove EVA suits when atmosphere is safe again
-    state.ship.crew.forEach(member => {
-      if (member.dead) return;
-      if (!member.evaSuit || !member.evaSuit.wearing) return;
-      const deck = state.ship.decks[member.deck];
-      if (!deck || !deck.atmosphere) return;
-      const atmoStatus = getAtmoStatus(deck.atmosphere);
-      if (atmoStatus === 'nominal') {
-        removeEvaSuit(state, member);
-        addLogEntry(`${member.name} removed EVA suit — atmosphere safe`, 'crew');
-      }
-    });
-
-    updateJobsCount();
-    // Live-refresh jobs dialog if open
-    const jobsDlg = document.getElementById('dialog-jobs');
-    if (jobsDlg && jobsDlg.style.display !== 'none') renderJobsDialog();
   }, async (event, data) => {
     if (event === 'autosave') {
       try {
@@ -2567,12 +2589,17 @@ function initHudActions() {
   document.querySelector('[data-action="game-settings"]').addEventListener('click', () => {
     if (gameLoop) gameLoop.setSpeed(0);
     updateSpeedUI(0);
-    // Sync dev mode toggle state
+    // Sync toggle states
     const devOn = document.body.classList.contains('dev-mode');
     const ingameDev = document.getElementById('ingame-devmode');
     if (ingameDev) {
       ingameDev.classList.toggle('active', devOn);
       ingameDev.textContent = devOn ? 'ON' : 'OFF';
+    }
+    const ingameFps = document.getElementById('ingame-fps');
+    if (ingameFps) {
+      ingameFps.classList.toggle('active', fpsEnabled);
+      ingameFps.textContent = fpsEnabled ? 'ON' : 'OFF';
     }
     document.getElementById('dialog-settings').style.display = '';
   });
@@ -2591,6 +2618,23 @@ function initHudActions() {
   document.querySelector('[data-action="close-jobs"]').addEventListener('click', () => {
     document.getElementById('dialog-jobs').style.display = 'none';
   });
+
+  // In-game FPS toggle
+  const ingameFpsBtn = document.getElementById('ingame-fps');
+  if (ingameFpsBtn) {
+    ingameFpsBtn.addEventListener('click', () => {
+      const isActive = ingameFpsBtn.classList.toggle('active');
+      ingameFpsBtn.textContent = isActive ? 'ON' : 'OFF';
+      setFpsEnabled(isActive);
+      // Sync with main settings toggle
+      const mainBtn = document.getElementById('setting-fps');
+      if (mainBtn) {
+        mainBtn.classList.toggle('active', isActive);
+        mainBtn.textContent = isActive ? 'ON' : 'OFF';
+      }
+      import('./storage.js').then(s => s.saveSetting('showFps', isActive));
+    });
+  }
 
   // In-game dev mode toggle
   const ingameDevBtn = document.getElementById('ingame-devmode');
@@ -2635,6 +2679,17 @@ function initSettings() {
     toggle.textContent = toggle.classList.contains('active') ? 'ON' : 'OFF';
   });
 
+  // FPS toggle
+  const fpsToggle = document.getElementById('setting-fps');
+  if (fpsToggle) {
+    fpsToggle.addEventListener('click', () => {
+      const isActive = fpsToggle.classList.toggle('active');
+      fpsToggle.textContent = isActive ? 'ON' : 'OFF';
+      setFpsEnabled(isActive);
+      import('./storage.js').then(s => s.saveSetting('showFps', isActive));
+    });
+  }
+
   // Dev mode toggle
   const devToggle = document.getElementById('setting-devmode');
   devToggle.addEventListener('click', () => {
@@ -2648,6 +2703,12 @@ function initSettings() {
   });
 }
 
+function setFpsEnabled(on) {
+  fpsEnabled = on;
+  const el = document.getElementById('hud-fps');
+  if (el) el.style.display = on ? '' : 'none';
+}
+
 async function loadDevMode() {
   const { loadSetting } = await import('./storage.js');
   const devMode = await loadSetting('devMode', false);
@@ -2658,6 +2719,14 @@ async function loadDevMode() {
       toggle.classList.add('active');
       toggle.textContent = 'ON';
     }
+  }
+  const showFps = await loadSetting('showFps', false);
+  if (showFps) {
+    setFpsEnabled(true);
+    ['setting-fps', 'ingame-fps'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) { btn.classList.add('active'); btn.textContent = 'ON'; }
+    });
   }
 }
 

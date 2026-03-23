@@ -108,6 +108,10 @@
               <option value="0">Off</option>
             </select>
           </div>
+          <div class="setting-row">
+            <span class="setting-label">Show FPS</span>
+            <button class="setting-toggle" id="setting-fps">OFF</button>
+          </div>
           <div class="setting-row setting-row-dev">
             <span class="setting-label">Dev Mode</span>
             <button class="setting-toggle" id="setting-devmode">OFF</button>
@@ -143,6 +147,7 @@
             <button class="speed-btn" data-speed="2" title="1 hr/s">2x</button>
             <button class="speed-btn" data-speed="3" title="1 day/s">3x</button>
           </div>
+          <span class="hud-fps" id="hud-fps" style="display:none">60 FPS</span>
           <div class="hud-divider dev-only"></div>
           <button class="thrust-btn dev-only" id="thrust-toggle" title="Toggle Torch Engine (T)">
             <span class="thrust-btn-icon" id="icon-thrust"></span>
@@ -293,6 +298,10 @@
                 <option value="600">10 min</option>
                 <option value="0">Off</option>
               </select>
+            </div>
+            <div class="setting-row">
+              <span class="setting-label">Show FPS</span>
+              <button class="setting-toggle" id="ingame-fps">OFF</button>
             </div>
             <div class="setting-row setting-row-dev">
               <span class="setting-label">Dev Mode</span>

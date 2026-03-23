@@ -769,6 +769,15 @@ body {
   gap: 3px;
 }
 
+.hud-fps {
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  opacity: 0.7;
+  padding: 2px 6px;
+  letter-spacing: 0.05em;
+}
+
 .speed-btn {
   width: 30px;
   height: 26px;
