@@ -469,6 +469,92 @@ function initHud() {
       }
     });
   });
+
+  // Tac screen click → open modal
+  const tacScreenEl = document.getElementById('tac-screen');
+  if (tacScreenEl) {
+    tacScreenEl.style.cursor = 'pointer';
+    tacScreenEl.addEventListener('click', () => openTacModal());
+  }
+
+  // Tac modal controls
+  initTacModal();
+}
+
+// ---- TACTICAL MAP MODAL ----
+
+let tacModalOpen = false;
+let tacModalZoom = 0;
+
+function initTacModal() {
+  const modal = document.getElementById('tac-modal');
+  if (!modal) return;
+
+  const rangeLabels = ['1 km', '5 km', '25 km'];
+
+  // Close button
+  document.getElementById('tac-modal-close').addEventListener('click', closeTacModal);
+
+  // Click backdrop to close
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeTacModal();
+  });
+
+  // ESC to close
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && tacModalOpen) closeTacModal();
+  });
+
+  // Zoom controls inside modal
+  document.querySelectorAll('.tac-zoom-btn-modal').forEach(btn => {
+    btn.addEventListener('click', () => {
+      tacModalZoom = parseInt(btn.dataset.tacZoomModal);
+      document.querySelectorAll('.tac-zoom-btn-modal').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tac-range-modal').textContent = rangeLabels[tacModalZoom];
+      renderTacModal();
+    });
+  });
+}
+
+function openTacModal() {
+  const modal = document.getElementById('tac-modal');
+  if (!modal) return;
+  tacModalOpen = true;
+  tacModalZoom = tacZoomLevel; // sync with small tac
+  modal.style.display = 'flex';
+
+  // Sync zoom button state
+  document.querySelectorAll('.tac-zoom-btn-modal').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.tacZoomModal) === tacModalZoom);
+  });
+  const rangeLabels = ['1 km', '5 km', '25 km'];
+  document.getElementById('tac-range-modal').textContent = rangeLabels[tacModalZoom];
+
+  renderTacModal();
+}
+
+function closeTacModal() {
+  const modal = document.getElementById('tac-modal');
+  if (modal) modal.style.display = 'none';
+  tacModalOpen = false;
+}
+
+function renderTacModal() {
+  if (!tacModalOpen || !gameState) return;
+  const tacScreen = document.getElementById('tac-screen-modal');
+  if (!tacScreen) return;
+  const phys = gameState.physics;
+  renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacModalZoom, phys.flipping, getRelativeVelocity(phys));
+
+  // Update info bar
+  const vel = getRelativeVelocity(phys);
+  const velEl = document.getElementById('tac-modal-velocity');
+  const headEl = document.getElementById('tac-modal-heading');
+  const thrEl = document.getElementById('tac-modal-thrust');
+  if (velEl) velEl.textContent = `VEL ${formatVelocity(vel)}`;
+  if (headEl) headEl.textContent = phys.flipping ? 'FLIPPING' : (vel >= 0 ? 'PROGRADE' : 'RETROGRADE');
+  if (thrEl) thrEl.textContent = phys.thrustActive ? `BURN ${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G` : 'COAST';
 }
 
 // ---- RCS THRUSTER VISUALS (main view) ----
@@ -1326,6 +1412,8 @@ function updateHud(state) {
     if (tacScreen) {
       renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys));
     }
+    // Keep modal tac in sync
+    if (tacModalOpen) renderTacModal();
   }
 
   // Update crew visual states from physics

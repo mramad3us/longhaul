@@ -322,6 +322,30 @@
       </div>
 
       <!-- Exit Confirm Overlay -->
+      <!-- Tactical Map Modal -->
+      <div class="tac-modal-overlay" id="tac-modal" style="display:none">
+        <div class="tac-modal">
+          <div class="tac-modal-header">
+            <span class="tac-label">TACTICAL</span>
+            <div class="tac-zoom-controls">
+              <button class="tac-zoom-btn-modal active" data-tac-zoom-modal="0" title="Close">1</button>
+              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="1" title="Medium">2</button>
+              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="2" title="Far">3</button>
+            </div>
+            <span class="tac-range" id="tac-range-modal">1 km</span>
+            <button class="tac-modal-close" id="tac-modal-close">&times;</button>
+          </div>
+          <div class="tac-screen tac-screen-modal" id="tac-screen-modal">
+            <!-- Tactical SVG rendered by JS -->
+          </div>
+          <div class="tac-modal-info">
+            <span id="tac-modal-velocity"></span>
+            <span id="tac-modal-heading"></span>
+            <span id="tac-modal-thrust"></span>
+          </div>
+        </div>
+      </div>
+
       <div class="dialog-overlay" id="dialog-exit" style="display:none">
         <div class="dialog">
           <h3 class="dialog-title">Exit to Menu</h3>
