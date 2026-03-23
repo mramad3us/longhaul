@@ -80,19 +80,18 @@ function deckStartY(ship, deckIdx) {
 
 // ---- SPEED CALCULATION ----
 
-function crewSpeed(gState, gForce) {
-  switch (gState) {
-    case 'floating':
-      return BASE_SPEED * 0.5;
-    case 'standing':
-      // Normal up to 1G, gradually slower above
-      if (gForce <= 1.0) return BASE_SPEED;
-      return BASE_SPEED * Math.max(0.2, 1.0 - (gForce - 1.0) * 1.5);
-    case 'strained':
-      return BASE_SPEED * 0.1;
-    default: // prone, secured
-      return 0;
-  }
+// Continuous speed curve based on G-force:
+//   0G (floating)  → 0.5x
+//   0.3G           → 1.0x  (max speed start)
+//   1.0G           → 1.0x  (max speed end)
+//   2.5G (crushed) → 0x
+// Linear ramps between these points.
+function crewSpeed(_gState, gForce) {
+  if (gForce < 0.01) return BASE_SPEED * 0.5;                      // micro-G
+  if (gForce < 0.3) return BASE_SPEED * (0.5 + (gForce / 0.3) * 0.5); // 0.5→1.0
+  if (gForce <= 1.0) return BASE_SPEED;                             // sweet spot
+  if (gForce < 2.5) return BASE_SPEED * Math.max(0, 1.0 - (gForce - 1.0) / 1.5); // 1.0→0
+  return 0;                                                          // crushed
 }
 
 // ---- PUBLIC API ----
