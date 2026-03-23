@@ -389,9 +389,11 @@ const RESOURCE_CONFIG = [
 
 function initResourcePanel() {
   const panel = document.getElementById('resource-panel');
-  // Keep the panel header
+  // Keep the tac view and panel header
+  const tacView = panel.querySelector('.tac-view');
   const header = panel.querySelector('.panel-header');
   panel.innerHTML = '';
+  if (tacView) panel.appendChild(tacView);
   if (header) panel.appendChild(header);
 
   // Crew count
