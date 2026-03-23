@@ -154,12 +154,15 @@ function initParticles() {
     const p = document.createElement('div');
     p.className = 'particle';
 
-    // Particles are driven ONLY by the velocity vector.
-    // Positive velocity = ship moving "up" (prograde) → particles flow down past us
-    // Negative velocity = ship moving "down" (retrograde) → particles flow up past us
-    // Zero velocity = gentle random drift (micro-debris)
+    // Particles reflect velocity RELATIVE TO THE SHIP.
+    // Camera is attached to the ship, so when we flip 180°,
+    // we're now moving backwards — particles must reverse.
+    // relativeVel > 0 = moving forward (particles flow down past us)
+    // relativeVel < 0 = moving backward (particles flow up past us)
     const phys = gameState ? gameState.physics : null;
-    const velocity = phys ? phys.velocity : 0;        // signed, m/s
+    const absVelocity = phys ? phys.velocity : 0;     // absolute frame velocity
+    const heading = phys ? phys.heading : 0;
+    const velocity = heading === 0 ? absVelocity : -absVelocity; // ship-relative
     const absVel = Math.abs(velocity);
 
     // Speed factor: 0 = stationary, 1 = very fast (100 km/s+)
@@ -225,10 +228,17 @@ function initParticles() {
   particleInterval = setTimeout(spawnParticle, 400);
 }
 
+// Ship-relative velocity: what the crew perceives.
+// Positive = moving forward, negative = moving backward.
+function getRelativeVelocity(phys) {
+  if (!phys) return 0;
+  return phys.heading === 0 ? phys.velocity : -phys.velocity;
+}
+
 function speedParticleRate() {
   if (!gameState) return 400;
-  const vel = Math.abs(gameState.physics.velocity);
-  const speedFactor = Math.min(1, vel / 100000);
+  const absVel = Math.abs(gameState.physics.velocity);
+  const speedFactor = Math.min(1, absVel / 100000);
   // More particles at high speed: 400ms → 120ms
   return Math.max(120, 400 - speedFactor * 280);
 }
@@ -413,7 +423,7 @@ function initHud() {
         // Update RCS on tac view during flip (close zoom only)
         const tacScreen = document.getElementById('tac-screen');
         if (tacScreen && tacZoomLevel === 0) {
-          renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, phys.velocity);
+          renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys));
         }
 
         if (complete) {
@@ -446,7 +456,7 @@ function initHud() {
       // Re-render tac view
       const tacScreen = document.getElementById('tac-screen');
       if (tacScreen && gameState) {
-        renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, gameState.physics.velocity);
+        renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, getRelativeVelocity(gameState.physics));
       }
     });
   });
@@ -740,8 +750,9 @@ function updateHud(state) {
   document.getElementById('info-heading').textContent = headingText;
   document.getElementById('info-heading').style.color =
     phys.flipping ? '#E2A355' : '';
+  // Velocity displayed relative to ship heading (camera follows ship)
   document.getElementById('info-velocity').textContent =
-    formatVelocity(state.navigation.velocity);
+    formatVelocity(getRelativeVelocity(phys));
   document.getElementById('info-mass').textContent =
     `${(phys.shipMass / 1000).toFixed(1)} t`;
 
@@ -777,15 +788,16 @@ function updateHud(state) {
 
   // Update tactical view when thrust state or velocity changes significantly
   // Bucket velocity so we don't re-render every frame
-  const velSign = phys.velocity >= 0 ? 1 : -1;
-  const velBucket = velSign * Math.floor(Math.abs(phys.velocity) / 5000);
+  const relVel = getRelativeVelocity(phys);
+  const velSign = relVel >= 0 ? 1 : -1;
+  const velBucket = velSign * Math.floor(Math.abs(relVel) / 5000);
   const tacNeedsUpdate = phys.thrustActive !== lastThrustActive || velBucket !== lastTacVelocityBucket;
   if (tacNeedsUpdate) {
     lastThrustActive = phys.thrustActive;
     lastTacVelocityBucket = velBucket;
     const tacScreen = document.getElementById('tac-screen');
     if (tacScreen) {
-      renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, phys.velocity);
+      renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys));
     }
   }
 
@@ -830,7 +842,7 @@ function startGame() {
   // Render tactical view
   const tacScreen = document.getElementById('tac-screen');
   if (tacScreen) {
-    renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, gameState.physics.velocity);
+    renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, getRelativeVelocity(gameState.physics));
   }
 
   // Set initial gravity state (thrust=0 at start = micro-G)
