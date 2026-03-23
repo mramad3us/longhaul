@@ -739,7 +739,7 @@ function updateHud(state) {
 
   // Ship status info
   document.getElementById('info-torch').textContent =
-    phys.thrustActive ? `ON (${(phys.thrustLevel * phys.maxThrust).toFixed(1)}g)` : 'CUTOFF';
+    phys.thrustActive ? `BURNING (${(phys.thrustLevel * phys.maxThrust).toFixed(1)}g)` : 'CUTOFF';
   document.getElementById('info-torch').style.color =
     phys.thrustActive ? '#FFFFFF' : '';
   document.getElementById('info-thrust').textContent =
