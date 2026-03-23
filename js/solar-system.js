@@ -90,6 +90,19 @@ for (let i = 0; i < 400; i++) {
   });
 }
 
+// Background star field — fixed screen-space stars for atmosphere
+// Uses a seeded pattern so stars don't flicker on re-render
+const BG_STARS = [];
+for (let i = 0; i < 200; i++) {
+  BG_STARS.push({
+    // Normalized screen coords [0, 1]
+    nx: (Math.sin(i * 127.1 + 311.7) * 0.5 + 0.5),
+    ny: (Math.sin(i * 269.5 + 183.3) * 0.5 + 0.5),
+    brightness: 0.15 + (Math.sin(i * 43.7) * 0.5 + 0.5) * 0.4,
+    size: 0.3 + (Math.sin(i * 91.3) * 0.5 + 0.5) * 0.8,
+  });
+}
+
 // ---- ORBITAL POSITION CALCULATION ----
 
 function orbitalPos(body, daysSinceStart) {
@@ -206,6 +219,23 @@ export function renderSolarSystem(container, gameState, routeInfo) {
     </radialGradient>
   `;
   svg.appendChild(defs);
+
+  // ---- BACKGROUND STAR FIELD ----
+  // Screen-space stars for atmosphere — placed in viewBox coords from normalized positions
+  const starGroup = document.createElementNS(SVG_NS, 'g');
+  const starR = auPerPx * 0.8; // sub-pixel to ~1px
+  BG_STARS.forEach(s => {
+    const sx = vx + s.nx * vw;
+    const sy = vy + s.ny * vh;
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.setAttribute('cx', sx);
+    dot.setAttribute('cy', sy);
+    dot.setAttribute('r', starR * s.size);
+    dot.setAttribute('fill', '#FFF');
+    dot.setAttribute('opacity', s.brightness);
+    starGroup.appendChild(dot);
+  });
+  svg.appendChild(starGroup);
 
   // ---- AU DISTANCE RINGS ----
   const ringDistances = mapState.zoom > 15
@@ -332,7 +362,22 @@ export function renderSolarSystem(container, gameState, routeInfo) {
     if (Math.abs(pos.x - mapState.cx) > halfW * 1.5 ||
         Math.abs(pos.y - mapState.cy) > halfH * 1.5) return;
 
-    const pR = Math.max(minBodyR, mapState.zoom * 0.005);
+    // Scale planet radius — larger at close zoom for visual impact
+    const closeZoomBoost = mapState.zoom < 0.2 ? 1.8 : mapState.zoom < 1 ? 1.3 : 1.0;
+    const pR = Math.max(minBodyR * closeZoomBoost, mapState.zoom * 0.005);
+
+    // Outer atmosphere haze (only at close zoom for more visual presence)
+    if (mapState.zoom < 0.5) {
+      const haze = document.createElementNS(SVG_NS, 'circle');
+      haze.setAttribute('cx', pos.x);
+      haze.setAttribute('cy', pos.y);
+      haze.setAttribute('r', pR * 5);
+      haze.setAttribute('fill', 'none');
+      haze.setAttribute('stroke', p.color);
+      haze.setAttribute('stroke-width', pR * 0.3);
+      haze.setAttribute('opacity', '0.06');
+      planetGroup.appendChild(haze);
+    }
 
     // Glow behind planet
     const glow = document.createElementNS(SVG_NS, 'circle');
@@ -352,6 +397,17 @@ export function renderSolarSystem(container, gameState, routeInfo) {
     body.setAttribute('fill', p.color);
     planetGroup.appendChild(body);
 
+    // Inner highlight — terminator-style half-lit effect
+    if (mapState.zoom < 1) {
+      const highlight = document.createElementNS(SVG_NS, 'circle');
+      highlight.setAttribute('cx', pos.x - pR * 0.2);
+      highlight.setAttribute('cy', pos.y - pR * 0.2);
+      highlight.setAttribute('r', pR * 0.7);
+      highlight.setAttribute('fill', '#FFF');
+      highlight.setAttribute('opacity', '0.08');
+      planetGroup.appendChild(highlight);
+    }
+
     // Track position for click detection
     bodyPositions.push({ name: p.name, type: 'planet', x: pos.x, y: pos.y, r: pR });
 
@@ -369,9 +425,11 @@ export function renderSolarSystem(container, gameState, routeInfo) {
       planetGroup.appendChild(ringEl);
     }
 
-    // Planet label — show when zoomed close enough
+    // Planet label — show when zoomed close enough, but hide if it's the selected body
+    // (selection ring already has its own label above)
+    const isSelected = mapState.selectedBody && mapState.selectedBody.name === p.name;
     const labelThreshold = p.a * 0.4;
-    if (mapState.zoom < Math.max(labelThreshold, 6)) {
+    if (!isSelected && mapState.zoom < Math.max(labelThreshold, 6)) {
       const fontSize = Math.max(mapState.zoom * 0.012, auPerPx * 8);
       const label = document.createElementNS(SVG_NS, 'text');
       label.setAttribute('x', pos.x + pR * 1.8);
@@ -388,24 +446,33 @@ export function renderSolarSystem(container, gameState, routeInfo) {
     // Only render moons when zoomed close to the planet
     const moonViewThreshold = p.a * 0.08;
     if (mapState.zoom < moonViewThreshold && p.moons.length > 0) {
-      // Moon orbit rings
       p.moons.forEach(m => {
         const mPos = orbitalPos(m, days);
         const mx = pos.x + mPos.x;
         const my = pos.y + mPos.y;
 
-        // Moon orbit
+        // Moon orbit — brighter, dashed ring
         const mOrbit = document.createElementNS(SVG_NS, 'circle');
         mOrbit.setAttribute('cx', pos.x);
         mOrbit.setAttribute('cy', pos.y);
         mOrbit.setAttribute('r', m.a);
         mOrbit.setAttribute('fill', 'none');
-        mOrbit.setAttribute('stroke', '#1A2A3A');
-        mOrbit.setAttribute('stroke-width', mapState.zoom * 0.0003);
+        mOrbit.setAttribute('stroke', '#2A4A5A');
+        mOrbit.setAttribute('stroke-width', Math.max(mapState.zoom * 0.0004, auPerPx * 0.5));
+        mOrbit.setAttribute('stroke-dasharray', `${mapState.zoom * 0.002} ${mapState.zoom * 0.003}`);
         planetGroup.appendChild(mOrbit);
 
+        // Moon glow
+        const mR = Math.max(minBodyR * 0.8, mapState.zoom * 0.003);
+        const mGlow = document.createElementNS(SVG_NS, 'circle');
+        mGlow.setAttribute('cx', mx);
+        mGlow.setAttribute('cy', my);
+        mGlow.setAttribute('r', mR * 2);
+        mGlow.setAttribute('fill', m.color);
+        mGlow.setAttribute('opacity', '0.1');
+        planetGroup.appendChild(mGlow);
+
         // Moon body
-        const mR = Math.max(minBodyR * 0.6, mapState.zoom * 0.002);
         const mBody = document.createElementNS(SVG_NS, 'circle');
         mBody.setAttribute('cx', mx);
         mBody.setAttribute('cy', my);
@@ -416,8 +483,9 @@ export function renderSolarSystem(container, gameState, routeInfo) {
         // Track moon position
         bodyPositions.push({ name: m.name, type: 'moon', x: mx, y: my, r: mR, parentName: p.name });
 
-        // Moon label at high zoom
-        if (mapState.zoom < moonViewThreshold * 0.3) {
+        // Moon label — always show when moons are visible, hide if selected
+        const moonSelected = mapState.selectedBody && mapState.selectedBody.name === m.name;
+        if (!moonSelected) {
           const mFontSize = Math.max(mapState.zoom * 0.01, auPerPx * 6);
           const mLabel = document.createElementNS(SVG_NS, 'text');
           mLabel.setAttribute('x', mx + mR * 2);
@@ -452,7 +520,8 @@ export function renderSolarSystem(container, gameState, routeInfo) {
       // Track asteroid position
       bodyPositions.push({ name: ast.name, type: 'asteroid', x: pos.x, y: pos.y, r: aR });
 
-      if (mapState.zoom < 5) {
+      const astSelected = mapState.selectedBody && mapState.selectedBody.name === ast.name;
+      if (!astSelected && mapState.zoom < 5) {
         const fontSize = Math.max(mapState.zoom * 0.01, auPerPx * 7);
         const label = document.createElementNS(SVG_NS, 'text');
         label.setAttribute('x', pos.x + d * 2);
@@ -855,8 +924,10 @@ export function zoomToBody(bodyName, gameState) {
       mapState.cy = pos.y;
       if (planet.moons.length > 0) {
         const outerMoon = Math.max(...planet.moons.map(m => m.a));
-        zoomTarget = outerMoon * 3;
-        reason = `planet ${bodyName} moons (outerMoon=${outerMoon.toFixed(6)} AU)`;
+        // Moon distances in AU can be tiny (Luna ≈ 0.0026 AU), so enforce a
+        // minimum zoom that still shows the planet in useful context
+        zoomTarget = Math.max(outerMoon * 3, planet.a * 0.06);
+        reason = `planet ${bodyName} moons (outerMoon=${outerMoon.toFixed(6)} AU, floor=${(planet.a * 0.06).toFixed(4)})`;
       } else {
         zoomTarget = planet.a * 0.15;
         reason = `planet ${bodyName} no moons (a=${planet.a})`;
@@ -873,8 +944,8 @@ export function zoomToBody(bodyName, gameState) {
         mapState.cx = pPos.x;
         mapState.cy = pPos.y;
         const outerMoon = Math.max(...p.moons.map(m => m.a));
-        zoomTarget = outerMoon * 3;
-        reason = `moon ${bodyName} of ${p.name} (outerMoon=${outerMoon.toFixed(6)} AU)`;
+        zoomTarget = Math.max(outerMoon * 3, p.a * 0.06);
+        reason = `moon ${bodyName} of ${p.name} (outerMoon=${outerMoon.toFixed(6)} AU, floor=${(p.a * 0.06).toFixed(4)})`;
         break;
       }
     }

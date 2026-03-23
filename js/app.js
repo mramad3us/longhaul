@@ -788,6 +788,8 @@ function renderSolarTab(forceRender) {
     if (zoomBtn) zoomBtn.style.display = '';
     if (plotBtn) plotBtn.style.display = getActiveRoute() ? 'none' : '';
     if (thrEl) thrEl.textContent = '';
+    const sepThr = document.getElementById('tac-sep-thrust');
+    if (sepThr) sepThr.style.display = 'none';
   } else {
     if (headEl) headEl.textContent = `ZOOM ${ms.zoom.toFixed(ms.zoom < 1 ? 3 : 1)} AU`;
     if (thrEl) {
@@ -797,6 +799,8 @@ function renderSolarTab(forceRender) {
         thrEl.textContent = `POS ${dist.toFixed(2)} AU`;
       }
     }
+    const sepThr = document.getElementById('tac-sep-thrust');
+    if (sepThr) sepThr.style.display = '';
     if (zoomBtn) zoomBtn.style.display = 'none';
     if (plotBtn) plotBtn.style.display = 'none';
   }

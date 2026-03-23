@@ -2948,7 +2948,8 @@ body.dev-mode .info-section.dev-only {
 }
 .tac-modal-info {
   display: flex;
-  justify-content: space-around;
+  align-items: center;
+  gap: 8px;
   padding: 10px 16px;
   font-family: var(--font-pixel);
   font-size: 0.45rem;
@@ -2957,6 +2958,13 @@ body.dev-mode .info-section.dev-only {
 }
 .tac-modal-info span {
   color: var(--text-secondary);
+  white-space: nowrap;
+}
+.tac-info-sep {
+  color: var(--hull-accent) !important;
+  font-size: 0.6rem;
+  opacity: 0.5;
+  user-select: none;
 }
 .tac-modal-info, .route-status-bar {
   flex-shrink: 0;
