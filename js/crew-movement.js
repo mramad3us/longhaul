@@ -116,7 +116,6 @@ export function initCrewMovement(ship) {
       pause: 1 + Math.random() * 4, // stagger initial movement
       segDist: 0,   // total distance of current segment
       traveled: 0,  // distance traveled along current segment
-      walkPhase: Math.random() * Math.PI * 2, // walk bob phase offset
     });
   });
 }
@@ -182,17 +181,12 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
     ms.y += (dy / dist) * step;
     ms.traveled += step;
 
-    // Walk bob: subtle vertical bounce while moving (2px amplitude, ~3 steps/sec)
-    ms.walkPhase += dt * 6.5;
-    const isFloating = gState === 'floating';
-    const bobAmount = isFloating ? 0 : Math.sin(ms.walkPhase) * 2;
-
-    // Update SVG transform
+    // Update SVG transform — straight slide, no bobbing
     const el = document.querySelector(`[data-crew-id="${member.id}"]`);
     if (el) {
       const dsy = deckStartY(ship, ms.deckIdx);
       const px = OFFSET_X + ms.x * TILE_SIZE;
-      const py = OFFSET_Y + (dsy + ms.y) * TILE_SIZE + bobAmount;
+      const py = OFFSET_Y + (dsy + ms.y) * TILE_SIZE;
       el.setAttribute('transform', `translate(${px}, ${py})`);
     }
   });
