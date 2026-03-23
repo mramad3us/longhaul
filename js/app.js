@@ -747,7 +747,7 @@ function renderSolarTab(forceRender) {
 
   // Throttle SVG re-render to every 30 ticks (~0.5s at 60fps) unless forced
   solarRenderCounter++;
-  if (forceRender || solarRenderCounter % 30 === 0) {
+  if (forceRender || solarRenderCounter % 60 === 0) {
     renderSolarSystem(solarScreen, gameState, routeInfo);
   }
 

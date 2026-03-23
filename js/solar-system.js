@@ -169,7 +169,6 @@ let _lastRenderWarn = 0;
 export function renderSolarSystem(container, gameState, routeInfo) {
   const t0 = performance.now();
   _renderCount++;
-  container.innerHTML = '';
   bodyPositions = [];
 
   const rect = container.getBoundingClientRect();
@@ -184,58 +183,44 @@ export function renderSolarSystem(container, gameState, routeInfo) {
   const vw = halfW * 2;
   const vh = halfH * 2;
 
-  const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('width', '100%');
-  svg.setAttribute('height', '100%');
-  svg.setAttribute('viewBox', `${vx} ${vy} ${vw} ${vh}`);
-  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-  svg.style.display = 'block';
-  svg.style.background = '#030810';
+  // Build SVG as a string — single innerHTML assignment is vastly faster
+  // than hundreds of createElement + setAttribute DOM calls
+  const parts = [];
+  const F = '"Press Start 2P", monospace'; // font shorthand
 
   // Elapsed days for orbital calculation
   const days = gameState ? gameTimeToDays(gameState.time, gameState.stats) : 0;
 
   // Defs: filters for glow
-  // Skip expensive SVG filters at extreme zoom (< 0.1 AU viewbox)
   const useFilters = mapState.zoom > 0.05;
-  const defs = document.createElementNS(SVG_NS, 'defs');
+  parts.push('<defs>');
   if (useFilters) {
-    defs.innerHTML = `
-      <filter id="sol-glow" x="-200%" y="-200%" width="500%" height="500%">
-        <feGaussianBlur stdDeviation="${Math.max(0.001, mapState.zoom * 0.008)}" result="b"/>
-        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-      </filter>
-      <filter id="planet-glow" x="-100%" y="-100%" width="300%" height="300%">
-        <feGaussianBlur stdDeviation="${Math.max(0.0005, mapState.zoom * 0.003)}"/>
-      </filter>
-    `;
+    const blurSun = Math.max(0.001, mapState.zoom * 0.008);
+    const blurPlanet = Math.max(0.0005, mapState.zoom * 0.003);
+    parts.push(
+      `<filter id="sol-glow" x="-200%" y="-200%" width="500%" height="500%">` +
+      `<feGaussianBlur stdDeviation="${blurSun}" result="b"/>` +
+      `<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>` +
+      `<filter id="planet-glow" x="-100%" y="-100%" width="300%" height="300%">` +
+      `<feGaussianBlur stdDeviation="${blurPlanet}"/></filter>`
+    );
   }
-  defs.innerHTML += `
-    <radialGradient id="sun-grad" cx="50%" cy="50%">
-      <stop offset="0%" stop-color="#FFF8E0"/>
-      <stop offset="30%" stop-color="#FDB813"/>
-      <stop offset="70%" stop-color="#E8960A"/>
-      <stop offset="100%" stop-color="#C06000" stop-opacity="0"/>
-    </radialGradient>
-  `;
-  svg.appendChild(defs);
+  parts.push(
+    `<radialGradient id="sun-grad" cx="50%" cy="50%">` +
+    `<stop offset="0%" stop-color="#FFF8E0"/>` +
+    `<stop offset="30%" stop-color="#FDB813"/>` +
+    `<stop offset="70%" stop-color="#E8960A"/>` +
+    `<stop offset="100%" stop-color="#C06000" stop-opacity="0"/>` +
+    `</radialGradient></defs>`
+  );
 
   // ---- BACKGROUND STAR FIELD ----
-  // Screen-space stars for atmosphere — placed in viewBox coords from normalized positions
-  const starGroup = document.createElementNS(SVG_NS, 'g');
-  const starR = (vw / w) * 0.8; // sub-pixel to ~1px
+  const starR = (vw / w) * 0.8;
+  parts.push('<g>');
   BG_STARS.forEach(s => {
-    const sx = vx + s.nx * vw;
-    const sy = vy + s.ny * vh;
-    const dot = document.createElementNS(SVG_NS, 'circle');
-    dot.setAttribute('cx', sx);
-    dot.setAttribute('cy', sy);
-    dot.setAttribute('r', starR * s.size);
-    dot.setAttribute('fill', '#FFF');
-    dot.setAttribute('opacity', s.brightness);
-    starGroup.appendChild(dot);
+    parts.push(`<circle cx="${vx + s.nx * vw}" cy="${vy + s.ny * vh}" r="${starR * s.size}" fill="#FFF" opacity="${s.brightness}"/>`);
   });
-  svg.appendChild(starGroup);
+  parts.push('</g>');
 
   // ---- AU DISTANCE RINGS ----
   const ringDistances = mapState.zoom > 15
@@ -246,372 +231,166 @@ export function renderSolarSystem(container, gameState, routeInfo) {
         ? [0.25, 0.5, 1, 1.5, 2]
         : [0.1, 0.25, 0.5, 1];
 
-  const auGroup = document.createElementNS(SVG_NS, 'g');
+  const sw001 = mapState.zoom * 0.001;
+  const dash005 = mapState.zoom * 0.005;
+  parts.push('<g>');
   ringDistances.forEach(r => {
     if (r > mapState.zoom * 1.5) return;
-    const ring = document.createElementNS(SVG_NS, 'circle');
-    ring.setAttribute('cx', 0);
-    ring.setAttribute('cy', 0);
-    ring.setAttribute('r', r);
-    ring.setAttribute('fill', 'none');
-    ring.setAttribute('stroke', '#1A2A3A');
-    ring.setAttribute('stroke-width', mapState.zoom * 0.001);
-    ring.setAttribute('stroke-dasharray', `${mapState.zoom * 0.005} ${mapState.zoom * 0.005}`);
-    auGroup.appendChild(ring);
-
-    // Label
+    parts.push(`<circle cx="0" cy="0" r="${r}" fill="none" stroke="#1A2A3A" stroke-width="${sw001}" stroke-dasharray="${dash005} ${dash005}"/>`);
     if (mapState.zoom < 40) {
-      const label = document.createElementNS(SVG_NS, 'text');
-      label.setAttribute('x', mapState.zoom * 0.005);
-      label.setAttribute('y', -r + mapState.zoom * 0.012);
-      label.setAttribute('fill', '#2A4A5A');
-      label.setAttribute('font-family', '"Press Start 2P", monospace');
-      label.setAttribute('font-size', mapState.zoom * 0.015);
-      label.textContent = `${r} AU`;
-      auGroup.appendChild(label);
+      parts.push(`<text x="${mapState.zoom * 0.005}" y="${-r + mapState.zoom * 0.012}" fill="#2A4A5A" font-family='${F}' font-size="${mapState.zoom * 0.015}">${r} AU</text>`);
     }
   });
-  svg.appendChild(auGroup);
+  parts.push('</g>');
 
   // ---- ASTEROID BELT DUST ----
-  // Belt spans ~2.1–3.4 AU; skip entirely if viewBox can't see that range
-  const beltGroup = document.createElementNS(SVG_NS, 'g');
-  const beltInner = 2.0, beltOuter = 3.5;
+  const beltInner = 2.0;
   const viewEdge = Math.sqrt((mapState.cx ** 2) + (mapState.cy ** 2)) + halfW * 1.5;
   const beltVisible = mapState.zoom < 20 && viewEdge > beltInner && mapState.zoom > 0.5;
   if (beltVisible) {
-    const visibleDust = mapState.zoom > 8
-      ? BELT_DUST.filter((_, i) => i % 4 === 0)
-      : mapState.zoom > 3
-        ? BELT_DUST.filter((_, i) => i % 2 === 0)
-        : BELT_DUST;
-    visibleDust.forEach(d => {
+    parts.push('<g>');
+    const dustStep = mapState.zoom > 8 ? 4 : mapState.zoom > 3 ? 2 : 1;
+    for (let i = 0; i < BELT_DUST.length; i += dustStep) {
+      const d = BELT_DUST[i];
       const a = d.angle + days * 0.0002;
-      const dx = d.a * Math.cos(a);
-      const dy = d.a * Math.sin(a);
-      const dot = document.createElementNS(SVG_NS, 'circle');
-      dot.setAttribute('cx', dx);
-      dot.setAttribute('cy', dy);
-      dot.setAttribute('r', mapState.zoom * 0.001 * d.size);
-      dot.setAttribute('fill', `rgba(140, 130, 110, ${d.brightness})`);
-      beltGroup.appendChild(dot);
-    });
+      parts.push(`<circle cx="${d.a * Math.cos(a)}" cy="${d.a * Math.sin(a)}" r="${sw001 * d.size}" fill="rgba(140,130,110,${d.brightness})"/>`);
+    }
+    parts.push('</g>');
   }
-  svg.appendChild(beltGroup);
 
   // ---- ORBIT PATHS ----
-  const orbitGroup = document.createElementNS(SVG_NS, 'g');
+  parts.push('<g>');
+  const orbitSW = mapState.zoom * 0.0008;
   PLANETS.forEach(p => {
-    if (p.a > mapState.zoom * 1.5) return; // off-screen
-    const orbit = document.createElementNS(SVG_NS, 'circle');
-    orbit.setAttribute('cx', 0);
-    orbit.setAttribute('cy', 0);
-    orbit.setAttribute('r', p.a);
-    orbit.setAttribute('fill', 'none');
-    orbit.setAttribute('stroke', '#152535');
-    orbit.setAttribute('stroke-width', mapState.zoom * 0.0008);
-    orbitGroup.appendChild(orbit);
+    if (p.a > mapState.zoom * 1.5) return;
+    parts.push(`<circle cx="0" cy="0" r="${p.a}" fill="none" stroke="#152535" stroke-width="${orbitSW}"/>`);
   });
-  // Named asteroid orbits
   if (mapState.zoom < 10) {
+    const astOrbitSW = mapState.zoom * 0.0004;
+    const astDash = `${mapState.zoom * 0.003} ${mapState.zoom * 0.006}`;
     ASTEROIDS.forEach(ast => {
-      const orbit = document.createElementNS(SVG_NS, 'circle');
-      orbit.setAttribute('cx', 0);
-      orbit.setAttribute('cy', 0);
-      orbit.setAttribute('r', ast.a);
-      orbit.setAttribute('fill', 'none');
-      orbit.setAttribute('stroke', '#121F2A');
-      orbit.setAttribute('stroke-width', mapState.zoom * 0.0004);
-      orbit.setAttribute('stroke-dasharray', `${mapState.zoom * 0.003} ${mapState.zoom * 0.006}`);
-      orbitGroup.appendChild(orbit);
+      parts.push(`<circle cx="0" cy="0" r="${ast.a}" fill="none" stroke="#121F2A" stroke-width="${astOrbitSW}" stroke-dasharray="${astDash}"/>`);
     });
   }
-  svg.appendChild(orbitGroup);
+  parts.push('</g>');
 
   // ---- SUN ----
   const sunR = Math.max(mapState.zoom * 0.012, 0.01);
-  // Outer corona
-  const corona = document.createElementNS(SVG_NS, 'circle');
-  corona.setAttribute('cx', 0);
-  corona.setAttribute('cy', 0);
-  corona.setAttribute('r', sunR * 3);
-  corona.setAttribute('fill', 'url(#sun-grad)');
-  corona.setAttribute('opacity', '0.4');
-  svg.appendChild(corona);
-  // Core
-  const sun = document.createElementNS(SVG_NS, 'circle');
-  sun.setAttribute('cx', 0);
-  sun.setAttribute('cy', 0);
-  sun.setAttribute('r', sunR);
-  sun.setAttribute('fill', '#FDB813');
-  if (useFilters) sun.setAttribute('filter', 'url(#sol-glow)');
-  svg.appendChild(sun);
-
-  // Track Sun position
+  parts.push(`<circle cx="0" cy="0" r="${sunR * 3}" fill="url(#sun-grad)" opacity="0.4"/>`);
+  parts.push(`<circle cx="0" cy="0" r="${sunR}" fill="#FDB813"${useFilters ? ' filter="url(#sol-glow)"' : ''}/>`);
   bodyPositions.push({ name: 'Sol', type: 'star', x: 0, y: 0, r: sunR });
 
-  // Pixel size helper — how many AU per pixel
+  // Pixel size helper
   const auPerPx = vw / w;
-  const minBodyR = auPerPx * 2.5; // minimum 2.5px visual radius
+  const minBodyR = auPerPx * 2.5;
 
   // ---- PLANETS ----
-  const planetGroup = document.createElementNS(SVG_NS, 'g');
+  parts.push('<g>');
   PLANETS.forEach(p => {
     const pos = orbitalPos(p, days);
-    // Skip if far off screen
     if (Math.abs(pos.x - mapState.cx) > halfW * 1.5 ||
         Math.abs(pos.y - mapState.cy) > halfH * 1.5) return;
 
-    // Scale planet radius — larger at close zoom for visual impact
     const closeZoomBoost = mapState.zoom < 0.2 ? 1.8 : mapState.zoom < 1 ? 1.3 : 1.0;
     const pR = Math.max(minBodyR * closeZoomBoost, mapState.zoom * 0.005);
 
-    // Outer atmosphere haze (only at close zoom for more visual presence)
     if (mapState.zoom < 0.5) {
-      const haze = document.createElementNS(SVG_NS, 'circle');
-      haze.setAttribute('cx', pos.x);
-      haze.setAttribute('cy', pos.y);
-      haze.setAttribute('r', pR * 5);
-      haze.setAttribute('fill', 'none');
-      haze.setAttribute('stroke', p.color);
-      haze.setAttribute('stroke-width', pR * 0.3);
-      haze.setAttribute('opacity', '0.06');
-      planetGroup.appendChild(haze);
+      parts.push(`<circle cx="${pos.x}" cy="${pos.y}" r="${pR * 5}" fill="none" stroke="${p.color}" stroke-width="${pR * 0.3}" opacity="0.06"/>`);
     }
+    parts.push(`<circle cx="${pos.x}" cy="${pos.y}" r="${pR * 2.5}" fill="${p.color}" opacity="0.15"${useFilters ? ' filter="url(#planet-glow)"' : ''}/>`);
+    parts.push(`<circle cx="${pos.x}" cy="${pos.y}" r="${pR}" fill="${p.color}"/>`);
 
-    // Glow behind planet
-    const glow = document.createElementNS(SVG_NS, 'circle');
-    glow.setAttribute('cx', pos.x);
-    glow.setAttribute('cy', pos.y);
-    glow.setAttribute('r', pR * 2.5);
-    glow.setAttribute('fill', p.color);
-    glow.setAttribute('opacity', '0.15');
-    if (useFilters) glow.setAttribute('filter', 'url(#planet-glow)');
-    planetGroup.appendChild(glow);
-
-    // Planet body
-    const body = document.createElementNS(SVG_NS, 'circle');
-    body.setAttribute('cx', pos.x);
-    body.setAttribute('cy', pos.y);
-    body.setAttribute('r', pR);
-    body.setAttribute('fill', p.color);
-    planetGroup.appendChild(body);
-
-    // Inner highlight — terminator-style half-lit effect
     if (mapState.zoom < 1) {
-      const highlight = document.createElementNS(SVG_NS, 'circle');
-      highlight.setAttribute('cx', pos.x - pR * 0.2);
-      highlight.setAttribute('cy', pos.y - pR * 0.2);
-      highlight.setAttribute('r', pR * 0.7);
-      highlight.setAttribute('fill', '#FFF');
-      highlight.setAttribute('opacity', '0.08');
-      planetGroup.appendChild(highlight);
+      parts.push(`<circle cx="${pos.x - pR * 0.2}" cy="${pos.y - pR * 0.2}" r="${pR * 0.7}" fill="#FFF" opacity="0.08"/>`);
     }
 
-    // Track position for click detection
     bodyPositions.push({ name: p.name, type: 'planet', x: pos.x, y: pos.y, r: pR });
 
-    // Saturn rings
     if (p.name === 'Saturn') {
-      const ringEl = document.createElementNS(SVG_NS, 'ellipse');
-      ringEl.setAttribute('cx', pos.x);
-      ringEl.setAttribute('cy', pos.y);
-      ringEl.setAttribute('rx', pR * 2.2);
-      ringEl.setAttribute('ry', pR * 0.6);
-      ringEl.setAttribute('fill', 'none');
-      ringEl.setAttribute('stroke', '#D4C49A');
-      ringEl.setAttribute('stroke-width', pR * 0.3);
-      ringEl.setAttribute('opacity', '0.5');
-      planetGroup.appendChild(ringEl);
+      parts.push(`<ellipse cx="${pos.x}" cy="${pos.y}" rx="${pR * 2.2}" ry="${pR * 0.6}" fill="none" stroke="#D4C49A" stroke-width="${pR * 0.3}" opacity="0.5"/>`);
     }
 
-    // Planet label — show when zoomed close enough, but hide if it's the selected body
-    // (selection ring already has its own label above)
     const isSelected = mapState.selectedBody && mapState.selectedBody.name === p.name;
     const labelThreshold = p.a * 0.4;
     if (!isSelected && mapState.zoom < Math.max(labelThreshold, 6)) {
       const fontSize = Math.max(mapState.zoom * 0.012, auPerPx * 8);
-      const label = document.createElementNS(SVG_NS, 'text');
-      label.setAttribute('x', pos.x + pR * 1.8);
-      label.setAttribute('y', pos.y + fontSize * 0.3);
-      label.setAttribute('fill', p.color);
-      label.setAttribute('font-family', '"Press Start 2P", monospace');
-      label.setAttribute('font-size', fontSize);
-      label.setAttribute('opacity', '0.7');
-      label.textContent = p.name.toUpperCase();
-      planetGroup.appendChild(label);
+      parts.push(`<text x="${pos.x + pR * 1.8}" y="${pos.y + fontSize * 0.3}" fill="${p.color}" font-family='${F}' font-size="${fontSize}" opacity="0.7">${p.name.toUpperCase()}</text>`);
     }
 
-    // ---- MOONS ----
-    // Only render moons when zoomed close to the planet
+    // Moons
     const moonViewThreshold = p.a * 0.08;
     if (mapState.zoom < moonViewThreshold && p.moons.length > 0) {
       p.moons.forEach(m => {
         const mPos = orbitalPos(m, days);
         const mx = pos.x + mPos.x;
         const my = pos.y + mPos.y;
+        const moonOrbitSW = Math.max(mapState.zoom * 0.0004, auPerPx * 0.5);
+        const moonDash = `${mapState.zoom * 0.002} ${mapState.zoom * 0.003}`;
+        parts.push(`<circle cx="${pos.x}" cy="${pos.y}" r="${m.a}" fill="none" stroke="#2A4A5A" stroke-width="${moonOrbitSW}" stroke-dasharray="${moonDash}"/>`);
 
-        // Moon orbit — brighter, dashed ring
-        const mOrbit = document.createElementNS(SVG_NS, 'circle');
-        mOrbit.setAttribute('cx', pos.x);
-        mOrbit.setAttribute('cy', pos.y);
-        mOrbit.setAttribute('r', m.a);
-        mOrbit.setAttribute('fill', 'none');
-        mOrbit.setAttribute('stroke', '#2A4A5A');
-        mOrbit.setAttribute('stroke-width', Math.max(mapState.zoom * 0.0004, auPerPx * 0.5));
-        mOrbit.setAttribute('stroke-dasharray', `${mapState.zoom * 0.002} ${mapState.zoom * 0.003}`);
-        planetGroup.appendChild(mOrbit);
-
-        // Moon glow
         const mR = Math.max(minBodyR * 0.8, mapState.zoom * 0.003);
-        const mGlow = document.createElementNS(SVG_NS, 'circle');
-        mGlow.setAttribute('cx', mx);
-        mGlow.setAttribute('cy', my);
-        mGlow.setAttribute('r', mR * 2);
-        mGlow.setAttribute('fill', m.color);
-        mGlow.setAttribute('opacity', '0.1');
-        planetGroup.appendChild(mGlow);
+        parts.push(`<circle cx="${mx}" cy="${my}" r="${mR * 2}" fill="${m.color}" opacity="0.1"/>`);
+        parts.push(`<circle cx="${mx}" cy="${my}" r="${mR}" fill="${m.color}"/>`);
 
-        // Moon body
-        const mBody = document.createElementNS(SVG_NS, 'circle');
-        mBody.setAttribute('cx', mx);
-        mBody.setAttribute('cy', my);
-        mBody.setAttribute('r', mR);
-        mBody.setAttribute('fill', m.color);
-        planetGroup.appendChild(mBody);
-
-        // Track moon position
         bodyPositions.push({ name: m.name, type: 'moon', x: mx, y: my, r: mR, parentName: p.name });
 
-        // Moon label — always show when moons are visible, hide if selected
         const moonSelected = mapState.selectedBody && mapState.selectedBody.name === m.name;
         if (!moonSelected) {
           const mFontSize = Math.max(mapState.zoom * 0.01, auPerPx * 6);
-          const mLabel = document.createElementNS(SVG_NS, 'text');
-          mLabel.setAttribute('x', mx + mR * 2);
-          mLabel.setAttribute('y', my + mFontSize * 0.3);
-          mLabel.setAttribute('fill', m.color);
-          mLabel.setAttribute('font-family', '"Press Start 2P", monospace');
-          mLabel.setAttribute('font-size', mFontSize);
-          mLabel.setAttribute('opacity', '0.6');
-          mLabel.textContent = m.name;
-          planetGroup.appendChild(mLabel);
+          parts.push(`<text x="${mx + mR * 2}" y="${my + mFontSize * 0.3}" fill="${m.color}" font-family='${F}' font-size="${mFontSize}" opacity="0.6">${m.name}</text>`);
         }
       });
     }
   });
-  svg.appendChild(planetGroup);
+  parts.push('</g>');
 
   // ---- NAMED ASTEROIDS ----
   if (mapState.zoom < 10) {
-    const astGroup = document.createElementNS(SVG_NS, 'g');
+    parts.push('<g>');
     ASTEROIDS.forEach(ast => {
       const pos = orbitalPos(ast, days);
       const aR = Math.max(minBodyR * 0.5, mapState.zoom * 0.002);
-      // Irregular shape — small diamond
       const d = aR;
-      const shape = document.createElementNS(SVG_NS, 'polygon');
-      shape.setAttribute('points',
-        `${pos.x},${pos.y - d} ${pos.x + d * 0.7},${pos.y} ${pos.x},${pos.y + d * 0.8} ${pos.x - d * 0.6},${pos.y}`);
-      shape.setAttribute('fill', ast.color);
-      shape.setAttribute('opacity', '0.7');
-      astGroup.appendChild(shape);
-
-      // Track asteroid position
+      parts.push(`<polygon points="${pos.x},${pos.y - d} ${pos.x + d * 0.7},${pos.y} ${pos.x},${pos.y + d * 0.8} ${pos.x - d * 0.6},${pos.y}" fill="${ast.color}" opacity="0.7"/>`);
       bodyPositions.push({ name: ast.name, type: 'asteroid', x: pos.x, y: pos.y, r: aR });
 
       const astSelected = mapState.selectedBody && mapState.selectedBody.name === ast.name;
       if (!astSelected && mapState.zoom < 5) {
         const fontSize = Math.max(mapState.zoom * 0.01, auPerPx * 7);
-        const label = document.createElementNS(SVG_NS, 'text');
-        label.setAttribute('x', pos.x + d * 2);
-        label.setAttribute('y', pos.y + fontSize * 0.3);
-        label.setAttribute('fill', ast.color);
-        label.setAttribute('font-family', '"Press Start 2P", monospace');
-        label.setAttribute('font-size', fontSize);
-        label.setAttribute('opacity', '0.5');
-        label.textContent = ast.name;
-        astGroup.appendChild(label);
+        parts.push(`<text x="${pos.x + d * 2}" y="${pos.y + fontSize * 0.3}" fill="${ast.color}" font-family='${F}' font-size="${fontSize}" opacity="0.5">${ast.name}</text>`);
       }
     });
-    svg.appendChild(astGroup);
+    parts.push('</g>');
   }
 
   // ---- SHIP POSITION ----
   if (gameState && gameState.shipPosition) {
     const sp = gameState.shipPosition;
     const shipR = Math.max(minBodyR, mapState.zoom * 0.004);
-    // Ship marker — teal blinking dot
-    const shipGlow = document.createElementNS(SVG_NS, 'circle');
-    shipGlow.setAttribute('cx', sp.x);
-    shipGlow.setAttribute('cy', sp.y);
-    shipGlow.setAttribute('r', shipR * 3);
-    shipGlow.setAttribute('fill', '#4FD1C5');
-    shipGlow.setAttribute('opacity', '0.2');
-    const pulseAnim = document.createElementNS(SVG_NS, 'animate');
-    pulseAnim.setAttribute('attributeName', 'opacity');
-    pulseAnim.setAttribute('values', '0.2;0.4;0.2');
-    pulseAnim.setAttribute('dur', '2s');
-    pulseAnim.setAttribute('repeatCount', 'indefinite');
-    shipGlow.appendChild(pulseAnim);
-    svg.appendChild(shipGlow);
-
-    const shipDot = document.createElementNS(SVG_NS, 'circle');
-    shipDot.setAttribute('cx', sp.x);
-    shipDot.setAttribute('cy', sp.y);
-    shipDot.setAttribute('r', shipR);
-    shipDot.setAttribute('fill', '#4FD1C5');
-    svg.appendChild(shipDot);
-
-    // Ship label
+    parts.push(
+      `<circle cx="${sp.x}" cy="${sp.y}" r="${shipR * 3}" fill="#4FD1C5" opacity="0.2">` +
+      `<animate attributeName="opacity" values="0.2;0.4;0.2" dur="2s" repeatCount="indefinite"/></circle>`
+    );
+    parts.push(`<circle cx="${sp.x}" cy="${sp.y}" r="${shipR}" fill="#4FD1C5"/>`);
     const sFontSize = Math.max(mapState.zoom * 0.012, auPerPx * 8);
-    const shipLabel = document.createElementNS(SVG_NS, 'text');
-    shipLabel.setAttribute('x', sp.x + shipR * 2);
-    shipLabel.setAttribute('y', sp.y - shipR);
-    shipLabel.setAttribute('fill', '#4FD1C5');
-    shipLabel.setAttribute('font-family', '"Press Start 2P", monospace');
-    shipLabel.setAttribute('font-size', sFontSize);
-    shipLabel.setAttribute('opacity', '0.8');
-    shipLabel.textContent = gameState.ship?.name?.toUpperCase() || 'SHIP';
-    svg.appendChild(shipLabel);
+    const shipName = gameState.ship?.name?.toUpperCase() || 'SHIP';
+    parts.push(`<text x="${sp.x + shipR * 2}" y="${sp.y - shipR}" fill="#4FD1C5" font-family='${F}' font-size="${sFontSize}" opacity="0.8">${shipName}</text>`);
   }
 
   // ---- SELECTION RING ----
   if (mapState.selectedBody) {
     const sel = mapState.selectedBody;
-    // Find current rendered position from bodyPositions
     const bp = bodyPositions.find(b => b.name === sel.name);
     if (bp) {
       const selR = Math.max(bp.r * 2.5, mapState.zoom * 0.008);
-      // Pulsing selection ring
-      const ring = document.createElementNS(SVG_NS, 'circle');
-      ring.setAttribute('cx', bp.x);
-      ring.setAttribute('cy', bp.y);
-      ring.setAttribute('r', selR);
-      ring.setAttribute('fill', 'none');
-      ring.setAttribute('stroke', '#4FD1C5');
-      ring.setAttribute('stroke-width', mapState.zoom * 0.0015);
-      ring.setAttribute('stroke-dasharray', `${mapState.zoom * 0.004} ${mapState.zoom * 0.003}`);
-      const pulseRing = document.createElementNS(SVG_NS, 'animate');
-      pulseRing.setAttribute('attributeName', 'r');
-      pulseRing.setAttribute('values', `${selR};${selR * 1.15};${selR}`);
-      pulseRing.setAttribute('dur', '1.5s');
-      pulseRing.setAttribute('repeatCount', 'indefinite');
-      ring.appendChild(pulseRing);
-      svg.appendChild(ring);
-
-      // Selection label
+      const selSW = mapState.zoom * 0.0015;
+      const selDash = `${mapState.zoom * 0.004} ${mapState.zoom * 0.003}`;
+      parts.push(
+        `<circle cx="${bp.x}" cy="${bp.y}" r="${selR}" fill="none" stroke="#4FD1C5" stroke-width="${selSW}" stroke-dasharray="${selDash}">` +
+        `<animate attributeName="r" values="${selR};${selR * 1.15};${selR}" dur="1.5s" repeatCount="indefinite"/></circle>`
+      );
       const selFont = Math.max(mapState.zoom * 0.014, auPerPx * 9);
-      const selLabel = document.createElementNS(SVG_NS, 'text');
-      selLabel.setAttribute('x', bp.x);
-      selLabel.setAttribute('y', bp.y - selR - selFont * 0.5);
-      selLabel.setAttribute('fill', '#4FD1C5');
-      selLabel.setAttribute('font-family', '"Press Start 2P", monospace');
-      selLabel.setAttribute('font-size', selFont);
-      selLabel.setAttribute('text-anchor', 'middle');
-      selLabel.setAttribute('opacity', '0.9');
-      selLabel.textContent = `▶ ${sel.name.toUpperCase()}`;
-      svg.appendChild(selLabel);
+      parts.push(`<text x="${bp.x}" y="${bp.y - selR - selFont * 0.5}" fill="#4FD1C5" font-family='${F}' font-size="${selFont}" text-anchor="middle" opacity="0.9">▶ ${sel.name.toUpperCase()}</text>`);
     }
   }
 
@@ -620,15 +399,7 @@ export function renderSolarSystem(container, gameState, routeInfo) {
     const hbp = bodyPositions.find(b => b.name === mapState.hoveredBody);
     if (hbp) {
       const hR = Math.max(hbp.r * 2, mapState.zoom * 0.007);
-      const hoverRing = document.createElementNS(SVG_NS, 'circle');
-      hoverRing.setAttribute('cx', hbp.x);
-      hoverRing.setAttribute('cy', hbp.y);
-      hoverRing.setAttribute('r', hR);
-      hoverRing.setAttribute('fill', 'none');
-      hoverRing.setAttribute('stroke', '#4FD1C5');
-      hoverRing.setAttribute('stroke-width', mapState.zoom * 0.001);
-      hoverRing.setAttribute('opacity', '0.4');
-      svg.appendChild(hoverRing);
+      parts.push(`<circle cx="${hbp.x}" cy="${hbp.y}" r="${hR}" fill="none" stroke="#4FD1C5" stroke-width="${sw001}" opacity="0.4"/>`);
     }
   }
 
@@ -640,119 +411,50 @@ export function renderSolarSystem(container, gameState, routeInfo) {
     const origin = ri.startPosition || sp;
 
     if (ri.active) {
-      // Trail line: origin → current position (dotted, dim)
-      const trailLine = document.createElementNS(SVG_NS, 'line');
-      trailLine.setAttribute('x1', origin.x);
-      trailLine.setAttribute('y1', origin.y);
-      trailLine.setAttribute('x2', sp.x);
-      trailLine.setAttribute('y2', sp.y);
-      trailLine.setAttribute('stroke', '#4FD1C5');
-      trailLine.setAttribute('stroke-width', sw);
-      trailLine.setAttribute('stroke-dasharray', `${mapState.zoom * 0.003} ${mapState.zoom * 0.003}`);
-      trailLine.setAttribute('opacity', '0.3');
-      svg.appendChild(trailLine);
-
-      // Remaining route: current position → destination (solid)
-      const routeLine = document.createElementNS(SVG_NS, 'line');
-      routeLine.setAttribute('x1', sp.x);
-      routeLine.setAttribute('y1', sp.y);
-      routeLine.setAttribute('x2', ri.destX);
-      routeLine.setAttribute('y2', ri.destY);
-      routeLine.setAttribute('stroke', '#E25555');
-      routeLine.setAttribute('stroke-width', sw);
-      routeLine.setAttribute('opacity', '0.6');
-      svg.appendChild(routeLine);
+      const trailDash = `${mapState.zoom * 0.003} ${mapState.zoom * 0.003}`;
+      parts.push(`<line x1="${origin.x}" y1="${origin.y}" x2="${sp.x}" y2="${sp.y}" stroke="#4FD1C5" stroke-width="${sw}" stroke-dasharray="${trailDash}" opacity="0.3"/>`);
+      parts.push(`<line x1="${sp.x}" y1="${sp.y}" x2="${ri.destX}" y2="${ri.destY}" stroke="#E25555" stroke-width="${sw}" opacity="0.6"/>`);
     } else {
-      // Preview line (dashed, teal)
-      const routeLine = document.createElementNS(SVG_NS, 'line');
-      routeLine.setAttribute('x1', sp.x);
-      routeLine.setAttribute('y1', sp.y);
-      routeLine.setAttribute('x2', ri.destX);
-      routeLine.setAttribute('y2', ri.destY);
-      routeLine.setAttribute('stroke', '#4FD1C5');
-      routeLine.setAttribute('stroke-width', sw);
-      routeLine.setAttribute('stroke-dasharray', `${mapState.zoom * 0.006} ${mapState.zoom * 0.004}`);
-      routeLine.setAttribute('opacity', '0.4');
-      svg.appendChild(routeLine);
+      const prevDash = `${mapState.zoom * 0.006} ${mapState.zoom * 0.004}`;
+      parts.push(`<line x1="${sp.x}" y1="${sp.y}" x2="${ri.destX}" y2="${ri.destY}" stroke="#4FD1C5" stroke-width="${sw}" stroke-dasharray="${prevDash}" opacity="0.4"/>`);
     }
 
-    // Flip point marker — fixed world position between route origin and destination
     if (ri.active && ri.flipFraction && !ri.flipDone) {
       const fx = origin.x + (ri.destX - origin.x) * ri.flipFraction;
       const fy = origin.y + (ri.destY - origin.y) * ri.flipFraction;
       const fR = mapState.zoom * 0.005;
-      const flipMarker = document.createElementNS(SVG_NS, 'circle');
-      flipMarker.setAttribute('cx', fx);
-      flipMarker.setAttribute('cy', fy);
-      flipMarker.setAttribute('r', fR);
-      flipMarker.setAttribute('fill', '#E8D56B');
-      flipMarker.setAttribute('opacity', '0.7');
-      svg.appendChild(flipMarker);
-
+      parts.push(`<circle cx="${fx}" cy="${fy}" r="${fR}" fill="#E8D56B" opacity="0.7"/>`);
       const flipFont = Math.max(mapState.zoom * 0.01, auPerPx * 6);
-      const flipLabel = document.createElementNS(SVG_NS, 'text');
-      flipLabel.setAttribute('x', fx + fR * 2);
-      flipLabel.setAttribute('y', fy);
-      flipLabel.setAttribute('fill', '#E8D56B');
-      flipLabel.setAttribute('font-family', '"Press Start 2P", monospace');
-      flipLabel.setAttribute('font-size', flipFont);
-      flipLabel.setAttribute('opacity', '0.6');
-      flipLabel.textContent = 'FLIP';
-      svg.appendChild(flipLabel);
+      parts.push(`<text x="${fx + fR * 2}" y="${fy}" fill="#E8D56B" font-family='${F}' font-size="${flipFont}" opacity="0.6">FLIP</text>`);
     }
 
-    // Destination marker
     const destR = mapState.zoom * 0.006;
-    const destMarker = document.createElementNS(SVG_NS, 'circle');
-    destMarker.setAttribute('cx', ri.destX);
-    destMarker.setAttribute('cy', ri.destY);
-    destMarker.setAttribute('r', destR);
-    destMarker.setAttribute('fill', 'none');
-    destMarker.setAttribute('stroke', '#E25555');
-    destMarker.setAttribute('stroke-width', mapState.zoom * 0.001);
-    svg.appendChild(destMarker);
+    parts.push(`<circle cx="${ri.destX}" cy="${ri.destY}" r="${destR}" fill="none" stroke="#E25555" stroke-width="${sw001}"/>`);
   }
 
-  // ---- CROSSHAIR AT MAP CENTER (subtle) ----
+  // ---- CROSSHAIR ----
   const chSize = mapState.zoom * 0.02;
-  const chGroup = document.createElementNS(SVG_NS, 'g');
-  chGroup.setAttribute('opacity', '0.15');
-  ['h', 'v'].forEach(dir => {
-    const line = document.createElementNS(SVG_NS, 'line');
-    if (dir === 'h') {
-      line.setAttribute('x1', mapState.cx - chSize);
-      line.setAttribute('y1', mapState.cy);
-      line.setAttribute('x2', mapState.cx + chSize);
-      line.setAttribute('y2', mapState.cy);
-    } else {
-      line.setAttribute('x1', mapState.cx);
-      line.setAttribute('y1', mapState.cy - chSize);
-      line.setAttribute('x2', mapState.cx);
-      line.setAttribute('y2', mapState.cy + chSize);
-    }
-    line.setAttribute('stroke', '#4FD1C5');
-    line.setAttribute('stroke-width', mapState.zoom * 0.0008);
-    chGroup.appendChild(line);
-  });
-  svg.appendChild(chGroup);
+  const chSW = mapState.zoom * 0.0008;
+  parts.push(
+    `<g opacity="0.15">` +
+    `<line x1="${mapState.cx - chSize}" y1="${mapState.cy}" x2="${mapState.cx + chSize}" y2="${mapState.cy}" stroke="#4FD1C5" stroke-width="${chSW}"/>` +
+    `<line x1="${mapState.cx}" y1="${mapState.cy - chSize}" x2="${mapState.cx}" y2="${mapState.cy + chSize}" stroke="#4FD1C5" stroke-width="${chSW}"/>` +
+    `</g>`
+  );
 
-  container.appendChild(svg);
+  // Single DOM write
+  container.innerHTML = `<svg width="100%" height="100%" viewBox="${vx} ${vy} ${vw} ${vh}" preserveAspectRatio="xMidYMid meet" style="display:block;background:#030810" xmlns="http://www.w3.org/2000/svg">${parts.join('')}</svg>`;
 
   const elapsed = performance.now() - t0;
-  const nodeCount = svg.querySelectorAll('*').length;
-  if (elapsed > 30 || nodeCount > 500) {
+  if (elapsed > 30) {
     const now = Date.now();
     if (now - _lastRenderWarn > 2000) {
-      console.warn(
-        `[SolarMap] SLOW render #${_renderCount}: ${elapsed.toFixed(1)}ms, ` +
-        `${nodeCount} SVG nodes, zoom=${mapState.zoom.toFixed(6)}, ` +
-        `center=(${mapState.cx.toFixed(4)}, ${mapState.cy.toFixed(4)})`
-      );
+      console.warn(`[SolarMap] render #${_renderCount}: ${elapsed.toFixed(1)}ms, zoom=${mapState.zoom.toFixed(2)}, center=(${mapState.cx.toFixed(4)}, ${mapState.cy.toFixed(4)})`);
       _lastRenderWarn = now;
     }
   }
 
-  return svg;
+  return container.firstChild;
 }
 
 // ---- HELPERS: screen → world coordinate conversion ----
