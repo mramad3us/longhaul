@@ -555,13 +555,23 @@ export function renderTacView(ship, container, thrustActive) {
 
   // Range rings (concentric from ship center)
   const cx = viewW / 2;
-  const shipY = viewH * 0.25; // ship sits in upper quarter
+  const cy = viewH / 2; // ship centered
+  const shipY = cy;
   const ringGroup = document.createElementNS(SVG_NS, 'g');
   ringGroup.setAttribute('opacity', '0.06');
-  [40, 80].forEach(r => {
-    ringGroup.innerHTML += `<ellipse cx="${cx}" cy="${shipY}" rx="${r}" ry="${r}" fill="none" stroke="#4FD1C5" stroke-width="0.5"/>`;
+  [30, 60, 90].forEach(r => {
+    ringGroup.innerHTML += `<ellipse cx="${cx}" cy="${cy}" rx="${r}" ry="${r}" fill="none" stroke="#4FD1C5" stroke-width="0.5"/>`;
   });
   svgEl.appendChild(ringGroup);
+
+  // Crosshair at center
+  const chGroup = document.createElementNS(SVG_NS, 'g');
+  chGroup.setAttribute('opacity', '0.1');
+  chGroup.innerHTML = `
+    <line x1="${cx}" y1="0" x2="${cx}" y2="${viewH}" stroke="#4FD1C5" stroke-width="0.5"/>
+    <line x1="0" y1="${cy}" x2="${viewW}" y2="${cy}" stroke="#4FD1C5" stroke-width="0.5"/>
+  `;
+  svgEl.appendChild(chGroup);
 
   // Ship outline — tiny simplified silhouette
   const shipW = 8; // pixels wide
@@ -591,8 +601,7 @@ export function renderTacView(ship, container, thrustActive) {
 
   if (thrustActive) {
     const plumeStartY = shipY + shipH / 2;
-    const plumeEndY = viewH + 40; // extends past viewport
-    const plumeLen = plumeEndY - plumeStartY;
+    const plumeLen = viewH * 2; // massive — extends far past the tac screen
     const maxPlumeW = viewW * 0.7; // plume fills most of the tac view width
 
     // Defs for tac plume glow
