@@ -171,7 +171,8 @@ function generateCrew(count) {
       deathTimer: -1, // minutes until death once critical (-1 = not dying)
 
       // Active status conditions
-      conditions: [], // e.g. ['crushed', 'critical', 'dead', 'brain-damage']
+      conditions: [], // e.g. ['crushed', 'critical', 'dead', 'brain-damage', 'juice-hangover']
+      juiceHangover: 0, // minutes remaining of juice hangover (increases brain damage risk under G)
 
       // Skills (0-100)
       skills,
@@ -977,7 +978,7 @@ const TAC_ZOOM_LEVELS = [
   { scale: 25,  range: '25 km',  shipMode: 'dot' },    // Far: ship is dot, plume is a star
 ];
 
-export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flipping = false, velocity = 0) {
+export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flipping = false, velocity = 0, orienting = false) {
   container.innerHTML = '';
 
   const viewW = container.clientWidth || 186;
@@ -1219,26 +1220,52 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
   }
   // dot mode: blinking dot only (below)
 
-  // RCS thrusters (close zoom only, during flip)
-  if (flipping && zoom.shipMode === 'hull') {
+  // RCS thrusters (close zoom only, during flip or orient)
+  if ((flipping || orienting) && zoom.shipMode === 'hull') {
     const rcsGroup = document.createElementNS(SVG_NS, 'g');
     const rcsW = 3;
     const rcsH = 1.5;
-    // 4 corners: top-left fires left, top-right fires right, etc.
+    // 4 corners: top-left, top-right, bottom-left, bottom-right
+    // For rotation: diagonal pairs fire together (TL+BR or TR+BL)
     const rcsPositions = [
-      { x: cx - shipPixelW / 2 - rcsW, y: cy - shipPixelH / 2 + 1, },
-      { x: cx + shipPixelW / 2, y: cy - shipPixelH / 2 + 1, },
-      { x: cx - shipPixelW / 2 - rcsW, y: cy + shipPixelH / 2 - 2, },
-      { x: cx + shipPixelW / 2, y: cy + shipPixelH / 2 - 2, },
+      { x: cx - shipPixelW / 2 - rcsW, y: cy - shipPixelH / 2 + 1 },  // 0: top-left
+      { x: cx + shipPixelW / 2,        y: cy - shipPixelH / 2 + 1 },  // 1: top-right
+      { x: cx - shipPixelW / 2 - rcsW, y: cy + shipPixelH / 2 - 2 },  // 2: bottom-left
+      { x: cx + shipPixelW / 2,        y: cy + shipPixelH / 2 - 2 },  // 3: bottom-right
     ];
-    rcsPositions.forEach(pos => {
-      rcsGroup.innerHTML += `
-        <rect x="${pos.x}" y="${pos.y}" width="${rcsW}" height="${rcsH}"
-          fill="#E2A355" opacity="0.9">
-          <animate attributeName="opacity" values="0.5;1;0.5" dur="0.08s" repeatCount="indefinite"/>
-        </rect>
-      `;
-    });
+
+    if (flipping) {
+      // Flip: all 4 fire rapidly
+      rcsPositions.forEach(pos => {
+        rcsGroup.innerHTML += `
+          <rect x="${pos.x}" y="${pos.y}" width="${rcsW}" height="${rcsH}"
+            fill="#E2A355" opacity="0.9">
+            <animate attributeName="opacity" values="0.5;1;0.5" dur="0.08s" repeatCount="indefinite"/>
+          </rect>
+        `;
+      });
+    } else {
+      // Orient: alternating diagonal pairs with irregular pulses
+      // Pair A: top-left + bottom-right (clockwise torque)
+      // Pair B: top-right + bottom-left (counter-clockwise correction)
+      const pairA = [0, 3];
+      const pairB = [1, 2];
+      rcsPositions.forEach((pos, i) => {
+        const isPairA = pairA.includes(i);
+        // Pair A: long pulse, short off — dominant thrust
+        // Pair B: short correction pulse with longer pause
+        const vals = isPairA
+          ? '0;0.9;0.9;0.7;0;0;0;0;0;0.8;0.9;0;0'
+          : '0;0;0;0;0;0.7;0.8;0;0;0;0;0;0';
+        const dur = isPairA ? '2.4s' : '2.4s';
+        rcsGroup.innerHTML += `
+          <rect x="${pos.x}" y="${pos.y}" width="${rcsW}" height="${rcsH}"
+            fill="#E2A355" opacity="0">
+            <animate attributeName="opacity" values="${vals}" dur="${dur}" repeatCount="indefinite"/>
+          </rect>
+        `;
+      });
+    }
     shipGroup.appendChild(rcsGroup);
   }
 

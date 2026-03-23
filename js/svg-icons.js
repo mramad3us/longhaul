@@ -406,6 +406,21 @@ export function iconCrew() {
   ], { p: C.purple, s: C.skin1, t: C.purpleDk, l: C.metalDk }, 1));
 }
 
+export function iconMedical() {
+  return svg(18, 18, '0 0 12 12', sprite([
+    '....rr......',
+    '....rr......',
+    '..rrrrrr....',
+    '..rrrrrr....',
+    '....rr......',
+    '....rr......',
+    '............',
+    '..wwwwww....',
+    '..w....w....',
+    '..wwwwww....',
+  ], { r: C.redLt, w: C.white }, 1));
+}
+
 export function iconPower() {
   return svg(18, 18, '0 0 12 12', `
     ${sprite([

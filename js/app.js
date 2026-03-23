@@ -7,7 +7,7 @@ import {
   iconNewGame, iconLoadGame, iconSettings, iconPause,
   iconHudSettings, iconHudSave, iconHudExit,
   iconMinus, iconPlus, iconDelete, iconThrust,
-  iconFuel, iconOxygen, iconN2, iconWater, iconFood, iconCrew, iconPower,
+  iconFuel, iconOxygen, iconN2, iconWater, iconFood, iconCrew, iconPower, iconMedical,
   logoShip, createStarfield, setCrewGravity, TILE_NAMES, TileType,
 } from './svg-icons.js';
 
@@ -19,7 +19,8 @@ import { toggleThrust, setThrustLevel, startFlip, updateFlip, CrewState, stabili
 import { initCrewMovement, updateCrewMovement, getCrewMission, isBeingRescued, assignRecoverMission, assignRescueMission, cancelMission, assignSecureBurnMission, releaseSecureBurn, isSeatedInCouch, assignRepairLSMission, isRepairComplete, assignEquipSuitMission, isSuitDonned } from './crew-movement.js';
 import { generateAutoJobs, clearJobs, getJobQueue, getCrewJobs, completeJob, JobPriority, JobType } from './jobs.js';
 import { getAtmoStatus, getEquipmentStatusLabel, depressurizeCompartment, repressurizeCompartment, quickPatchLS, toggleLS, countSuitsOnDeck, donEvaSuit, removeEvaSuit, findNearestSuitLocker } from './life-support.js';
-import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet, SOLAR_ZOOM_PRESETS, resetMapState, getMapState } from './solar-system.js';
+import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet, SOLAR_ZOOM_PRESETS, resetMapState, getMapState, setOnBodySelect, getSelectedBody, setSelectedBody } from './solar-system.js';
+import { findBody, getBodyWorldPos, calculateRoutes, activateRoute, cancelRoute, getActiveRoute, getRouteProgress, formatDuration, formatDeltaV, serializeRoute, deserializeRoute, resetRoute } from './navigation.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -31,9 +32,17 @@ let particleInterval = null;
 let lastCrewStateKey = null;
 let lastThrustActive = null;
 let lastTacVelocityBucket = null;
+let lastOrienting = null;
+// Orient maneuver state: null | 'waiting-pilot' | 'waiting-crew' | 'active'
+let _orientState = null;
 let tacZoomLevel = 0;
 let flipAnimFrame = null;
 let crewMoveFrame = null;
+
+// ---- ROUTE PLANNING ----
+let routePanelOpen = false;
+let computedRoutes = [];
+let selectedRouteIdx = -1;
 
 // ---- SHIP'S LOG ----
 const MAX_LOG_ENTRIES = 200;
@@ -141,6 +150,82 @@ function showToast(message, type = '') {
   setTimeout(() => {
     if (toast.parentNode) toast.parentNode.removeChild(toast);
   }, 3200);
+}
+
+// ---- MANEUVER PROMPT ----
+// Persistent overlay when orient phase is waiting for crew/pilot
+
+function showManeuverPrompt() {
+  let el = document.getElementById('maneuver-prompt');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'maneuver-prompt';
+    el.className = 'maneuver-prompt';
+    document.getElementById('screen-game')?.appendChild(el);
+  }
+  el.style.display = 'flex';
+  updateManeuverPrompt();
+}
+
+function updateManeuverPrompt() {
+  const el = document.getElementById('maneuver-prompt');
+  if (!el) return;
+
+  const pilot = gameState?.ship.crew.find(c => c.role === 'Pilot' && !c.dead);
+  const pilotReady = pilot && isSeatedInCouch(pilot.id);
+
+  const aliveCrew = gameState?.ship.crew.filter(c => !c.dead && c.consciousness > 10) || [];
+  const secured = aliveCrew.filter(c => isSeatedInCouch(c.id));
+  const unsecured = aliveCrew.length - secured.length;
+
+  let statusHtml = '';
+  if (!pilotReady) {
+    statusHtml = `<span class="mp-status mp-waiting">PILOT EN ROUTE TO HELM</span>`;
+  } else if (unsecured > 0) {
+    statusHtml = `<span class="mp-status mp-caution">${unsecured} CREW UNSECURED</span>`;
+  } else {
+    statusHtml = `<span class="mp-status mp-ready">ALL HANDS SECURED</span>`;
+  }
+
+  const crewDots = aliveCrew.map(c => {
+    const seated = isSeatedInCouch(c.id);
+    const isPilot = c.role === 'Pilot';
+    return `<span class="mp-dot ${seated ? 'mp-dot-ok' : 'mp-dot-wait'} ${isPilot ? 'mp-dot-pilot' : ''}" title="${c.name} — ${seated ? 'secured' : 'moving'}">${isPilot ? 'P' : '·'}</span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="mp-header">ORIENTATION MANEUVER</div>
+    <div class="mp-crew-row">${crewDots}</div>
+    ${statusHtml}
+    <button class="mp-engage-btn" id="mp-engage-btn" ${!pilotReady ? 'disabled' : ''}>${pilotReady ? 'ENGAGE MANEUVER' : 'WAITING FOR PILOT'}</button>
+  `;
+
+  const btn = document.getElementById('mp-engage-btn');
+  if (btn && pilotReady) {
+    btn.onclick = () => engageOrientManeuver(gameState);
+  }
+}
+
+function engageOrientManeuver(state) {
+  _orientState = 'active';
+  hideManeuverPrompt();
+  showRcsThrusters('orient');
+
+  const pilot = state.ship.crew.find(c => c.role === 'Pilot' && !c.dead);
+  const aliveCrew = state.ship.crew.filter(c => !c.dead && c.consciousness > 10);
+  const unsecured = aliveCrew.filter(c => !isSeatedInCouch(c.id));
+
+  if (unsecured.length > 0) {
+    addLogEntry(`${pilot?.name || 'Pilot'}: engaging maneuver — ${unsecured.length} crew unsecured!`, 'warn');
+    showToast(`MANEUVER — ${unsecured.length} crew unsecured!`, 'warn');
+  } else {
+    addLogEntry(`${pilot?.name || 'Pilot'}: all hands secured — engaging orientation`, 'nav');
+  }
+}
+
+function hideManeuverPrompt() {
+  const el = document.getElementById('maneuver-prompt');
+  if (el) el.style.display = 'none';
 }
 
 // ---- FLOATING PARTICLES ----
@@ -331,6 +416,18 @@ async function refreshSaveList() {
       if (!gameState.shipPosition) {
         gameState.shipPosition = { x: 2.77, y: 0.0 };
       }
+      // Migrate: add route navigation fields if missing
+      if (!gameState.navigation.routeActive) {
+        gameState.navigation.routeActive = false;
+        gameState.navigation.routeHeading = null;
+        gameState.navigation.routeDestination = null;
+      }
+      // Restore active route (reset first to clear stale state from previous game)
+      resetRoute();
+      if (gameState._activeRoute) {
+        deserializeRoute(gameState._activeRoute, gameState);
+        delete gameState._activeRoute;
+      }
       startGame();
       showToast('Mission loaded', 'ok');
     });
@@ -421,7 +518,7 @@ function initHud() {
       updateThrustSliderUI(0);
 
       // Show RCS thrusters on main view
-      showRcsThrusters(true);
+      showRcsThrusters('flip');
 
       const flipBtn = document.getElementById('flip-toggle');
       flipBtn.classList.add('flipping');
@@ -436,7 +533,7 @@ function initHud() {
         // Update RCS on tac view during flip (close zoom only)
         const tacScreen = document.getElementById('tac-screen');
         if (tacScreen && tacZoomLevel === 0) {
-          renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys));
+          renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting);
         }
 
         if (complete) {
@@ -484,6 +581,7 @@ function initHud() {
 
   // Tac modal controls
   initTacModal();
+  initRoutePanel();
 }
 
 // ---- TACTICAL MAP MODAL ----
@@ -598,10 +696,37 @@ function renderSolarTab(forceRender) {
   const solarScreen = document.getElementById('solar-screen-modal');
   if (!solarScreen) return;
 
+  // Build route info for solar map rendering
+  let routeInfo = null;
+  const activeRt = getActiveRoute();
+  const selBody = getSelectedBody();
+  if (activeRt && activeRt.active) {
+    const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
+    const destBody = findBody(activeRt.destinationName);
+    if (destBody) {
+      const dp = getBodyWorldPos(destBody, days);
+      const progress = getRouteProgress();
+      routeInfo = {
+        destX: dp.x, destY: dp.y, active: true,
+        flipFraction: progress?.flipFraction ?? 0.5,
+        flipDone: progress?.flipDone ?? false,
+        startPosition: progress?.startPosition || gameState.shipPosition,
+      };
+    }
+  } else if (selBody && !routePanelOpen) {
+    // Show dashed line to selected body
+    const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
+    const body = findBody(selBody.name);
+    if (body) {
+      const dp = getBodyWorldPos(body, days);
+      routeInfo = { destX: dp.x, destY: dp.y, active: false };
+    }
+  }
+
   // Throttle SVG re-render to every 30 ticks (~0.5s at 60fps) unless forced
   solarRenderCounter++;
   if (forceRender || solarRenderCounter % 30 === 0) {
-    renderSolarSystem(solarScreen, gameState);
+    renderSolarSystem(solarScreen, gameState, routeInfo);
   }
 
   // Update info bar every tick (cheap DOM updates)
@@ -609,16 +734,206 @@ function renderSolarTab(forceRender) {
   const velEl = document.getElementById('tac-modal-velocity');
   const headEl = document.getElementById('tac-modal-heading');
   const thrEl = document.getElementById('tac-modal-thrust');
+  const plotBtn = document.getElementById('route-plot-btn');
   const phys = gameState.physics;
-  if (velEl) velEl.textContent = `VEL ${formatVelocity(getRelativeVelocity(phys))}`;
-  if (headEl) headEl.textContent = `ZOOM ${ms.zoom.toFixed(ms.zoom < 1 ? 3 : 1)} AU`;
-  if (thrEl) {
-    const sp = gameState.shipPosition;
-    if (sp) {
-      const dist = Math.sqrt(sp.x * sp.x + sp.y * sp.y);
-      thrEl.textContent = `POS ${dist.toFixed(2)} AU`;
-    }
+
+  // Active route status bar
+  const statusBar = document.getElementById('route-status-bar');
+  const progress = getRouteProgress();
+  if (progress) {
+    if (statusBar) statusBar.style.display = 'flex';
+    const destEl = document.getElementById('route-status-dest');
+    const phaseEl = document.getElementById('route-status-phase');
+    const fillEl = document.getElementById('route-status-fill');
+    const etaEl = document.getElementById('route-status-eta');
+    if (destEl) destEl.textContent = `→ ${progress.destinationName}`;
+    if (phaseEl) phaseEl.textContent = progress.currentPhase?.type?.toUpperCase() || '';
+    if (fillEl) fillEl.style.width = `${(progress.fraction * 100).toFixed(1)}%`;
+    if (etaEl) etaEl.textContent = `ETA ${formatDuration(progress.etaMin)}`;
+  } else {
+    if (statusBar) statusBar.style.display = 'none';
   }
+
+  if (velEl) velEl.textContent = `VEL ${formatVelocity(getRelativeVelocity(phys))}`;
+
+  // Show body selection info or default zoom/pos display
+  if (selBody && !getActiveRoute()) {
+    const body = findBody(selBody.name);
+    if (body && headEl) {
+      const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
+      const dp = getBodyWorldPos(body, days);
+      const sp = gameState.shipPosition;
+      const d = Math.sqrt((dp.x - sp.x) ** 2 + (dp.y - sp.y) ** 2);
+      headEl.textContent = `${selBody.name.toUpperCase()} ${d.toFixed(2)} AU`;
+    }
+    if (plotBtn) plotBtn.style.display = '';
+    if (thrEl) thrEl.textContent = '';
+  } else {
+    if (headEl) headEl.textContent = `ZOOM ${ms.zoom.toFixed(ms.zoom < 1 ? 3 : 1)} AU`;
+    if (thrEl) {
+      const sp = gameState.shipPosition;
+      if (sp) {
+        const dist = Math.sqrt(sp.x * sp.x + sp.y * sp.y);
+        thrEl.textContent = `POS ${dist.toFixed(2)} AU`;
+      }
+    }
+    if (plotBtn) plotBtn.style.display = 'none';
+  }
+}
+
+// ---- ROUTE PLANNING UI ----
+
+function handleBodySelect(body) {
+  const plotBtn = document.getElementById('route-plot-btn');
+  if (body && !getActiveRoute()) {
+    if (plotBtn) plotBtn.style.display = '';
+  } else {
+    if (plotBtn) plotBtn.style.display = 'none';
+  }
+  renderSolarTab(true);
+}
+
+function openRoutePanel() {
+  const selBody = getSelectedBody();
+  if (!selBody || !gameState) return;
+
+  const body = findBody(selBody.name);
+  if (!body) return;
+
+  computedRoutes = calculateRoutes(gameState, body);
+  selectedRouteIdx = -1;
+  routePanelOpen = true;
+
+  const panel = document.getElementById('route-panel');
+  if (panel) panel.style.display = 'flex';
+
+  document.getElementById('route-dest-name').textContent = selBody.name.toUpperCase();
+
+  const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
+  const dp = getBodyWorldPos(body, days);
+  const sp = gameState.shipPosition;
+  const dist = Math.sqrt((dp.x - sp.x) ** 2 + (dp.y - sp.y) ** 2);
+  document.getElementById('route-dest-dist').textContent = `${dist.toFixed(3)} AU · ${(dist * 149.6).toFixed(0)} Mkm`;
+
+  renderRouteCards();
+}
+
+function closeRoutePanel() {
+  routePanelOpen = false;
+  computedRoutes = [];
+  selectedRouteIdx = -1;
+  const panel = document.getElementById('route-panel');
+  if (panel) panel.style.display = 'none';
+  document.getElementById('route-confirm-btn').disabled = true;
+}
+
+function renderRouteCards() {
+  const container = document.getElementById('route-options');
+  if (!container) return;
+
+  container.innerHTML = computedRoutes.map((r, i) => {
+    const totalMin = r.phases.reduce((s, p) => s + p.durationMin, 0);
+    const phaseSegments = r.phases
+      .filter(p => p.durationMin > 0)
+      .map(p => {
+        const pct = Math.max(2, (p.durationMin / totalMin) * 100);
+        return `<div class="route-phase-seg ${p.type}" style="width:${pct}%" title="${p.description}"></div>`;
+      }).join('');
+
+    return `
+      <div class="route-card ${!r.feasible ? 'infeasible' : ''} ${i === selectedRouteIdx ? 'selected' : ''}" data-route-idx="${i}">
+        <div class="route-card-header">
+          <span class="route-card-name">${escapeHtml(r.name)}</span>
+          <span class="route-card-type">${escapeHtml(r.label)}</span>
+        </div>
+        <div class="route-card-stats">
+          <span class="route-stat">TIME <span class="route-stat-val">${formatDuration(r.totalTimeMin)}</span></span>
+          <span class="route-stat">FUEL <span class="route-stat-val">${r.fuelRequired.toFixed(0)} kg (${r.fuelPercent.toFixed(1)}%)</span></span>
+          <span class="route-stat">ΔV <span class="route-stat-val">${formatDeltaV(r.deltaV)}</span></span>
+          <span class="route-stat">MAX-G <span class="route-stat-val ${r.accelG > 1.5 ? 'route-juice-warn' : ''}">${r.accelG.toFixed(1)}G${r.accelG > 1.5 ? ' · JUICE' : ''}</span></span>
+          <span class="route-stat">PEAK-V <span class="route-stat-val">${formatVelocity(r.peakVelocity)}</span></span>
+          <span class="route-stat">DIST <span class="route-stat-val">${r.distanceAU.toFixed(3)} AU</span></span>
+        </div>
+        <div class="route-phase-bar">${phaseSegments}</div>
+        <div class="route-phase-legend">
+          ${r.phases.filter(p => p.durationMin > 0).map(p =>
+            `<span class="route-phase-label"><span class="route-phase-dot ${p.type}" style="background:${phaseColor(p.type)}"></span>${p.type.toUpperCase()} ${formatDuration(p.durationMin)}</span>`
+          ).join('')}
+        </div>
+        <div class="route-card-feasibility ${r.feasible ? 'route-feasible' : 'route-infeasible'}">
+          ${r.feasible ? '● FEASIBLE' : '● INSUFFICIENT FUEL'}
+        </div>
+        ${r.accelG > 1.5 ? `<div class="route-juice-note">⚠ Juice required — 1 med supply/crew · hangover risk (${gameState.resources.medSupplies.current} in stock)</div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // Bind click handlers
+  container.querySelectorAll('.route-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const idx = parseInt(card.dataset.routeIdx);
+      if (!computedRoutes[idx]?.feasible) return;
+      selectedRouteIdx = idx;
+      container.querySelectorAll('.route-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      document.getElementById('route-confirm-btn').disabled = false;
+    });
+  });
+}
+
+function phaseColor(type) {
+  const colors = { orient: '#5A8A9A', secure: '#8B8B4A', burn: '#D16A4B', coast: '#2A5A7A', flip: '#E8D56B', arrive: '#6BCB77' };
+  return colors[type] || '#444';
+}
+
+function confirmRoute() {
+  if (selectedRouteIdx < 0 || !computedRoutes[selectedRouteIdx]) return;
+
+  const route = computedRoutes[selectedRouteIdx];
+  activateRoute(gameState, route);
+
+  // Reset velocity for fresh route
+  gameState.physics.velocity = 0;
+  gameState.physics.heading = 0;
+
+  addLogEntry(`Course plotted for ${route.destinationName} — ${route.name} ${route.label}`, 'nav');
+  addLogEntry(`ETA: ${formatDuration(route.totalTimeMin)} · ΔV: ${formatDeltaV(route.deltaV)} · Fuel: ${route.fuelRequired.toFixed(0)} kg`, 'nav');
+  showToast(`Route confirmed — game paused. Unpause when ready.`, 'ok');
+
+  // Pause so the player can close the map before the sequence starts
+  if (gameLoop) { gameLoop.setSpeed(0); updateSpeedUI(0); }
+
+  closeRoutePanel();
+  setSelectedBody(null);
+  renderSolarTab(true);
+}
+
+function abortRoute() {
+  const rt = getActiveRoute();
+  if (!rt) return;
+  cancelRoute(gameState);
+  _orientState = null;
+  hideManeuverPrompt();
+  showRcsThrusters(false);
+  addLogEntry('Navigation route ABORTED — engines cut', 'warn');
+  showToast('Route aborted', 'warn');
+  renderSolarTab(true);
+}
+
+function initRoutePanel() {
+  // Plot Route button
+  document.getElementById('route-plot-btn')?.addEventListener('click', openRoutePanel);
+
+  // Route panel close
+  document.getElementById('route-panel-close')?.addEventListener('click', closeRoutePanel);
+  document.getElementById('route-cancel-btn')?.addEventListener('click', closeRoutePanel);
+  document.getElementById('route-confirm-btn')?.addEventListener('click', confirmRoute);
+
+  // Abort route button
+  document.getElementById('route-abort-btn')?.addEventListener('click', abortRoute);
+
+  // Body selection callback
+  setOnBodySelect(handleBodySelect);
 }
 
 function openTacModal() {
@@ -652,7 +967,7 @@ function renderTacModal() {
   const tacScreen = document.getElementById('tac-screen-modal');
   if (!tacScreen) return;
   const phys = gameState.physics;
-  renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacModalZoom, phys.flipping, getRelativeVelocity(phys));
+  renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacModalZoom, phys.flipping, getRelativeVelocity(phys), phys.orienting);
 
   // Update info bar
   const vel = getRelativeVelocity(phys);
@@ -665,19 +980,17 @@ function renderTacModal() {
 }
 
 // ---- RCS THRUSTER VISUALS (main view) ----
-function showRcsThrusters(active) {
+// mode: false/null = hide, 'flip' = all fire rapidly, 'orient' = alternating diagonal pulses
+function showRcsThrusters(mode) {
   const existing = document.getElementById('rcs-thrusters');
-  if (!active) {
-    if (existing) existing.setAttribute('display', 'none');
+  if (!mode) {
+    if (existing) existing.remove();
     return;
   }
 
-  if (existing) {
-    existing.setAttribute('display', 'inline');
-    return;
-  }
+  // Always recreate to switch between flip/orient animation patterns
+  if (existing) existing.remove();
 
-  // Create RCS thruster group on the ship SVG
   const shipSvg = document.querySelector('#ship-container svg');
   if (!shipSvg) return;
 
@@ -685,12 +998,6 @@ function showRcsThrusters(active) {
   const rcs = document.createElementNS(SVG_NS, 'g');
   rcs.setAttribute('id', 'rcs-thrusters');
 
-  // Find hull bounds from the ship SVG viewBox
-  const vb = shipSvg.getAttribute('viewBox').split(' ').map(Number);
-  const svgW = vb[2];
-
-  // Ship hull: roughly tiles at offsetX to offsetX + shipWidth
-  // We'll position RCS at corners of the hull outline
   const hullEl = shipSvg.querySelector('path[stroke]');
   if (!hullEl) return;
 
@@ -700,30 +1007,108 @@ function showRcsThrusters(active) {
   const hw = bbox.width;
   const hh = bbox.height;
 
-  // 4 RCS thruster positions: top-left, top-right, bottom-left, bottom-right
+  // Add glow filter for plumes
+  let defs = shipSvg.querySelector('defs');
+  if (defs && !shipSvg.querySelector('#rcs-glow')) {
+    defs.innerHTML += `
+      <filter id="rcs-glow" x="-100%" y="-100%" width="300%" height="300%">
+        <feGaussianBlur stdDeviation="3" result="blur"/>
+        <feMerge>
+          <feMergeNode in="blur"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+    `;
+  }
+
+  // Position thrusters at ~20% and ~80% down the hull (fore and aft pairs)
+  // Each side of the hull, firing outward perpendicular
+  const foreY = hy + hh * 0.15;
+  const aftY = hy + hh * 0.78;
+  const nozzleOffset = 4;  // how far from hull edge
+
+  // 4 thruster positions: fore-port, fore-starboard, aft-port, aft-starboard
+  // dir: -1 = fires left (port), +1 = fires right (starboard)
   const positions = [
-    { x: hx - 6, y: hy + 8, dir: -1 },       // top-left: fires left
-    { x: hx + hw + 6, y: hy + 8, dir: 1 },    // top-right: fires right
-    { x: hx - 6, y: hy + hh - 8, dir: 1 },    // bottom-left: fires right (torque)
-    { x: hx + hw + 6, y: hy + hh - 8, dir: -1 }, // bottom-right: fires left (torque)
+    { x: hx - nozzleOffset, y: foreY, dir: -1, label: 'FP' },   // 0: fore-port
+    { x: hx + hw + nozzleOffset, y: foreY, dir: 1, label: 'FS' },  // 1: fore-starboard
+    { x: hx - nozzleOffset, y: aftY, dir: -1, label: 'AP' },    // 2: aft-port
+    { x: hx + hw + nozzleOffset, y: aftY, dir: 1, label: 'AS' },   // 3: aft-starboard
   ];
+
+  // Diagonal pairs for rotation torque:
+  // Pair A: fore-port(0) + aft-starboard(3) — clockwise
+  // Pair B: fore-starboard(1) + aft-port(2) — counter-clockwise
+  const pairA = [0, 3];
 
   const thrusterParts = [];
   positions.forEach((pos, i) => {
-    const plumeW = 8;
-    const plumeH = 3;
-    // Small blocky RCS plume pointing outward
-    const px = pos.dir > 0 ? pos.x : pos.x - plumeW;
+    const isPairA = pairA.includes(i);
+    const d = pos.dir;
+
+    // Nozzle housing (small dark block on hull)
+    const nzW = 6;
+    const nzH = 10;
+    const nzX = d > 0 ? pos.x - 2 : pos.x - nzW + 2;
     thrusterParts.push(`
-      <rect x="${px}" y="${pos.y - plumeH / 2}" width="${plumeW}" height="${plumeH}"
-        fill="#E2A355" opacity="0.9">
-        <animate attributeName="opacity" values="0.6;1;0.6" dur="0.08s" repeatCount="indefinite"/>
-      </rect>
-      <rect x="${px + (pos.dir > 0 ? plumeW : -3)}" y="${pos.y - 1}" width="3" height="2"
-        fill="#FFCC66" opacity="0.7">
-        <animate attributeName="opacity" values="0.4;0.8;0.4" dur="0.06s" repeatCount="indefinite"/>
-      </rect>
+      <rect x="${nzX}" y="${pos.y - nzH / 2}" width="${nzW}" height="${nzH}"
+        fill="#1A2A3A" stroke="#3D7A8A" stroke-width="0.5" opacity="0.8"/>
     `);
+
+    // Plume: conical exhaust shooting outward
+    // Triangle: narrow at nozzle, wide at tip
+    const plumeLen = 20;
+    const plumeNarrow = 4;
+    const plumeWide = 12;
+    const baseX = d > 0 ? pos.x + 1 : pos.x - 1;
+    const tipX = baseX + d * plumeLen;
+
+    // Main plume triangle
+    const p1x = baseX; const p1y = pos.y - plumeNarrow / 2;
+    const p2x = baseX; const p2y = pos.y + plumeNarrow / 2;
+    const p3x = tipX;  const p3y = pos.y - plumeWide / 2;
+    const p4x = tipX;  const p4y = pos.y + plumeWide / 2;
+
+    // Inner bright core (narrower)
+    const coreLen = plumeLen * 0.6;
+    const coreTipX = baseX + d * coreLen;
+    const coreWide = 6;
+    const c1x = baseX; const c1y = pos.y - 2;
+    const c2x = baseX; const c2y = pos.y + 2;
+    const c3x = coreTipX; const c3y = pos.y - coreWide / 2;
+    const c4x = coreTipX; const c4y = pos.y + coreWide / 2;
+
+    if (mode === 'flip') {
+      // All fire rapidly with flickering
+      thrusterParts.push(`
+        <polygon points="${p1x},${p1y} ${p2x},${p2y} ${p4x},${p4y} ${p3x},${p3y}"
+          fill="#E2A355" opacity="0.7" filter="url(#rcs-glow)">
+          <animate attributeName="opacity" values="0.5;0.8;0.6;0.9;0.5" dur="0.12s" repeatCount="indefinite"/>
+        </polygon>
+        <polygon points="${c1x},${c1y} ${c2x},${c2y} ${c4x},${c4y} ${c3x},${c3y}"
+          fill="#FFDD77" opacity="0.9">
+          <animate attributeName="opacity" values="0.7;1;0.8;1;0.7" dur="0.08s" repeatCount="indefinite"/>
+        </polygon>
+      `);
+    } else {
+      // Orient: alternating diagonal pair pulses
+      const opVals = isPairA
+        ? '0;0.7;0.8;0.6;0;0;0;0;0;0.7;0.8;0;0'
+        : '0;0;0;0;0;0.6;0.7;0;0;0;0;0;0';
+      const coreVals = isPairA
+        ? '0;0.9;1;0.8;0;0;0;0;0;0.9;1;0;0'
+        : '0;0;0;0;0;0.8;0.9;0;0;0;0;0;0';
+      thrusterParts.push(`
+        <polygon points="${p1x},${p1y} ${p2x},${p2y} ${p4x},${p4y} ${p3x},${p3y}"
+          fill="#E2A355" opacity="0" filter="url(#rcs-glow)">
+          <animate attributeName="opacity" values="${opVals}" dur="2.4s" repeatCount="indefinite"/>
+        </polygon>
+        <polygon points="${c1x},${c1y} ${c2x},${c2y} ${c4x},${c4y} ${c3x},${c3y}"
+          fill="#FFDD77" opacity="0">
+          <animate attributeName="opacity" values="${coreVals}" dur="2.4s" repeatCount="indefinite"/>
+        </polygon>
+      `);
+    }
   });
 
   rcs.innerHTML = thrusterParts.join('');
@@ -796,14 +1181,30 @@ function selectCrew(member) {
     'hypoxic': 'HYPOXIC',
     'hypercapnia': 'HYPERCAPNIA',
     'decompression': 'DECOMPRESSION',
+    'juice-hangover': 'JUICE HANGOVER',
   };
 
-  const condHtml = member.conditions.length > 0
-    ? member.conditions.map(c => {
-      const severity = (c === 'dead' || c === 'crushed' || c === 'unconscious' || c === 'decompression') ? 'danger'
-        : (c === 'critical') ? 'critical'
-        : (c === 'brain-damage' || c === 'cardiac-stress' || c === 'injured' || c === 'hypoxic' || c === 'hypercapnia') ? 'warning' : 'dim';
-      return `<span class="crew-condition crew-condition-${severity}">${condLabels[c] || c.toUpperCase()}</span>`;
+  // Build condition tags — add juice status dynamically
+  const liveConds = [...member.conditions];
+  if (member._juiceActive) liveConds.unshift('juiced');
+
+  const condHtml = liveConds.length > 0
+    ? liveConds.map(c => {
+      let severity, label;
+      if (c === 'juiced') {
+        severity = 'juice';
+        label = 'JUICED';
+      } else if (c === 'juice-hangover') {
+        severity = 'hangover';
+        const hrs = Math.ceil((member.juiceHangover || 0) / 60);
+        label = `HANGOVER ${hrs}h`;
+      } else {
+        severity = (c === 'dead' || c === 'crushed' || c === 'unconscious' || c === 'decompression') ? 'danger'
+          : (c === 'critical') ? 'critical'
+          : (c === 'brain-damage' || c === 'cardiac-stress' || c === 'injured' || c === 'hypoxic' || c === 'hypercapnia') ? 'warning' : 'dim';
+        label = condLabels[c] || c.toUpperCase();
+      }
+      return `<span class="crew-condition crew-condition-${severity}">${label}</span>`;
     }).join('')
     : '<span class="crew-condition crew-condition-ok">NOMINAL</span>';
 
@@ -1281,6 +1682,7 @@ const RESOURCE_CONFIG = [
   { key: 'water', name: 'H2O', icon: iconWater, barClass: 'bar-water' },
   { key: 'food', name: 'Food', icon: iconFood, barClass: 'bar-food' },
   { key: 'power', name: 'Power', icon: iconPower, barClass: 'bar-power' },
+  { key: 'medSupplies', name: 'Med', icon: iconMedical, barClass: 'bar-medical' },
 ];
 
 function initResourcePanel() {
@@ -1511,17 +1913,38 @@ function updateHud(state) {
   const relVel = getRelativeVelocity(phys);
   const velSign = relVel >= 0 ? 1 : -1;
   const velBucket = velSign * Math.floor(Math.abs(relVel) / 5000);
-  const tacNeedsUpdate = phys.thrustActive !== lastThrustActive || velBucket !== lastTacVelocityBucket;
+  const tacNeedsUpdate = phys.thrustActive !== lastThrustActive || velBucket !== lastTacVelocityBucket || !!phys.orienting !== lastOrienting;
   if (tacNeedsUpdate) {
     lastThrustActive = phys.thrustActive;
     lastTacVelocityBucket = velBucket;
+    lastOrienting = !!phys.orienting;
     const tacScreen = document.getElementById('tac-screen');
     if (tacScreen) {
-      renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys));
+      renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting);
     }
     // Keep modal tac in sync (full re-render on significant change)
     if (tacModalOpen && tacModalTab === 'tactical') renderTacModal();
   }
+  // Orient maneuver gating: pilot must be at helm, then wait for crew (or player override)
+  if (_orientState === 'waiting-pilot') {
+    const pilot = state.ship.crew.find(c => c.role === 'Pilot' && !c.dead);
+    if (pilot && isSeatedInCouch(pilot.id)) {
+      _orientState = 'waiting-crew';
+      addLogEntry(`${pilot.name} at helm — awaiting crew secure`, 'nav');
+      updateManeuverPrompt();
+    }
+  }
+  if (_orientState === 'waiting-crew') {
+    const allSecured = state.ship.crew.every(c =>
+      c.dead || c.consciousness <= 10 || isSeatedInCouch(c.id)
+    );
+    if (allSecured) {
+      engageOrientManeuver(state);
+    } else {
+      updateManeuverPrompt();
+    }
+  }
+
   // Update tac modal info bar every tick (velocity, heading, thrust always fresh)
   if (tacModalOpen) {
     if (tacModalTab === 'tactical') {
@@ -1703,6 +2126,8 @@ function startGame() {
       }
     });
 
+    // Route execution now handled in _processMinute via onPhysicsEvent("routeEvents")
+
     // Jobs system tick — generate and assign jobs
     const devMode = document.body.classList.contains('dev-mode');
     const jobLogs = generateAutoJobs(state.ship, state.physics, devMode, state.lsEquipment, state);
@@ -1711,6 +2136,9 @@ function startGame() {
     }
 
     // Secure-for-burn: dispatch crew to crash couches under high-G
+    // Skip auto-release during active route secure/burn phases
+    const routePhase = getRouteProgress()?.currentPhase?.type;
+    const routeHoldingCrew = routePhase === 'secure' || routePhase === 'burn' || routePhase === 'orient' || routePhase === 'flip';
     const gForce = state.physics.gForce || 0;
     if (gForce >= 1.5) {
       state.ship.crew.forEach(member => {
@@ -1720,8 +2148,8 @@ function startGame() {
           assignSecureBurnMission(state.ship, member);
         }
       });
-    } else {
-      // Release crew from crash couches when G normalises
+    } else if (!routeHoldingCrew) {
+      // Release crew from crash couches when G normalises (and no route holding them)
       state.ship.crew.forEach(member => {
         if (getCrewMission(member.id) === 'secure-burn') {
           releaseSecureBurn(member.id);
@@ -1754,11 +2182,12 @@ function startGame() {
           completeJob(lsJob.id);
           cancelMission(member.id);
           if (repairResult.success) {
-            showToast(`${member.name} patched ${deckName} LS`, 'ok');
-            addLogEntry(`${member.name} patched life support on ${deckName} — ${repairResult.message}`, 'ok');
+            const verb = repairResult.repairType === 'full' ? 'repaired' : 'patched';
+            showToast(`${member.name} ${verb} ${deckName} LS`, 'ok');
+            addLogEntry(`${member.name} ${verb} life support on ${deckName} — ${repairResult.message}`, 'ok');
           } else {
-            showToast(`${member.name}: patch failed`, 'warn');
-            addLogEntry(`${member.name} failed to patch ${deckName} life support — will retry`, 'warn');
+            showToast(`${member.name}: repair failed`, 'warn');
+            addLogEntry(`${member.name} failed to repair ${deckName} life support — will retry`, 'warn');
           }
         }
       }
@@ -1815,7 +2244,16 @@ function startGame() {
     // Live-refresh jobs dialog if open
     const jobsDlg = document.getElementById('dialog-jobs');
     if (jobsDlg && jobsDlg.style.display !== 'none') renderJobsDialog();
-  }, (event, data) => {
+  }, async (event, data) => {
+    if (event === 'autosave') {
+      try {
+        await saveGame(gameState, 'Autosave');
+        addLogEntry('Autosave complete', 'system');
+      } catch (e) {
+        addLogEntry('Autosave failed', 'warn');
+      }
+      return;
+    }
     if (event === 'crewStateChange') {
       data.forEach(({ member, oldState, newState }) => {
         if (newState === CrewState.PRONE) {
@@ -1830,6 +2268,98 @@ function startGame() {
         } else if (oldState === CrewState.PRONE && newState !== CrewState.PRONE) {
           showToast(`${member.name} recovering from high-G`, 'ok');
           addLogEntry(`${member.name} recovering from high-G exposure`, 'ok');
+        }
+      });
+    } else if (event === 'routeEvents') {
+      const state = gameState;
+      data.forEach(evt => {
+        if (evt.event === 'phase-start') {
+          const p = evt.phase;
+          switch (p.type) {
+            case 'orient': {
+              addLogEntry(`Helm: plotting course for ${getActiveRoute()?.destinationName}`, 'nav');
+              addLogEntry('All hands — secure for acceleration. Crash couches.', 'nav');
+              showToast('SECURE FOR BURN', 'warn');
+              // Send entire crew to crash couches immediately
+              state.ship.crew.forEach(member => {
+                if (member.dead || member.consciousness <= 10) return;
+                const mission = getCrewMission(member.id);
+                if (!mission || mission === 'patrol') {
+                  assignSecureBurnMission(state.ship, member);
+                }
+              });
+              const pilot = state.ship.crew.find(c => c.role === 'Pilot' && !c.dead);
+              if (pilot) {
+                addLogEntry(`${pilot.name} to helm`, 'nav');
+              }
+              // RCS waits for pilot at helm, then all crew secured (or player override)
+              _orientState = 'waiting-pilot';
+              showManeuverPrompt();
+              break;
+            }
+            case 'secure':
+              // Crew already moving to couches from orient — catch any stragglers
+              state.ship.crew.forEach(member => {
+                if (member.dead || member.consciousness <= 10) return;
+                const mission = getCrewMission(member.id);
+                if (!mission || mission === 'patrol') {
+                  assignSecureBurnMission(state.ship, member);
+                }
+              });
+              break;
+            case 'burn':
+              addLogEntry(p.description, 'thrust');
+              showToast(`BURN: ${p.thrustG.toFixed(1)}G`, 'thrust');
+              break;
+            case 'coast':
+              addLogEntry('Main engine cut. Coast phase — all hands free to move.', 'nav');
+              showToast('COAST — crew released', 'ok');
+              state.ship.crew.forEach(member => {
+                if (getCrewMission(member.id) === 'secure-burn') {
+                  releaseSecureBurn(member.id);
+                  cancelMission(member.id, state.ship);
+                }
+              });
+              break;
+            case 'flip':
+              addLogEntry('Executing flip maneuver', 'nav');
+              showToast('FLIP', 'warn');
+              break;
+            case 'arrive':
+              break;
+          }
+        } else if (evt.event === 'phase-end') {
+          if (evt.phase.type === 'orient') {
+            _orientState = null;
+            hideManeuverPrompt();
+            showRcsThrusters(false);
+          }
+          if (evt.phase.type === 'flip') {
+            addLogEntry(`Flip complete — heading ${state.physics.heading === 0 ? 'PROGRADE' : 'RETROGRADE'}`, 'nav');
+          }
+        } else if (evt.event === 'complete') {
+          addLogEntry(`Arrived at ${evt.route.destinationName}. Engines offline.`, 'nav');
+          showToast(`ARRIVED: ${evt.route.destinationName}`, 'ok');
+          const maxBurnG = Math.max(...(evt.route.phases || [])
+            .filter(p => p.type === 'burn')
+            .map(p => p.thrustG || 0), 0);
+          state.ship.crew.forEach(member => {
+            if (getCrewMission(member.id) === 'secure-burn') {
+              releaseSecureBurn(member.id);
+              cancelMission(member.id, state.ship);
+            }
+            // Juice hangover for crew that were juiced during the burn
+            if (!member.dead && member._juiceActive) {
+              member._juiceActive = false;
+              const hangoverMin = Math.round(4320 * Math.min(maxBurnG / 5, 1));
+              member.juiceHangover = Math.max(member.juiceHangover || 0, hangoverMin);
+              if (!member.conditions.includes('juice-hangover')) {
+                member.conditions.push('juice-hangover');
+              }
+              const days = (hangoverMin / 1440).toFixed(1);
+              addLogEntry(`${member.name}: juice hangover — ~${days}d recovery`, 'medical');
+            }
+          });
         }
       });
     }
@@ -1849,7 +2379,10 @@ function initHudActions() {
 
   document.querySelector('[data-action="confirm-save"]').addEventListener('click', async () => {
     const name = document.getElementById('input-save-name').value.trim() || 'Quicksave';
+    // Attach active route to save data
+    gameState._activeRoute = serializeRoute();
     await saveGame(gameState, name);
+    delete gameState._activeRoute;
     document.getElementById('dialog-save').style.display = 'none';
     showToast('Mission saved', 'ok');
     addLogEntry(`Mission saved: "${name}"`, 'system');
@@ -1984,6 +2517,7 @@ function initStartGame() {
   document.querySelector('[data-action="start-game"]').addEventListener('click', () => {
     const shipName = document.getElementById('input-ship-name').value.trim() || 'RSV Canterbury';
     const captainName = document.getElementById('input-captain-name').value.trim() || 'J. Holden';
+    resetRoute(); // Clear any active route from previous game
     gameState = createGameState(shipName, captainName, crewCount);
     startGame();
     showToast('Mission started. Good luck, Captain.', 'ok');
@@ -2110,6 +2644,17 @@ function initKeyboard() {
           document.getElementById('flip-toggle').click();
         }
         break;
+      case 'm':
+      case 'M': {
+        // Toggle solar system map
+        if (tacModalOpen && tacModalTab === 'solar') {
+          closeTacModal();
+        } else {
+          tacModalTab = 'solar';
+          openTacModal();
+        }
+        break;
+      }
       case 'j':
       case 'J': {
         // Toggle jobs dialog

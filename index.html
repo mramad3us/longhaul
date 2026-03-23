@@ -4,9 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LONGHAUL</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Share+Tech+Mono&family=Chakra+Petch:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/fonts.css">
   <link rel="stylesheet" href="css/main.css">
 </head>
 <body>
@@ -355,6 +353,38 @@
             <span id="tac-modal-velocity"></span>
             <span id="tac-modal-heading"></span>
             <span id="tac-modal-thrust"></span>
+            <button class="route-plot-btn" id="route-plot-btn" style="display:none">PLOT ROUTE</button>
+          </div>
+
+          <!-- Route Planning Panel -->
+          <div class="route-panel" id="route-panel" style="display:none">
+            <div class="route-panel-header">
+              <span class="route-panel-title">NAVIGATION PLOT</span>
+              <button class="route-panel-close" id="route-panel-close">&times;</button>
+            </div>
+            <div class="route-dest-info">
+              <span class="route-dest-label">DESTINATION</span>
+              <span class="route-dest-name" id="route-dest-name"></span>
+              <span class="route-dest-dist" id="route-dest-dist"></span>
+            </div>
+            <div class="route-options" id="route-options">
+              <!-- Route cards rendered by JS -->
+            </div>
+            <div class="route-panel-actions">
+              <button class="btn btn-secondary route-btn" id="route-cancel-btn">CANCEL</button>
+              <button class="btn btn-primary route-btn" id="route-confirm-btn" disabled>CONFIRM</button>
+            </div>
+          </div>
+
+          <!-- Active Route Status Bar -->
+          <div class="route-status-bar" id="route-status-bar" style="display:none">
+            <span class="route-status-dest" id="route-status-dest"></span>
+            <span class="route-status-phase" id="route-status-phase"></span>
+            <div class="route-status-progress">
+              <div class="route-status-fill" id="route-status-fill"></div>
+            </div>
+            <span class="route-status-eta" id="route-status-eta"></span>
+            <button class="route-abort-btn" id="route-abort-btn">ABORT</button>
           </div>
         </div>
       </div>

@@ -339,19 +339,43 @@ export function generateAutoJobs(ship, physics, devMode, lsEquipment, gameState)
     }
   }
 
-  // Auto-assign pending jobs to idle crew
-  ship.crew.forEach(member => {
-    if (member.dead || member.consciousness <= 10) return;
+  // Auto-assign pending jobs to best available crew member
+  // For each pending job (priority-sorted), find the most skilled idle crew
+  const assignedThisRound = new Set();
+  for (const job of jobQueue) {
+    if (job.status !== 'pending') continue;
 
-    // Skip crew already assigned to a job
-    const existing = getCrewJobs(member.id);
-    if (existing.length > 0) return;
+    const skillKey = JOB_SKILL[job.type];
+    const minSkill = JOB_MIN_SKILL[job.type] || 0;
 
-    const job = pickJob(member);
-    if (job && devMode) {
-      logs.push(`[JOBS] ${member.name} picked up ${job.type} job #${job.id}`);
+    // Find eligible idle crew, sorted by relevant skill (best first)
+    const candidates = ship.crew
+      .filter(m => {
+        if (m.dead || m.consciousness <= 10) return false;
+        if (assignedThisRound.has(m.id)) return false;
+        if (getCrewJobs(m.id).length > 0) return false;
+        if (job.targetCrewId === m.id) return false; // don't self-assign rescue
+        if (skillKey && m.skills[skillKey] < minSkill) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        // Sort by relevant skill descending; if no skill needed, any crew is fine
+        const skillA = skillKey ? (a.skills[skillKey] || 0) : 0;
+        const skillB = skillKey ? (b.skills[skillKey] || 0) : 0;
+        return skillB - skillA;
+      });
+
+    if (candidates.length > 0) {
+      const best = candidates[0];
+      job.status = 'assigned';
+      job.assigneeId = best.id;
+      assignedThisRound.add(best.id);
+      if (devMode) {
+        const skillVal = skillKey ? ` (${skillKey}: ${best.skills[skillKey] || 0})` : '';
+        logs.push(`[JOBS] ${best.name}${skillVal} assigned to ${job.type} job #${job.id}`);
+      }
     }
-  });
+  }
 
   // Unassign jobs from incapacitated crew
   ship.crew.forEach(member => {

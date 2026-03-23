@@ -7,6 +7,7 @@ import { createDefaultShip } from './ship.js';
 import { VERSION } from './version.js';
 import { createPhysicsState, computeShipMass, physicsTick } from './physics.js';
 import { initLifeSupport, lifeSupportTick } from './life-support.js';
+import { routeTick } from './navigation.js';
 
 // Speed multipliers: game-minutes per real-second
 const SPEED_MULTIPLIERS = {
@@ -50,11 +51,15 @@ export function createGameState(shipName, captainName, crewCount) {
       water: { current: 4200, max: 5000, unit: 'L' },
       food: { current: 1800, max: 2000, unit: 'rations' },
       power: { current: 88, max: 100, unit: '%' },
+      medSupplies: { current: 50, max: 50, unit: 'units' },
     },
     navigation: {
       thrust: 0,
       heading: null,
       velocity: 0,
+      routeActive: false,
+      routeHeading: null,
+      routeDestination: null,
     },
     stats: {
       distanceTraveled: 0,
@@ -117,6 +122,7 @@ export class GameLoop {
     this.onPhysicsEvent = onPhysicsEvent || (() => {});
     this.lastTime = null;
     this.accumulator = 0;
+    this._autosaveCounter = 0;
     this.running = false;
     this._raf = null;
   }
@@ -171,6 +177,12 @@ export class GameLoop {
       this.onPhysicsEvent('crewStateChange', stateChanges);
     }
 
+    // --- ROUTE EXECUTION (must run per game-minute, before resource consumption) ---
+    const routeEvents = routeTick(this.state);
+    if (routeEvents && routeEvents.length > 0) {
+      this.onPhysicsEvent('routeEvents', routeEvents);
+    }
+
     // --- LIFE SUPPORT ---
     lifeSupportTick(this.state);
 
@@ -194,5 +206,12 @@ export class GameLoop {
 
     // Track elapsed days
     this.state.stats.daysElapsed += 1 / 1440;
+
+    // Autosave every game-hour (60 minutes)
+    this._autosaveCounter++;
+    if (this._autosaveCounter >= 60) {
+      this._autosaveCounter = 0;
+      this.onPhysicsEvent('autosave', null);
+    }
   }
 }

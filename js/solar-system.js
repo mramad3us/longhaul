@@ -112,8 +112,12 @@ let mapState = {
   dragStart: null,
   dragCenterStart: null,
   hoveredBody: null,
-  selectedBody: null,
+  selectedBody: null,      // { name, type, x, y } — selected for route planning
 };
+
+// Track rendered body positions for click detection
+let bodyPositions = []; // [{ name, type, x, y, r, parentName }]
+let onBodySelectCallback = null;
 
 export function resetMapState() {
   mapState.cx = 0;
@@ -121,6 +125,18 @@ export function resetMapState() {
   mapState.zoom = 35;
   mapState.hoveredBody = null;
   mapState.selectedBody = null;
+}
+
+export function setSelectedBody(body) {
+  mapState.selectedBody = body;
+}
+
+export function getSelectedBody() {
+  return mapState.selectedBody;
+}
+
+export function setOnBodySelect(cb) {
+  onBodySelectCallback = cb;
 }
 
 // ---- ZOOM PRESETS ----
@@ -134,8 +150,9 @@ export const SOLAR_ZOOM_PRESETS = [
 
 // ---- RENDER ----
 
-export function renderSolarSystem(container, gameState) {
+export function renderSolarSystem(container, gameState, routeInfo) {
   container.innerHTML = '';
+  bodyPositions = [];
 
   const rect = container.getBoundingClientRect();
   const w = rect.width || 600;
@@ -286,6 +303,9 @@ export function renderSolarSystem(container, gameState) {
   sun.setAttribute('filter', 'url(#sol-glow)');
   svg.appendChild(sun);
 
+  // Track Sun position
+  bodyPositions.push({ name: 'Sol', type: 'star', x: 0, y: 0, r: sunR });
+
   // Pixel size helper — how many AU per pixel
   const auPerPx = vw / w;
   const minBodyR = auPerPx * 2.5; // minimum 2.5px visual radius
@@ -317,6 +337,9 @@ export function renderSolarSystem(container, gameState) {
     body.setAttribute('r', pR);
     body.setAttribute('fill', p.color);
     planetGroup.appendChild(body);
+
+    // Track position for click detection
+    bodyPositions.push({ name: p.name, type: 'planet', x: pos.x, y: pos.y, r: pR });
 
     // Saturn rings
     if (p.name === 'Saturn') {
@@ -376,6 +399,9 @@ export function renderSolarSystem(container, gameState) {
         mBody.setAttribute('fill', m.color);
         planetGroup.appendChild(mBody);
 
+        // Track moon position
+        bodyPositions.push({ name: m.name, type: 'moon', x: mx, y: my, r: mR, parentName: p.name });
+
         // Moon label at high zoom
         if (mapState.zoom < moonViewThreshold * 0.3) {
           const mFontSize = Math.max(mapState.zoom * 0.01, auPerPx * 6);
@@ -408,6 +434,9 @@ export function renderSolarSystem(container, gameState) {
       shape.setAttribute('fill', ast.color);
       shape.setAttribute('opacity', '0.7');
       astGroup.appendChild(shape);
+
+      // Track asteroid position
+      bodyPositions.push({ name: ast.name, type: 'asteroid', x: pos.x, y: pos.y, r: aR });
 
       if (mapState.zoom < 5) {
         const fontSize = Math.max(mapState.zoom * 0.01, auPerPx * 7);
@@ -462,6 +491,126 @@ export function renderSolarSystem(container, gameState) {
     shipLabel.setAttribute('opacity', '0.8');
     shipLabel.textContent = gameState.ship?.name?.toUpperCase() || 'SHIP';
     svg.appendChild(shipLabel);
+  }
+
+  // ---- SELECTION RING ----
+  if (mapState.selectedBody) {
+    const sel = mapState.selectedBody;
+    // Find current rendered position from bodyPositions
+    const bp = bodyPositions.find(b => b.name === sel.name);
+    if (bp) {
+      const selR = Math.max(bp.r * 2.5, mapState.zoom * 0.008);
+      // Pulsing selection ring
+      const ring = document.createElementNS(SVG_NS, 'circle');
+      ring.setAttribute('cx', bp.x);
+      ring.setAttribute('cy', bp.y);
+      ring.setAttribute('r', selR);
+      ring.setAttribute('fill', 'none');
+      ring.setAttribute('stroke', '#4FD1C5');
+      ring.setAttribute('stroke-width', mapState.zoom * 0.0015);
+      ring.setAttribute('stroke-dasharray', `${mapState.zoom * 0.004} ${mapState.zoom * 0.003}`);
+      const pulseRing = document.createElementNS(SVG_NS, 'animate');
+      pulseRing.setAttribute('attributeName', 'r');
+      pulseRing.setAttribute('values', `${selR};${selR * 1.15};${selR}`);
+      pulseRing.setAttribute('dur', '1.5s');
+      pulseRing.setAttribute('repeatCount', 'indefinite');
+      ring.appendChild(pulseRing);
+      svg.appendChild(ring);
+
+      // Selection label
+      const selFont = Math.max(mapState.zoom * 0.014, auPerPx * 9);
+      const selLabel = document.createElementNS(SVG_NS, 'text');
+      selLabel.setAttribute('x', bp.x);
+      selLabel.setAttribute('y', bp.y - selR - selFont * 0.5);
+      selLabel.setAttribute('fill', '#4FD1C5');
+      selLabel.setAttribute('font-family', '"Press Start 2P", monospace');
+      selLabel.setAttribute('font-size', selFont);
+      selLabel.setAttribute('text-anchor', 'middle');
+      selLabel.setAttribute('opacity', '0.9');
+      selLabel.textContent = `▶ ${sel.name.toUpperCase()}`;
+      svg.appendChild(selLabel);
+    }
+  }
+
+  // ---- ROUTE LINE ----
+  if (routeInfo && gameState?.shipPosition) {
+    const sp = gameState.shipPosition;
+    const ri = routeInfo;
+    const sw = mapState.zoom * 0.0012;
+    const origin = ri.startPosition || sp;
+
+    if (ri.active) {
+      // Trail line: origin → current position (dotted, dim)
+      const trailLine = document.createElementNS(SVG_NS, 'line');
+      trailLine.setAttribute('x1', origin.x);
+      trailLine.setAttribute('y1', origin.y);
+      trailLine.setAttribute('x2', sp.x);
+      trailLine.setAttribute('y2', sp.y);
+      trailLine.setAttribute('stroke', '#4FD1C5');
+      trailLine.setAttribute('stroke-width', sw);
+      trailLine.setAttribute('stroke-dasharray', `${mapState.zoom * 0.003} ${mapState.zoom * 0.003}`);
+      trailLine.setAttribute('opacity', '0.3');
+      svg.appendChild(trailLine);
+
+      // Remaining route: current position → destination (solid)
+      const routeLine = document.createElementNS(SVG_NS, 'line');
+      routeLine.setAttribute('x1', sp.x);
+      routeLine.setAttribute('y1', sp.y);
+      routeLine.setAttribute('x2', ri.destX);
+      routeLine.setAttribute('y2', ri.destY);
+      routeLine.setAttribute('stroke', '#E25555');
+      routeLine.setAttribute('stroke-width', sw);
+      routeLine.setAttribute('opacity', '0.6');
+      svg.appendChild(routeLine);
+    } else {
+      // Preview line (dashed, teal)
+      const routeLine = document.createElementNS(SVG_NS, 'line');
+      routeLine.setAttribute('x1', sp.x);
+      routeLine.setAttribute('y1', sp.y);
+      routeLine.setAttribute('x2', ri.destX);
+      routeLine.setAttribute('y2', ri.destY);
+      routeLine.setAttribute('stroke', '#4FD1C5');
+      routeLine.setAttribute('stroke-width', sw);
+      routeLine.setAttribute('stroke-dasharray', `${mapState.zoom * 0.006} ${mapState.zoom * 0.004}`);
+      routeLine.setAttribute('opacity', '0.4');
+      svg.appendChild(routeLine);
+    }
+
+    // Flip point marker — fixed world position between route origin and destination
+    if (ri.active && ri.flipFraction && !ri.flipDone) {
+      const fx = origin.x + (ri.destX - origin.x) * ri.flipFraction;
+      const fy = origin.y + (ri.destY - origin.y) * ri.flipFraction;
+      const fR = mapState.zoom * 0.005;
+      const flipMarker = document.createElementNS(SVG_NS, 'circle');
+      flipMarker.setAttribute('cx', fx);
+      flipMarker.setAttribute('cy', fy);
+      flipMarker.setAttribute('r', fR);
+      flipMarker.setAttribute('fill', '#E8D56B');
+      flipMarker.setAttribute('opacity', '0.7');
+      svg.appendChild(flipMarker);
+
+      const flipFont = Math.max(mapState.zoom * 0.01, auPerPx * 6);
+      const flipLabel = document.createElementNS(SVG_NS, 'text');
+      flipLabel.setAttribute('x', fx + fR * 2);
+      flipLabel.setAttribute('y', fy);
+      flipLabel.setAttribute('fill', '#E8D56B');
+      flipLabel.setAttribute('font-family', '"Press Start 2P", monospace');
+      flipLabel.setAttribute('font-size', flipFont);
+      flipLabel.setAttribute('opacity', '0.6');
+      flipLabel.textContent = 'FLIP';
+      svg.appendChild(flipLabel);
+    }
+
+    // Destination marker
+    const destR = mapState.zoom * 0.006;
+    const destMarker = document.createElementNS(SVG_NS, 'circle');
+    destMarker.setAttribute('cx', ri.destX);
+    destMarker.setAttribute('cy', ri.destY);
+    destMarker.setAttribute('r', destR);
+    destMarker.setAttribute('fill', 'none');
+    destMarker.setAttribute('stroke', '#E25555');
+    destMarker.setAttribute('stroke-width', mapState.zoom * 0.001);
+    svg.appendChild(destMarker);
   }
 
   // ---- CROSSHAIR AT MAP CENTER (subtle) ----
@@ -520,10 +669,13 @@ export function initSolarMapInteraction(container) {
     mapState.zoom = newZoom;
   }, { passive: false });
 
-  // Mouse drag pan
+  // Mouse drag pan — track drag distance for click vs drag detection
+  let dragDist = 0;
+
   container.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     mapState.dragging = true;
+    dragDist = 0;
     mapState.dragStart = { x: e.clientX, y: e.clientY };
     mapState.dragCenterStart = { x: mapState.cx, y: mapState.cy };
     container.style.cursor = 'grabbing';
@@ -537,6 +689,7 @@ export function initSolarMapInteraction(container) {
     const dy = (e.clientY - mapState.dragStart.y) / rect.height * mapState.zoom * 2;
     mapState.cx = mapState.dragCenterStart.x - dx;
     mapState.cy = mapState.dragCenterStart.y - dy;
+    dragDist += Math.abs(e.movementX) + Math.abs(e.movementY);
   });
 
   window.addEventListener('mouseup', () => {
@@ -544,6 +697,41 @@ export function initSolarMapInteraction(container) {
       mapState.dragging = false;
       container.style.cursor = 'grab';
     }
+  });
+
+  // Click-to-select bodies (only if not dragging)
+  container.addEventListener('click', (e) => {
+    if (dragDist > 5) return; // was a drag, not a click
+
+    const rect = container.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width;
+    const my = (e.clientY - rect.top) / rect.height;
+    const aspect = rect.width / rect.height;
+    const halfW = mapState.zoom * aspect;
+    const halfH = mapState.zoom;
+    const wx = mapState.cx - halfW + mx * halfW * 2;
+    const wy = mapState.cy - halfH + my * halfH * 2;
+
+    // Find nearest body within click threshold
+    const threshold = mapState.zoom * 0.03; // ~3% of view width
+    let best = null;
+    let bestD = threshold;
+
+    bodyPositions.forEach(bp => {
+      const d = Math.sqrt((bp.x - wx) * (bp.x - wx) + (bp.y - wy) * (bp.y - wy));
+      if (d < bestD) {
+        bestD = d;
+        best = bp;
+      }
+    });
+
+    if (best) {
+      mapState.selectedBody = { name: best.name, type: best.type, x: best.x, y: best.y };
+    } else {
+      mapState.selectedBody = null;
+    }
+
+    if (onBodySelectCallback) onBodySelectCallback(mapState.selectedBody);
   });
 
   container.style.cursor = 'grab';

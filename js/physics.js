@@ -193,12 +193,38 @@ function removeCondition(member, condition) {
 
 function clamp(v, min = 0, max = 100) { return Math.max(min, Math.min(max, v)); }
 
-function applyGForceEffects(member, gForce, isSecured = false) {
+function applyGForceEffects(member, gForce, isSecured = false, resources = null) {
   // Dead crew don't update
   if (member.dead) return;
 
-  // Crash couch / medbay reduces effective G-force — crew feels ~1/3 of adverse effects
-  const effectiveG = isSecured ? gForce * 0.33 : gForce;
+  // Couch protection:
+  //   Couch alone: 30% G reduction (physical support)
+  //   Couch + juice (auto above 1.5G, costs 1 med supply): 6G → 2G (multiplier ≈ 1/3)
+  let effectiveG = gForce;
+  if (isSecured) {
+    const needsJuice = gForce > G_THRESHOLDS.HIGH;
+    const hasSupplies = resources && resources.medSupplies && resources.medSupplies.current > 0;
+
+    if (needsJuice && hasSupplies) {
+      // Juice active — consume 1 med supply per crew per injection cycle
+      // Flag so we only consume once per burn (not every minute)
+      if (!member._juiceActive) {
+        member._juiceActive = true;
+        resources.medSupplies.current = Math.max(0, resources.medSupplies.current - 1);
+      }
+      effectiveG = gForce * (1 / 3);  // 6G → 2G
+    } else if (needsJuice && !hasSupplies) {
+      // No med supplies — couch only, no juice
+      effectiveG = gForce * 0.7;
+      member._juiceActive = false;
+    } else {
+      // Low G, couch is enough
+      effectiveG = gForce * 0.7;
+      member._juiceActive = false;
+    }
+  } else {
+    member._juiceActive = false;
+  }
 
   const b = member.body;
   const h = member.heart;
@@ -290,6 +316,22 @@ function applyGForceEffects(member, gForce, isSecured = false) {
     h.health = clamp(h.health + 0.15);
   }
 
+  // ---- JUICE HANGOVER ----
+  // Juice hangover increases spontaneous brain damage risk during high-G burns.
+  // Timer decrements each minute; condition clears after ~3 days (4320 min).
+  if (member.juiceHangover > 0) {
+    member.juiceHangover -= 1;
+    if (member.juiceHangover <= 0) {
+      member.juiceHangover = 0;
+      removeCondition(member, 'juice-hangover');
+    }
+    // Under high-G with hangover: random chance of spontaneous brain damage
+    if (effectiveG >= G_THRESHOLDS.HIGH && Math.random() < 0.003) {
+      b.head = clamp(b.head - 3.0);
+      member.consciousness = clamp(member.consciousness - 5, 10, 100);
+    }
+  }
+
   // ---- BRAIN DAMAGE ----
   // Head at 0% = brain damage (permanent until medical equipment)
   if (b.head <= 0) {
@@ -316,12 +358,19 @@ function applyGForceEffects(member, gForce, isSecured = false) {
   member.consciousness = clamp(member.consciousness, consciousnessFloor, consciousnessCap);
 
   // ---- CARDIAC STRESS DURATION & HEART DEGRADATION ----
+  // Heart only degrades when under DANGEROUS+ G — HIGH G is uncomfortable but survivable.
+  // This means juiced crew in couches (6G → 2G effective = HIGH range) survive long burns.
   if (member.conditions.includes('cardiac-stress')) {
-    h.stressMinutes = (h.stressMinutes || 0) + 1;
-    // After 10 minutes of sustained cardiac stress, heart health degrades
-    if (h.stressMinutes > 10) {
-      const degradeRate = 0.1 + (h.stressMinutes - 10) * 0.02; // accelerates over time
-      h.health = clamp(h.health - degradeRate);
+    if (effectiveG >= G_THRESHOLDS.DANGEROUS) {
+      h.stressMinutes = (h.stressMinutes || 0) + 1;
+      // After 10 minutes of sustained dangerous cardiac stress, heart health degrades
+      if (h.stressMinutes > 10) {
+        const degradeRate = 0.1 + (h.stressMinutes - 10) * 0.02; // accelerates over time
+        h.health = clamp(h.health - degradeRate);
+      }
+    } else {
+      // HIGH G range: stress ticks but doesn't escalate to heart damage
+      h.stressMinutes = Math.max(0, (h.stressMinutes || 0) - 1);
     }
   } else {
     h.stressMinutes = 0;
@@ -388,9 +437,16 @@ export function physicsTick(gameState, physicsState) {
   if (gameState.shipPosition) {
     const metersPerAU = 149_597_870_700;
     const displacementAU = physicsState.velocity * dt / metersPerAU;
-    // Move along current heading axis (simplified: heading 0 = +x prograde)
-    const hSign = physicsState.heading === 0 ? 1 : -1;
-    gameState.shipPosition.x += hSign * displacementAU;
+
+    if (nav.routeActive && nav.routeHeading != null) {
+      // 2D movement along route heading vector
+      // velocity is positive during forward travel, direction given by routeHeading
+      gameState.shipPosition.x += Math.cos(nav.routeHeading) * displacementAU;
+      gameState.shipPosition.y += Math.sin(nav.routeHeading) * displacementAU;
+    } else {
+      // Legacy 1D: velocity sign is correct from integration (heading determines accel sign)
+      gameState.shipPosition.x += displacementAU;
+    }
   }
 
   // Update crew states
@@ -406,7 +462,7 @@ export function physicsTick(gameState, physicsState) {
     physicsState.crewStates[member.id] = newState;
 
     // G-force effects on crew per minute (secured crew get reduced effects)
-    applyGForceEffects(member, physicsState.gForce, newState === CrewState.SECURED);
+    applyGForceEffects(member, physicsState.gForce, newState === CrewState.SECURED, gameState.resources);
   });
 
   // Future: process loose objects (slide toward floor under thrust,

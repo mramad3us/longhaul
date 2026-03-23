@@ -39,8 +39,8 @@ const BREACH_RATE       = 0.20;     // 20% of current pressure per minute
 // Inter-deck gas exchange through ladder connections
 const EXCHANGE_RATE     = 0.08;     // 8% of delta per minute
 
-// Random failure
-const FAILURE_CHANCE    = 0.0003;   // per minute (~0.03%, ~once per 55 hours)
+// Random failure — base rate is very low; increases under stress (high-G, low power)
+const FAILURE_CHANCE_BASE = 0.00005;   // per minute (~0.005%, ~once per 333 hours base)
 const PATCH_DURATION_MIN = 120;     // 2 hours minimum
 const PATCH_DURATION_MAX = 480;     // 8 hours maximum
 
@@ -325,10 +325,18 @@ export function lifeSupportTick(gameState) {
       }
     }
 
-    // 5. RANDOM EQUIPMENT FAILURES
+    // 5. RANDOM EQUIPMENT FAILURES (stress-weighted)
+    // Higher chance under high-G (vibration/strain) or low power
     if (eq && eq.status === 'operational') {
-      if (Math.random() < FAILURE_CHANCE) {
-        // Random failure mode
+      let failChance = FAILURE_CHANCE_BASE;
+      const gForce = gameState.physics?.gForce || 0;
+      const power = gameState.resources?.power?.current || 100;
+      // High-G stress: 3x at 2G, 6x at 5G
+      if (gForce > 1.5) failChance *= 1 + (gForce - 1.5) * 1.5;
+      // Low power stress: 2x at 50%, 4x at 25%
+      if (power < 60) failChance *= 1 + (60 - power) / 20;
+
+      if (Math.random() < failChance) {
         const roll = Math.random();
         if (roll < 0.4) {
           eq.co2Scrubber = false;
@@ -505,19 +513,35 @@ export function lifeSupportTick(gameState) {
 
 // ---- EQUIPMENT REPAIR ----
 
-// Quick patch — temporary fix, requires engineering skill
-// Returns { success, message }
-export function quickPatchLS(gameState, deckIdx, engineerSkill) {
+// Repair life support — degraded can be fully repaired by engineer,
+// failed requires a temporary patch (needs materials/station for full fix)
+// Returns { success, message, repairType }
+export function repairLS(gameState, deckIdx, engineerSkill) {
   const eq = gameState.lsEquipment[deckIdx];
   if (!eq) return { success: false, message: 'No life support equipment on this deck' };
   if (eq.status === 'operational') return { success: false, message: 'Equipment already operational' };
 
-  // Success chance: 40% base + 0.6% per skill point
+  // Degraded = minor damage (one subsystem) — full repair possible
+  if (eq.status === 'degraded') {
+    // Success chance: 60% base + 0.8% per skill point
+    const chance = 0.60 + engineerSkill * 0.008;
+    if (Math.random() > chance) {
+      return { success: false, message: 'Repair attempt failed — retry needed' };
+    }
+    eq.status = 'operational';
+    eq.co2Scrubber = true;
+    eq.o2Injector = true;
+    eq.n2Injector = true;
+    eq.patchDurability = -1;
+    return { success: true, repairType: 'full', message: 'Life support fully repaired' };
+  }
+
+  // Failed = major damage (all subsystems) — only a temporary patch is possible
+  // Full repair requires materials or station dock
   const chance = 0.40 + engineerSkill * 0.006;
   if (Math.random() > chance) {
     return { success: false, message: 'Patch attempt failed — retry needed' };
   }
-
   eq.status = 'patched';
   eq.co2Scrubber = true;
   eq.o2Injector = true;
@@ -525,7 +549,12 @@ export function quickPatchLS(gameState, deckIdx, engineerSkill) {
   eq.patchDurability = PATCH_DURATION_MIN +
     Math.floor(Math.random() * (PATCH_DURATION_MAX - PATCH_DURATION_MIN));
 
-  return { success: true, message: `Patched — estimated ${Math.round(eq.patchDurability / 60)}h durability` };
+  return { success: true, repairType: 'patch', message: `Patched — estimated ${Math.round(eq.patchDurability / 60)}h durability` };
+}
+
+// Backward compat alias
+export function quickPatchLS(gameState, deckIdx, engineerSkill) {
+  return repairLS(gameState, deckIdx, engineerSkill);
 }
 
 // Full repair — permanent fix, requires materials or station dock
