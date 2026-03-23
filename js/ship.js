@@ -504,6 +504,270 @@ export function renderShip(ship, container, onCrewClick, onTileClick) {
 
   svgEl.appendChild(crewLayer);
 
+  // --- EXTERIOR HULL VIEW (shown during fast-forward / pause) ---
+  const exteriorGroup = document.createElementNS(SVG_NS, 'g');
+  exteriorGroup.setAttribute('class', 'ship-exterior');
+  exteriorGroup.setAttribute('display', 'none');
+  {
+    const T = TILE_SIZE;
+    const ox = offsetX;
+    const oy = offsetY;
+    const W = maxWidth;
+    // Colors for hull plating
+    const hullDk = '#0E1E2E';
+    const hullMd = '#142838';
+    const hullLt = '#1A3248';
+    const hullAcc = '#223C50';
+    const rivet = '#2A4A60';
+    const panel = '#162E40';
+    const glow = '#2D5A6A';
+    const porthole = '#1A3A4A';
+    const portholeGlow = '#3A8A9A';
+
+    // Fill the hull shape with dark plating
+    if (hullPath) {
+      const hullFill = document.createElementNS(SVG_NS, 'path');
+      hullFill.setAttribute('d', hullPath);
+      hullFill.setAttribute('fill', hullDk);
+      hullFill.setAttribute('stroke', 'none');
+      exteriorGroup.appendChild(hullFill);
+    }
+
+    // Armor panel grid — horizontal and vertical seam lines
+    let ey = 0;
+    ship.decks.forEach((deck, di) => {
+      const rows = deck.tiles.length;
+
+      // Find deck width bounds
+      let deckLeft = W, deckRight = 0;
+      deck.tiles.forEach(row => {
+        row.forEach((tile, rx) => {
+          if (tile !== TileType.EMPTY) {
+            if (rx < deckLeft) deckLeft = rx;
+            if (rx > deckRight) deckRight = rx;
+          }
+        });
+      });
+      const dLeft = ox + deckLeft * T;
+      const dRight = ox + (deckRight + 1) * T;
+      const dTop = oy + ey * T;
+      const dBottom = oy + (ey + rows) * T;
+      const dW = dRight - dLeft;
+      const dH = dBottom - dTop;
+
+      // Panel fill with slight variation per deck
+      const panelFill = document.createElementNS(SVG_NS, 'rect');
+      panelFill.setAttribute('x', dLeft);
+      panelFill.setAttribute('y', dTop);
+      panelFill.setAttribute('width', dW);
+      panelFill.setAttribute('height', dH);
+      panelFill.setAttribute('fill', di % 2 === 0 ? hullMd : panel);
+      panelFill.setAttribute('opacity', '0.6');
+      exteriorGroup.appendChild(panelFill);
+
+      // Horizontal seam lines (between tile rows)
+      for (let r = 1; r < rows; r++) {
+        const seamY = dTop + r * T;
+        const seam = document.createElementNS(SVG_NS, 'line');
+        seam.setAttribute('x1', dLeft + 2);
+        seam.setAttribute('y1', seamY);
+        seam.setAttribute('x2', dRight - 2);
+        seam.setAttribute('y2', seamY);
+        seam.setAttribute('stroke', hullAcc);
+        seam.setAttribute('stroke-width', '0.5');
+        seam.setAttribute('opacity', '0.4');
+        exteriorGroup.appendChild(seam);
+      }
+
+      // Vertical seam lines (panel divisions — every 2 tiles)
+      for (let c = deckLeft + 2; c <= deckRight; c += 2) {
+        const seamX = ox + c * T;
+        if (seamX <= dLeft || seamX >= dRight) continue;
+        const seam = document.createElementNS(SVG_NS, 'line');
+        seam.setAttribute('x1', seamX);
+        seam.setAttribute('y1', dTop + 2);
+        seam.setAttribute('x2', seamX);
+        seam.setAttribute('y2', dBottom - 2);
+        seam.setAttribute('stroke', hullAcc);
+        seam.setAttribute('stroke-width', '0.5');
+        seam.setAttribute('opacity', '0.3');
+        exteriorGroup.appendChild(seam);
+      }
+
+      // Rivets along left and right hull edges
+      for (let r = 0; r < rows; r++) {
+        const ry = dTop + r * T + T / 2;
+        // Left rivets
+        const rL = document.createElementNS(SVG_NS, 'rect');
+        rL.setAttribute('x', dLeft + 3);
+        rL.setAttribute('y', ry - 1);
+        rL.setAttribute('width', 2);
+        rL.setAttribute('height', 2);
+        rL.setAttribute('fill', rivet);
+        rL.setAttribute('opacity', '0.5');
+        exteriorGroup.appendChild(rL);
+        // Right rivets
+        const rR = document.createElementNS(SVG_NS, 'rect');
+        rR.setAttribute('x', dRight - 5);
+        rR.setAttribute('y', ry - 1);
+        rR.setAttribute('width', 2);
+        rR.setAttribute('height', 2);
+        rR.setAttribute('fill', rivet);
+        rR.setAttribute('opacity', '0.5');
+        exteriorGroup.appendChild(rR);
+      }
+
+      // Portholes (small lit windows) — 2-3 per deck, offset per deck
+      const phCount = di === 0 ? 3 : di === 5 ? 1 : 2;
+      const phStart = di % 2 === 0 ? 2 : 3;
+      for (let p = 0; p < phCount; p++) {
+        const phX = ox + (deckLeft + phStart + p * 2) * T + T / 2 - 3;
+        const phY = dTop + Math.floor(rows / 2) * T + T / 2 - 2;
+        // Dark window frame
+        const frame = document.createElementNS(SVG_NS, 'rect');
+        frame.setAttribute('x', phX - 1);
+        frame.setAttribute('y', phY - 1);
+        frame.setAttribute('width', 8);
+        frame.setAttribute('height', 6);
+        frame.setAttribute('fill', porthole);
+        frame.setAttribute('rx', '1');
+        exteriorGroup.appendChild(frame);
+        // Lit interior
+        const light = document.createElementNS(SVG_NS, 'rect');
+        light.setAttribute('x', phX);
+        light.setAttribute('y', phY);
+        light.setAttribute('width', 6);
+        light.setAttribute('height', 4);
+        light.setAttribute('fill', deck.glow ? deck.glow.accent : portholeGlow);
+        light.setAttribute('opacity', '0.6');
+        light.setAttribute('rx', '1');
+        exteriorGroup.appendChild(light);
+      }
+
+      // Deck separator — structural beam
+      if (di < ship.decks.length - 1) {
+        const beamY = dBottom;
+        const beam = document.createElementNS(SVG_NS, 'rect');
+        beam.setAttribute('x', dLeft);
+        beam.setAttribute('y', beamY);
+        beam.setAttribute('width', dW);
+        beam.setAttribute('height', deckGap * T);
+        beam.setAttribute('fill', hullLt);
+        beam.setAttribute('opacity', '0.5');
+        exteriorGroup.appendChild(beam);
+      }
+
+      ey += rows + deckGap;
+    });
+
+    // Hull highlights — edge lighting along hull outline
+    if (hullPath) {
+      const highlight = document.createElementNS(SVG_NS, 'path');
+      highlight.setAttribute('d', hullPath);
+      highlight.setAttribute('fill', 'none');
+      highlight.setAttribute('stroke', glow);
+      highlight.setAttribute('stroke-width', '1.5');
+      highlight.setAttribute('opacity', '0.5');
+      exteriorGroup.appendChild(highlight);
+
+      // Inner glow
+      const innerGlow = document.createElementNS(SVG_NS, 'path');
+      innerGlow.setAttribute('d', hullPath);
+      innerGlow.setAttribute('fill', 'none');
+      innerGlow.setAttribute('stroke', glow);
+      innerGlow.setAttribute('stroke-width', '4');
+      innerGlow.setAttribute('filter', 'url(#hull-glow)');
+      innerGlow.setAttribute('opacity', '0.15');
+      exteriorGroup.appendChild(innerGlow);
+    }
+
+    // Bow sensor array — antenna dishes at top of bridge
+    const bowY = oy;
+    const centerX = ox + W * T / 2;
+    // Central antenna mast
+    const mast = document.createElementNS(SVG_NS, 'line');
+    mast.setAttribute('x1', centerX);
+    mast.setAttribute('y1', bowY - 16);
+    mast.setAttribute('x2', centerX);
+    mast.setAttribute('y2', bowY);
+    mast.setAttribute('stroke', rivet);
+    mast.setAttribute('stroke-width', '2');
+    exteriorGroup.appendChild(mast);
+    // Dish
+    const dish = document.createElementNS(SVG_NS, 'path');
+    dish.setAttribute('d', `M ${centerX - 8} ${bowY - 12} Q ${centerX} ${bowY - 20} ${centerX + 8} ${bowY - 12}`);
+    dish.setAttribute('fill', 'none');
+    dish.setAttribute('stroke', glow);
+    dish.setAttribute('stroke-width', '1.5');
+    dish.setAttribute('opacity', '0.6');
+    exteriorGroup.appendChild(dish);
+    // Side sensor nubs
+    [-18, 18].forEach(dx => {
+      const nub = document.createElementNS(SVG_NS, 'rect');
+      nub.setAttribute('x', centerX + dx - 2);
+      nub.setAttribute('y', bowY - 6);
+      nub.setAttribute('width', 4);
+      nub.setAttribute('height', 4);
+      nub.setAttribute('fill', hullLt);
+      nub.setAttribute('stroke', rivet);
+      nub.setAttribute('stroke-width', '0.5');
+      exteriorGroup.appendChild(nub);
+    });
+
+    // Engine bell nozzles at bottom
+    const sternY = oy + (ey - deckGap) * T;
+    const nozzleW = 10;
+    const nozzleH = 14;
+    [-1, 0, 1].forEach(n => {
+      const nx = centerX + n * (nozzleW + 4) - nozzleW / 2;
+      // Bell shape
+      const bell = document.createElementNS(SVG_NS, 'path');
+      bell.setAttribute('d', `M ${nx + 2} ${sternY} L ${nx} ${sternY + nozzleH} L ${nx + nozzleW} ${sternY + nozzleH} L ${nx + nozzleW - 2} ${sternY} Z`);
+      bell.setAttribute('fill', '#0C1820');
+      bell.setAttribute('stroke', rivet);
+      bell.setAttribute('stroke-width', '1');
+      exteriorGroup.appendChild(bell);
+      // Inner glow of engine
+      const innerB = document.createElementNS(SVG_NS, 'rect');
+      innerB.setAttribute('x', nx + 2);
+      innerB.setAttribute('y', sternY + nozzleH - 3);
+      innerB.setAttribute('width', nozzleW - 4);
+      innerB.setAttribute('height', 2);
+      innerB.setAttribute('fill', '#E2A355');
+      innerB.setAttribute('opacity', '0.3');
+      exteriorGroup.appendChild(innerB);
+    });
+
+    // Ship name stenciled on hull
+    const nameY = oy + 3 * T + T / 2;
+    const nameText = document.createElementNS(SVG_NS, 'text');
+    nameText.setAttribute('x', centerX);
+    nameText.setAttribute('y', nameY);
+    nameText.setAttribute('text-anchor', 'middle');
+    nameText.setAttribute('font-family', '"Press Start 2P", monospace');
+    nameText.setAttribute('font-size', '6');
+    nameText.setAttribute('fill', glow);
+    nameText.setAttribute('opacity', '0.5');
+    nameText.setAttribute('letter-spacing', '2');
+    nameText.textContent = ship.name.toUpperCase();
+    exteriorGroup.appendChild(nameText);
+
+    // Registration hash marks — small tally lines near bow
+    const regY = oy + T + 4;
+    for (let i = 0; i < 4; i++) {
+      const tick = document.createElementNS(SVG_NS, 'line');
+      tick.setAttribute('x1', centerX - 20 + i * 6);
+      tick.setAttribute('y1', regY);
+      tick.setAttribute('x2', centerX - 20 + i * 6);
+      tick.setAttribute('y2', regY + 6);
+      tick.setAttribute('stroke', rivet);
+      tick.setAttribute('stroke-width', '1');
+      tick.setAttribute('opacity', '0.4');
+      exteriorGroup.appendChild(tick);
+    }
+  }
+  svgEl.appendChild(exteriorGroup);
+
   // --- TORCH ENGINE PLUME (below reactor) ---
   // Massive Epstein drive plume: 30% wider than ship, extends way past viewport
   // The ship cross-section shows only the base of the plume — the rest is clipped.

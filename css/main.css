@@ -2497,12 +2497,23 @@ body.dev-mode .info-section.dev-only {
   animation-play-state: paused !important;
 }
 
-/* ---- FAST-FORWARD: HIDE SHIP INTERIOR ---- */
+/* ---- FAST-FORWARD: SHOW EXTERIOR HULL ---- */
 .ship-fast-forward .deck-group,
 .ship-fast-forward .crew-layer {
   opacity: 0;
-  transition: opacity 0.2s ease;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
 }
 .ship-fast-forward .deck-highlight {
   display: none;
+}
+/* Show exterior hull view */
+.ship-fast-forward .ship-exterior {
+  display: inline !important;
+  opacity: 1;
+  animation: exterior-fade-in 0.4s ease;
+}
+@keyframes exterior-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
