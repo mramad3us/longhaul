@@ -223,7 +223,7 @@ export function renderSolarSystem(container, gameState, routeInfo) {
   // ---- BACKGROUND STAR FIELD ----
   // Screen-space stars for atmosphere — placed in viewBox coords from normalized positions
   const starGroup = document.createElementNS(SVG_NS, 'g');
-  const starR = auPerPx * 0.8; // sub-pixel to ~1px
+  const starR = (vw / w) * 0.8; // sub-pixel to ~1px
   BG_STARS.forEach(s => {
     const sx = vx + s.nx * vw;
     const sy = vy + s.ny * vh;
