@@ -581,10 +581,17 @@ function updateHud(state) {
     updateThrustSliderUI(phys.thrustLevel);
   }
 
-  // Engine plume visibility
+  // Engine plume visibility + intensity scaling with thrust level
   const plume = document.getElementById('engine-plume');
   if (plume) {
-    plume.setAttribute('display', phys.thrustActive ? 'inline' : 'none');
+    if (!phys.thrustActive) {
+      plume.setAttribute('display', 'none');
+    } else {
+      plume.setAttribute('display', 'inline');
+      // Scale opacity: min thrust = 0.4, max thrust = 1.0
+      const intensity = 0.4 + phys.thrustLevel * 0.6;
+      plume.setAttribute('opacity', intensity.toFixed(2));
+    }
   }
 
   // Update tactical view when thrust state changes

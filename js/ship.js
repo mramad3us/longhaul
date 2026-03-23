@@ -422,7 +422,9 @@ export function renderShip(ship, container, onCrewClick) {
   // Massive Epstein drive plume: 30% wider than ship, extends way past viewport
   // The ship cross-section shows only the base of the plume — the rest is clipped.
   // Tactical view will show the full scale.
-  const exhaustY = offsetY + (currentY - deckGap) * TILE_SIZE;
+  const hullBottomY = offsetY + (currentY - deckGap) * TILE_SIZE;
+  const nozzleHeight = 6 * 4; // nozzleRows * P — nozzle bell height
+  const exhaustY = hullBottomY + nozzleHeight; // plume starts at nozzle exit
   const shipWidth = maxWidth * TILE_SIZE;
   const nozzleCenterX = offsetX + maxWidth * TILE_SIZE / 2;
 
@@ -450,100 +452,166 @@ export function renderShip(ship, container, onCrewClick) {
   exhaust.setAttribute('class', 'engine-exhaust');
   exhaust.setAttribute('id', 'engine-plume');
   exhaust.setAttribute('display', 'none'); // OFF by default
+  exhaust.setAttribute('shape-rendering', 'crispEdges'); // 8-bit blocky style
 
-  // Build the plume as fireball near nozzle + long tapered tail
-  // Fireball: expands fast to max width close to ship, then tapers
-  const sections = [];
-  const nozzleHalfW = 18;
-  const fireballLen = plumeLength * 0.15; // fireball is 15% of total plume
+  // Plume shape: fireball near nozzle (fast expansion) + long tapered tail
+  const nozzleHalfW = 1.25 * TILE_SIZE; // matches nozzle bottom opening (half of nozzleBotW)
+  const fireballLen = plumeLength * 0.15;
   const tailLen = plumeLength * 0.85;
-  const numSections = 24;
+  const peakW = nozzleHalfW + (plumeHalfW - nozzleHalfW) * Math.sin(0.7 * Math.PI);
 
-  for (let i = 0; i < numSections; i++) {
-    const t = i / numSections;
-    const dist = t * plumeLength;
-    const y = exhaustY + dist;
-    const h = plumeLength / numSections + 2;
-
-    // Width: fast expansion to fireball peak, then taper
-    let w;
+  // Helper: compute plume half-width at a given distance from nozzle
+  function plumeWidthAt(dist) {
+    if (dist <= 0) return nozzleHalfW;
     if (dist < fireballLen) {
       const ft = dist / fireballLen;
-      w = nozzleHalfW + (plumeHalfW - nozzleHalfW) * Math.sin(ft * Math.PI * 0.7);
-    } else {
-      const tt = (dist - fireballLen) / tailLen;
-      const peakW = nozzleHalfW + (plumeHalfW - nozzleHalfW) * Math.sin(0.7 * Math.PI);
-      w = peakW * Math.pow(1 - tt, 0.6);
-      w = Math.max(w, 2);
+      return nozzleHalfW + (plumeHalfW - nozzleHalfW) * Math.sin(ft * Math.PI * 0.7);
     }
-
-    // Color + opacity
-    let color, opacity;
-    if (dist < fireballLen * 0.3) {
-      color = '#FFFFFF';
-      opacity = 1.0 - t * 0.3;
-    } else if (dist < fireballLen) {
-      const ft = (dist - fireballLen * 0.3) / (fireballLen * 0.7);
-      color = `rgb(${Math.round(255 - ft * 50)},${Math.round(255 - ft * 25)},255)`;
-      opacity = 0.8 - ft * 0.2;
-    } else {
-      const tt = (dist - fireballLen) / tailLen;
-      const r = Math.max(80, Math.round(205 - tt * 140));
-      const g = Math.max(120, Math.round(230 - tt * 120));
-      color = `rgb(${r},${g},255)`;
-      opacity = Math.max(0.02, 0.6 - tt * 0.58);
-    }
-
-    sections.push(`<rect x="${nozzleCenterX - w}" y="${y}" width="${w * 2}" height="${h}"
-      fill="${color}" opacity="${opacity.toFixed(3)}">
-      <animate attributeName="opacity"
-        values="${(opacity * 0.85).toFixed(3)};${opacity.toFixed(3)};${(opacity * 0.85).toFixed(3)}"
-        dur="${(0.05 + t * 0.12).toFixed(2)}s" repeatCount="indefinite"/>
-    </rect>`);
+    const tt = (dist - fireballLen) / tailLen;
+    return Math.max(2, peakW * Math.pow(1 - Math.min(tt, 1), 0.6));
   }
 
-  // White-hot nozzle core
-  const coreLen = fireballLen * 0.5;
-  for (let i = 0; i < 6; i++) {
-    const t = i / 6;
-    const y = exhaustY + t * coreLen;
-    const h = coreLen / 6 + 1;
-    const w = nozzleHalfW * (0.6 + t * 0.8);
-    const op = 1.0 - t * 0.15;
-    sections.push(`<rect x="${nozzleCenterX - w}" y="${y}" width="${w * 2}" height="${h}"
-      fill="#FFFFFF" opacity="${op.toFixed(2)}">
-      <animate attributeName="opacity"
-        values="${(op * 0.9).toFixed(2)};${op.toFixed(2)};${(op * 0.9).toFixed(2)}"
-        dur="0.05s" repeatCount="indefinite"/>
-    </rect>`);
+  // Build smooth plume outline as a polygon path
+  const numPoints = 60;
+  const leftPts = [];
+  const rightPts = [];
+
+  for (let i = 0; i <= numPoints; i++) {
+    const t = i / numPoints;
+    const dist = t * plumeLength;
+    const y = exhaustY + dist;
+    const w = plumeWidthAt(dist);
+    leftPts.push(`${nozzleCenterX - w},${y}`);
+    rightPts.push(`${nozzleCenterX + w},${y}`);
   }
 
-  // Exhaust particles
-  for (let i = 0; i < 8; i++) {
-    const px = nozzleCenterX + (Math.random() - 0.5) * 40;
-    const startY = exhaustY + 10;
-    const endY = exhaustY + 60 + Math.random() * 100;
-    const dur = (0.25 + Math.random() * 0.35).toFixed(2);
-    const begin = (Math.random() * 0.5).toFixed(2);
-    const colors = ['#FFFFFF', '#D0E8FF', '#8ECAFF', '#FFFFFF'];
-    sections.push(`<rect x="${px}" y="${startY}" width="2" height="2" fill="${colors[i % 4]}" opacity="0">
-      <animate attributeName="opacity" values="0;0.9;0.4;0" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
-      <animate attributeName="y" values="${startY};${endY}" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
-    </rect>`);
+  // Plume outline: down the left side, back up the right side
+  rightPts.reverse();
+  const outlinePath = `M ${leftPts[0]} L ${leftPts.slice(1).join(' L ')}`
+    + ` L ${rightPts.join(' L ')} Z`;
+
+  // Add gradient defs for plume layers
+  const plumeGradId = 'plume-grad-main';
+  const plumeGlowGradId = 'plume-grad-glow';
+  defs.innerHTML += `
+    <linearGradient id="${plumeGradId}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="5%" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="12%" stop-color="#E0E8FF" stop-opacity="0.7"/>
+      <stop offset="20%" stop-color="#C0D8FF" stop-opacity="0.5"/>
+      <stop offset="40%" stop-color="#80B0FF" stop-opacity="0.3"/>
+      <stop offset="70%" stop-color="#5090FF" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#3060CC" stop-opacity="0.02"/>
+    </linearGradient>
+    <linearGradient id="${plumeGlowGradId}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="10%" stop-color="#D0E8FF" stop-opacity="0.3"/>
+      <stop offset="30%" stop-color="#80C0FF" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#4080FF" stop-opacity="0"/>
+    </linearGradient>
+  `;
+
+  const sections = [];
+
+  // Outer glow layer (wider, softer)
+  sections.push(`<path d="${outlinePath}" fill="url(#${plumeGlowGradId})"
+    filter="url(#torch-glow)" opacity="0.6">
+    <animate attributeName="opacity" values="0.4;0.7;0.4" dur="0.15s" repeatCount="indefinite"/>
+  </path>`);
+
+  // Main plume shape
+  sections.push(`<path d="${outlinePath}" fill="url(#${plumeGradId})" opacity="0.9">
+    <animate attributeName="opacity" values="0.8;0.95;0.8" dur="0.08s" repeatCount="indefinite"/>
+  </path>`);
+
+  // Inner core: narrower, white-hot near nozzle
+  const corePoints = 30;
+  const coreLeftPts = [];
+  const coreRightPts = [];
+  const coreLen = fireballLen * 1.5;
+  for (let i = 0; i <= corePoints; i++) {
+    const t = i / corePoints;
+    const dist = t * coreLen;
+    const y = exhaustY + dist;
+    const w = plumeWidthAt(dist) * (0.4 - t * 0.25);
+    coreLeftPts.push(`${nozzleCenterX - Math.max(w, 1)},${y}`);
+    coreRightPts.push(`${nozzleCenterX + Math.max(w, 1)},${y}`);
   }
 
-  // Fireball bloom glow
-  sections.push(`<ellipse cx="${nozzleCenterX}" cy="${exhaustY + fireballLen * 0.4}"
-    rx="${plumeHalfW * 1.3}" ry="${fireballLen * 0.7}"
-    fill="#FFFFFF" opacity="0.06" filter="url(#torch-bloom)">
-    <animate attributeName="opacity" values="0.03;0.08;0.03" dur="0.2s" repeatCount="indefinite"/>
+  coreRightPts.reverse();
+  const corePath = `M ${coreLeftPts[0]} L ${coreLeftPts.slice(1).join(' L ')}`
+    + ` L ${coreRightPts.join(' L ')} Z`;
+
+  sections.push(`<path d="${corePath}" fill="#FFFFFF" opacity="0.8">
+    <animate attributeName="opacity" values="0.7;0.9;0.7" dur="0.05s" repeatCount="indefinite"/>
+  </path>`);
+
+  // Exhaust particles (streaming downward)
+  for (let i = 0; i < 10; i++) {
+    const px = nozzleCenterX + (Math.random() - 0.5) * plumeHalfW * 0.6;
+    const startY = exhaustY + Math.random() * fireballLen * 0.5;
+    const endY = exhaustY + fireballLen + Math.random() * tailLen * 0.4;
+    const dur = (0.3 + Math.random() * 0.5).toFixed(2);
+    const begin = (Math.random() * 0.6).toFixed(2);
+    const colors = ['#FFFFFF', '#D0E8FF', '#8ECAFF', '#FFFFFF', '#B0D0FF'];
+    sections.push(`<circle cx="${px}" cy="${startY}" r="${1 + Math.random()}" fill="${colors[i % 5]}" opacity="0">
+      <animate attributeName="opacity" values="0;0.8;0.3;0" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="${startY};${endY}" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
+    </circle>`);
+  }
+
+  // Fireball bloom glow (soft elliptical wash)
+  sections.push(`<ellipse cx="${nozzleCenterX}" cy="${exhaustY + fireballLen * 0.35}"
+    rx="${plumeHalfW * 1.4}" ry="${fireballLen * 0.8}"
+    fill="#FFFFFF" opacity="0.05" filter="url(#torch-bloom)">
+    <animate attributeName="opacity" values="0.03;0.07;0.03" dur="0.2s" repeatCount="indefinite"/>
   </ellipse>`);
-
-  // Nozzle ring (on top)
-  sections.push(`<rect x="${nozzleCenterX - 22}" y="${exhaustY - 3}" width="44" height="5" fill="#1A2A3A"/>`);
 
   exhaust.innerHTML = sections.join('\n');
   svgEl.appendChild(exhaust);
+
+  // Nozzle bell — always visible, pixel-art style, flush under reactor hull
+  // Reactor bottom is 5 tiles wide (cols 2-6), nozzle tapers from that width
+  const nozzle = document.createElementNS(SVG_NS, 'g');
+  nozzle.setAttribute('id', 'engine-nozzle');
+  const P = 4; // pixel size for 8-bit look
+  const nozzleTopW = 5 * TILE_SIZE; // matches reactor bottom (160px)
+  const nozzleBotW = 2.5 * TILE_SIZE; // narrows to exhaust opening (80px)
+  const nozzleRows = 6; // 6 rows of pixels tall
+  const nozzleTopX = nozzleCenterX - nozzleTopW / 2;
+  const nozzleTopY = hullBottomY; // flush against hull bottom
+
+  // Build stepped trapezoid (wide top, narrower bottom) — pixel staircase
+  const nozzleParts = [];
+  for (let row = 0; row < nozzleRows; row++) {
+    const t = row / (nozzleRows - 1);
+    const rowW = nozzleTopW - t * (nozzleTopW - nozzleBotW);
+    const rx = nozzleCenterX - rowW / 2;
+    const ry = nozzleTopY + row * P;
+    // Outer shell
+    const shade = Math.round(14 + t * 8);
+    const highlight = Math.round(35 + t * 15);
+    nozzleParts.push(`<rect x="${rx}" y="${ry}" width="${rowW}" height="${P}"
+      fill="rgb(${shade},${shade + 12},${shade + 20})"
+      stroke="rgb(${highlight},${highlight + 20},${highlight + 30})" stroke-width="0.5"/>`);
+  }
+
+  // Inner bore (dark center channel)
+  const boreW = nozzleBotW * 0.5;
+  const boreX = nozzleCenterX - boreW / 2;
+  nozzleParts.push(`<rect x="${boreX}" y="${nozzleTopY + P}" width="${boreW}" height="${(nozzleRows - 1) * P}"
+    fill="#060C14" opacity="0.7"/>`);
+
+  // Mounting bolts (small accent squares at top corners)
+  const boltSize = 3;
+  const boltY = nozzleTopY + 1;
+  nozzleParts.push(`<rect x="${nozzleTopX + 4}" y="${boltY}" width="${boltSize}" height="${boltSize}" fill="#3A5A6A"/>`);
+  nozzleParts.push(`<rect x="${nozzleTopX + nozzleTopW - 4 - boltSize}" y="${boltY}" width="${boltSize}" height="${boltSize}" fill="#3A5A6A"/>`);
+  nozzleParts.push(`<rect x="${nozzleCenterX - boreW / 2 - 8}" y="${boltY}" width="${boltSize}" height="${boltSize}" fill="#2A4A5A"/>`);
+  nozzleParts.push(`<rect x="${nozzleCenterX + boreW / 2 + 5}" y="${boltY}" width="${boltSize}" height="${boltSize}" fill="#2A4A5A"/>`);
+
+  nozzle.innerHTML = nozzleParts.join('\n');
+  svgEl.appendChild(nozzle);
 
   container.appendChild(svgEl);
 }
