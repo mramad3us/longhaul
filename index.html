@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LONGHAUL</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Share+Tech+Mono&family=Chakra+Petch:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Landing Screen -->
+    <div id="screen-landing" class="screen active">
+      <div class="landing-bg"></div>
+      <div class="landing-content">
+        <div class="landing-logo" id="landing-logo"></div>
+        <h1 class="landing-title">LONGHAUL</h1>
+        <p class="landing-subtitle">Deep Space Operations</p>
+        <nav class="landing-menu" id="landing-menu">
+          <button class="menu-btn" data-action="new-game">
+            <span class="menu-btn-icon" id="icon-new-game"></span>
+            <span class="menu-btn-label">New Game</span>
+            <span class="menu-btn-arrow">&gt;</span>
+          </button>
+          <button class="menu-btn" data-action="load-game">
+            <span class="menu-btn-icon" id="icon-load-game"></span>
+            <span class="menu-btn-label">Load Game</span>
+            <span class="menu-btn-arrow">&gt;</span>
+          </button>
+          <button class="menu-btn" data-action="settings">
+            <span class="menu-btn-icon" id="icon-settings-menu"></span>
+            <span class="menu-btn-label">Settings</span>
+            <span class="menu-btn-arrow">&gt;</span>
+          </button>
+        </nav>
+        <p class="landing-version">v0.1.0</p>
+      </div>
+    </div>
+
+    <!-- New Game Screen -->
+    <div id="screen-new-game" class="screen">
+      <div class="landing-bg"></div>
+      <div class="panel-screen">
+        <h2 class="panel-title">New Mission</h2>
+        <div class="form-group">
+          <label class="form-label">Ship Name</label>
+          <input type="text" id="input-ship-name" class="form-input" placeholder="RSV Canterbury" maxlength="32">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Captain Name</label>
+          <input type="text" id="input-captain-name" class="form-input" placeholder="J. Holden" maxlength="32">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Starting Crew</label>
+          <div class="crew-count-selector">
+            <button class="crew-btn" data-delta="-1" id="crew-minus">
+              <span id="icon-minus"></span>
+            </button>
+            <span class="crew-count" id="crew-count">4</span>
+            <button class="crew-btn" data-delta="1" id="crew-plus">
+              <span id="icon-plus"></span>
+            </button>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-secondary" data-action="back">Back</button>
+          <button class="btn btn-primary" data-action="start-game">
+            <span class="btn-text">Launch</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Load Game Screen -->
+    <div id="screen-load-game" class="screen">
+      <div class="landing-bg"></div>
+      <div class="panel-screen">
+        <h2 class="panel-title">Load Mission</h2>
+        <div class="save-list" id="save-list">
+          <p class="save-empty">No saved missions found.</p>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-secondary" data-action="back">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Screen -->
+    <div id="screen-settings" class="screen">
+      <div class="landing-bg"></div>
+      <div class="panel-screen">
+        <h2 class="panel-title">Settings</h2>
+        <div class="settings-group">
+          <div class="setting-row">
+            <span class="setting-label">Master Volume</span>
+            <input type="range" class="setting-range" min="0" max="100" value="70" id="setting-volume">
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">Show Tooltips</span>
+            <button class="setting-toggle active" id="setting-tooltips">ON</button>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">Autosave Interval</span>
+            <select class="setting-select" id="setting-autosave">
+              <option value="60">1 min</option>
+              <option value="300" selected>5 min</option>
+              <option value="600">10 min</option>
+              <option value="0">Off</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-secondary" data-action="back">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Game Screen -->
+    <div id="screen-game" class="screen">
+      <!-- CRT overlay -->
+      <div class="crt-overlay"></div>
+      <!-- Critical alert border -->
+      <div class="alert-border" id="alert-border"></div>
+
+      <!-- Top HUD Bar -->
+      <header class="hud-bar">
+        <div class="hud-left">
+          <div class="hud-datetime">
+            <span class="hud-date" id="hud-date">2351.03.22</span>
+            <span class="hud-time-sep">|</span>
+            <span class="hud-time" id="hud-time">08:00</span>
+          </div>
+          <div class="hud-divider"></div>
+          <div class="hud-speed">
+            <button class="speed-btn" data-speed="0" id="speed-pause" title="Pause">
+              <span id="icon-pause"></span>
+            </button>
+            <button class="speed-btn active" data-speed="1" title="1 min/s">1x</button>
+            <button class="speed-btn" data-speed="2" title="1 hr/s">2x</button>
+            <button class="speed-btn" data-speed="3" title="1 day/s">3x</button>
+          </div>
+        </div>
+        <div class="hud-center">
+          <span class="hud-ship-name" id="hud-ship-name">RSV Canterbury</span>
+        </div>
+        <div class="hud-right">
+          <button class="hud-icon-btn" data-action="game-settings" title="Settings">
+            <span id="icon-hud-settings"></span>
+          </button>
+          <button class="hud-icon-btn" data-action="save-game" title="Save">
+            <span id="icon-hud-save"></span>
+          </button>
+          <button class="hud-icon-btn" data-action="exit-game" title="Exit to Menu">
+            <span id="icon-hud-exit"></span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Ship View -->
+      <main class="game-main">
+        <aside class="resource-panel" id="resource-panel">
+          <div class="panel-header">Systems</div>
+          <!-- Resources populated by JS -->
+        </aside>
+        <div class="ship-viewport" id="ship-viewport">
+          <div class="viewport-grid"></div>
+          <div class="viewport-particles" id="viewport-particles"></div>
+          <div class="viewport-vignette"></div>
+          <div class="ship-container" id="ship-container">
+            <!-- Ship rendered by JS -->
+          </div>
+        </div>
+        <aside class="info-panel" id="info-panel">
+          <div class="info-section">
+            <h3 class="info-title">Ship Status</h3>
+            <div class="info-content" id="ship-status-info">
+              <p class="info-line"><span class="info-key">Thrust</span> <span class="info-val" id="info-thrust">0.0g</span></p>
+              <p class="info-line"><span class="info-key">Heading</span> <span class="info-val" id="info-heading">---</span></p>
+              <p class="info-line"><span class="info-key">Velocity</span> <span class="info-val" id="info-velocity">0 m/s</span></p>
+            </div>
+          </div>
+          <div class="info-section">
+            <h3 class="info-title">Selected Crew</h3>
+            <div class="info-content" id="crew-info">
+              <p class="info-line info-dim">No crew selected</p>
+            </div>
+          </div>
+          <div class="info-section">
+            <h3 class="info-title">Alerts</h3>
+            <div class="info-content" id="alerts-list">
+              <p class="info-line alert-ok">All systems nominal</p>
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <!-- Toast Notifications -->
+      <div class="toast-container" id="toast-container"></div>
+
+      <!-- Save Dialog Overlay -->
+      <div class="dialog-overlay" id="dialog-save" style="display:none">
+        <div class="dialog">
+          <h3 class="dialog-title">Save Mission</h3>
+          <div class="form-group">
+            <label class="form-label">Save Name</label>
+            <input type="text" id="input-save-name" class="form-input" placeholder="Quicksave" maxlength="32">
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" data-action="cancel-save">Cancel</button>
+            <button class="btn btn-primary" data-action="confirm-save">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Exit Confirm Overlay -->
+      <div class="dialog-overlay" id="dialog-exit" style="display:none">
+        <div class="dialog">
+          <h3 class="dialog-title">Exit to Menu</h3>
+          <p class="dialog-text">Unsaved progress will be lost. Continue?</p>
+          <div class="form-actions">
+            <button class="btn btn-secondary" data-action="cancel-exit">Cancel</button>
+            <button class="btn btn-primary" data-action="confirm-exit">Exit</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
