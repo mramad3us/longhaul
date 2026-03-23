@@ -160,6 +160,10 @@
           <span class="hud-ship-name" id="hud-ship-name">RSV Canterbury</span>
         </div>
         <div class="hud-right">
+          <button class="hud-icon-btn hud-jobs-btn" data-action="open-jobs" title="Jobs Queue">
+            <span class="hud-jobs-label">JOBS</span>
+            <span class="hud-jobs-count" id="hud-jobs-count">0</span>
+          </button>
           <button class="hud-icon-btn" data-action="game-settings" title="Settings">
             <span id="icon-hud-settings"></span>
           </button>
@@ -266,6 +270,53 @@
           <div class="form-actions">
             <button class="btn btn-secondary" data-action="cancel-save">Cancel</button>
             <button class="btn btn-primary" data-action="confirm-save">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- In-Game Settings Overlay -->
+      <div class="dialog-overlay" id="dialog-settings" style="display:none">
+        <div class="dialog dialog-wide">
+          <h3 class="dialog-title">Settings</h3>
+          <div class="settings-group">
+            <div class="setting-row">
+              <span class="setting-label">Master Volume</span>
+              <input type="range" class="setting-range" min="0" max="100" value="70" id="ingame-volume">
+            </div>
+            <div class="setting-row">
+              <span class="setting-label">Show Tooltips</span>
+              <button class="setting-toggle active" id="ingame-tooltips">ON</button>
+            </div>
+            <div class="setting-row">
+              <span class="setting-label">Autosave Interval</span>
+              <select class="setting-select" id="ingame-autosave">
+                <option value="60">1 min</option>
+                <option value="300" selected>5 min</option>
+                <option value="600">10 min</option>
+                <option value="0">Off</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-dev">
+              <span class="setting-label">Dev Mode</span>
+              <button class="setting-toggle" id="ingame-devmode">OFF</button>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" data-action="close-settings">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Jobs Queue Overlay -->
+      <div class="dialog-overlay" id="dialog-jobs" style="display:none">
+        <div class="dialog dialog-jobs">
+          <h3 class="dialog-title">Jobs Queue</h3>
+          <div class="jobs-list" id="jobs-list">
+            <p class="jobs-empty">— No active jobs —</p>
+          </div>
+          <div class="jobs-summary" id="jobs-summary"></div>
+          <div class="form-actions">
+            <button class="btn btn-primary" data-action="close-jobs">Close</button>
           </div>
         </div>
       </div>

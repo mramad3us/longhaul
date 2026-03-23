@@ -348,6 +348,20 @@ export function iconOxygen() {
   ], { b: C.blue }, 1));
 }
 
+export function iconN2() {
+  return svg(18, 18, '0 0 12 12', sprite([
+    '...cccc.....',
+    '..c....c....',
+    '.c..cc..c...',
+    '.c.c..c.c...',
+    '.c.c..c.c...',
+    '.c..cc..c...',
+    '.c......c...',
+    '..c....c....',
+    '...cccc.....',
+  ], { c: '#7B8FA3' }, 1));
+}
+
 export function iconWater() {
   return svg(18, 18, '0 0 12 12', sprite([
     '.....b......',
@@ -524,7 +538,40 @@ export const TileType = {
   AIRLOCK: 13,
   MEDBAY: 14,
   NAV_CONSOLE: 15,
+  CRASH_COUCH: 16,
+  TERMINAL: 17,
+  EVA_LOCKER: 18,
 };
+
+// Human-readable tile names (for tooltips and UI)
+export const TILE_NAMES = {
+  [TileType.HULL_WALL]: 'Hull Wall',
+  [TileType.INTERIOR_WALL]: 'Interior Wall',
+  [TileType.FLOOR]: 'Floor',
+  [TileType.DOOR]: 'Door',
+  [TileType.LADDER]: 'Ladder',
+  [TileType.CONSOLE]: 'Console',
+  [TileType.BUNK]: 'Bunk',
+  [TileType.TABLE]: 'Table',
+  [TileType.ENGINE]: 'Epstein Drive',
+  [TileType.REACTOR]: 'Reactor',
+  [TileType.STORAGE]: 'Storage Bay',
+  [TileType.LIFE_SUPPORT]: 'Life Support',
+  [TileType.AIRLOCK]: 'Airlock',
+  [TileType.MEDBAY]: 'Medical Bay',
+  [TileType.NAV_CONSOLE]: 'Navigation Console',
+  [TileType.CRASH_COUCH]: 'Crash Couch',
+  [TileType.TERMINAL]: 'Terminal',
+  [TileType.EVA_LOCKER]: 'EVA Suit Locker',
+};
+
+// Tiles that are interactive (clickable for info/actions)
+export const INTERACTIVE_TILES = new Set([
+  TileType.CONSOLE, TileType.NAV_CONSOLE, TileType.ENGINE,
+  TileType.REACTOR, TileType.STORAGE, TileType.LIFE_SUPPORT,
+  TileType.AIRLOCK, TileType.MEDBAY, TileType.CRASH_COUCH,
+  TileType.TERMINAL, TileType.EVA_LOCKER,
+]);
 
 // Tile palettes
 const TP = {
@@ -792,6 +839,60 @@ const TILE_PATTERNS = {
     'bbbbbbbbbbbbbbbb',
     'bbbbbbbbbbbbbbbb',
   ],
+  [TileType.CRASH_COUCH]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbiiiiiiiiiiibb',
+    'bbirkkkkkkkrib',
+    'bbirRRRRRRkrib',
+    'bbirRRRRRRkrib',
+    'bbirRRRRRRkrib',
+    'bbirRRRRRRkrib',
+    'bbirRRRRRRkrib',
+    'bbirRRRRRRkrib',
+    'bbirkkkkkkkrib',
+    'bbirrrrrrrrribb',
+    'bbirkkkkkkkrib',
+    'bbirRRRRRRkrib',
+    'bbiiiiiiiiiiibb',
+    'bbibbbbbbbbbibbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  [TileType.TERMINAL]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbiiiiiiiiiiibb',
+    'bbiBBBBBBBBBibb',
+    'bbiBBtBBBBBBibb',
+    'bbiBBBBBtBBBibb',
+    'bbiBBBBBBBBBibb',
+    'bbiBBtBBBtBBibb',
+    'bbiBBBBBBBBBibb',
+    'bbiiiiiiiiiiibb',
+    'bbbbiiiiiibbbbb',
+    'bbbbibbbbibbbbb',
+    'bbbbibbbbibbbbb',
+    'bbbbiiiiiibbbbb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  [TileType.EVA_LOCKER]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbiiiiiiiiiiibb',
+    'bbimmmmmmmmmibb',
+    'bbimuuuuuuumibb',
+    'bbimuuUUuuumibb',
+    'bbimuuUUuuumibb',
+    'bbimuuuuuuumibb',
+    'bbimmmmmmmmmibb',
+    'bbimuuuuuuumibb',
+    'bbimuuUUuuumibb',
+    'bbimuuUUuuumibb',
+    'bbimuuuuuuumibb',
+    'bbimmmmmmmmmibb',
+    'bbiiiiiiiiiiibb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
 };
 
 
@@ -800,9 +901,29 @@ export function renderTile(type, x, y, ctx) {
   g.setAttribute('transform', `translate(${x * TILE_SIZE}, ${y * TILE_SIZE})`);
   g.setAttribute('shape-rendering', 'crispEdges');
 
+  // Tooltip for furniture tiles
+  const tileName = TILE_NAMES[type];
+  if (tileName) {
+    const title = document.createElementNS(SVG_NS, 'title');
+    title.textContent = tileName;
+    g.appendChild(title);
+  }
+
+  // Make interactive tiles show pointer cursor
+  if (INTERACTIVE_TILES.has(type)) {
+    g.setAttribute('class', 'tile-interactive');
+    g.setAttribute('data-tile-type', type);
+  }
+
   const pattern = TILE_PATTERNS[type];
   if (pattern) {
     g.innerHTML = sprite(pattern, TP, PX);
+    // Re-insert title since innerHTML wipes it
+    if (tileName) {
+      const title = document.createElementNS(SVG_NS, 'title');
+      title.textContent = tileName;
+      g.insertBefore(title, g.firstChild);
+    }
   } else {
     // EMPTY
     g.innerHTML = '';
@@ -946,6 +1067,7 @@ function buildCrewSprite(def) {
     h: def.hair, s: def.skin, d: def.skinDk,
     u: def.uniform, U: def.uniformDk, B: def.boots,
     e: def.eye, p: def.pupil, b: C.hullDk,
+    E: '#3A7BD5', F: '#1E4A8A', v: '#7EC8E3', // EVA suit blue, dark blue, visor cyan
   };
 
   return {
@@ -1007,7 +1129,65 @@ function buildCrewSprite(def) {
         '...B........B...',
       ],
     ],
+    // Secured: crew reclined in crash couch, red gel visible around body
+    secured: [
+      '................',
+      '................',
+      '................',
+      '................',
+      '..kkkkkkkkkkk...',
+      '..kRhhhRRRRRk...',
+      '..kRhsseRRRRk...',
+      '..kRhsseRRRRk...',
+      '..kRRssRRRRRk...',
+      '..kRuuuuuuRRk...',
+      '..kRuuUUuuRRk...',
+      '..kRuuUUuuRRk...',
+      '..kRRuuuuRRRk...',
+      '..kRRBBBBRRRk...',
+      '..kkkkkkkkkkk...',
+      '................',
+    ],
+    // In medbay: crew lying on medical bed, teal indicators
+    inMedbay: [
+      '................',
+      '................',
+      '................',
+      '................',
+      '..ttttttttttt...',
+      '..tThhhTTTTTt...',
+      '..tThsseTTTTt...',
+      '..tThsseTTTTt...',
+      '..tTTssTTTTTt...',
+      '..tTuuuuuuTTt...',
+      '..tTuuUUuuTTt...',
+      '..tTuuUUuuTTt...',
+      '..tTTuuuuTTTt...',
+      '..tTTBBBBTTTt...',
+      '..ttttttttttt...',
+      '................',
+    ],
+    // EVA suited: crew in blue EVA suit with helmet visor
+    suited: [
+      '................',
+      '......EEEE......',
+      '.....EEEEEE.....',
+      '.....EvvEEE.....',
+      '.....EvvEEE.....',
+      '......EEEE......',
+      '......EEEE......',
+      '.....EEEEEE.....',
+      '.....EEFFEE.....',
+      '.....EEFFEE.....',
+      '.....EEFFEE.....',
+      '.....EEFFEE.....',
+      '......EEEE......',
+      '......EEEE......',
+      '......E..E......',
+      '......E..E......',
+    ],
     // Prone: crew member collapsed on deck, on knees/face, arms out
+    // Used for: crushed under G, unconscious on floor, dead on floor
     prone: [
       '................',
       '................',
@@ -1090,7 +1270,28 @@ export function renderCrewMember(x, y, memberIndex, name) {
 
   g.appendChild(floatingGroup);
 
-  // Prone sprite (shown under dangerous G without crash couch)
+  // Secured in crash couch sprite
+  const securedGroup = document.createElementNS(SVG_NS, 'g');
+  securedGroup.setAttribute('class', 'crew-secured');
+  securedGroup.setAttribute('display', 'none');
+  securedGroup.innerHTML = sprite(crewSprite.secured, crewSprite.palette, PX);
+  g.appendChild(securedGroup);
+
+  // In medbay sprite
+  const medbayGroup = document.createElementNS(SVG_NS, 'g');
+  medbayGroup.setAttribute('class', 'crew-in-medbay');
+  medbayGroup.setAttribute('display', 'none');
+  medbayGroup.innerHTML = sprite(crewSprite.inMedbay, crewSprite.palette, PX);
+  g.appendChild(medbayGroup);
+
+  // EVA suited sprite (shown when crew is wearing a suit)
+  const suitedGroup = document.createElementNS(SVG_NS, 'g');
+  suitedGroup.setAttribute('class', 'crew-suited');
+  suitedGroup.setAttribute('display', 'none');
+  suitedGroup.innerHTML = sprite(crewSprite.suited, crewSprite.palette, PX);
+  g.appendChild(suitedGroup);
+
+  // Prone sprite (shown under dangerous G without crash couch — with shake)
   const proneGroup = document.createElementNS(SVG_NS, 'g');
   proneGroup.setAttribute('class', 'crew-prone');
   proneGroup.setAttribute('display', 'none');
@@ -1104,6 +1305,38 @@ export function renderCrewMember(x, y, memberIndex, name) {
   proneShake.setAttribute('repeatCount', 'indefinite');
   proneGroup.appendChild(proneShake);
   g.appendChild(proneGroup);
+
+  // Unconscious on floor (same prone sprite, no shake — still/limp)
+  const unconsciousFloorGroup = document.createElementNS(SVG_NS, 'g');
+  unconsciousFloorGroup.setAttribute('class', 'crew-unconscious-floor');
+  unconsciousFloorGroup.setAttribute('display', 'none');
+  unconsciousFloorGroup.innerHTML = sprite(crewSprite.prone, crewSprite.palette, PX);
+  g.appendChild(unconsciousFloorGroup);
+
+  // Unconscious/dead floating in zero-G (prone sprite with bob, no shake)
+  const unconsciousFloatGroup = document.createElementNS(SVG_NS, 'g');
+  unconsciousFloatGroup.setAttribute('class', 'crew-unconscious-float');
+  unconsciousFloatGroup.setAttribute('display', 'none');
+  unconsciousFloatGroup.innerHTML = sprite(crewSprite.prone, crewSprite.palette, PX);
+  // Slow tumble/bob for limp body floating
+  const limpBobDur = 5 + (memberIndex % 3);
+  const limpBob = document.createElementNS(SVG_NS, 'animateTransform');
+  limpBob.setAttribute('attributeName', 'transform');
+  limpBob.setAttribute('type', 'translate');
+  limpBob.setAttribute('values', `0 0; 0 -${bobAmt}; 0 0; 0 ${bobAmt * 0.5}; 0 0`);
+  limpBob.setAttribute('dur', `${limpBobDur}s`);
+  limpBob.setAttribute('repeatCount', 'indefinite');
+  unconsciousFloatGroup.appendChild(limpBob);
+  // Slow rotation for drifting feel
+  const limpRotate = document.createElementNS(SVG_NS, 'animateTransform');
+  limpRotate.setAttribute('attributeName', 'transform');
+  limpRotate.setAttribute('type', 'rotate');
+  limpRotate.setAttribute('values', '0 16 16; 8 16 16; 0 16 16; -5 16 16; 0 16 16');
+  limpRotate.setAttribute('dur', `${limpBobDur * 1.3}s`);
+  limpRotate.setAttribute('repeatCount', 'indefinite');
+  limpRotate.setAttribute('additive', 'sum');
+  unconsciousFloatGroup.appendChild(limpRotate);
+  g.appendChild(unconsciousFloatGroup);
 
   // Eye blink (works for both states)
   const blink = document.createElementNS(SVG_NS, 'g');
@@ -1138,19 +1371,32 @@ export function renderCrewMember(x, y, memberIndex, name) {
   return g;
 }
 
-// Set crew visual state: 'standing', 'floating', or 'prone'
-// Can be called per-crew with crewId, or for all crew (crewId = null)
-export function setCrewGravity(container, hasGravity, crewStates = null) {
+// Set crew visual state based on physics state + consciousness/dead
+// crewMembers: array of crew objects (for checking consciousness/dead)
+export function setCrewGravity(container, hasGravity, crewStates = null, crewMembers = null) {
   container.querySelectorAll('.crew-symbol').forEach(crew => {
     const crewId = crew.getAttribute('data-crew-id');
     const standing = crew.querySelector('.crew-standing');
     const floating = crew.querySelector('.crew-floating');
     const prone = crew.querySelector('.crew-prone');
+    const unconsciousFloor = crew.querySelector('.crew-unconscious-floor');
+    const unconsciousFloat = crew.querySelector('.crew-unconscious-float');
     const blinkStanding = crew.querySelector('.blink-standing');
     const blinkFloating = crew.querySelector('.blink-floating');
     const blink = crew.querySelector('.crew-blink');
 
-    // Determine state for this crew member
+    // Find crew member data
+    const member = crewMembers && crewId !== null
+      ? crewMembers.find(m => String(m.id) === String(crewId))
+      : null;
+
+    const isDead = member && member.dead;
+    const isUnconscious = member && (member.consciousness <= 10 || member.dead);
+    const inCrashCouch = member && member._inCrashCouch;
+    const inMedbayBed = member && member._inMedbay;
+    const inSuit = member && member._inSuit;
+
+    // Determine physics state
     let state;
     if (crewStates && crewId !== null && crewStates[crewId]) {
       state = crewStates[crewId];
@@ -1158,17 +1404,51 @@ export function setCrewGravity(container, hasGravity, crewStates = null) {
       state = hasGravity ? 'standing' : 'floating';
     }
 
-    const isStanding = state === 'standing' || state === 'strained' || state === 'secured';
-    const isFloating = state === 'floating';
-    const isProne = state === 'prone';
+    const inGravity = state !== 'floating';
 
-    if (standing) standing.setAttribute('display', isStanding ? 'inline' : 'none');
-    if (floating) floating.setAttribute('display', isFloating ? 'inline' : 'none');
-    if (prone) prone.setAttribute('display', isProne ? 'inline' : 'none');
-    if (blinkStanding) blinkStanding.setAttribute('display', isStanding ? 'inline' : 'none');
-    if (blinkFloating) blinkFloating.setAttribute('display', isFloating ? 'inline' : 'none');
-    // Hide blink entirely when prone (face down)
-    if (blink) blink.setAttribute('display', isProne ? 'none' : 'inline');
+    // Determine which sprite to show
+    let showStanding = false, showFloating = false, showProne = false;
+    let showUnconsciousFloor = false, showUnconsciousFloat = false;
+    let showSecured = false, showInMedbay = false, showSuited = false;
+
+    const isCrushed = member && member.conditions && member.conditions.includes('crushed');
+
+    if (isUnconscious || isDead) {
+      if (inGravity) {
+        showUnconsciousFloor = true;
+      } else {
+        showUnconsciousFloat = true;
+      }
+    } else if (inMedbayBed) {
+      showInMedbay = true;
+    } else if (inCrashCouch) {
+      showSecured = true;
+    } else if (isCrushed || state === 'prone') {
+      showProne = true;
+    } else if (inSuit) {
+      showSuited = true;
+    } else if (state === 'floating') {
+      showFloating = true;
+    } else {
+      showStanding = true;
+    }
+
+    const secured = crew.querySelector('.crew-secured');
+    const medbaySprite = crew.querySelector('.crew-in-medbay');
+    const suited = crew.querySelector('.crew-suited');
+
+    if (standing) standing.setAttribute('display', showStanding ? 'inline' : 'none');
+    if (floating) floating.setAttribute('display', showFloating ? 'inline' : 'none');
+    if (prone) prone.setAttribute('display', showProne ? 'inline' : 'none');
+    if (unconsciousFloor) unconsciousFloor.setAttribute('display', showUnconsciousFloor ? 'inline' : 'none');
+    if (unconsciousFloat) unconsciousFloat.setAttribute('display', showUnconsciousFloat ? 'inline' : 'none');
+    if (secured) secured.setAttribute('display', showSecured ? 'inline' : 'none');
+    if (medbaySprite) medbaySprite.setAttribute('display', showInMedbay ? 'inline' : 'none');
+    if (suited) suited.setAttribute('display', showSuited ? 'inline' : 'none');
+    if (blinkStanding) blinkStanding.setAttribute('display', showStanding ? 'inline' : 'none');
+    if (blinkFloating) blinkFloating.setAttribute('display', showFloating ? 'inline' : 'none');
+    // Blink only when standing, floating, secured, or in medbay (not prone/unconscious/dead/suited)
+    if (blink) blink.setAttribute('display', (showStanding || showFloating || showSecured || showInMedbay) ? 'inline' : 'none');
   });
 }
 

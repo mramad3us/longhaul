@@ -3,7 +3,7 @@
 // Expanse-style vertical ship with hull outline, ambient glow
 // ============================================================
 
-import { SVG_NS, TileType, renderTile, renderCrewMember } from './svg-icons.js';
+import { SVG_NS, TileType, renderTile, renderCrewMember, INTERACTIVE_TILES, TILE_NAMES } from './svg-icons.js';
 
 const TILE_SIZE = 32;
 
@@ -20,9 +20,9 @@ export function createDefaultShip(crewCount = 4) {
         glow: { color: 'rgba(91, 192, 235, 0.06)', accent: '#5BC0EB' },
         tiles: [
           [T.EMPTY,     T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.EMPTY],
-          [T.HULL_WALL, T.NAV_CONSOLE,T.FLOOR,      T.CONSOLE,    T.FLOOR,      T.CONSOLE,    T.FLOOR,      T.NAV_CONSOLE,T.HULL_WALL],
-          [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.HULL_WALL],
-          [T.HULL_WALL, T.CONSOLE,    T.FLOOR,      T.FLOOR,      T.LADDER,     T.FLOOR,      T.FLOOR,      T.CONSOLE,    T.HULL_WALL],
+          [T.HULL_WALL, T.TERMINAL,   T.CRASH_COUCH,T.FLOOR,      T.FLOOR,      T.FLOOR,      T.CRASH_COUCH,T.TERMINAL,   T.HULL_WALL],
+          [T.HULL_WALL, T.EVA_LOCKER, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.EVA_LOCKER, T.HULL_WALL],
+          [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.LADDER,     T.FLOOR,      T.FLOOR,      T.FLOOR,      T.HULL_WALL],
         ],
       },
       {
@@ -30,9 +30,9 @@ export function createDefaultShip(crewCount = 4) {
         id: 'quarters',
         glow: { color: 'rgba(192, 132, 252, 0.04)', accent: '#C084FC' },
         tiles: [
-          [T.HULL_WALL, T.BUNK,       T.BUNK,       T.FLOOR,      T.LADDER,     T.FLOOR,      T.BUNK,       T.BUNK,       T.HULL_WALL],
-          [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.HULL_WALL],
-          [T.HULL_WALL, T.BUNK,       T.BUNK,       T.FLOOR,      T.DOOR,       T.FLOOR,      T.MEDBAY,     T.FLOOR,      T.HULL_WALL],
+          [T.HULL_WALL, T.TERMINAL,   T.CRASH_COUCH,T.FLOOR,      T.LADDER,     T.FLOOR,      T.CRASH_COUCH,T.TERMINAL,   T.HULL_WALL],
+          [T.HULL_WALL, T.EVA_LOCKER, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.EVA_LOCKER, T.HULL_WALL],
+          [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.DOOR,       T.FLOOR,      T.MEDBAY,     T.FLOOR,      T.HULL_WALL],
         ],
       },
       {
@@ -40,9 +40,9 @@ export function createDefaultShip(crewCount = 4) {
         id: 'mess',
         glow: { color: 'rgba(107, 203, 119, 0.04)', accent: '#6BCB77' },
         tiles: [
-          [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.LADDER,     T.FLOOR,      T.FLOOR,      T.FLOOR,      T.HULL_WALL],
-          [T.HULL_WALL, T.TABLE,      T.FLOOR,      T.TABLE,      T.FLOOR,      T.TABLE,      T.FLOOR,      T.LIFE_SUPPORT, T.HULL_WALL],
-          [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.HULL_WALL],
+          [T.HULL_WALL, T.EVA_LOCKER, T.FLOOR,      T.FLOOR,      T.LADDER,     T.FLOOR,      T.FLOOR,      T.EVA_LOCKER, T.HULL_WALL],
+          [T.HULL_WALL, T.TERMINAL,   T.CRASH_COUCH,T.FLOOR,      T.FLOOR,      T.FLOOR,      T.CRASH_COUCH,T.TERMINAL,   T.HULL_WALL],
+          [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.LIFE_SUPPORT,T.FLOOR,      T.HULL_WALL],
         ],
       },
       {
@@ -50,9 +50,9 @@ export function createDefaultShip(crewCount = 4) {
         id: 'cargo',
         glow: { color: 'rgba(79, 209, 197, 0.03)', accent: '#4FD1C5' },
         tiles: [
-          [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.LADDER,     T.FLOOR,      T.FLOOR,      T.FLOOR,      T.HULL_WALL],
+          [T.HULL_WALL, T.TERMINAL,   T.CRASH_COUCH,T.FLOOR,      T.LADDER,     T.FLOOR,      T.CRASH_COUCH,T.TERMINAL,   T.HULL_WALL],
           [T.HULL_WALL, T.STORAGE,    T.STORAGE,    T.FLOOR,      T.FLOOR,      T.FLOOR,      T.STORAGE,    T.STORAGE,    T.HULL_WALL],
-          [T.HULL_WALL, T.STORAGE,    T.FLOOR,      T.FLOOR,      T.AIRLOCK,    T.FLOOR,      T.FLOOR,      T.STORAGE,    T.HULL_WALL],
+          [T.HULL_WALL, T.STORAGE,    T.EVA_LOCKER, T.FLOOR,      T.AIRLOCK,    T.FLOOR,      T.EVA_LOCKER, T.STORAGE,    T.HULL_WALL],
         ],
       },
       {
@@ -60,8 +60,8 @@ export function createDefaultShip(crewCount = 4) {
         id: 'engineering',
         glow: { color: 'rgba(226, 163, 85, 0.06)', accent: '#E2A355' },
         tiles: [
-          [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.LADDER,     T.FLOOR,      T.FLOOR,      T.FLOOR,      T.HULL_WALL],
-          [T.HULL_WALL, T.CONSOLE,    T.FLOOR,      T.ENGINE,     T.FLOOR,      T.ENGINE,     T.FLOOR,      T.CONSOLE,    T.HULL_WALL],
+          [T.HULL_WALL, T.TERMINAL,   T.CRASH_COUCH,T.FLOOR,      T.LADDER,     T.FLOOR,      T.CRASH_COUCH,T.TERMINAL,   T.HULL_WALL],
+          [T.HULL_WALL, T.EVA_LOCKER, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.EVA_LOCKER, T.HULL_WALL],
           [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.HULL_WALL],
         ],
       },
@@ -71,7 +71,7 @@ export function createDefaultShip(crewCount = 4) {
         glow: { color: 'rgba(226, 85, 85, 0.06)', accent: '#E25555' },
         tiles: [
           [T.EMPTY,     T.HULL_WALL,  T.HULL_WALL,  T.FLOOR,      T.LADDER,     T.FLOOR,      T.HULL_WALL,  T.HULL_WALL,  T.EMPTY],
-          [T.EMPTY,     T.HULL_WALL,  T.FLOOR,      T.REACTOR,    T.FLOOR,      T.REACTOR,    T.FLOOR,      T.HULL_WALL,  T.EMPTY],
+          [T.EMPTY,     T.HULL_WALL,  T.EVA_LOCKER, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.EVA_LOCKER, T.HULL_WALL,  T.EMPTY],
           [T.EMPTY,     T.EMPTY,      T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.EMPTY,      T.EMPTY],
         ],
       },
@@ -80,33 +80,101 @@ export function createDefaultShip(crewCount = 4) {
   };
 }
 
+// Compute overall health from body parts (weighted average)
+export function getOverallHealth(member) {
+  if (member.dead) return 0;
+  const b = member.body;
+  return Math.round(
+    b.head * 0.25 + b.torso * 0.3 +
+    b.leftArm * 0.1 + b.rightArm * 0.1 +
+    b.leftLeg * 0.125 + b.rightLeg * 0.125
+  );
+}
+
+// Role → primary skill affinity (gets a boost)
+const ROLE_SKILL_AFFINITY = {
+  Captain:    'piloting',
+  Pilot:      'piloting',
+  Engineer:   'engineering',
+  Medic:      'medical',
+  Gunner:     'security',
+  Mechanic:   'engineering',
+  Scientist:  'medical',
+  Cook:       'medical',
+};
+
 function generateCrew(count) {
   const names = ['Chen', 'Nakamura', 'Okafor', 'Petrov', 'Morales', 'Kim', 'Al-Rashid', 'Johansson'];
   const roles = ['Captain', 'Pilot', 'Engineer', 'Medic', 'Gunner', 'Mechanic', 'Scientist', 'Cook'];
   const crew = [];
 
   const defaultPositions = [
-    { deck: 0, x: 3, y: 1 },
-    { deck: 0, x: 5, y: 1 },
-    { deck: 4, x: 3, y: 1 },
-    { deck: 2, x: 3, y: 1 },
-    { deck: 1, x: 1, y: 0 },
-    { deck: 3, x: 4, y: 1 },
-    { deck: 1, x: 6, y: 2 },
-    { deck: 4, x: 5, y: 1 },
+    { deck: 0, x: 3, y: 1 },   // Captain — Bridge
+    { deck: 0, x: 5, y: 1 },   // Pilot — Bridge
+    { deck: 4, x: 3, y: 0 },   // Engineer — Engine
+    { deck: 2, x: 3, y: 0 },   // Medic — Mess
+    { deck: 1, x: 3, y: 1 },   // Gunner — Quarters
+    { deck: 3, x: 4, y: 0 },   // Mechanic — Cargo
+    { deck: 1, x: 5, y: 1 },   // Scientist — Quarters
+    { deck: 4, x: 5, y: 0 },   // Cook — Engine
   ];
 
   for (let i = 0; i < Math.min(count, 8); i++) {
     const pos = defaultPositions[i];
+    const role = roles[i];
+    const randSkill = () => 20 + Math.floor(Math.random() * 40); // 20-59 base
+
+    const skills = {
+      piloting: randSkill(),
+      security: randSkill(),
+      engineering: randSkill(),
+      medical: randSkill(),
+    };
+    // Boost primary affinity skill
+    const primary = ROLE_SKILL_AFFINITY[role];
+    if (primary) skills[primary] = Math.min(100, skills[primary] + 25 + Math.floor(Math.random() * 15));
+
     crew.push({
       id: i,
       name: names[i],
-      role: roles[i],
+      role,
       deck: pos.deck,
       x: pos.x,
       y: pos.y,
-      health: 85 + Math.floor(Math.random() * 15),
+
+      // Body part health (0-100 each)
+      body: {
+        head: 100,
+        torso: 100,
+        leftArm: 100,
+        rightArm: 100,
+        leftLeg: 100,
+        rightLeg: 100,
+      },
+
+      // Cardiovascular system
+      heart: {
+        health: 100,    // 0-100, degrades under sustained stress
+        bpm: 68 + Math.floor(Math.random() * 12), // resting 68-79
+        stress: 0,      // 0-100, drives bpm up
+        stressMinutes: 0, // minutes of continuous cardiac-stress
+        bpSystolic: 120,  // mmHg, normal ~120
+        bpDiastolic: 80,  // mmHg, normal ~80
+      },
+
+      // Mental state
+      consciousness: 100, // 10-100 while alive (bottoms at 10 unless dead)
       morale: 70 + Math.floor(Math.random() * 30),
+
+      // Life state
+      dead: false,
+      deathTimer: -1, // minutes until death once critical (-1 = not dying)
+
+      // Active status conditions
+      conditions: [], // e.g. ['crushed', 'critical', 'dead', 'brain-damage']
+
+      // Skills (0-100)
+      skills,
     });
   }
 
@@ -218,7 +286,7 @@ function buildHullPath(ship, offsetX, offsetY, deckGap) {
 
 // ---- SHIP RENDERER ----
 
-export function renderShip(ship, container, onCrewClick) {
+export function renderShip(ship, container, onCrewClick, onTileClick) {
   container.innerHTML = '';
 
   const maxWidth = Math.max(...ship.decks.map(d => d.tiles[0].length));
@@ -320,6 +388,13 @@ export function renderShip(ship, container, onCrewClick) {
           const tileGroup = renderTile(tile, 0, 0, null);
           tileGroup.setAttribute('transform',
             `translate(${offsetX + rx * TILE_SIZE}, ${offsetY + (deckStartY + ry) * TILE_SIZE})`);
+          // Click handler for interactive tiles
+          if (onTileClick && INTERACTIVE_TILES.has(tile)) {
+            tileGroup.addEventListener('click', (e) => {
+              e.stopPropagation();
+              onTileClick(tile, deckIndex, rx, ry);
+            });
+          }
           deckGroup.appendChild(tileGroup);
         }
       });
@@ -348,6 +423,17 @@ export function renderShip(ship, container, onCrewClick) {
     dot.setAttribute('fill', deck.glow ? deck.glow.accent : '#3A4E62');
     dot.setAttribute('opacity', '0.6');
     svgEl.appendChild(dot);
+
+    // Atmosphere status indicator (small dot below deck label)
+    const atmoDot = document.createElementNS(SVG_NS, 'rect');
+    atmoDot.setAttribute('x', labelWidth - 6);
+    atmoDot.setAttribute('y', offsetY + (deckStartY + deckHeight / 2) * TILE_SIZE + 5);
+    atmoDot.setAttribute('width', 3);
+    atmoDot.setAttribute('height', 3);
+    atmoDot.setAttribute('class', 'atmo-indicator');
+    atmoDot.setAttribute('data-deck-atmo', deckIndex);
+    atmoDot.setAttribute('fill', '#4FD1C5'); // default nominal
+    svgEl.appendChild(atmoDot);
 
     // Deck separator
     if (deckIndex < ship.decks.length - 1) {

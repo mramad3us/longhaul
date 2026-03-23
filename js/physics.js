@@ -5,6 +5,7 @@
 // ============================================================
 
 import { TileType } from './svg-icons.js';
+import { isSeatedInCouch, getCrewMission } from './crew-movement.js';
 
 // ---- CONSTANTS ----
 
@@ -52,6 +53,9 @@ export const TILE_MASS = {
   [TileType.LIFE_SUPPORT]:  180,   // O2 scrubbers, water recycler
   [TileType.AIRLOCK]:       350,   // Heavy pressure door
   [TileType.MEDBAY]:        95,    // Medical station
+  [TileType.CRASH_COUCH]:   150,   // Gel crash couch with harness
+  [TileType.TERMINAL]:      70,    // Control terminal
+  [TileType.EVA_LOCKER]:    60,    // EVA suit storage locker
 };
 
 // Whether each tile type is structurally bolted to the ship
@@ -72,6 +76,9 @@ export const TILE_BOLTED = {
   [TileType.LIFE_SUPPORT]:  true,
   [TileType.AIRLOCK]:       true,
   [TileType.MEDBAY]:        true,
+  [TileType.CRASH_COUCH]:   true,   // Bolted for high-G
+  [TileType.TERMINAL]:      true,
+  [TileType.EVA_LOCKER]:    true,   // Bolted to wall
 };
 
 // Average crew member mass in kg
@@ -144,8 +151,10 @@ export function computeShipMass(ship) {
 // ---- CREW STATE DETERMINATION ----
 
 function determineCrewState(gForce, crewMember) {
-  // Future: check if crew is in a crash couch (bunk tile)
-  const inCrashCouch = false; // Will check tile type later
+  // Crew must be actively seated in crash couch (arrived via secure-burn mission)
+  // or actively healing in medbay to get protection
+  let inCrashCouch = isSeatedInCouch(crewMember.id) ||
+                     getCrewMission(crewMember.id) === 'healing';
 
   if (gForce < G_THRESHOLDS.MICRO_G) {
     return CrewState.FLOATING;
@@ -163,6 +172,178 @@ function determineCrewState(gForce, crewMember) {
   // Above dangerous threshold
   if (inCrashCouch) return CrewState.SECURED;
   return CrewState.PRONE;
+}
+
+// ---- G-FORCE HEALTH EFFECTS ----
+// Realistic high-G effects per game-minute:
+//   0-1G:   comfortable, slow recovery
+//   1.5G+:  heart stress builds, morale drains
+//   2.5G+:  body damage (legs/torso first), consciousness drops
+//   5G+:    severe — all body parts, rapid consciousness loss
+//   8G+:    lethal — catastrophic damage
+
+function addCondition(member, condition) {
+  if (!member.conditions.includes(condition)) member.conditions.push(condition);
+}
+
+function removeCondition(member, condition) {
+  const idx = member.conditions.indexOf(condition);
+  if (idx !== -1) member.conditions.splice(idx, 1);
+}
+
+function clamp(v, min = 0, max = 100) { return Math.max(min, Math.min(max, v)); }
+
+function applyGForceEffects(member, gForce, isSecured = false) {
+  // Dead crew don't update
+  if (member.dead) return;
+
+  // Crash couch / medbay reduces effective G-force — crew feels ~1/3 of adverse effects
+  const effectiveG = isSecured ? gForce * 0.33 : gForce;
+
+  const b = member.body;
+  const h = member.heart;
+
+  // ---- DEATH SYSTEM ----
+  // Heart health 0% → CRITICAL state, death timer starts
+  // Critical ONLY clears via medical intervention (stabilizeCrew)
+  // Death happens after a random delay (2-30 minutes)
+  const isCritical = member.conditions.includes('critical');
+
+  if (h.health <= 0 || isCritical) {
+    if (h.health <= 0) h.health = 0;
+    if (!isCritical) {
+      // Just entered critical — set random death countdown
+      member.deathTimer = 2 + Math.random() * 28; // 2-30 minutes
+      addCondition(member, 'critical');
+      // Critical = shock → immediate unconsciousness
+      member.consciousness = 10;
+    }
+    // Death timer ticks down even if heart recovers slightly — need medical aid
+    if (member.deathTimer >= 0) {
+      member.deathTimer -= 1;
+      if (member.deathTimer <= 0) {
+        member.dead = true;
+        member.consciousness = 0;
+        h.bpm = 0;
+        h.stress = 0;
+        member.conditions = ['dead'];
+        return;
+      }
+    }
+  }
+
+  // ---- G-FORCE BODY DAMAGE (uses effectiveG — reduced when in crash couch/medbay) ----
+  if (effectiveG >= G_THRESHOLDS.LETHAL) {
+    b.head = clamp(b.head - 2.0);
+    b.torso = clamp(b.torso - 2.5);
+    b.leftArm = clamp(b.leftArm - 1.5);
+    b.rightArm = clamp(b.rightArm - 1.5);
+    b.leftLeg = clamp(b.leftLeg - 2.0);
+    b.rightLeg = clamp(b.rightLeg - 2.0);
+    h.stress = clamp(h.stress + 8);
+    h.health = clamp(h.health - 1.5);
+    member.morale = clamp(member.morale - 3);
+    addCondition(member, 'crushed');
+    addCondition(member, 'cardiac-stress');
+  } else if (effectiveG >= G_THRESHOLDS.DANGEROUS) {
+    b.torso = clamp(b.torso - 0.4);
+    b.leftLeg = clamp(b.leftLeg - 0.6);
+    b.rightLeg = clamp(b.rightLeg - 0.6);
+    h.stress = clamp(h.stress + 4);
+    h.health = clamp(h.health - 0.3);
+    member.morale = clamp(member.morale - 1);
+    addCondition(member, 'crushed');
+    addCondition(member, 'cardiac-stress');
+  } else if (effectiveG >= G_THRESHOLDS.HIGH) {
+    b.leftLeg = clamp(b.leftLeg - 0.05);
+    b.rightLeg = clamp(b.rightLeg - 0.05);
+    h.stress = clamp(h.stress + 1.5);
+    member.morale = clamp(member.morale - 0.2);
+    removeCondition(member, 'crushed');
+    if (h.stress > 50) addCondition(member, 'cardiac-stress');
+  } else if (effectiveG >= G_THRESHOLDS.COMFORTABLE) {
+    h.stress = clamp(h.stress - 5);
+    member.morale = clamp(member.morale + 0.05);
+    // Slow body recovery (head doesn't auto-heal past brain damage threshold)
+    b.torso = clamp(b.torso + 0.01);
+    b.leftArm = clamp(b.leftArm + 0.02);
+    b.rightArm = clamp(b.rightArm + 0.02);
+    b.leftLeg = clamp(b.leftLeg + 0.02);
+    b.rightLeg = clamp(b.rightLeg + 0.02);
+    if (!member.conditions.includes('brain-damage')) {
+      b.head = clamp(b.head + 0.01);
+    }
+    removeCondition(member, 'crushed');
+    if (h.stress < 20) removeCondition(member, 'cardiac-stress');
+  } else {
+    // Micro-G
+    h.stress = clamp(h.stress - 4);
+    if (h.stress < 20) removeCondition(member, 'cardiac-stress');
+    removeCondition(member, 'crushed');
+  }
+
+  // ---- HEART RECOVERY ----
+  // Heart heals slowly when no cardiac-stress or critical condition is active
+  if (!member.conditions.includes('cardiac-stress') &&
+      !member.conditions.includes('critical') &&
+      h.health < 100) {
+    h.health = clamp(h.health + 0.15);
+  }
+
+  // ---- BRAIN DAMAGE ----
+  // Head at 0% = brain damage (permanent until medical equipment)
+  if (b.head <= 0) {
+    b.head = 0;
+    addCondition(member, 'brain-damage');
+  }
+  // brain-damage is NOT auto-removed — requires future medical treatment
+
+  // ---- CONSCIOUSNESS ----
+  // Consciousness bottoms at 10% (alive but incapacitated)
+  const consciousnessFloor = 10;
+  const consciousnessCap = member.conditions.includes('brain-damage') ? 50 : 100;
+
+  // Consciousness pressure from injuries
+  if (b.head < 20) member.consciousness -= 2;
+  if (b.torso < 15) member.consciousness -= 3;
+  if (effectiveG >= G_THRESHOLDS.DANGEROUS) member.consciousness -= 1.5;
+
+  // Recovery when not under extreme stress
+  if (effectiveG < G_THRESHOLDS.DANGEROUS && b.head >= 20 && b.torso >= 15) {
+    member.consciousness += 0.5;
+  }
+
+  member.consciousness = clamp(member.consciousness, consciousnessFloor, consciousnessCap);
+
+  // ---- CARDIAC STRESS DURATION & HEART DEGRADATION ----
+  if (member.conditions.includes('cardiac-stress')) {
+    h.stressMinutes = (h.stressMinutes || 0) + 1;
+    // After 10 minutes of sustained cardiac stress, heart health degrades
+    if (h.stressMinutes > 10) {
+      const degradeRate = 0.1 + (h.stressMinutes - 10) * 0.02; // accelerates over time
+      h.health = clamp(h.health - degradeRate);
+    }
+  } else {
+    h.stressMinutes = 0;
+  }
+
+  // ---- HEART BPM & BLOOD PRESSURE ----
+  const restBpm = 72;
+  h.bpm = Math.round(restBpm + (h.stress / 100) * 120); // 72-192 bpm range
+
+  // Blood pressure: stress and G-force driven
+  // Normal: 120/80. Stress raises both. Will spike with bleeding (future).
+  const stressFactor = h.stress / 100;
+  h.bpSystolic = Math.round(120 + stressFactor * 60 + Math.max(0, gForce - 1) * 15);
+  h.bpDiastolic = Math.round(80 + stressFactor * 30 + Math.max(0, gForce - 1) * 8);
+
+  // ---- DERIVED CONDITIONS ----
+  const anyInjured = [b.head, b.torso, b.leftArm, b.rightArm, b.leftLeg, b.rightLeg].some(v => v < 70);
+  if (anyInjured) addCondition(member, 'injured');
+  else removeCondition(member, 'injured');
+
+  if (member.consciousness <= consciousnessFloor) addCondition(member, 'unconscious');
+  else removeCondition(member, 'unconscious');
 }
 
 // ---- PHYSICS TICK ----
@@ -214,25 +395,60 @@ export function physicsTick(gameState, physicsState) {
 
     physicsState.crewStates[member.id] = newState;
 
-    // G-force effects on crew per minute
-    if (physicsState.gForce >= G_THRESHOLDS.DANGEROUS) {
-      // Prone crew take health damage
-      member.health = Math.max(0, member.health - 0.5);
-      member.morale = Math.max(0, member.morale - 1);
-    } else if (physicsState.gForce >= G_THRESHOLDS.HIGH) {
-      // Strained crew lose morale slowly
-      member.morale = Math.max(0, member.morale - 0.2);
-    } else if (physicsState.gForce >= G_THRESHOLDS.COMFORTABLE &&
-               physicsState.gForce <= G_THRESHOLDS.STANDARD) {
-      // Comfortable gravity slowly restores morale
-      member.morale = Math.min(100, member.morale + 0.05);
-    }
+    // G-force effects on crew per minute (secured crew get reduced effects)
+    applyGForceEffects(member, physicsState.gForce, newState === CrewState.SECURED);
   });
 
   // Future: process loose objects (slide toward floor under thrust,
   // float when micro-G, slam into walls during maneuvers)
 
   return stateChanges;
+}
+
+// ---- MEDICAL INTERVENTION ----
+
+// Stabilize a critical crew member (first aid or medbay).
+// Cancels death timer, restores heart to 15%, removes critical.
+// Returns true if stabilization succeeded.
+export function stabilizeCrew(member) {
+  if (member.dead) return false;
+  if (!member.conditions.includes('critical')) return false;
+
+  removeCondition(member, 'critical');
+  member.deathTimer = -1;
+  member.heart.health = Math.max(member.heart.health, 15); // minimum 15% heart
+  member.heart.stress = Math.min(member.heart.stress, 50); // reduce stress
+  return true;
+}
+
+// Apply medbay healing per game-minute. Heals all body parts and heart.
+// Returns true if crew is fully healed.
+export function medbayHealTick(member) {
+  if (member.dead) return false;
+  const b = member.body;
+  const h = member.heart;
+
+  // Heal body parts
+  b.head = clamp(b.head + 0.3);
+  b.torso = clamp(b.torso + 0.25);
+  b.leftArm = clamp(b.leftArm + 0.4);
+  b.rightArm = clamp(b.rightArm + 0.4);
+  b.leftLeg = clamp(b.leftLeg + 0.35);
+  b.rightLeg = clamp(b.rightLeg + 0.35);
+
+  // Heal heart
+  h.health = clamp(h.health + 0.2);
+  h.stress = clamp(h.stress - 1);
+
+  // Restore consciousness
+  const cap = member.conditions.includes('brain-damage') ? 50 : 100;
+  member.consciousness = clamp(member.consciousness + 0.8, 10, cap);
+
+  // Check if fully healed
+  const parts = [b.head, b.torso, b.leftArm, b.rightArm, b.leftLeg, b.rightLeg];
+  const bodyOk = parts.every(v => v >= 99.5);
+  const heartOk = h.health >= 99.5;
+  return bodyOk && heartOk;
 }
 
 // ---- THRUST CONTROL ----

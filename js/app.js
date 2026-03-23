@@ -7,16 +7,18 @@ import {
   iconNewGame, iconLoadGame, iconSettings, iconPause,
   iconHudSettings, iconHudSave, iconHudExit,
   iconMinus, iconPlus, iconDelete, iconThrust,
-  iconFuel, iconOxygen, iconWater, iconFood, iconCrew, iconPower,
-  logoShip, createStarfield, setCrewGravity,
+  iconFuel, iconOxygen, iconN2, iconWater, iconFood, iconCrew, iconPower,
+  logoShip, createStarfield, setCrewGravity, TILE_NAMES, TileType,
 } from './svg-icons.js';
 
 import { initStorage, saveGame, loadGame, listSaves, deleteSave } from './storage.js';
 import { createGameState, formatDate, formatTime, GameLoop } from './game.js';
-import { renderShip, renderTacView } from './ship.js';
+import { renderShip, renderTacView, getOverallHealth } from './ship.js';
 import { VERSION } from './version.js';
-import { toggleThrust, setThrustLevel, startFlip, updateFlip, CrewState } from './physics.js';
-import { initCrewMovement, updateCrewMovement } from './crew-movement.js';
+import { toggleThrust, setThrustLevel, startFlip, updateFlip, CrewState, stabilizeCrew } from './physics.js';
+import { initCrewMovement, updateCrewMovement, getCrewMission, isBeingRescued, assignRecoverMission, assignRescueMission, cancelMission, assignSecureBurnMission, releaseSecureBurn, isSeatedInCouch, assignRepairLSMission, isRepairComplete, assignEquipSuitMission, isSuitDonned } from './crew-movement.js';
+import { generateAutoJobs, clearJobs, getJobQueue, getCrewJobs, completeJob, JobPriority, JobType } from './jobs.js';
+import { getAtmoStatus, getEquipmentStatusLabel, depressurizeCompartment, repressurizeCompartment, quickPatchLS, toggleLS, countSuitsOnDeck, donEvaSuit, removeEvaSuit, findNearestSuitLocker } from './life-support.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -46,6 +48,7 @@ const LOG_ICONS = {
   crew:    '\u263A', // ☺
   system:  '\u25C8', // ◈
   nav:     '\u25C6', // ◆
+  debug:   '\u25CB', // ○
 };
 
 function addLogEntry(message, category = 'system') {
@@ -318,6 +321,11 @@ async function refreshSaveList() {
       if (e.target.closest('.save-item-delete')) return;
       const saveData = await loadGame(save.id);
       gameState = saveData.state;
+      // Migrate old saves: add life support if missing
+      if (!gameState.lsEquipment) {
+        const { initLifeSupport } = await import('./life-support.js');
+        initLifeSupport(gameState);
+      }
       startGame();
       showToast('Mission loaded', 'ok');
     });
@@ -554,6 +562,10 @@ function updateThrustSliderUI(level) {
 
 function selectCrew(member) {
   selectedCrew = member;
+  selectedTile = null;
+
+  // Deselect tile visuals
+  document.querySelectorAll('.tile-interactive').forEach(el => el.classList.remove('tile-selected'));
 
   // Update visual selection
   document.querySelectorAll('.crew-symbol').forEach(el => {
@@ -565,29 +577,469 @@ function selectCrew(member) {
 
   // Update info panel
   const crewInfo = document.getElementById('crew-info');
+  const b = member.body;
+  const h = member.heart;
+  const overall = getOverallHealth(member);
+
+  // Color helper for health values
+  const hc = v => v >= 70 ? 'var(--ok)' : v >= 40 ? 'var(--warning)' : 'var(--danger)';
+  const bc = v => v >= 70 ? 'ok' : v >= 40 ? 'warning' : 'danger';
+
+  // Heartbeat speed: faster BPM = faster animation, flatline if dead
+  const beatDuration = h.bpm > 0 ? Math.max(0.25, 60 / h.bpm) : 0;
+
+  // Conditions display
+  const condLabels = {
+    'dead': 'DEAD',
+    'critical': 'CRITICAL',
+    'brain-damage': 'BRAIN DAMAGE',
+    'crushed': 'CRUSHED',
+    'cardiac-stress': 'CARDIAC STRESS',
+    'injured': 'INJURED',
+    'unconscious': 'UNCONSCIOUS',
+    'fatigued': 'FATIGUED',
+    'starving': 'STARVING',
+    'dehydrated': 'DEHYDRATED',
+    'hypoxic': 'HYPOXIC',
+    'hypercapnia': 'HYPERCAPNIA',
+    'decompression': 'DECOMPRESSION',
+  };
+
+  const condHtml = member.conditions.length > 0
+    ? member.conditions.map(c => {
+      const severity = (c === 'dead' || c === 'crushed' || c === 'unconscious' || c === 'decompression') ? 'danger'
+        : (c === 'critical') ? 'critical'
+        : (c === 'brain-damage' || c === 'cardiac-stress' || c === 'injured' || c === 'hypoxic' || c === 'hypercapnia') ? 'warning' : 'dim';
+      return `<span class="crew-condition crew-condition-${severity}">${condLabels[c] || c.toUpperCase()}</span>`;
+    }).join('')
+    : '<span class="crew-condition crew-condition-ok">NOMINAL</span>';
+
+  // Skill bars
+  const skillDefs = [
+    { key: 'piloting', label: 'PIL' },
+    { key: 'security', label: 'SEC' },
+    { key: 'engineering', label: 'ENG' },
+    { key: 'medical', label: 'MED' },
+  ];
+  const skillsHtml = skillDefs.map(s => {
+    const val = member.skills[s.key];
+    return `<div class="crew-skill">
+      <span class="crew-skill-label">${s.label}</span>
+      <div class="crew-skill-bar"><div class="crew-skill-fill" style="width: ${val}%"></div></div>
+      <span class="crew-skill-val">${val}</span>
+    </div>`;
+  }).join('');
+
   crewInfo.innerHTML = `
     <div class="crew-detail-name">${escapeHtml(member.name)}</div>
     <div class="crew-detail-role">${member.role}</div>
+
+    <div class="crew-section-label">CONDITION</div>
+    <div class="crew-conditions">${condHtml}</div>
+
+    <div class="crew-section-label">VITALS</div>
+    <div class="crew-vitals-row">
+      <div class="crew-heart-container">
+        <svg class="crew-heartbeat" viewBox="0 0 48 20" width="48" height="20">
+          <polyline class="crew-heartbeat-line${member.dead ? ' flatline' : ''}" style="${beatDuration > 0 ? `animation-duration: ${beatDuration}s` : 'animation: none'}"
+            points="${member.dead ? '0,10 48,10' : '0,10 8,10 12,10 15,2 18,18 21,6 24,14 27,10 32,10 40,10 48,10'}" />
+        </svg>
+        <span class="crew-heart-bpm${member.dead ? ' flatline' : ''}">${member.dead ? '---' : h.bpm}</span>
+      </div>
+      <div class="crew-vital-mini">
+        <span class="crew-vital-label">Heart</span>
+        <span class="crew-vital-val" style="color: ${hc(h.health)}">${Math.round(h.health)}%</span>
+      </div>
+      <div class="crew-vital-mini">
+        <span class="crew-vital-label">Mind</span>
+        <span class="crew-vital-val" style="color: ${hc(member.consciousness)}">${Math.round(member.consciousness)}%</span>
+      </div>
+      <div class="crew-vital-mini">
+        <span class="crew-vital-label">BP</span>
+        <span class="crew-vital-val${member.dead ? ' flatline' : ''}">${member.dead ? '---' : `${h.bpSystolic}/${h.bpDiastolic}`}</span>
+      </div>
+    </div>
+
+    <div class="crew-section-label">BODY</div>
+    <div class="crew-body-diagram">
+      <div class="crew-body-row">
+        <div class="crew-body-part crew-body-head ${bc(b.head)}" title="Head: ${Math.round(b.head)}%">
+          <span class="crew-body-icon">&#9673;</span>
+        </div>
+      </div>
+      <div class="crew-body-row crew-body-mid">
+        <div class="crew-body-part crew-body-arm ${bc(b.leftArm)}" title="L.Arm: ${Math.round(b.leftArm)}%">
+          <span class="crew-body-val">${Math.round(b.leftArm)}</span>
+        </div>
+        <div class="crew-body-part crew-body-torso ${bc(b.torso)}" title="Torso: ${Math.round(b.torso)}%">
+          <span class="crew-body-val">${Math.round(b.torso)}</span>
+        </div>
+        <div class="crew-body-part crew-body-arm ${bc(b.rightArm)}" title="R.Arm: ${Math.round(b.rightArm)}%">
+          <span class="crew-body-val">${Math.round(b.rightArm)}</span>
+        </div>
+      </div>
+      <div class="crew-body-row crew-body-legs">
+        <div class="crew-body-part crew-body-leg ${bc(b.leftLeg)}" title="L.Leg: ${Math.round(b.leftLeg)}%">
+          <span class="crew-body-val">${Math.round(b.leftLeg)}</span>
+        </div>
+        <div class="crew-body-part crew-body-leg ${bc(b.rightLeg)}" title="R.Leg: ${Math.round(b.rightLeg)}%">
+          <span class="crew-body-val">${Math.round(b.rightLeg)}</span>
+        </div>
+      </div>
+    </div>
+
     <div class="crew-stat">
-      <span class="crew-stat-label">Health</span>
-      <div class="crew-stat-bar"><div class="crew-stat-fill health" style="width: ${member.health}%"></div></div>
+      <span class="crew-stat-label">Overall</span>
+      <div class="crew-stat-bar"><div class="crew-stat-fill health" style="width: ${overall}%; background: ${hc(overall)}"></div></div>
     </div>
     <div class="crew-stat">
       <span class="crew-stat-label">Morale</span>
       <div class="crew-stat-bar"><div class="crew-stat-fill morale" style="width: ${member.morale}%"></div></div>
     </div>
+
+    <div class="crew-section-label">SKILLS</div>
+    ${skillsHtml}
+
     <div class="info-line" style="margin-top: 6px">
       <span class="info-key">Deck</span>
       <span class="info-val">${gameState.ship.decks[member.deck].name}</span>
     </div>
+    ${member._inCrashCouch ? '<div class="crew-location-tag crew-location-couch">In Crash Couch</div>' : ''}
+    ${member._inMedbay ? '<div class="crew-location-tag crew-location-medbay">In Medical Bay</div>' : ''}
+    ${member._inSuit ? `<div class="crew-location-tag crew-location-suit">EVA Suit (${Math.round(member.evaSuit.o2Remaining)}h O₂)</div>` : ''}
+
+    ${buildCrewActions(member)}
   `;
+
+  // Wire up action buttons after innerHTML is set
+  bindCrewActionButtons(member);
+}
+
+function buildCrewActions(member) {
+  if (member.dead) return '';
+
+  const mission = getCrewMission(member.id);
+  const isUnconscious = member.consciousness <= 10;
+  const needsHealing = getOverallHealth(member) < 100 ||
+    member.heart.health < 100 ||
+    member.conditions.includes('critical') ||
+    member.conditions.includes('brain-damage') ||
+    member.conditions.includes('injured');
+
+  // Secured in crash couch
+  if (mission === 'secure-burn') {
+    return `
+      <div class="crew-actions">
+        <div class="crew-mission-status">Secured for burn</div>
+      </div>`;
+  }
+
+  // Donning EVA suit
+  if (mission === 'equip-suit') {
+    return `
+      <div class="crew-actions">
+        <div class="crew-mission-status">Donning EVA suit...</div>
+      </div>`;
+  }
+
+  // Already at medbay healing
+  if (mission === 'healing') {
+    return `
+      <div class="crew-actions">
+        <div class="crew-mission-status">Receiving treatment...</div>
+        <button class="crew-action-btn crew-action-cancel" data-crew-action="cancel">CANCEL</button>
+      </div>`;
+  }
+
+  // Already on recover mission
+  if (mission === 'recover') {
+    return `
+      <div class="crew-actions">
+        <div class="crew-mission-status">Moving to medbay...</div>
+        <button class="crew-action-btn crew-action-cancel" data-crew-action="cancel">CANCEL</button>
+      </div>`;
+  }
+
+  // Being rescued (patient side) — check if someone is rescuing this crew
+  const beingRescued = isBeingRescued(member.id);
+
+  if (!needsHealing) return '';
+
+  const buttons = [];
+
+  if (isUnconscious) {
+    if (!beingRescued) {
+      buttons.push(`<button class="crew-action-btn crew-action-rescue" data-crew-action="rescue">RESCUE</button>`);
+    } else {
+      buttons.push(`<div class="crew-mission-status">Rescue en route...</div>`);
+    }
+  } else if (member.conditions.includes('critical')) {
+    // Critical but conscious — need first aid then medbay
+    buttons.push(`<button class="crew-action-btn crew-action-rescue" data-crew-action="rescue">RESCUE</button>`);
+  } else {
+    buttons.push(`<button class="crew-action-btn crew-action-recover" data-crew-action="recover">RECOVER</button>`);
+  }
+
+  return buttons.length > 0 ? `<div class="crew-actions">${buttons.join('')}</div>` : '';
+}
+
+function bindCrewActionButtons(member) {
+  const recoverBtn = document.querySelector('[data-crew-action="recover"]');
+  if (recoverBtn) {
+    recoverBtn.addEventListener('click', () => {
+      const ok = assignRecoverMission(gameState.ship, member);
+      if (ok) {
+        showToast(`${member.name} heading to medbay`, 'info');
+        addLogEntry(`${member.name} assigned to medbay for recovery`, 'crew');
+      } else {
+        showToast('No medbay available', 'danger');
+      }
+      selectCrew(member); // refresh panel
+    });
+  }
+
+  const rescueBtn = document.querySelector('[data-crew-action="rescue"]');
+  if (rescueBtn) {
+    rescueBtn.addEventListener('click', () => {
+      const result = assignRescueMission(gameState.ship, member);
+      if (result.success) {
+        showToast(`${result.medicName} dispatched to rescue ${member.name}`, 'info');
+        addLogEntry(`${result.medicName} dispatched — rescuing ${member.name}`, 'crew');
+      } else if (result.reason === 'no-medic') {
+        showToast('No crew with medical skill > 20 available', 'danger');
+      } else if (result.reason === 'dead') {
+        showToast(`${member.name} is beyond help`, 'danger');
+      } else {
+        showToast('Cannot dispatch rescue', 'danger');
+      }
+      selectCrew(member); // refresh panel
+    });
+  }
+
+  const cancelBtn = document.querySelector('[data-crew-action="cancel"]');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => {
+      cancelMission(member.id);
+      showToast(`${member.name}'s mission cancelled`);
+      selectCrew(member); // refresh panel
+    });
+  }
+}
+
+// ---- TILE SELECTION ----
+
+let selectedTile = null;
+
+const TILE_DESCRIPTIONS = {
+  [TileType.CONSOLE]: 'General-purpose ship terminal. Used for comms, sensors, and system monitoring.',
+  [TileType.NAV_CONSOLE]: 'Navigation and flight control. Plots courses and manages burn sequences.',
+  [TileType.ENGINE]: 'Epstein fusion drive. Provides thrust for interplanetary travel.',
+  [TileType.REACTOR]: 'Fusion reactor core. Powers all ship systems.',
+  [TileType.STORAGE]: 'Cargo and supply storage. Holds provisions and spare parts.',
+  [TileType.LIFE_SUPPORT]: 'Atmospheric recycling and O2 generation. Keeps the crew breathing.',
+  [TileType.AIRLOCK]: 'Pressurized airlock for EVA operations.',
+  [TileType.MEDBAY]: 'Medical bay. Auto-administers first aid and heals injured crew.',
+  [TileType.CRASH_COUCH]: 'High-G crash couch. Gel-filled acceleration seat for sustained burns above 1G.',
+  [TileType.TERMINAL]: 'Workstation terminal. Crew interface for system operations.',
+  [TileType.EVA_LOCKER]: 'EVA suit locker. Contains one EVA suit with built-in life support.',
+};
+
+const TILE_STATUS_FN = {
+  [TileType.ENGINE]: () => {
+    if (!gameState) return 'Idle';
+    const p = gameState.physics;
+    return p.thrustActive ? `Active — ${p.gForce.toFixed(1)}G` : 'Idle';
+  },
+  [TileType.REACTOR]: () => 'Online',
+  [TileType.LIFE_SUPPORT]: (deckIdx) => {
+    if (!gameState) return '—';
+    const eq = gameState.lsEquipment?.[deckIdx];
+    const statusLabel = getEquipmentStatusLabel(eq);
+    const atmo = gameState.ship.decks[deckIdx]?.atmosphere;
+    if (!atmo) return statusLabel;
+    return `${statusLabel}\nAtmo: ${atmo.pressure.toFixed(1)} kPa | O2 ${atmo.o2Pct.toFixed(1)}% | CO2 ${atmo.co2Pct.toFixed(2)}%`;
+  },
+  [TileType.MEDBAY]: () => {
+    if (!gameState) return 'Ready';
+    const healing = gameState.ship.crew.filter(c =>
+      !c.dead && c.conditions.includes('healing')
+    );
+    return healing.length > 0 ? `Treating ${healing.length} patient(s)` : 'Ready';
+  },
+  [TileType.CRASH_COUCH]: () => {
+    if (!gameState) return 'Empty';
+    const g = gameState.physics.gForce;
+    return g > 1.5 ? `Active — ${g.toFixed(1)}G` : 'Standby';
+  },
+  [TileType.EVA_LOCKER]: (deckIdx, tx, ty) => {
+    if (!gameState || !gameState.suitLockers) return '—';
+    const locker = gameState.suitLockers.find(l =>
+      l.deckIdx === deckIdx && l.x === tx && l.y === ty
+    );
+    if (!locker) return 'Empty';
+    return locker.hasSuit ? 'EVA Suit — Ready' : 'Empty';
+  },
+};
+
+function selectTile(tileType, deckIdx, tx, ty) {
+  selectedTile = { tileType, deckIdx, tx, ty };
+  selectedCrew = null;
+
+  // Deselect crew visuals
+  document.querySelectorAll('.crew-symbol').forEach(el => el.classList.remove('selected'));
+
+  // Highlight selected tile
+  document.querySelectorAll('.tile-interactive').forEach(el => el.classList.remove('tile-selected'));
+  // Find the tile at matching position (by transform attribute)
+  const tiles = document.querySelectorAll(`.tile-interactive[data-tile-type="${tileType}"]`);
+  // We match by parent deck group's data-deck and tile transform
+  tiles.forEach(el => {
+    const deckGroup = el.closest('[data-deck]');
+    if (deckGroup && parseInt(deckGroup.getAttribute('data-deck')) === deckIdx) {
+      el.classList.add('tile-selected');
+    }
+  });
+
+  const crewInfo = document.getElementById('crew-info');
+  const name = TILE_NAMES[tileType] || 'Unknown';
+  const desc = TILE_DESCRIPTIONS[tileType] || '';
+  const statusFn = TILE_STATUS_FN[tileType];
+  const status = statusFn ? statusFn(deckIdx, tx, ty) : null;
+  const deckName = gameState.ship.decks[deckIdx]?.name || `Deck ${deckIdx}`;
+
+  let html = `
+    <div class="tile-detail-name">${escapeHtml(name)}</div>
+    <div class="tile-detail-deck">${escapeHtml(deckName.toUpperCase())}</div>
+    <p class="tile-detail-desc">${escapeHtml(desc)}</p>`;
+
+  if (status) {
+    const statusLines = status.split('\n');
+    html += `<div class="tile-detail-status">
+      <span class="tile-status-label">STATUS</span>
+      ${statusLines.map(l => `<span class="tile-status-value">${escapeHtml(l)}</span>`).join('')}
+    </div>`;
+  }
+
+  // Atmosphere readout for this compartment
+  const atmo = gameState.ship.decks[deckIdx]?.atmosphere;
+  if (atmo) {
+    const atmoStatus = getAtmoStatus(atmo);
+    const statusClass = atmoStatus === 'nominal' ? 'atmo-ok'
+      : (atmoStatus === 'warning' ? 'atmo-warn' : 'atmo-danger');
+    html += `<div class="tile-detail-atmosphere">
+      <span class="tile-status-label">COMPARTMENT</span>
+      <div class="atmo-readout ${statusClass}">
+        <span>${atmo.pressure.toFixed(1)} kPa</span>
+        <span>O2 ${atmo.o2Pct.toFixed(1)}%</span>
+        <span>N2 ${atmo.n2Pct.toFixed(1)}%</span>
+        <span>CO2 ${atmo.co2Pct.toFixed(2)}%</span>
+      </div>
+      <div class="atmo-meta">EVA suits available: ${countSuitsOnDeck(gameState, deckIdx)}</div>
+    </div>`;
+  }
+
+  // Life support toggle button
+  if (tileType === TileType.LIFE_SUPPORT) {
+    const eq = gameState.lsEquipment?.[deckIdx];
+    if (eq) {
+      const isOn = eq.enabled !== false;
+      html += `<div class="tile-actions">
+        <button class="crew-action-btn ${isOn ? 'crew-action-recover' : 'crew-action-rescue'}"
+                data-tile-action="toggle-ls" data-deck="${deckIdx}">
+          ${isOn ? 'DISABLE' : 'ENABLE'} LIFE SUPPORT
+        </button>
+      </div>`;
+    }
+  }
+
+  crewInfo.innerHTML = html;
+
+  // Wire up tile action buttons
+  crewInfo.querySelectorAll('[data-tile-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.getAttribute('data-tile-action');
+      const di = parseInt(btn.getAttribute('data-deck'));
+      if (action === 'toggle-ls') {
+        const nowEnabled = toggleLS(gameState, di);
+        const dName = gameState.ship.decks[di]?.name || `Deck ${di}`;
+        if (nowEnabled) {
+          showToast(`${dName} LS enabled`, 'ok');
+          addLogEntry(`Life support enabled on ${dName}`, 'system');
+        } else {
+          showToast(`${dName} LS DISABLED`, 'danger');
+          addLogEntry(`Life support manually disabled on ${dName}`, 'danger');
+        }
+        // Re-render the tile detail
+        selectTile(tileType, deckIdx, tx, ty);
+      }
+    });
+  });
+}
+
+// ---- COMPARTMENT CONTEXT MENU ----
+
+function showCompartmentMenu(x, y, deckIdx) {
+  // Remove existing context menu
+  const existing = document.getElementById('compartment-menu');
+  if (existing) existing.remove();
+
+  const deck = gameState.ship.decks[deckIdx];
+  if (!deck || !deck.atmosphere) return;
+  const atmo = deck.atmosphere;
+  const deckName = deck.name;
+
+  const menu = document.createElement('div');
+  menu.id = 'compartment-menu';
+  menu.className = 'compartment-context-menu';
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+
+  let items = `<div class="ctx-header">${escapeHtml(deckName.toUpperCase())}</div>`;
+  items += `<div class="ctx-info">${atmo.pressure.toFixed(1)} kPa | O2 ${atmo.o2Pct.toFixed(1)}%</div>`;
+
+  if (atmo.depressurized) {
+    items += `<div class="ctx-item" data-action="repressurize">Repressurize</div>`;
+  } else if (!atmo.breached && atmo.pressure > 1) {
+    items += `<div class="ctx-item ctx-danger" data-action="depressurize">Depressurize Compartment</div>`;
+  }
+  if (atmo.breached) {
+    items += `<div class="ctx-info ctx-breach">HULL BREACH</div>`;
+  }
+
+  menu.innerHTML = items;
+  document.body.appendChild(menu);
+
+  // Actions
+  menu.addEventListener('click', (e) => {
+    const action = e.target.getAttribute('data-action');
+    if (action === 'depressurize') {
+      depressurizeCompartment(gameState, deckIdx);
+      addLogEntry(`${deckName} compartment depressurized`, 'danger');
+      showToast(`${deckName} DEPRESSURIZING`, 'danger');
+    } else if (action === 'repressurize') {
+      repressurizeCompartment(gameState, deckIdx);
+      addLogEntry(`${deckName} repressurization started`, 'system');
+      showToast(`${deckName} repressurizing`, 'ok');
+    }
+    menu.remove();
+  });
+
+  // Close on click outside
+  const closeHandler = (e) => {
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
 }
 
 // ---- RESOURCE PANEL ----
 
 const RESOURCE_CONFIG = [
   { key: 'fuel', name: 'Fuel', icon: iconFuel, barClass: 'bar-fuel' },
-  { key: 'oxygen', name: 'O2', icon: iconOxygen, barClass: 'bar-oxygen' },
+  { key: 'o2Tank', name: 'O2', icon: iconOxygen, barClass: 'bar-oxygen' },
+  { key: 'n2Tank', name: 'N2', icon: iconN2, barClass: 'bar-n2' },
   { key: 'water', name: 'H2O', icon: iconWater, barClass: 'bar-water' },
   { key: 'food', name: 'Food', icon: iconFood, barClass: 'bar-food' },
   { key: 'power', name: 'Power', icon: iconPower, barClass: 'bar-power' },
@@ -692,6 +1144,25 @@ function updateResourcePanel(state) {
   }
 
   // Alerts are now shown in the ship's log — no separate alerts list needed
+}
+
+function updateAtmosphereIndicators(state) {
+  const ATMO_COLORS = {
+    nominal: '#4FD1C5',
+    warning: '#E2A355',
+    critical: '#E25555',
+    breached: '#FF2222',
+    depressurized: '#FF2222',
+    vacuum: '#661111',
+    unknown: '#3A4E62',
+  };
+
+  state.ship.decks.forEach((deck, di) => {
+    const dot = document.querySelector(`[data-deck-atmo="${di}"]`);
+    if (!dot || !deck.atmosphere) return;
+    const status = getAtmoStatus(deck.atmosphere);
+    dot.setAttribute('fill', ATMO_COLORS[status] || ATMO_COLORS.unknown);
+  });
 }
 
 // ---- SPEED CONTROLS ----
@@ -810,11 +1281,21 @@ function updateHud(state) {
   // Update crew visual states from physics
   const shipContainer = document.getElementById('ship-container');
   if (shipContainer) {
-    // Build a serialized key of all crew states to detect changes
-    const crewStateKey = JSON.stringify(phys.crewStates);
+    // Tag crew with location flags for sprite display
+    gameState.ship.crew.forEach(c => {
+      c._inCrashCouch = isSeatedInCouch(c.id);
+      c._inMedbay = getCrewMission(c.id) === 'healing';
+      c._inSuit = c.evaSuit && c.evaSuit.wearing;
+    });
+
+    // Build a key from physics states AND crew consciousness/dead/location to detect changes
+    const crewVitalKey = gameState.ship.crew.map(c =>
+      `${c.id}:${c.dead ? 'D' : c.consciousness <= 10 ? 'U' : 'A'}:${c._inCrashCouch ? 'C' : c._inMedbay ? 'M' : c._inSuit ? 'S' : ''}:${c.conditions?.includes('crushed') ? 'X' : ''}`
+    ).join(',');
+    const crewStateKey = JSON.stringify(phys.crewStates) + '|' + crewVitalKey;
     if (crewStateKey !== lastCrewStateKey) {
       lastCrewStateKey = crewStateKey;
-      setCrewGravity(shipContainer, hasGravity, phys.crewStates);
+      setCrewGravity(shipContainer, hasGravity, phys.crewStates, gameState.ship.crew);
     }
   }
 }
@@ -868,10 +1349,21 @@ function startGame() {
   const crewInfo = document.getElementById('crew-info');
   if (crewInfo) crewInfo.innerHTML = '<p class="info-line info-dim">Click a crew member</p>';
 
-  // Render ship with crew click handler
+  // Render ship with crew and tile click handlers
   const shipContainer = document.getElementById('ship-container');
   renderShip(gameState.ship, shipContainer, (member) => {
     selectCrew(member);
+  }, (tileType, deckIdx, tx, ty) => {
+    selectTile(tileType, deckIdx, tx, ty);
+  });
+
+  // Right-click context menu on deck groups for compartment controls
+  shipContainer.querySelectorAll('.deck-group').forEach(deckGroup => {
+    deckGroup.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const deckIdx = parseInt(deckGroup.getAttribute('data-deck'));
+      showCompartmentMenu(e.clientX, e.clientY, deckIdx);
+    });
   });
 
   // Render tactical view
@@ -882,12 +1374,13 @@ function startGame() {
 
   // Init crew movement patrol system
   initCrewMovement(gameState.ship);
+  clearJobs();
   startCrewMovementLoop();
 
   // Set initial gravity state (thrust=0 at start = micro-G)
   const hasGravity = gameState.navigation.thrust > 0;
   lastCrewStateKey = null;
-  setCrewGravity(shipContainer, hasGravity, gameState.physics.crewStates);
+  setCrewGravity(shipContainer, hasGravity, gameState.physics.crewStates, gameState.ship.crew);
 
   // Init log and add launch entry
   clearLog();
@@ -916,9 +1409,153 @@ function startGame() {
 
   // Start game loop
   if (gameLoop) gameLoop.stop();
+  // Track conditions we've already alerted on
+  const alertedConditions = new Set();
+
   gameLoop = new GameLoop(gameState, (state) => {
     updateHud(state);
     updateResourcePanel(state);
+    updateAtmosphereIndicators(state);
+    // Refresh crew panel so vitals/conditions update live
+    if (selectedCrew) selectCrew(selectedCrew);
+    // Don't re-render tile panel every tick — it destroys click handlers
+    // Tile panel updates when user clicks a tile or toggles LS
+
+    // Check for critical/death events
+    state.ship.crew.forEach(member => {
+      const deathKey = `dead-${member.id}`;
+      const critKey = `critical-${member.id}`;
+      const brainKey = `brain-damage-${member.id}`;
+
+      if (member.dead && !alertedConditions.has(deathKey)) {
+        alertedConditions.add(deathKey);
+        showToast(`${member.name} has died`, 'danger');
+        addLogEntry(`${member.name} (${member.role}) — DECEASED`, 'danger');
+      } else if (member.conditions.includes('critical') && !alertedConditions.has(critKey)) {
+        alertedConditions.add(critKey);
+        showToast(`${member.name} is in critical condition!`, 'danger');
+        addLogEntry(`${member.name} (${member.role}) — cardiac arrest, critical condition`, 'danger');
+      }
+
+      if (member.conditions.includes('brain-damage') && !alertedConditions.has(brainKey)) {
+        alertedConditions.add(brainKey);
+        showToast(`${member.name} has suffered brain damage`, 'danger');
+        addLogEntry(`${member.name} (${member.role}) — severe head trauma, brain damage`, 'danger');
+      }
+    });
+
+    // Jobs system tick — generate and assign jobs
+    const devMode = document.body.classList.contains('dev-mode');
+    const jobLogs = generateAutoJobs(state.ship, state.physics, devMode, state.lsEquipment, state);
+    if (devMode) {
+      jobLogs.forEach(log => addLogEntry(log, 'debug'));
+    }
+
+    // Secure-for-burn: dispatch crew to crash couches under high-G
+    const gForce = state.physics.gForce || 0;
+    if (gForce >= 1.5) {
+      state.ship.crew.forEach(member => {
+        if (member.dead || member.consciousness <= 10) return;
+        const mission = getCrewMission(member.id);
+        if (!mission || mission === 'patrol') {
+          assignSecureBurnMission(state.ship, member);
+        }
+      });
+    } else {
+      // Release crew from crash couches when G normalises
+      state.ship.crew.forEach(member => {
+        if (getCrewMission(member.id) === 'secure-burn') {
+          releaseSecureBurn(member.id);
+          cancelMission(member.id, state.ship);
+        }
+      });
+    }
+
+    // Dispatch and complete LS repair missions
+    state.ship.crew.forEach(member => {
+      if (member.dead || member.consciousness <= 10) return;
+      const mission = getCrewMission(member.id);
+
+      // Dispatch: engineer has REPAIR_LS job but no mission yet
+      if (!mission) {
+        const jobs = getCrewJobs(member.id);
+        const lsJob = jobs.find(j => j.type === JobType.REPAIR_LS);
+        if (lsJob && lsJob.target) {
+          assignRepairLSMission(state.ship, member, lsJob.target.deckIdx, lsJob.target.x, lsJob.target.y);
+        }
+      }
+
+      // Complete: repair-ls mission finished (crew arrived and timer elapsed)
+      if (mission === 'repair-ls' && isRepairComplete(member.id)) {
+        const jobs = getCrewJobs(member.id);
+        const lsJob = jobs.find(j => j.type === JobType.REPAIR_LS);
+        if (lsJob) {
+          const deckName = state.ship.decks[lsJob.target.deckIdx]?.name || 'Unknown';
+          const repairResult = quickPatchLS(state, lsJob.target.deckIdx, member.skills.engineering);
+          completeJob(lsJob.id);
+          cancelMission(member.id);
+          if (repairResult.success) {
+            showToast(`${member.name} patched ${deckName} LS`, 'ok');
+            addLogEntry(`${member.name} patched life support on ${deckName} — ${repairResult.message}`, 'ok');
+          } else {
+            showToast(`${member.name}: patch failed`, 'warn');
+            addLogEntry(`${member.name} failed to patch ${deckName} life support — will retry`, 'warn');
+          }
+        }
+      }
+    });
+
+    // Dispatch and complete EVA suit missions
+    state.ship.crew.forEach(member => {
+      if (member.dead || member.consciousness <= 10) return;
+      const mission = getCrewMission(member.id);
+
+      // Dispatch: crew has EQUIP_EVA job but no mission yet
+      if (!mission) {
+        const jobs = getCrewJobs(member.id);
+        const evaJob = jobs.find(j => j.type === JobType.EQUIP_EVA);
+        if (evaJob && evaJob.target) {
+          assignEquipSuitMission(state.ship, member, evaJob.target.x, evaJob.target.y, evaJob.target.deckIdx);
+        }
+      }
+
+      // Complete: suit donned
+      if (mission === 'equip-suit' && isSuitDonned(member.id)) {
+        const jobs = getCrewJobs(member.id);
+        const evaJob = jobs.find(j => j.type === JobType.EQUIP_EVA);
+        if (evaJob) {
+          // Find the locker at the target position
+          const locker = state.suitLockers?.find(l =>
+            l.deckIdx === evaJob.target.deckIdx && l.x === evaJob.target.x && l.y === evaJob.target.y
+          );
+          if (locker) {
+            donEvaSuit(state, member, locker);
+            showToast(`${member.name} donned EVA suit`, 'ok');
+            addLogEntry(`${member.name} donned EVA suit on ${state.ship.decks[member.deck]?.name || 'unknown deck'}`, 'ok');
+          }
+          completeJob(evaJob.id);
+        }
+        cancelMission(member.id);
+      }
+    });
+
+    // Remove EVA suits when atmosphere is safe again
+    state.ship.crew.forEach(member => {
+      if (member.dead) return;
+      if (!member.evaSuit || !member.evaSuit.wearing) return;
+      const deck = state.ship.decks[member.deck];
+      if (!deck || !deck.atmosphere) return;
+      const atmoStatus = getAtmoStatus(deck.atmosphere);
+      if (atmoStatus === 'nominal') {
+        removeEvaSuit(state, member);
+        addLogEntry(`${member.name} removed EVA suit — atmosphere safe`, 'crew');
+      }
+    });
+
+    updateJobsCount();
+    // Live-refresh jobs dialog if open
+    const jobsDlg = document.getElementById('dialog-jobs');
+    if (jobsDlg && jobsDlg.style.display !== 'none') renderJobsDialog();
   }, (event, data) => {
     if (event === 'crewStateChange') {
       data.forEach(({ member, oldState, newState }) => {
@@ -988,8 +1625,55 @@ function initHudActions() {
   document.querySelector('[data-action="game-settings"]').addEventListener('click', () => {
     if (gameLoop) gameLoop.setSpeed(0);
     updateSpeedUI(0);
-    showToast('Game paused');
+    // Sync dev mode toggle state
+    const devOn = document.body.classList.contains('dev-mode');
+    const ingameDev = document.getElementById('ingame-devmode');
+    if (ingameDev) {
+      ingameDev.classList.toggle('active', devOn);
+      ingameDev.textContent = devOn ? 'ON' : 'OFF';
+    }
+    document.getElementById('dialog-settings').style.display = '';
   });
+
+  // Close in-game settings
+  document.querySelector('[data-action="close-settings"]').addEventListener('click', () => {
+    document.getElementById('dialog-settings').style.display = 'none';
+  });
+
+  // Jobs queue
+  document.querySelector('[data-action="open-jobs"]').addEventListener('click', () => {
+    renderJobsDialog();
+    document.getElementById('dialog-jobs').style.display = '';
+  });
+
+  document.querySelector('[data-action="close-jobs"]').addEventListener('click', () => {
+    document.getElementById('dialog-jobs').style.display = 'none';
+  });
+
+  // In-game dev mode toggle
+  const ingameDevBtn = document.getElementById('ingame-devmode');
+  if (ingameDevBtn) {
+    ingameDevBtn.addEventListener('click', () => {
+      const isActive = ingameDevBtn.classList.toggle('active');
+      ingameDevBtn.textContent = isActive ? 'ON' : 'OFF';
+      document.body.classList.toggle('dev-mode', isActive);
+      // Sync with main settings toggle
+      const mainBtn = document.getElementById('setting-devmode');
+      if (mainBtn) {
+        mainBtn.classList.toggle('active', isActive);
+        mainBtn.textContent = isActive ? 'ON' : 'OFF';
+      }
+    });
+  }
+
+  // In-game tooltips toggle
+  const ingameTooltipsBtn = document.getElementById('ingame-tooltips');
+  if (ingameTooltipsBtn) {
+    ingameTooltipsBtn.addEventListener('click', () => {
+      const isActive = ingameTooltipsBtn.classList.toggle('active');
+      ingameTooltipsBtn.textContent = isActive ? 'ON' : 'OFF';
+    });
+  }
 }
 
 // ---- BACK BUTTONS ----
@@ -1055,6 +1739,78 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// ---- JOBS DIALOG ----
+
+const PRIORITY_LABELS = ['CRIT', 'HIGH', 'NORM', 'LOW'];
+const PRIORITY_CLASSES = ['critical', 'high', 'normal', 'low'];
+
+function renderJobsDialog() {
+  const container = document.getElementById('jobs-list');
+  const jobs = getJobQueue();
+  const activeJobs = jobs.filter(j => j.status === 'pending' || j.status === 'assigned');
+
+  if (activeJobs.length === 0) {
+    container.innerHTML = '<p class="jobs-empty">— No active jobs —</p>';
+    const summary = document.getElementById('jobs-summary');
+    if (summary) summary.innerHTML = '';
+    return;
+  }
+
+  const crewMap = {};
+  if (gameState && gameState.ship) {
+    gameState.ship.crew.forEach(m => { crewMap[m.id] = m.name; });
+  }
+
+  const header = `<div class="jobs-header">
+    <span class="jobs-col-priority">PRI</span>
+    <span class="jobs-col-type">Type</span>
+    <span class="jobs-col-status">Status</span>
+    <span class="jobs-col-assignee">Assignee</span>
+  </div>`;
+
+  const rows = activeJobs.map(job => {
+    const pIdx = Math.min(job.priority, 3);
+    const assignee = job.assigneeId
+      ? (crewMap[job.assigneeId] || `#${job.assigneeId}`)
+      : '';
+    const assigneeClass = job.assigneeId ? '' : ' job-assignee-none';
+    const target = job.targetCrewId ? (crewMap[job.targetCrewId] || '') : '';
+    const targetHtml = target ? ` <span class="job-type-target">→ ${escapeHtml(target)}</span>` : '';
+
+    return `<div class="job-row">
+      <span class="job-priority job-priority-${PRIORITY_CLASSES[pIdx]}">${PRIORITY_LABELS[pIdx]}</span>
+      <span class="job-type">${escapeHtml(job.type)}${targetHtml}</span>
+      <span class="job-status job-status-${job.status}">${job.status}</span>
+      <span class="job-assignee${assigneeClass}">${assignee ? escapeHtml(assignee) : '—'}</span>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = header + rows;
+
+  // Summary counts
+  const pending = activeJobs.filter(j => j.status === 'pending').length;
+  const assigned = activeJobs.filter(j => j.status === 'assigned').length;
+  const summary = document.getElementById('jobs-summary');
+  if (summary) {
+    summary.innerHTML =
+      `<span class="jobs-summary-pending">${pending} pending</span>` +
+      `<span class="jobs-summary-assigned">${assigned} assigned</span>`;
+  }
+}
+
+function updateJobsCount() {
+  const jobs = getJobQueue();
+  const activeJobs = jobs.filter(j => j.status === 'pending' || j.status === 'assigned');
+  const count = activeJobs.length;
+  const hasCritical = activeJobs.some(j => j.priority === 0);
+  const el = document.getElementById('hud-jobs-count');
+  if (el) {
+    el.textContent = count;
+    el.classList.toggle('has-jobs', count > 0 && !hasCritical);
+    el.classList.toggle('has-critical', hasCritical);
+  }
+}
+
 // ---- KEYBOARD SHORTCUTS ----
 
 function initKeyboard() {
@@ -1095,13 +1851,39 @@ function initKeyboard() {
           document.getElementById('flip-toggle').click();
         }
         break;
-      case 'Escape':
-        // Deselect crew
-        selectedCrew = null;
-        document.querySelectorAll('.crew-symbol').forEach(el => el.classList.remove('selected'));
-        const crewInfo = document.getElementById('crew-info');
-        if (crewInfo) crewInfo.innerHTML = '<p class="info-line info-dim">Click a crew member</p>';
+      case 'j':
+      case 'J': {
+        // Toggle jobs dialog
+        const jobsDlg = document.getElementById('dialog-jobs');
+        if (jobsDlg.style.display !== 'none') {
+          jobsDlg.style.display = 'none';
+        } else {
+          renderJobsDialog();
+          jobsDlg.style.display = '';
+        }
         break;
+      }
+      case 'Escape': {
+        e.preventDefault();
+        // Close any open dialog first
+        const dialogs = ['dialog-save', 'dialog-exit', 'dialog-settings', 'dialog-jobs'];
+        let closedDialog = false;
+        for (const id of dialogs) {
+          const dlg = document.getElementById(id);
+          if (dlg && dlg.style.display !== 'none') {
+            dlg.style.display = 'none';
+            closedDialog = true;
+          }
+        }
+        // If no dialog was open, deselect crew
+        if (!closedDialog) {
+          selectedCrew = null;
+          document.querySelectorAll('.crew-symbol').forEach(el => el.classList.remove('selected'));
+          const crewInfo = document.getElementById('crew-info');
+          if (crewInfo) crewInfo.innerHTML = '<p class="info-line info-dim">Click a crew member</p>';
+        }
+        break;
+      }
     }
   });
 }

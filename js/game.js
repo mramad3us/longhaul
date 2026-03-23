@@ -6,6 +6,7 @@
 import { createDefaultShip } from './ship.js';
 import { VERSION } from './version.js';
 import { createPhysicsState, computeShipMass, physicsTick } from './physics.js';
+import { initLifeSupport, lifeSupportTick } from './life-support.js';
 
 // Speed multipliers: game-minutes per real-second
 const SPEED_MULTIPLIERS = {
@@ -29,7 +30,7 @@ export function createGameState(shipName, captainName, crewCount) {
     physics.crewStates[member.id] = 'floating'; // start in micro-G
   });
 
-  return {
+  const state = {
     version: VERSION,
     ship,
     physics,
@@ -60,6 +61,11 @@ export function createGameState(shipName, captainName, crewCount) {
       daysElapsed: 0,
     },
   };
+
+  // Initialize life support system (adds atmosphere to decks, tanks to resources)
+  initLifeSupport(state);
+
+  return state;
 }
 
 // ---- TIME SYSTEM ----
@@ -160,12 +166,12 @@ export class GameLoop {
       this.onPhysicsEvent('crewStateChange', stateChanges);
     }
 
+    // --- LIFE SUPPORT ---
+    lifeSupportTick(this.state);
+
     // Resource consumption per game-minute
     const crewCount = this.state.ship.crew.length;
     const res = this.state.resources;
-
-    // Oxygen: consumed by crew, 1 unit per crew per hour
-    res.oxygen.current = Math.max(0, res.oxygen.current - (crewCount / 60));
 
     // Water: consumed slowly
     res.water.current = Math.max(0, res.water.current - (crewCount * 0.002));
