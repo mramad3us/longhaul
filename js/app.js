@@ -680,16 +680,25 @@ function switchTacTab(tab) {
     // Initialize solar map interaction once
     if (!solarMapInitialized) {
       initSolarMapInteraction(solarScreen);
-      // Re-render on user zoom/pan interaction
-      solarScreen.addEventListener('wheel', () => requestAnimationFrame(() => renderSolarTab(true)));
+      // Re-render on user zoom/pan interaction — debounced via single rAF flag
+      let _solarRafPending = false;
+      const scheduleRender = () => {
+        if (_solarRafPending) return;
+        _solarRafPending = true;
+        requestAnimationFrame(() => {
+          _solarRafPending = false;
+          renderSolarTab(true);
+        });
+      };
+      solarScreen.addEventListener('wheel', scheduleRender);
       let _lastHover = null;
       solarScreen.addEventListener('mousemove', () => {
         const ms = getMapState();
         if (ms.dragging) {
-          requestAnimationFrame(() => renderSolarTab(true));
+          scheduleRender();
         } else if (ms.hoveredBody !== _lastHover) {
           _lastHover = ms.hoveredBody;
-          requestAnimationFrame(() => renderSolarTab(true));
+          scheduleRender();
         }
       });
       solarMapInitialized = true;
@@ -943,8 +952,13 @@ function initRoutePanel() {
   document.getElementById('route-zoom-btn')?.addEventListener('click', () => {
     const sel = getSelectedBody();
     if (sel && gameState) {
+      console.log(`[App] ZOOM button clicked for "${sel.name}"`);
+      const t0 = performance.now();
       zoomToBody(sel.name, gameState);
+      console.log(`[App] zoomToBody took ${(performance.now() - t0).toFixed(1)}ms, starting render...`);
+      const t1 = performance.now();
       renderSolarTab(true);
+      console.log(`[App] renderSolarTab took ${(performance.now() - t1).toFixed(1)}ms`);
     }
   });
 

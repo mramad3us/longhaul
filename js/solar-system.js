@@ -150,7 +150,12 @@ export const SOLAR_ZOOM_PRESETS = [
 
 // ---- RENDER ----
 
+let _renderCount = 0;
+let _lastRenderWarn = 0;
+
 export function renderSolarSystem(container, gameState, routeInfo) {
+  const t0 = performance.now();
+  _renderCount++;
   container.innerHTML = '';
   bodyPositions = [];
 
@@ -178,15 +183,21 @@ export function renderSolarSystem(container, gameState, routeInfo) {
   const days = gameState ? gameTimeToDays(gameState.time, gameState.stats) : 0;
 
   // Defs: filters for glow
+  // Skip expensive SVG filters at extreme zoom (< 0.1 AU viewbox)
+  const useFilters = mapState.zoom > 0.05;
   const defs = document.createElementNS(SVG_NS, 'defs');
-  defs.innerHTML = `
-    <filter id="sol-glow" x="-200%" y="-200%" width="500%" height="500%">
-      <feGaussianBlur stdDeviation="${mapState.zoom * 0.008}" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-    <filter id="planet-glow" x="-100%" y="-100%" width="300%" height="300%">
-      <feGaussianBlur stdDeviation="${mapState.zoom * 0.003}"/>
-    </filter>
+  if (useFilters) {
+    defs.innerHTML = `
+      <filter id="sol-glow" x="-200%" y="-200%" width="500%" height="500%">
+        <feGaussianBlur stdDeviation="${Math.max(0.001, mapState.zoom * 0.008)}" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <filter id="planet-glow" x="-100%" y="-100%" width="300%" height="300%">
+        <feGaussianBlur stdDeviation="${Math.max(0.0005, mapState.zoom * 0.003)}"/>
+      </filter>
+    `;
+  }
+  defs.innerHTML += `
     <radialGradient id="sun-grad" cx="50%" cy="50%">
       <stop offset="0%" stop-color="#FFF8E0"/>
       <stop offset="30%" stop-color="#FDB813"/>
@@ -233,15 +244,18 @@ export function renderSolarSystem(container, gameState, routeInfo) {
   svg.appendChild(auGroup);
 
   // ---- ASTEROID BELT DUST ----
+  // Belt spans ~2.1–3.4 AU; skip entirely if viewBox can't see that range
   const beltGroup = document.createElementNS(SVG_NS, 'g');
-  if (mapState.zoom < 20) {
+  const beltInner = 2.0, beltOuter = 3.5;
+  const viewEdge = Math.sqrt((mapState.cx ** 2) + (mapState.cy ** 2)) + halfW * 1.5;
+  const beltVisible = mapState.zoom < 20 && viewEdge > beltInner && mapState.zoom > 0.5;
+  if (beltVisible) {
     const visibleDust = mapState.zoom > 8
       ? BELT_DUST.filter((_, i) => i % 4 === 0)
       : mapState.zoom > 3
         ? BELT_DUST.filter((_, i) => i % 2 === 0)
         : BELT_DUST;
     visibleDust.forEach(d => {
-      // Slowly orbit the dust
       const a = d.angle + days * 0.0002;
       const dx = d.a * Math.cos(a);
       const dy = d.a * Math.sin(a);
@@ -300,7 +314,7 @@ export function renderSolarSystem(container, gameState, routeInfo) {
   sun.setAttribute('cy', 0);
   sun.setAttribute('r', sunR);
   sun.setAttribute('fill', '#FDB813');
-  sun.setAttribute('filter', 'url(#sol-glow)');
+  if (useFilters) sun.setAttribute('filter', 'url(#sol-glow)');
   svg.appendChild(sun);
 
   // Track Sun position
@@ -327,7 +341,7 @@ export function renderSolarSystem(container, gameState, routeInfo) {
     glow.setAttribute('r', pR * 2.5);
     glow.setAttribute('fill', p.color);
     glow.setAttribute('opacity', '0.15');
-    glow.setAttribute('filter', 'url(#planet-glow)');
+    if (useFilters) glow.setAttribute('filter', 'url(#planet-glow)');
     planetGroup.appendChild(glow);
 
     // Planet body
@@ -654,6 +668,21 @@ export function renderSolarSystem(container, gameState, routeInfo) {
   svg.appendChild(chGroup);
 
   container.appendChild(svg);
+
+  const elapsed = performance.now() - t0;
+  const nodeCount = svg.querySelectorAll('*').length;
+  if (elapsed > 30 || nodeCount > 500) {
+    const now = Date.now();
+    if (now - _lastRenderWarn > 2000) {
+      console.warn(
+        `[SolarMap] SLOW render #${_renderCount}: ${elapsed.toFixed(1)}ms, ` +
+        `${nodeCount} SVG nodes, zoom=${mapState.zoom.toFixed(6)}, ` +
+        `center=(${mapState.cx.toFixed(4)}, ${mapState.cy.toFixed(4)})`
+      );
+      _lastRenderWarn = now;
+    }
+  }
+
   return svg;
 }
 
@@ -807,52 +836,79 @@ export function zoomToPlanet(planetName, gameState, zoomLevel) {
 // Zoom to any body — centers on it and picks a zoom level that shows its moons/context
 export function zoomToBody(bodyName, gameState) {
   const days = gameState ? gameTimeToDays(gameState.time, gameState.stats) : 0;
+  const t0 = performance.now();
+  let zoomTarget, reason;
 
   if (bodyName === 'Sol') {
     mapState.cx = 0;
     mapState.cy = 0;
-    mapState.zoom = 2.5;
-    return;
+    zoomTarget = 2.5;
+    reason = 'Sol center';
   }
 
   // Check planets
-  const planet = PLANETS.find(p => p.name === bodyName);
-  if (planet) {
-    const pos = orbitalPos(planet, days);
-    mapState.cx = pos.x;
-    mapState.cy = pos.y;
-    // Zoom level: show moons if it has any, otherwise show orbital context
-    if (planet.moons.length > 0) {
-      const outerMoon = Math.max(...planet.moons.map(m => m.a));
-      mapState.zoom = outerMoon * 3; // show all moons with margin
-    } else {
-      mapState.zoom = planet.a * 0.15;
+  if (zoomTarget == null) {
+    const planet = PLANETS.find(p => p.name === bodyName);
+    if (planet) {
+      const pos = orbitalPos(planet, days);
+      mapState.cx = pos.x;
+      mapState.cy = pos.y;
+      if (planet.moons.length > 0) {
+        const outerMoon = Math.max(...planet.moons.map(m => m.a));
+        zoomTarget = outerMoon * 3;
+        reason = `planet ${bodyName} moons (outerMoon=${outerMoon.toFixed(6)} AU)`;
+      } else {
+        zoomTarget = planet.a * 0.15;
+        reason = `planet ${bodyName} no moons (a=${planet.a})`;
+      }
     }
-    return;
   }
 
   // Check moons — zoom to parent planet's moon system
-  for (const p of PLANETS) {
-    const moon = p.moons.find(m => m.name === bodyName);
-    if (moon) {
-      const pPos = orbitalPos(p, days);
-      mapState.cx = pPos.x;
-      mapState.cy = pPos.y;
-      const outerMoon = Math.max(...p.moons.map(m => m.a));
-      mapState.zoom = outerMoon * 3;
-      return;
+  if (zoomTarget == null) {
+    for (const p of PLANETS) {
+      const moon = p.moons.find(m => m.name === bodyName);
+      if (moon) {
+        const pPos = orbitalPos(p, days);
+        mapState.cx = pPos.x;
+        mapState.cy = pPos.y;
+        const outerMoon = Math.max(...p.moons.map(m => m.a));
+        zoomTarget = outerMoon * 3;
+        reason = `moon ${bodyName} of ${p.name} (outerMoon=${outerMoon.toFixed(6)} AU)`;
+        break;
+      }
     }
   }
 
   // Check asteroids
-  const ast = ASTEROIDS.find(a => a.name === bodyName);
-  if (ast) {
-    const pos = orbitalPos(ast, days);
-    mapState.cx = pos.x;
-    mapState.cy = pos.y;
-    mapState.zoom = 1.5;
+  if (zoomTarget == null) {
+    const ast = ASTEROIDS.find(a => a.name === bodyName);
+    if (ast) {
+      const pos = orbitalPos(ast, days);
+      mapState.cx = pos.x;
+      mapState.cy = pos.y;
+      zoomTarget = 1.5;
+      reason = `asteroid ${bodyName}`;
+    }
+  }
+
+  if (zoomTarget == null) {
+    console.warn(`[SolarMap] zoomToBody: unknown body "${bodyName}"`);
     return;
   }
+
+  // Clamp zoom to safe bounds
+  const rawZoom = zoomTarget;
+  zoomTarget = Math.max(mapState.minZoom, Math.min(mapState.maxZoom, zoomTarget));
+
+  mapState.zoom = zoomTarget;
+
+  console.log(
+    `[SolarMap] zoomToBody "${bodyName}" — ${reason}` +
+    `\n  center=(${mapState.cx.toFixed(6)}, ${mapState.cy.toFixed(6)})` +
+    `\n  rawZoom=${rawZoom.toFixed(6)}, clampedZoom=${zoomTarget.toFixed(6)}` +
+    `\n  took ${(performance.now() - t0).toFixed(1)}ms`
+  );
 }
 
 export function getMapState() {
