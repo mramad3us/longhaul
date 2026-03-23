@@ -1167,7 +1167,7 @@ function buildCrewSprite(def) {
       '..ttttttttttt...',
       '................',
     ],
-    // EVA suited: crew in blue EVA suit with helmet visor
+    // EVA suited: crew in blue EVA suit with helmet visor (standing)
     suited: [
       '................',
       '......EEEE......',
@@ -1185,6 +1185,83 @@ function buildCrewSprite(def) {
       '......EEEE......',
       '......E..E......',
       '......E..E......',
+    ],
+    // EVA suited floating: arms spread, legs apart (zero-G)
+    suitedFloating: [
+      [
+        '................',
+        '.......EEEE.....',
+        '......EEEEEE....',
+        '......EvvEEE....',
+        '......EvvEEE....',
+        '.......EEEE.....',
+        '.......EEEE.....',
+        '...EEEEEEEEEEE..',
+        '..EE.EEFFEE.EE..',
+        '.E...EEFFEE...E.',
+        '.....EEFFEE.....',
+        '.....EEFFEE.....',
+        '......EEEE......',
+        '.....E....E.....',
+        '....E......E....',
+        '....E......E....',
+      ],
+      [
+        '................',
+        '.......EEEE.....',
+        '......EEEEEE....',
+        '......EvvEEE....',
+        '......EvvEEE....',
+        '.......EEEE.....',
+        '.......EEEE.....',
+        '...EEEEEEEEEEE..',
+        '..EE.EEFFEE.EE..',
+        '.E...EEFFEE...E.',
+        '.....EEFFEE.....',
+        '.....EEFFEE.....',
+        '......EEEE......',
+        '.....E....E.....',
+        '...E........E...',
+        '...E........E...',
+      ],
+    ],
+    // EVA suited in crash couch: reclined in couch, suit visible through gel
+    suitedSecured: [
+      '................',
+      '................',
+      '................',
+      '................',
+      '..kkkkkkkkkkk...',
+      '..kREEEERRRRk...',
+      '..kREvvERRRRk...',
+      '..kREvvERRRRk...',
+      '..kRREERRRRRk...',
+      '..kREEEEEERRk...',
+      '..kREEFFEERRk...',
+      '..kREEFFEERRk...',
+      '..kRREEEERRRk...',
+      '..kRREEEERRRk...',
+      '..kkkkkkkkkkk...',
+      '................',
+    ],
+    // EVA suited prone: collapsed on deck in suit (unconscious/crushed/dead)
+    suitedProne: [
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '......EEEE......',
+      '.....EEEEvv.....',
+      '...EEEEEEEE.....',
+      '..EEEEFFEEEE....',
+      '..E.EEFFFFEE....',
+      '....EEFFFFEE....',
+      '...EEEEEEEEEE...',
+      '...E..EEEE..E...',
     ],
     // Prone: crew member collapsed on deck, on knees/face, arms out
     // Used for: crushed under G, unconscious on floor, dead on floor
@@ -1284,12 +1361,65 @@ export function renderCrewMember(x, y, memberIndex, name) {
   medbayGroup.innerHTML = sprite(crewSprite.inMedbay, crewSprite.palette, PX);
   g.appendChild(medbayGroup);
 
-  // EVA suited sprite (shown when crew is wearing a suit)
+  // EVA suited sprite — standing (shown when crew is wearing a suit under gravity)
   const suitedGroup = document.createElementNS(SVG_NS, 'g');
   suitedGroup.setAttribute('class', 'crew-suited');
   suitedGroup.setAttribute('display', 'none');
   suitedGroup.innerHTML = sprite(crewSprite.suited, crewSprite.palette, PX);
   g.appendChild(suitedGroup);
+
+  // EVA suited floating (zero-G) — 2 frames with bob
+  const suitedFloatGroup = document.createElementNS(SVG_NS, 'g');
+  suitedFloatGroup.setAttribute('class', 'crew-suited-float');
+  suitedFloatGroup.setAttribute('display', 'none');
+
+  const suitFloatA = document.createElementNS(SVG_NS, 'g');
+  suitFloatA.innerHTML = sprite(crewSprite.suitedFloating[0], crewSprite.palette, PX);
+  const sfAnimA = document.createElementNS(SVG_NS, 'animate');
+  sfAnimA.setAttribute('attributeName', 'display');
+  sfAnimA.setAttribute('values', 'inline;inline;none;none');
+  sfAnimA.setAttribute('keyTimes', '0;0.499;0.5;1');
+  sfAnimA.setAttribute('dur', `${bobDur}s`);
+  sfAnimA.setAttribute('calcMode', 'discrete');
+  sfAnimA.setAttribute('repeatCount', 'indefinite');
+  suitFloatA.appendChild(sfAnimA);
+  suitedFloatGroup.appendChild(suitFloatA);
+
+  const suitFloatB = document.createElementNS(SVG_NS, 'g');
+  suitFloatB.setAttribute('display', 'none');
+  suitFloatB.innerHTML = sprite(crewSprite.suitedFloating[1], crewSprite.palette, PX);
+  const sfAnimB = document.createElementNS(SVG_NS, 'animate');
+  sfAnimB.setAttribute('attributeName', 'display');
+  sfAnimB.setAttribute('values', 'none;none;inline;inline');
+  sfAnimB.setAttribute('keyTimes', '0;0.499;0.5;1');
+  sfAnimB.setAttribute('dur', `${bobDur}s`);
+  sfAnimB.setAttribute('calcMode', 'discrete');
+  sfAnimB.setAttribute('repeatCount', 'indefinite');
+  suitFloatB.appendChild(sfAnimB);
+  suitedFloatGroup.appendChild(suitFloatB);
+
+  const suitBob = document.createElementNS(SVG_NS, 'animateTransform');
+  suitBob.setAttribute('attributeName', 'transform');
+  suitBob.setAttribute('type', 'translate');
+  suitBob.setAttribute('values', `0 0; 0 -${bobAmt}; 0 0; 0 ${bobAmt}; 0 0`);
+  suitBob.setAttribute('dur', `${bobDur}s`);
+  suitBob.setAttribute('repeatCount', 'indefinite');
+  suitedFloatGroup.appendChild(suitBob);
+  g.appendChild(suitedFloatGroup);
+
+  // EVA suited in crash couch
+  const suitedSecuredGroup = document.createElementNS(SVG_NS, 'g');
+  suitedSecuredGroup.setAttribute('class', 'crew-suited-secured');
+  suitedSecuredGroup.setAttribute('display', 'none');
+  suitedSecuredGroup.innerHTML = sprite(crewSprite.suitedSecured, crewSprite.palette, PX);
+  g.appendChild(suitedSecuredGroup);
+
+  // EVA suited prone (unconscious/crushed/dead on floor in suit)
+  const suitedProneGroup = document.createElementNS(SVG_NS, 'g');
+  suitedProneGroup.setAttribute('class', 'crew-suited-prone');
+  suitedProneGroup.setAttribute('display', 'none');
+  suitedProneGroup.innerHTML = sprite(crewSprite.suitedProne, crewSprite.palette, PX);
+  g.appendChild(suitedProneGroup);
 
   // Prone sprite (shown under dangerous G without crash couch — with shake)
   const proneGroup = document.createElementNS(SVG_NS, 'g');
@@ -1337,6 +1467,28 @@ export function renderCrewMember(x, y, memberIndex, name) {
   limpRotate.setAttribute('additive', 'sum');
   unconsciousFloatGroup.appendChild(limpRotate);
   g.appendChild(unconsciousFloatGroup);
+
+  // EVA suited prone floating (unconscious/dead in zero-G in suit)
+  const suitedProneFloatGroup = document.createElementNS(SVG_NS, 'g');
+  suitedProneFloatGroup.setAttribute('class', 'crew-suited-prone-float');
+  suitedProneFloatGroup.setAttribute('display', 'none');
+  suitedProneFloatGroup.innerHTML = sprite(crewSprite.suitedProne, crewSprite.palette, PX);
+  const suitLimpBob = document.createElementNS(SVG_NS, 'animateTransform');
+  suitLimpBob.setAttribute('attributeName', 'transform');
+  suitLimpBob.setAttribute('type', 'translate');
+  suitLimpBob.setAttribute('values', `0 0; 0 -${bobAmt}; 0 0; 0 ${bobAmt * 0.5}; 0 0`);
+  suitLimpBob.setAttribute('dur', `${limpBobDur}s`);
+  suitLimpBob.setAttribute('repeatCount', 'indefinite');
+  suitedProneFloatGroup.appendChild(suitLimpBob);
+  const suitLimpRotate = document.createElementNS(SVG_NS, 'animateTransform');
+  suitLimpRotate.setAttribute('attributeName', 'transform');
+  suitLimpRotate.setAttribute('type', 'rotate');
+  suitLimpRotate.setAttribute('values', '0 16 16; 8 16 16; 0 16 16; -5 16 16; 0 16 16');
+  suitLimpRotate.setAttribute('dur', `${limpBobDur * 1.3}s`);
+  suitLimpRotate.setAttribute('repeatCount', 'indefinite');
+  suitLimpRotate.setAttribute('additive', 'sum');
+  suitedProneFloatGroup.appendChild(suitLimpRotate);
+  g.appendChild(suitedProneFloatGroup);
 
   // Eye blink (works for both states)
   const blink = document.createElementNS(SVG_NS, 'g');
@@ -1409,24 +1561,47 @@ export function setCrewGravity(container, hasGravity, crewStates = null, crewMem
     // Determine which sprite to show
     let showStanding = false, showFloating = false, showProne = false;
     let showUnconsciousFloor = false, showUnconsciousFloat = false;
-    let showSecured = false, showInMedbay = false, showSuited = false;
+    let showSecured = false, showInMedbay = false;
+    let showSuited = false, showSuitedFloat = false, showSuitedSecured = false;
+    let showSuitedProne = false, showSuitedProneFloat = false;
 
     const isCrushed = member && member.conditions && member.conditions.includes('crushed');
 
     if (isUnconscious || isDead) {
-      if (inGravity) {
-        showUnconsciousFloor = true;
+      if (inSuit) {
+        // Suited + unconscious/dead
+        if (inGravity) {
+          showSuitedProne = true;
+        } else {
+          showSuitedProneFloat = true;
+        }
       } else {
-        showUnconsciousFloat = true;
+        if (inGravity) {
+          showUnconsciousFloor = true;
+        } else {
+          showUnconsciousFloat = true;
+        }
       }
     } else if (inMedbayBed) {
       showInMedbay = true;
     } else if (inCrashCouch) {
-      showSecured = true;
+      if (inSuit) {
+        showSuitedSecured = true;
+      } else {
+        showSecured = true;
+      }
     } else if (isCrushed || state === 'prone') {
-      showProne = true;
+      if (inSuit) {
+        showSuitedProne = true;
+      } else {
+        showProne = true;
+      }
     } else if (inSuit) {
-      showSuited = true;
+      if (state === 'floating') {
+        showSuitedFloat = true;
+      } else {
+        showSuited = true;
+      }
     } else if (state === 'floating') {
       showFloating = true;
     } else {
@@ -1436,6 +1611,10 @@ export function setCrewGravity(container, hasGravity, crewStates = null, crewMem
     const secured = crew.querySelector('.crew-secured');
     const medbaySprite = crew.querySelector('.crew-in-medbay');
     const suited = crew.querySelector('.crew-suited');
+    const suitedFloat = crew.querySelector('.crew-suited-float');
+    const suitedSecured = crew.querySelector('.crew-suited-secured');
+    const suitedProne = crew.querySelector('.crew-suited-prone');
+    const suitedProneFloat = crew.querySelector('.crew-suited-prone-float');
 
     if (standing) standing.setAttribute('display', showStanding ? 'inline' : 'none');
     if (floating) floating.setAttribute('display', showFloating ? 'inline' : 'none');
@@ -1445,6 +1624,10 @@ export function setCrewGravity(container, hasGravity, crewStates = null, crewMem
     if (secured) secured.setAttribute('display', showSecured ? 'inline' : 'none');
     if (medbaySprite) medbaySprite.setAttribute('display', showInMedbay ? 'inline' : 'none');
     if (suited) suited.setAttribute('display', showSuited ? 'inline' : 'none');
+    if (suitedFloat) suitedFloat.setAttribute('display', showSuitedFloat ? 'inline' : 'none');
+    if (suitedSecured) suitedSecured.setAttribute('display', showSuitedSecured ? 'inline' : 'none');
+    if (suitedProne) suitedProne.setAttribute('display', showSuitedProne ? 'inline' : 'none');
+    if (suitedProneFloat) suitedProneFloat.setAttribute('display', showSuitedProneFloat ? 'inline' : 'none');
     if (blinkStanding) blinkStanding.setAttribute('display', showStanding ? 'inline' : 'none');
     if (blinkFloating) blinkFloating.setAttribute('display', showFloating ? 'inline' : 'none');
     // Blink only when standing, floating, secured, or in medbay (not prone/unconscious/dead/suited)
