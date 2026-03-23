@@ -26,6 +26,7 @@ let selectedCrew = null;
 let particleInterval = null;
 let lastCrewStateKey = null;
 let lastThrustActive = null;
+let lastTacVelocityBucket = null;
 let tacZoomLevel = 0;
 let flipAnimFrame = null;
 
@@ -153,43 +154,57 @@ function initParticles() {
     const p = document.createElement('div');
     p.className = 'particle';
 
-    // Velocity-based particles: direction and streak length depend on ship speed
+    // Particles are driven ONLY by the velocity vector.
+    // Positive velocity = ship moving "up" (prograde) → particles flow down past us
+    // Negative velocity = ship moving "down" (retrograde) → particles flow up past us
+    // Zero velocity = gentle random drift (micro-debris)
     const phys = gameState ? gameState.physics : null;
-    const vel = phys ? Math.abs(phys.velocity) : 0;
-    const heading = phys ? phys.heading : 0;
+    const velocity = phys ? phys.velocity : 0;        // signed, m/s
+    const absVel = Math.abs(velocity);
 
-    // Speed factor: 0 = stationary, 1 = fast (100 km/s+)
-    const speedFactor = Math.min(1, vel / 100000);
+    // Speed factor: 0 = stationary, 1 = very fast (100 km/s+)
+    const speedFactor = Math.min(1, absVel / 100000);
 
-    // Direction: particles flow opposite to travel direction
-    // Heading 0 = prograde (moving "up"), particles flow down
-    // Heading 180 = retrograde, particles flow up
-    const flowDir = heading === 0 ? 1 : -1;
-
-    // At low speed: random slow drift. At high speed: fast directional streaks
-    const drift = (1 - speedFactor) * 0.8;
-    const dx = (Math.random() - 0.5) * 30 * drift;
-    const dy = flowDir * (20 + speedFactor * 200) + (Math.random() - 0.5) * 20 * drift;
-
-    p.style.setProperty('--dx', dx + 'px');
-    p.style.setProperty('--dy', dy + 'px');
-
-    // Streak length: dots when slow, elongated when fast
-    const streakH = Math.max(2, 2 + speedFactor * 14);
-    const streakW = speedFactor > 0.3 ? 1 : 2;
-    p.style.width = streakW + 'px';
-    p.style.height = streakH + 'px';
-
-    // Spawn position: at high speed, spawn from edge opposite to flow
-    if (speedFactor > 0.2) {
-      p.style.left = Math.random() * 100 + '%';
-      p.style.top = (flowDir > 0 ? (Math.random() * 30) : (70 + Math.random() * 30)) + '%';
-    } else {
+    if (absVel < 1) {
+      // Nearly stationary: gentle random micro-debris drift
+      const dx = (Math.random() - 0.5) * 20;
+      const dy = (Math.random() - 0.5) * 20;
+      p.style.setProperty('--dx', dx + 'px');
+      p.style.setProperty('--dy', dy + 'px');
+      p.style.width = '2px';
+      p.style.height = '2px';
       p.style.left = Math.random() * 100 + '%';
       p.style.top = Math.random() * 100 + '%';
+    } else {
+      // Moving: particles stream opposite to velocity direction
+      // velocity > 0 → flowDir = +1 (particles move down on screen)
+      // velocity < 0 → flowDir = -1 (particles move up on screen)
+      const flowDir = velocity > 0 ? 1 : -1;
+
+      // Lateral drift decreases as speed increases (tighter streaks)
+      const lateralDrift = (1 - speedFactor) * 0.6;
+      const dx = (Math.random() - 0.5) * 30 * lateralDrift;
+      const dy = flowDir * (20 + speedFactor * 200) + (Math.random() - 0.5) * 10 * lateralDrift;
+
+      p.style.setProperty('--dx', dx + 'px');
+      p.style.setProperty('--dy', dy + 'px');
+
+      // Streak length: proportional to speed. Dots when slow, long streaks when fast.
+      const streakH = Math.max(2, 2 + speedFactor * 14);
+      const streakW = speedFactor > 0.3 ? 1 : 2;
+      p.style.width = streakW + 'px';
+      p.style.height = streakH + 'px';
+
+      // Spawn from the edge particles are flowing FROM
+      p.style.left = Math.random() * 100 + '%';
+      if (speedFactor > 0.15) {
+        p.style.top = (flowDir > 0 ? (Math.random() * 25) : (75 + Math.random() * 25)) + '%';
+      } else {
+        p.style.top = Math.random() * 100 + '%';
+      }
     }
 
-    // Duration: faster particles move quicker across screen
+    // Duration: faster = shorter time on screen
     const dur = Math.max(1.5, 6 - speedFactor * 4) + Math.random() * 2;
     p.style.animationDuration = dur + 's';
 
@@ -203,7 +218,7 @@ function initParticles() {
       if (p.parentNode) p.parentNode.removeChild(p);
     }, dur * 1000);
 
-    // Schedule next particle — rate adapts to velocity
+    // Schedule next particle — more particles at higher speed
     particleInterval = setTimeout(spawnParticle, speedParticleRate());
   }
 
@@ -398,7 +413,7 @@ function initHud() {
         // Update RCS on tac view during flip (close zoom only)
         const tacScreen = document.getElementById('tac-screen');
         if (tacScreen && tacZoomLevel === 0) {
-          renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping);
+          renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, phys.velocity);
         }
 
         if (complete) {
@@ -409,7 +424,7 @@ function initHud() {
           showRcsThrusters(false);
           // Re-render tac view
           if (tacScreen) {
-            renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, false);
+            renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, false, phys.velocity);
           }
           flipAnimFrame = null;
           return;
@@ -431,7 +446,7 @@ function initHud() {
       // Re-render tac view
       const tacScreen = document.getElementById('tac-screen');
       if (tacScreen && gameState) {
-        renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel);
+        renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, gameState.physics.velocity);
       }
     });
   });
@@ -760,12 +775,17 @@ function updateHud(state) {
     }
   }
 
-  // Update tactical view when thrust state changes
-  if (phys.thrustActive !== lastThrustActive) {
+  // Update tactical view when thrust state or velocity changes significantly
+  // Bucket velocity so we don't re-render every frame
+  const velSign = phys.velocity >= 0 ? 1 : -1;
+  const velBucket = velSign * Math.floor(Math.abs(phys.velocity) / 5000);
+  const tacNeedsUpdate = phys.thrustActive !== lastThrustActive || velBucket !== lastTacVelocityBucket;
+  if (tacNeedsUpdate) {
     lastThrustActive = phys.thrustActive;
+    lastTacVelocityBucket = velBucket;
     const tacScreen = document.getElementById('tac-screen');
     if (tacScreen) {
-      renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel);
+      renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, phys.velocity);
     }
   }
 
@@ -783,9 +803,10 @@ function updateHud(state) {
 
 function formatVelocity(v) {
   const abs = Math.abs(v);
-  if (abs < 1000) return `${Math.round(abs)} m/s`;
-  if (abs < 1000000) return `${(abs / 1000).toFixed(1)} km/s`;
-  return `${(abs / 1000000).toFixed(2)} Mm/s`;
+  const sign = v < 0 ? '-' : '';
+  if (abs < 1000) return `${sign}${Math.round(abs)} m/s`;
+  if (abs < 1000000) return `${sign}${(abs / 1000).toFixed(1)} km/s`;
+  return `${sign}${(abs / 1000000).toFixed(2)} Mm/s`;
 }
 
 // ---- START GAME ----
@@ -809,7 +830,7 @@ function startGame() {
   // Render tactical view
   const tacScreen = document.getElementById('tac-screen');
   if (tacScreen) {
-    renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel);
+    renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, gameState.physics.velocity);
   }
 
   // Set initial gravity state (thrust=0 at start = micro-G)

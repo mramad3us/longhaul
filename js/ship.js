@@ -627,7 +627,7 @@ const TAC_ZOOM_LEVELS = [
   { scale: 25,  range: '25 km',  shipMode: 'dot' },    // Far: ship is dot, plume is a star
 ];
 
-export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flipping = false) {
+export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flipping = false, velocity = 0) {
   container.innerHTML = '';
 
   const viewW = container.clientWidth || 186;
@@ -901,26 +901,37 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
   `;
   svgEl.appendChild(shipGroup);
 
-  // Movement particles — subtle streaks showing velocity
-  // Dots when slow, streaks when fast, direction based on heading
-  const movGroup = document.createElementNS(SVG_NS, 'g');
-  movGroup.setAttribute('opacity', '0.15');
-  const numDust = 12;
-  for (let i = 0; i < numDust; i++) {
-    const px = Math.random() * viewW;
-    const streakLen = 1 + Math.random() * 4;
-    const startY = Math.random() * viewH;
-    const endY = startY + 15 + Math.random() * 25;
-    const dur = (1.5 + Math.random() * 2).toFixed(2);
-    const begin = (Math.random() * 3).toFixed(2);
-    movGroup.innerHTML += `
-      <rect x="${px}" y="${startY}" width="1" height="${streakLen}" fill="#4FD1C5" opacity="0">
-        <animate attributeName="opacity" values="0;0.4;0.2;0" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
-        <animate attributeName="y" values="${startY};${endY}" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
-      </rect>
-    `;
+  // Movement particles — driven by velocity vector
+  // velocity > 0 → particles flow down (we're moving "up"), < 0 → flow up
+  const absVel = Math.abs(velocity);
+  const tacSpeedFactor = Math.min(1, absVel / 100000);
+
+  if (absVel > 1) {
+    const movGroup = document.createElementNS(SVG_NS, 'g');
+    movGroup.setAttribute('opacity', String(0.08 + tacSpeedFactor * 0.15));
+    const flowDir = velocity > 0 ? 1 : -1;
+    const numDust = Math.round(6 + tacSpeedFactor * 10);
+    const streakBase = 1 + tacSpeedFactor * 6;
+    const travelDist = 10 + tacSpeedFactor * 30;
+
+    for (let i = 0; i < numDust; i++) {
+      const px = Math.random() * viewW;
+      const streakLen = streakBase + Math.random() * streakBase;
+      const startY = flowDir > 0
+        ? Math.random() * viewH * 0.5
+        : viewH * 0.5 + Math.random() * viewH * 0.5;
+      const endY = startY + flowDir * travelDist * (0.7 + Math.random() * 0.6);
+      const dur = (1.5 + Math.random() * 2 - tacSpeedFactor).toFixed(2);
+      const begin = (Math.random() * 3).toFixed(2);
+      movGroup.innerHTML += `
+        <rect x="${px}" y="${startY}" width="1" height="${streakLen}" fill="#4FD1C5" opacity="0">
+          <animate attributeName="opacity" values="0;0.5;0.2;0" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
+          <animate attributeName="y" values="${startY};${endY}" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
+        </rect>
+      `;
+    }
+    svgEl.appendChild(movGroup);
   }
-  svgEl.appendChild(movGroup);
 
   container.appendChild(svgEl);
 }
