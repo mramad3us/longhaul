@@ -398,9 +398,7 @@ function initHud() {
     if (phys.flipping) return; // already flipping
 
     if (startFlip(phys)) {
-      const from = phys.heading === 0 ? 'prograde' : 'retrograde';
-      const to = phys.heading === 0 ? 'retrograde' : 'prograde';
-      addLogEntry(`Flip maneuver initiated — ${from} to ${to}`, 'nav');
+      addLogEntry('Flip maneuver initiated', 'nav');
 
       // Update thrust UI since flip cuts thrust
       const sliderEl = document.getElementById('thrust-slider');
@@ -428,9 +426,10 @@ function initHud() {
 
         if (complete) {
           flipBtn.classList.remove('flipping');
-          const headingLabel = phys.heading === 0 ? 'PRO' : 'RETRO';
+          const relV = getRelativeVelocity(phys);
+          const headingLabel = relV >= 0 ? 'PRO' : 'RETRO';
           document.getElementById('flip-heading').textContent = headingLabel;
-          addLogEntry(`Flip complete — now facing ${phys.heading === 0 ? 'prograde' : 'retrograde'}`, 'nav');
+          addLogEntry(`Flip complete — now ${relV >= 0 ? 'prograde' : 'retrograde'}`, 'nav');
           showRcsThrusters(false);
           // Re-render tac view
           if (tacScreen) {
@@ -745,11 +744,16 @@ function updateHud(state) {
     phys.thrustActive ? '#FFFFFF' : '';
   document.getElementById('info-thrust').textContent =
     hasGravity ? `${state.navigation.thrust.toFixed(1)}g` : '0.0g';
+  const relVelForHeading = getRelativeVelocity(phys);
   const headingText = phys.flipping ? 'FLIPPING' :
-    (phys.heading === 0 ? 'PROGRADE' : 'RETROGRADE');
+    (relVelForHeading >= 0 ? 'PROGRADE' : 'RETROGRADE');
   document.getElementById('info-heading').textContent = headingText;
   document.getElementById('info-heading').style.color =
     phys.flipping ? '#E2A355' : '';
+  const flipHeadingEl = document.getElementById('flip-heading');
+  if (flipHeadingEl && !phys.flipping) {
+    flipHeadingEl.textContent = relVelForHeading >= 0 ? 'PRO' : 'RETRO';
+  }
   // Velocity displayed relative to ship heading (camera follows ship)
   document.getElementById('info-velocity').textContent =
     formatVelocity(getRelativeVelocity(phys));
@@ -864,7 +868,7 @@ function startGame() {
   }
   const flipHeading = document.getElementById('flip-heading');
   if (flipHeading) {
-    flipHeading.textContent = gameState.physics.heading === 0 ? 'PRO' : 'RETRO';
+    flipHeading.textContent = getRelativeVelocity(gameState.physics) >= 0 ? 'PRO' : 'RETRO';
   }
 
   // Start particles
