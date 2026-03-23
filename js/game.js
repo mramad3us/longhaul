@@ -60,6 +60,11 @@ export function createGameState(shipName, captainName, crewCount) {
       distanceTraveled: 0,
       daysElapsed: 0,
     },
+    // Ship position in AU (x, y) — start near Ceres in the asteroid belt
+    shipPosition: {
+      x: 2.77,
+      y: 0.0,
+    },
   };
 
   // Initialize life support system (adds atmosphere to decks, tanks to resources)

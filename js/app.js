@@ -19,6 +19,7 @@ import { toggleThrust, setThrustLevel, startFlip, updateFlip, CrewState, stabili
 import { initCrewMovement, updateCrewMovement, getCrewMission, isBeingRescued, assignRecoverMission, assignRescueMission, cancelMission, assignSecureBurnMission, releaseSecureBurn, isSeatedInCouch, assignRepairLSMission, isRepairComplete, assignEquipSuitMission, isSuitDonned } from './crew-movement.js';
 import { generateAutoJobs, clearJobs, getJobQueue, getCrewJobs, completeJob, JobPriority, JobType } from './jobs.js';
 import { getAtmoStatus, getEquipmentStatusLabel, depressurizeCompartment, repressurizeCompartment, quickPatchLS, toggleLS, countSuitsOnDeck, donEvaSuit, removeEvaSuit, findNearestSuitLocker } from './life-support.js';
+import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet, SOLAR_ZOOM_PRESETS, resetMapState, getMapState } from './solar-system.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -326,6 +327,10 @@ async function refreshSaveList() {
         const { initLifeSupport } = await import('./life-support.js');
         initLifeSupport(gameState);
       }
+      // Migrate: add ship position if missing
+      if (!gameState.shipPosition) {
+        gameState.shipPosition = { x: 2.77, y: 0.0 };
+      }
       startGame();
       showToast('Mission loaded', 'ok');
     });
@@ -485,6 +490,9 @@ function initHud() {
 
 let tacModalOpen = false;
 let tacModalZoom = 0;
+let tacModalTab = 'tactical'; // 'tactical' or 'solar'
+let solarMapInitialized = false;
+let solarRenderCounter = 0;
 
 function initTacModal() {
   const modal = document.getElementById('tac-modal');
@@ -515,6 +523,102 @@ function initTacModal() {
       renderTacModal();
     });
   });
+
+  // Tab switching (TACTICAL / SOLAR)
+  document.querySelectorAll('.tac-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const newTab = tab.dataset.tacTab;
+      if (newTab === tacModalTab) return;
+      tacModalTab = newTab;
+      document.querySelectorAll('.tac-tab').forEach(t => t.classList.toggle('active', t.dataset.tacTab === newTab));
+      switchTacTab(newTab);
+    });
+  });
+
+  // Solar zoom presets
+  document.querySelectorAll('.solar-zoom-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.solarPreset);
+      const preset = SOLAR_ZOOM_PRESETS[idx];
+      if (!preset) return;
+
+      // For Jupiter/Saturn, dynamically compute planet position
+      if (preset.name === 'Jupiter') {
+        zoomToPlanet('Jupiter', gameState, 0.05);
+      } else if (preset.name === 'Saturn') {
+        zoomToPlanet('Saturn', gameState, 0.1);
+      } else {
+        zoomToPreset(preset);
+      }
+
+      document.querySelectorAll('.solar-zoom-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderSolarTab(true);
+    });
+  });
+}
+
+function switchTacTab(tab) {
+  const tacScreen = document.getElementById('tac-screen-modal');
+  const solarScreen = document.getElementById('solar-screen-modal');
+  const tacZoomControls = document.getElementById('tac-zoom-controls-modal');
+  const solarZoomControls = document.getElementById('solar-zoom-controls');
+  const rangeEl = document.getElementById('tac-range-modal');
+
+  if (tab === 'tactical') {
+    tacScreen.style.display = '';
+    solarScreen.style.display = 'none';
+    tacZoomControls.style.display = '';
+    solarZoomControls.style.display = 'none';
+    rangeEl.style.display = '';
+    renderTacModal();
+  } else {
+    tacScreen.style.display = 'none';
+    solarScreen.style.display = '';
+    tacZoomControls.style.display = 'none';
+    solarZoomControls.style.display = '';
+    rangeEl.style.display = 'none';
+
+    // Initialize solar map interaction once
+    if (!solarMapInitialized) {
+      initSolarMapInteraction(solarScreen);
+      // Re-render on user zoom/pan interaction
+      solarScreen.addEventListener('wheel', () => requestAnimationFrame(() => renderSolarTab(true)));
+      solarScreen.addEventListener('mousemove', () => {
+        if (getMapState().dragging) requestAnimationFrame(() => renderSolarTab(true));
+      });
+      solarMapInitialized = true;
+    }
+    renderSolarTab(true);
+  }
+}
+
+function renderSolarTab(forceRender) {
+  if (!tacModalOpen || tacModalTab !== 'solar' || !gameState) return;
+  const solarScreen = document.getElementById('solar-screen-modal');
+  if (!solarScreen) return;
+
+  // Throttle SVG re-render to every 30 ticks (~0.5s at 60fps) unless forced
+  solarRenderCounter++;
+  if (forceRender || solarRenderCounter % 30 === 0) {
+    renderSolarSystem(solarScreen, gameState);
+  }
+
+  // Update info bar every tick (cheap DOM updates)
+  const ms = getMapState();
+  const velEl = document.getElementById('tac-modal-velocity');
+  const headEl = document.getElementById('tac-modal-heading');
+  const thrEl = document.getElementById('tac-modal-thrust');
+  const phys = gameState.physics;
+  if (velEl) velEl.textContent = `VEL ${formatVelocity(getRelativeVelocity(phys))}`;
+  if (headEl) headEl.textContent = `ZOOM ${ms.zoom.toFixed(ms.zoom < 1 ? 3 : 1)} AU`;
+  if (thrEl) {
+    const sp = gameState.shipPosition;
+    if (sp) {
+      const dist = Math.sqrt(sp.x * sp.x + sp.y * sp.y);
+      thrEl.textContent = `POS ${dist.toFixed(2)} AU`;
+    }
+  }
 }
 
 function openTacModal() {
@@ -531,13 +635,16 @@ function openTacModal() {
   const rangeLabels = ['1 km', '5 km', '25 km'];
   document.getElementById('tac-range-modal').textContent = rangeLabels[tacModalZoom];
 
-  renderTacModal();
+  // Sync tab state
+  document.querySelectorAll('.tac-tab').forEach(t => t.classList.toggle('active', t.dataset.tacTab === tacModalTab));
+  switchTacTab(tacModalTab);
 }
 
 function closeTacModal() {
   const modal = document.getElementById('tac-modal');
   if (modal) modal.style.display = 'none';
   tacModalOpen = false;
+  tacModalTab = 'tactical';
 }
 
 function renderTacModal() {
@@ -1412,8 +1519,22 @@ function updateHud(state) {
     if (tacScreen) {
       renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys));
     }
-    // Keep modal tac in sync
-    if (tacModalOpen) renderTacModal();
+    // Keep modal tac in sync (full re-render on significant change)
+    if (tacModalOpen && tacModalTab === 'tactical') renderTacModal();
+  }
+  // Update tac modal info bar every tick (velocity, heading, thrust always fresh)
+  if (tacModalOpen) {
+    if (tacModalTab === 'tactical') {
+      const vel = getRelativeVelocity(phys);
+      const velEl = document.getElementById('tac-modal-velocity');
+      const headEl = document.getElementById('tac-modal-heading');
+      const thrEl = document.getElementById('tac-modal-thrust');
+      if (velEl) velEl.textContent = `VEL ${formatVelocity(vel)}`;
+      if (headEl) headEl.textContent = phys.flipping ? 'FLIPPING' : (vel >= 0 ? 'PROGRADE' : 'RETROGRADE');
+      if (thrEl) thrEl.textContent = phys.thrustActive ? `BURN ${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G` : 'COAST';
+    } else if (tacModalTab === 'solar') {
+      renderSolarTab();
+    }
   }
 
   // Update crew visual states from physics

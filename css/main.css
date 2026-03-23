@@ -2558,6 +2558,31 @@ body.dev-mode .info-section.dev-only {
   padding: 12px 16px 8px;
   border-bottom: 1px solid var(--hull-primary);
 }
+.tac-modal-tabs {
+  display: flex;
+  gap: 2px;
+}
+.tac-tab {
+  font-family: var(--font-pixel);
+  font-size: 0.45rem;
+  color: var(--text-dim);
+  background: none;
+  border: 1px solid var(--hull-primary);
+  padding: 3px 10px;
+  cursor: pointer;
+  letter-spacing: 0.12em;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.tac-tab:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+.tac-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(79, 209, 197, 0.1);
+  text-shadow: 0 0 8px var(--accent-glow);
+}
 .tac-modal-header .tac-label {
   font-family: var(--font-pixel);
   font-size: 0.55rem;
@@ -2631,4 +2656,33 @@ body.dev-mode .info-section.dev-only {
 }
 .tac-modal-info span {
   color: var(--text-secondary);
+}
+
+/* Solar Map */
+.tac-screen-solar {
+  background: #030810;
+  cursor: grab;
+}
+.tac-screen-solar:active {
+  cursor: grabbing;
+}
+.solar-zoom-btn {
+  font-family: var(--font-pixel);
+  font-size: 0.4rem;
+  background: none;
+  border: 1px solid var(--hull-primary);
+  color: var(--text-dim);
+  padding: 2px 5px;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  transition: color 0.15s, border-color 0.15s;
+}
+.solar-zoom-btn:hover {
+  color: #4FD1C5;
+  border-color: #4FD1C5;
+}
+.solar-zoom-btn.active {
+  color: #4FD1C5;
+  border-color: #4FD1C5;
+  background: rgba(79, 209, 197, 0.08);
 }

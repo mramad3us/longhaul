@@ -383,6 +383,16 @@ export function physicsTick(gameState, physicsState) {
   physicsState.distance += Math.abs(physicsState.velocity) * dt;
   gameState.stats.distanceTraveled = physicsState.distance;
 
+  // Update ship position in AU (convert velocity m/s → AU displacement over dt seconds)
+  // 1 AU = 149,597,870,700 m
+  if (gameState.shipPosition) {
+    const metersPerAU = 149_597_870_700;
+    const displacementAU = physicsState.velocity * dt / metersPerAU;
+    // Move along current heading axis (simplified: heading 0 = +x prograde)
+    const hSign = physicsState.heading === 0 ? 1 : -1;
+    gameState.shipPosition.x += hSign * displacementAU;
+  }
+
   // Update crew states
   const stateChanges = [];
   gameState.ship.crew.forEach(member => {
