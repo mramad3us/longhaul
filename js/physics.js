@@ -102,6 +102,14 @@ export function createPhysicsState() {
     thrustLevel: 0,      // 0 to 1 (fraction of max)
     maxThrust: 10.0,     // Maximum G the engine can produce
 
+    // Heading: 0 = prograde (accelerating), 180 = retrograde (decelerating)
+    heading: 0,
+
+    // Flip maneuver state
+    flipping: false,
+    flipProgress: 0,     // 0 to 1 (animation progress)
+    flipDuration: 8,     // seconds of game-time for a full flip
+
     // Per-crew physics state
     crewStates: {},      // crewId -> CrewState
 
@@ -183,9 +191,12 @@ export function physicsTick(gameState, physicsState) {
   }
 
   // Update velocity (m/s) — 1 game-minute = 60 real seconds
+  // Heading 0 = prograde (adds velocity), 180 = retrograde (subtracts velocity)
   const dt = 60; // seconds per game-minute
-  physicsState.velocity += physicsState.acceleration.y * dt;
+  const thrustSign = physicsState.heading === 0 ? 1 : -1;
+  physicsState.velocity += thrustSign * physicsState.acceleration.y * dt;
   nav.velocity = physicsState.velocity;
+  nav.heading = physicsState.heading;
 
   // Update distance traveled
   physicsState.distance += Math.abs(physicsState.velocity) * dt;
@@ -243,4 +254,30 @@ export function setThrustLevel(physicsState, level) {
   } else {
     physicsState.thrustActive = true;
   }
+}
+
+// ---- FLIP MANEUVER ----
+// 180° rotation using RCS thrusters. Ship must cut main engine first.
+
+export function startFlip(physicsState) {
+  if (physicsState.flipping) return false;
+  // Cut thrust during flip
+  physicsState.thrustActive = false;
+  physicsState.thrustLevel = 0;
+  physicsState.flipping = true;
+  physicsState.flipProgress = 0;
+  return true;
+}
+
+// Called from animation frame (real-time, not game-time)
+export function updateFlip(physicsState, deltaSec) {
+  if (!physicsState.flipping) return false;
+  physicsState.flipProgress += deltaSec / physicsState.flipDuration;
+  if (physicsState.flipProgress >= 1) {
+    physicsState.flipProgress = 0;
+    physicsState.flipping = false;
+    physicsState.heading = physicsState.heading === 0 ? 180 : 0;
+    return true; // flip complete
+  }
+  return false; // still flipping
 }

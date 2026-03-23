@@ -627,7 +627,7 @@ const TAC_ZOOM_LEVELS = [
   { scale: 25,  range: '25 km',  shipMode: 'dot' },    // Far: ship is dot, plume is a star
 ];
 
-export function renderTacView(ship, container, thrustActive, zoomLevel = 0) {
+export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flipping = false) {
   container.innerHTML = '';
 
   const viewW = container.clientWidth || 186;
@@ -869,6 +869,29 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0) {
   }
   // dot mode: blinking dot only (below)
 
+  // RCS thrusters (close zoom only, during flip)
+  if (flipping && zoom.shipMode === 'hull') {
+    const rcsGroup = document.createElementNS(SVG_NS, 'g');
+    const rcsW = 3;
+    const rcsH = 1.5;
+    // 4 corners: top-left fires left, top-right fires right, etc.
+    const rcsPositions = [
+      { x: cx - shipPixelW / 2 - rcsW, y: cy - shipPixelH / 2 + 1, },
+      { x: cx + shipPixelW / 2, y: cy - shipPixelH / 2 + 1, },
+      { x: cx - shipPixelW / 2 - rcsW, y: cy + shipPixelH / 2 - 2, },
+      { x: cx + shipPixelW / 2, y: cy + shipPixelH / 2 - 2, },
+    ];
+    rcsPositions.forEach(pos => {
+      rcsGroup.innerHTML += `
+        <rect x="${pos.x}" y="${pos.y}" width="${rcsW}" height="${rcsH}"
+          fill="#E2A355" opacity="0.9">
+          <animate attributeName="opacity" values="0.5;1;0.5" dur="0.08s" repeatCount="indefinite"/>
+        </rect>
+      `;
+    });
+    shipGroup.appendChild(rcsGroup);
+  }
+
   // Blinking center dot (always visible)
   const dotSize = zoom.shipMode === 'dot' ? 2 : 1;
   shipGroup.innerHTML += `
@@ -877,6 +900,27 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0) {
     </rect>
   `;
   svgEl.appendChild(shipGroup);
+
+  // Movement particles — subtle streaks showing velocity
+  // Dots when slow, streaks when fast, direction based on heading
+  const movGroup = document.createElementNS(SVG_NS, 'g');
+  movGroup.setAttribute('opacity', '0.15');
+  const numDust = 12;
+  for (let i = 0; i < numDust; i++) {
+    const px = Math.random() * viewW;
+    const streakLen = 1 + Math.random() * 4;
+    const startY = Math.random() * viewH;
+    const endY = startY + 15 + Math.random() * 25;
+    const dur = (1.5 + Math.random() * 2).toFixed(2);
+    const begin = (Math.random() * 3).toFixed(2);
+    movGroup.innerHTML += `
+      <rect x="${px}" y="${startY}" width="1" height="${streakLen}" fill="#4FD1C5" opacity="0">
+        <animate attributeName="opacity" values="0;0.4;0.2;0" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
+        <animate attributeName="y" values="${startY};${endY}" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
+      </rect>
+    `;
+  }
+  svgEl.appendChild(movGroup);
 
   container.appendChild(svgEl);
 }

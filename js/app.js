@@ -15,7 +15,7 @@ import { initStorage, saveGame, loadGame, listSaves, deleteSave } from './storag
 import { createGameState, formatDate, formatTime, GameLoop } from './game.js';
 import { renderShip, renderTacView } from './ship.js';
 import { VERSION } from './version.js';
-import { toggleThrust, setThrustLevel, CrewState } from './physics.js';
+import { toggleThrust, setThrustLevel, startFlip, updateFlip, CrewState } from './physics.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -27,6 +27,7 @@ let particleInterval = null;
 let lastCrewStateKey = null;
 let lastThrustActive = null;
 let tacZoomLevel = 0;
+let flipAnimFrame = null;
 
 // ---- SHIP'S LOG ----
 const MAX_LOG_ENTRIES = 200;
@@ -141,29 +142,58 @@ function initParticles() {
   const container = document.getElementById('viewport-particles');
   if (!container) return;
 
-  if (particleInterval) clearInterval(particleInterval);
+  if (particleInterval) clearTimeout(particleInterval);
 
-  particleInterval = setInterval(() => {
-    if (currentScreen !== 'game') return;
+  function spawnParticle() {
+    if (currentScreen !== 'game') {
+      particleInterval = setTimeout(spawnParticle, 400);
+      return;
+    }
 
     const p = document.createElement('div');
     p.className = 'particle';
-    p.style.left = Math.random() * 100 + '%';
-    p.style.top = Math.random() * 100 + '%';
 
-    const dx = (Math.random() - 0.5) * 60;
-    const dy = (Math.random() - 0.5) * 60;
+    // Velocity-based particles: direction and streak length depend on ship speed
+    const phys = gameState ? gameState.physics : null;
+    const vel = phys ? Math.abs(phys.velocity) : 0;
+    const heading = phys ? phys.heading : 0;
+
+    // Speed factor: 0 = stationary, 1 = fast (100 km/s+)
+    const speedFactor = Math.min(1, vel / 100000);
+
+    // Direction: particles flow opposite to travel direction
+    // Heading 0 = prograde (moving "up"), particles flow down
+    // Heading 180 = retrograde, particles flow up
+    const flowDir = heading === 0 ? 1 : -1;
+
+    // At low speed: random slow drift. At high speed: fast directional streaks
+    const drift = (1 - speedFactor) * 0.8;
+    const dx = (Math.random() - 0.5) * 30 * drift;
+    const dy = flowDir * (20 + speedFactor * 200) + (Math.random() - 0.5) * 20 * drift;
+
     p.style.setProperty('--dx', dx + 'px');
     p.style.setProperty('--dy', dy + 'px');
 
-    const dur = 6 + Math.random() * 8;
+    // Streak length: dots when slow, elongated when fast
+    const streakH = Math.max(2, 2 + speedFactor * 14);
+    const streakW = speedFactor > 0.3 ? 1 : 2;
+    p.style.width = streakW + 'px';
+    p.style.height = streakH + 'px';
+
+    // Spawn position: at high speed, spawn from edge opposite to flow
+    if (speedFactor > 0.2) {
+      p.style.left = Math.random() * 100 + '%';
+      p.style.top = (flowDir > 0 ? (Math.random() * 30) : (70 + Math.random() * 30)) + '%';
+    } else {
+      p.style.left = Math.random() * 100 + '%';
+      p.style.top = Math.random() * 100 + '%';
+    }
+
+    // Duration: faster particles move quicker across screen
+    const dur = Math.max(1.5, 6 - speedFactor * 4) + Math.random() * 2;
     p.style.animationDuration = dur + 's';
 
-    // Vary particle appearance
-    const size = Math.random() > 0.8 ? 3 : 2;
-    p.style.width = size + 'px';
-    p.style.height = size + 'px';
-
+    // Color variation
     if (Math.random() > 0.7) {
       p.style.background = '#E2A355';
     }
@@ -172,7 +202,20 @@ function initParticles() {
     setTimeout(() => {
       if (p.parentNode) p.parentNode.removeChild(p);
     }, dur * 1000);
-  }, 400);
+
+    // Schedule next particle — rate adapts to velocity
+    particleInterval = setTimeout(spawnParticle, speedParticleRate());
+  }
+
+  particleInterval = setTimeout(spawnParticle, 400);
+}
+
+function speedParticleRate() {
+  if (!gameState) return 400;
+  const vel = Math.abs(gameState.physics.velocity);
+  const speedFactor = Math.min(1, vel / 100000);
+  // More particles at high speed: 400ms → 120ms
+  return Math.max(120, 400 - speedFactor * 280);
 }
 
 // ---- LANDING SCREEN ----
@@ -323,6 +366,60 @@ function initHud() {
 
   initLog();
 
+  // Flip maneuver button
+  document.getElementById('flip-toggle').addEventListener('click', () => {
+    if (!gameState) return;
+    const phys = gameState.physics;
+    if (phys.flipping) return; // already flipping
+
+    if (startFlip(phys)) {
+      const from = phys.heading === 0 ? 'prograde' : 'retrograde';
+      const to = phys.heading === 0 ? 'retrograde' : 'prograde';
+      addLogEntry(`Flip maneuver initiated — ${from} to ${to}`, 'nav');
+
+      // Update thrust UI since flip cuts thrust
+      const sliderEl = document.getElementById('thrust-slider');
+      sliderEl.value = 0;
+      updateThrustSliderUI(0);
+
+      // Show RCS thrusters on main view
+      showRcsThrusters(true);
+
+      const flipBtn = document.getElementById('flip-toggle');
+      flipBtn.classList.add('flipping');
+
+      // Animate flip in real-time
+      let lastTime = performance.now();
+      function animateFlip(now) {
+        const deltaSec = (now - lastTime) / 1000;
+        lastTime = now;
+        const complete = updateFlip(phys, deltaSec);
+
+        // Update RCS on tac view during flip (close zoom only)
+        const tacScreen = document.getElementById('tac-screen');
+        if (tacScreen && tacZoomLevel === 0) {
+          renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping);
+        }
+
+        if (complete) {
+          flipBtn.classList.remove('flipping');
+          const headingLabel = phys.heading === 0 ? 'PRO' : 'RETRO';
+          document.getElementById('flip-heading').textContent = headingLabel;
+          addLogEntry(`Flip complete — now facing ${phys.heading === 0 ? 'prograde' : 'retrograde'}`, 'nav');
+          showRcsThrusters(false);
+          // Re-render tac view
+          if (tacScreen) {
+            renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, false);
+          }
+          flipAnimFrame = null;
+          return;
+        }
+        flipAnimFrame = requestAnimationFrame(animateFlip);
+      }
+      flipAnimFrame = requestAnimationFrame(animateFlip);
+    }
+  });
+
   // Tac zoom controls
   const rangeLabels = ['1 km', '5 km', '25 km'];
   document.querySelectorAll('.tac-zoom-btn').forEach(btn => {
@@ -338,6 +435,72 @@ function initHud() {
       }
     });
   });
+}
+
+// ---- RCS THRUSTER VISUALS (main view) ----
+function showRcsThrusters(active) {
+  const existing = document.getElementById('rcs-thrusters');
+  if (!active) {
+    if (existing) existing.setAttribute('display', 'none');
+    return;
+  }
+
+  if (existing) {
+    existing.setAttribute('display', 'inline');
+    return;
+  }
+
+  // Create RCS thruster group on the ship SVG
+  const shipSvg = document.querySelector('#ship-container svg');
+  if (!shipSvg) return;
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const rcs = document.createElementNS(SVG_NS, 'g');
+  rcs.setAttribute('id', 'rcs-thrusters');
+
+  // Find hull bounds from the ship SVG viewBox
+  const vb = shipSvg.getAttribute('viewBox').split(' ').map(Number);
+  const svgW = vb[2];
+
+  // Ship hull: roughly tiles at offsetX to offsetX + shipWidth
+  // We'll position RCS at corners of the hull outline
+  const hullEl = shipSvg.querySelector('path[stroke]');
+  if (!hullEl) return;
+
+  const bbox = hullEl.getBBox();
+  const hx = bbox.x;
+  const hy = bbox.y;
+  const hw = bbox.width;
+  const hh = bbox.height;
+
+  // 4 RCS thruster positions: top-left, top-right, bottom-left, bottom-right
+  const positions = [
+    { x: hx - 6, y: hy + 8, dir: -1 },       // top-left: fires left
+    { x: hx + hw + 6, y: hy + 8, dir: 1 },    // top-right: fires right
+    { x: hx - 6, y: hy + hh - 8, dir: 1 },    // bottom-left: fires right (torque)
+    { x: hx + hw + 6, y: hy + hh - 8, dir: -1 }, // bottom-right: fires left (torque)
+  ];
+
+  const thrusterParts = [];
+  positions.forEach((pos, i) => {
+    const plumeW = 8;
+    const plumeH = 3;
+    // Small blocky RCS plume pointing outward
+    const px = pos.dir > 0 ? pos.x : pos.x - plumeW;
+    thrusterParts.push(`
+      <rect x="${px}" y="${pos.y - plumeH / 2}" width="${plumeW}" height="${plumeH}"
+        fill="#E2A355" opacity="0.9">
+        <animate attributeName="opacity" values="0.6;1;0.6" dur="0.08s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="${px + (pos.dir > 0 ? plumeW : -3)}" y="${pos.y - 1}" width="3" height="2"
+        fill="#FFCC66" opacity="0.7">
+        <animate attributeName="opacity" values="0.4;0.8;0.4" dur="0.06s" repeatCount="indefinite"/>
+      </rect>
+    `);
+  });
+
+  rcs.innerHTML = thrusterParts.join('');
+  shipSvg.appendChild(rcs);
 }
 
 function updateThrustSliderUI(level) {
@@ -557,8 +720,11 @@ function updateHud(state) {
     phys.thrustActive ? '#FFFFFF' : '';
   document.getElementById('info-thrust').textContent =
     hasGravity ? `${state.navigation.thrust.toFixed(1)}g` : '0.0g';
-  document.getElementById('info-heading').textContent =
-    state.navigation.heading || '---';
+  const headingText = phys.flipping ? 'FLIPPING' :
+    (phys.heading === 0 ? 'PROGRADE' : 'RETROGRADE');
+  document.getElementById('info-heading').textContent = headingText;
+  document.getElementById('info-heading').style.color =
+    phys.flipping ? '#E2A355' : '';
   document.getElementById('info-velocity').textContent =
     formatVelocity(state.navigation.velocity);
   document.getElementById('info-mass').textContent =
@@ -657,11 +823,15 @@ function startGame() {
   addLogEntry(`Crew complement: ${gameState.ship.crew.length}`, 'crew');
   addLogEntry(`Ship mass: ${(gameState.physics.shipMass / 1000).toFixed(1)}t`, 'nav');
 
-  // Sync thrust slider to physics state
+  // Sync thrust slider and flip heading to physics state
   const slider = document.getElementById('thrust-slider');
   if (slider) {
     slider.value = gameState.physics.thrustLevel * 100;
     updateThrustSliderUI(gameState.physics.thrustLevel);
+  }
+  const flipHeading = document.getElementById('flip-heading');
+  if (flipHeading) {
+    flipHeading.textContent = gameState.physics.heading === 0 ? 'PRO' : 'RETRO';
   }
 
   // Start particles
@@ -731,7 +901,7 @@ function initHudActions() {
   document.querySelector('[data-action="confirm-exit"]').addEventListener('click', () => {
     document.getElementById('dialog-exit').style.display = 'none';
     if (gameLoop) gameLoop.stop();
-    if (particleInterval) clearInterval(particleInterval);
+    if (particleInterval) clearTimeout(particleInterval);
     gameState = null;
     selectedCrew = null;
     showScreen('landing');
@@ -843,6 +1013,13 @@ function initKeyboard() {
         // Dev mode only: toggle thrust
         if (document.body.classList.contains('dev-mode')) {
           document.getElementById('thrust-toggle').click();
+        }
+        break;
+      case 'f':
+      case 'F':
+        // Dev mode only: flip maneuver
+        if (document.body.classList.contains('dev-mode')) {
+          document.getElementById('flip-toggle').click();
         }
         break;
       case 'Escape':
