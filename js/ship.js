@@ -7,6 +7,12 @@ import { SVG_NS, TileType, renderTile, renderCrewMember, INTERACTIVE_TILES, TILE
 
 const TILE_SIZE = 32;
 
+// ---- Caches for renderTacView (computed once per ship layout) ----
+let _cachedHullPath = null;
+let _cachedHullDeckCount = -1;
+let _cachedMaxTileCols = -1;
+let _cachedMaxTileColsDeckCount = -1;
+
 // Ship deck definitions — top to bottom (bow to stern)
 export function createDefaultShip(crewCount = 4) {
   const T = TileType;
@@ -979,25 +985,18 @@ const TAC_ZOOM_LEVELS = [
 ];
 
 export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flipping = false, velocity = 0, orienting = false) {
-  container.innerHTML = '';
-
   const viewW = container.clientWidth || 186;
   const viewH = container.clientHeight || 220;
   const zoom = TAC_ZOOM_LEVELS[zoomLevel];
 
-  const svgEl = document.createElementNS(SVG_NS, 'svg');
-  svgEl.setAttribute('width', viewW);
-  svgEl.setAttribute('height', viewH);
-  svgEl.setAttribute('viewBox', `0 0 ${viewW} ${viewH}`);
-  svgEl.setAttribute('shape-rendering', 'crispEdges');
-  svgEl.style.display = 'block';
-
   const cx = viewW / 2;
   const cy = viewH / 2;
 
+  // String builder — collect all SVG content, write once
+  const parts = [];
+
   // Defs (filters)
-  const defs = document.createElementNS(SVG_NS, 'defs');
-  defs.innerHTML = `
+  parts.push(`<defs>
     <filter id="tac-glow" x="-100%" y="-50%" width="300%" height="300%">
       <feGaussianBlur stdDeviation="4"/>
     </filter>
@@ -1007,45 +1006,53 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
     <filter id="tac-sun" x="-300%" y="-300%" width="700%" height="700%">
       <feGaussianBlur stdDeviation="20"/>
     </filter>
-  `;
-  svgEl.appendChild(defs);
+  </defs>`);
 
   // Grid
-  const gridGroup = document.createElementNS(SVG_NS, 'g');
-  gridGroup.setAttribute('opacity', '0.06');
   const gridSpacing = viewW / (4 + zoomLevel * 2);
+  parts.push('<g opacity="0.06">');
   for (let x = cx % gridSpacing; x < viewW; x += gridSpacing) {
-    gridGroup.innerHTML += `<line x1="${x}" y1="0" x2="${x}" y2="${viewH}" stroke="#4FD1C5" stroke-width="0.5"/>`;
+    parts.push(`<line x1="${x}" y1="0" x2="${x}" y2="${viewH}" stroke="#4FD1C5" stroke-width="0.5"/>`);
   }
   for (let y = cy % gridSpacing; y < viewH; y += gridSpacing) {
-    gridGroup.innerHTML += `<line x1="0" y1="${y}" x2="${viewW}" y2="${y}" stroke="#4FD1C5" stroke-width="0.5"/>`;
+    parts.push(`<line x1="0" y1="${y}" x2="${viewW}" y2="${y}" stroke="#4FD1C5" stroke-width="0.5"/>`);
   }
-  svgEl.appendChild(gridGroup);
+  parts.push('</g>');
 
   // Range rings
-  const ringGroup = document.createElementNS(SVG_NS, 'g');
-  ringGroup.setAttribute('opacity', '0.05');
   const ringSpacing = viewW / (3 + zoomLevel);
+  parts.push('<g opacity="0.05">');
   for (let r = ringSpacing; r < viewW; r += ringSpacing) {
-    ringGroup.innerHTML += `<ellipse cx="${cx}" cy="${cy}" rx="${r}" ry="${r}" fill="none" stroke="#4FD1C5" stroke-width="0.5"/>`;
+    parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${r}" ry="${r}" fill="none" stroke="#4FD1C5" stroke-width="0.5"/>`);
   }
-  svgEl.appendChild(ringGroup);
+  parts.push('</g>');
 
   // Crosshair
-  const chGroup = document.createElementNS(SVG_NS, 'g');
-  chGroup.setAttribute('opacity', '0.08');
-  chGroup.innerHTML = `
+  parts.push(`<g opacity="0.08">
     <line x1="${cx}" y1="0" x2="${cx}" y2="${viewH}" stroke="#4FD1C5" stroke-width="0.5"/>
     <line x1="0" y1="${cy}" x2="${viewW}" y2="${cy}" stroke="#4FD1C5" stroke-width="0.5"/>
-  `;
-  svgEl.appendChild(chGroup);
+  </g>`);
 
-  // ---- COMPUTE SHIP DIMENSIONS ----
+  // ---- COMPUTE SHIP DIMENSIONS (with caching) ----
   const deckGapTac = 1;
-  const hullPath = buildHullPath(ship, 0, 0, deckGapTac);
-  const maxTileCols = Math.max(...ship.decks.map(d => d.tiles[0].length));
+  const deckCount = ship.decks.length;
+
+  // Cache buildHullPath — hull shape never changes
+  if (_cachedHullDeckCount !== deckCount) {
+    _cachedHullPath = buildHullPath(ship, 0, 0, deckGapTac);
+    _cachedHullDeckCount = deckCount;
+  }
+  const hullPath = _cachedHullPath;
+
+  // Cache maxTileCols
+  if (_cachedMaxTileColsDeckCount !== deckCount) {
+    _cachedMaxTileCols = Math.max(...ship.decks.map(d => d.tiles[0].length));
+    _cachedMaxTileColsDeckCount = deckCount;
+  }
+  const maxTileCols = _cachedMaxTileCols;
+
   const totalTileRows = ship.decks.reduce((sum, d) => sum + d.tiles.length, 0);
-  const totalWithGaps = totalTileRows + (ship.decks.length - 1) * deckGapTac;
+  const totalWithGaps = totalTileRows + (deckCount - 1) * deckGapTac;
   const hullRawW = maxTileCols * TILE_SIZE;
   const hullRawH = totalWithGaps * TILE_SIZE;
 
@@ -1056,7 +1063,6 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
 
   // ---- PLUME (rendered behind ship) ----
   if (thrustActive) {
-    const plumeGroup = document.createElementNS(SVG_NS, 'g');
     const nozzleY = cy + shipPixelH / 2;
 
     // Plume geometry: fireball near ship then long taper
@@ -1067,11 +1073,11 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
     const tailLen = shipPixelH * 13;
     const totalPlumeLen = fireballLen + tailLen;
 
+    parts.push('<g>');
     if (zoom.shipMode === 'dot') {
       // FAR ZOOM: plume is a blazing star
       const starR = Math.min(viewW, viewH) * 0.3;
-      plumeGroup.innerHTML += `
-        <ellipse cx="${cx}" cy="${cy + 2}" rx="${starR}" ry="${starR * 1.3}"
+      parts.push(`<ellipse cx="${cx}" cy="${cy + 2}" rx="${starR}" ry="${starR * 1.3}"
           fill="#FFFFFF" opacity="0.06" filter="url(#tac-sun)">
           <animate attributeName="opacity" values="0.03;0.08;0.03" dur="0.3s" repeatCount="indefinite"/>
         </ellipse>
@@ -1085,12 +1091,10 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
         </ellipse>
         <rect x="${cx - 1}" y="${cy}" width="2" height="2" fill="#FFFFFF" opacity="1">
           <animate attributeName="opacity" values="0.8;1;0.8" dur="0.08s" repeatCount="indefinite"/>
-        </rect>
-      `;
+        </rect>`);
     } else {
       // CLOSE / MEDIUM: render fireball + tail shape
       const numSections = 24;
-      const sections = [];
 
       for (let i = 0; i < numSections; i++) {
         const t = i / numSections;
@@ -1132,7 +1136,7 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
           opacity = Math.max(0.02, 0.4 - tt * 0.38);
         }
 
-        sections.push(`<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
+        parts.push(`<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
           fill="${color}" opacity="${opacity.toFixed(3)}">
           <animate attributeName="opacity"
             values="${(opacity * 0.8).toFixed(3)};${opacity.toFixed(3)};${(opacity * 0.8).toFixed(3)}"
@@ -1148,7 +1152,7 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
         const h = coreLen / 5 + 0.5;
         const halfW = Math.max(1, shipPixelW * 0.4 * (1 + t * 2));
         const op = 1.0 - t * 0.2;
-        sections.push(`<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
+        parts.push(`<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
           fill="#FFFFFF" opacity="${op.toFixed(2)}">
           <animate attributeName="opacity"
             values="${(op * 0.9).toFixed(2)};${op.toFixed(2)};${(op * 0.9).toFixed(2)}"
@@ -1157,72 +1161,48 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
       }
 
       // Fireball bloom
-      sections.push(`<ellipse cx="${cx}" cy="${nozzleY + fireballLen * 0.4}"
+      parts.push(`<ellipse cx="${cx}" cy="${nozzleY + fireballLen * 0.4}"
         rx="${fireballHalfW * 1.2}" ry="${fireballLen * 0.6}"
         fill="#FFFFFF" opacity="0.05" filter="url(#tac-bloom)">
         <animate attributeName="opacity" values="0.03;0.07;0.03" dur="0.2s" repeatCount="indefinite"/>
       </ellipse>`);
 
       // Nozzle flash
-      sections.push(`<ellipse cx="${cx}" cy="${nozzleY + 1}"
+      parts.push(`<ellipse cx="${cx}" cy="${nozzleY + 1}"
         rx="${shipPixelW * 0.6}" ry="${shipPixelW * 0.3}"
         fill="#FFFFFF" opacity="0.4" filter="url(#tac-glow)">
         <animate attributeName="opacity" values="0.3;0.5;0.3" dur="0.1s" repeatCount="indefinite"/>
       </ellipse>`);
-
-      plumeGroup.innerHTML = sections.join('\n');
     }
-
-    svgEl.appendChild(plumeGroup);
+    parts.push('</g>');
   }
 
   // ---- SHIP ----
-  const shipGroup = document.createElementNS(SVG_NS, 'g');
+  parts.push('<g>');
 
   if (zoom.shipMode === 'hull' && hullPath) {
     // Close zoom: actual hull outline
     const tx = cx - (hullRawW * scaleFactor) / 2;
     const ty = cy - (hullRawH * scaleFactor) / 2;
 
-    const hullEl = document.createElementNS(SVG_NS, 'path');
-    hullEl.setAttribute('d', hullPath);
-    hullEl.setAttribute('fill', '#0C1420');
-    hullEl.setAttribute('stroke', '#2D5A6A');
-    hullEl.setAttribute('stroke-width', `${1 / scaleFactor}`);
-    hullEl.setAttribute('transform', `translate(${tx},${ty}) scale(${scaleFactor})`);
-    shipGroup.appendChild(hullEl);
-
-    const hullGlow = document.createElementNS(SVG_NS, 'path');
-    hullGlow.setAttribute('d', hullPath);
-    hullGlow.setAttribute('fill', 'none');
-    hullGlow.setAttribute('stroke', '#3D7A8A');
-    hullGlow.setAttribute('stroke-width', `${2 / scaleFactor}`);
-    hullGlow.setAttribute('opacity', '0.3');
-    hullGlow.setAttribute('transform', `translate(${tx},${ty}) scale(${scaleFactor})`);
-    shipGroup.appendChild(hullGlow);
+    parts.push(`<path d="${hullPath}" fill="#0C1420" stroke="#2D5A6A"
+      stroke-width="${1 / scaleFactor}" transform="translate(${tx},${ty}) scale(${scaleFactor})"/>`);
+    parts.push(`<path d="${hullPath}" fill="none" stroke="#3D7A8A"
+      stroke-width="${2 / scaleFactor}" opacity="0.3" transform="translate(${tx},${ty}) scale(${scaleFactor})"/>`);
 
     // Label next to ship
-    const labelEl = document.createElementNS(SVG_NS, 'text');
-    labelEl.setAttribute('x', cx + shipPixelW / 2 + 4);
-    labelEl.setAttribute('y', cy + 2);
-    labelEl.setAttribute('font-family', '"Press Start 2P", monospace');
-    labelEl.setAttribute('font-size', '4');
-    labelEl.setAttribute('fill', '#3A4E62');
-    labelEl.textContent = ship.name.substring(0, 10).toUpperCase();
-    shipGroup.appendChild(labelEl);
+    parts.push(`<text x="${cx + shipPixelW / 2 + 4}" y="${cy + 2}"
+      font-family="&quot;Press Start 2P&quot;, monospace" font-size="4" fill="#3A4E62">${ship.name.substring(0, 10).toUpperCase()}</text>`);
   } else if (zoom.shipMode === 'icon') {
     // Medium zoom: small diamond icon
     const s = 3;
-    shipGroup.innerHTML += `
-      <polygon points="${cx},${cy - s} ${cx + s * 0.6},${cy} ${cx},${cy + s} ${cx - s * 0.6},${cy}"
-        fill="#1A2A3A" stroke="#3D7A8A" stroke-width="0.5"/>
-    `;
+    parts.push(`<polygon points="${cx},${cy - s} ${cx + s * 0.6},${cy} ${cx},${cy + s} ${cx - s * 0.6},${cy}"
+      fill="#1A2A3A" stroke="#3D7A8A" stroke-width="0.5"/>`);
   }
   // dot mode: blinking dot only (below)
 
   // RCS thrusters (close zoom only, during flip or orient)
   if ((flipping || orienting) && zoom.shipMode === 'hull') {
-    const rcsGroup = document.createElementNS(SVG_NS, 'g');
     const rcsW = 3;
     const rcsH = 1.5;
     // 4 corners: top-left, top-right, bottom-left, bottom-right
@@ -1237,19 +1217,16 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
     if (flipping) {
       // Flip: all 4 fire rapidly
       rcsPositions.forEach(pos => {
-        rcsGroup.innerHTML += `
-          <rect x="${pos.x}" y="${pos.y}" width="${rcsW}" height="${rcsH}"
+        parts.push(`<rect x="${pos.x}" y="${pos.y}" width="${rcsW}" height="${rcsH}"
             fill="#E2A355" opacity="0.9">
             <animate attributeName="opacity" values="0.5;1;0.5" dur="0.08s" repeatCount="indefinite"/>
-          </rect>
-        `;
+          </rect>`);
       });
     } else {
       // Orient: alternating diagonal pairs with irregular pulses
       // Pair A: top-left + bottom-right (clockwise torque)
       // Pair B: top-right + bottom-left (counter-clockwise correction)
       const pairA = [0, 3];
-      const pairB = [1, 2];
       rcsPositions.forEach((pos, i) => {
         const isPairA = pairA.includes(i);
         // Pair A: long pulse, short off — dominant thrust
@@ -1257,26 +1234,21 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
         const vals = isPairA
           ? '0;0.9;0.9;0.7;0;0;0;0;0;0.8;0.9;0;0'
           : '0;0;0;0;0;0.7;0.8;0;0;0;0;0;0';
-        const dur = isPairA ? '2.4s' : '2.4s';
-        rcsGroup.innerHTML += `
-          <rect x="${pos.x}" y="${pos.y}" width="${rcsW}" height="${rcsH}"
+        const dur = '2.4s';
+        parts.push(`<rect x="${pos.x}" y="${pos.y}" width="${rcsW}" height="${rcsH}"
             fill="#E2A355" opacity="0">
             <animate attributeName="opacity" values="${vals}" dur="${dur}" repeatCount="indefinite"/>
-          </rect>
-        `;
+          </rect>`);
       });
     }
-    shipGroup.appendChild(rcsGroup);
   }
 
   // Blinking center dot (always visible)
   const dotSize = zoom.shipMode === 'dot' ? 2 : 1;
-  shipGroup.innerHTML += `
-    <rect x="${cx - dotSize / 2}" y="${cy - dotSize / 2}" width="${dotSize}" height="${dotSize}" fill="#4FD1C5" opacity="0.9">
+  parts.push(`<rect x="${cx - dotSize / 2}" y="${cy - dotSize / 2}" width="${dotSize}" height="${dotSize}" fill="#4FD1C5" opacity="0.9">
       <animate attributeName="opacity" values="0.5;1;0.5" dur="1.5s" repeatCount="indefinite"/>
-    </rect>
-  `;
-  svgEl.appendChild(shipGroup);
+    </rect>`);
+  parts.push('</g>');
 
   // Movement particles — driven by velocity vector
   // velocity > 0 → particles flow down (we're moving "up"), < 0 → flow up
@@ -1284,8 +1256,7 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
   const tacSpeedFactor = Math.min(1, absVel / 100000);
 
   if (absVel > 1) {
-    const movGroup = document.createElementNS(SVG_NS, 'g');
-    movGroup.setAttribute('opacity', String(0.08 + tacSpeedFactor * 0.15));
+    parts.push(`<g opacity="${0.08 + tacSpeedFactor * 0.15}">`);
     const flowDir = velocity > 0 ? 1 : -1;
     const numDust = Math.round(6 + tacSpeedFactor * 10);
     const streakBase = 1 + tacSpeedFactor * 6;
@@ -1300,15 +1271,14 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
       const endY = startY + flowDir * travelDist * (0.7 + Math.random() * 0.6);
       const dur = (1.5 + Math.random() * 2 - tacSpeedFactor).toFixed(2);
       const begin = (Math.random() * 3).toFixed(2);
-      movGroup.innerHTML += `
-        <rect x="${px}" y="${startY}" width="1" height="${streakLen}" fill="#4FD1C5" opacity="0">
+      parts.push(`<rect x="${px}" y="${startY}" width="1" height="${streakLen}" fill="#4FD1C5" opacity="0">
           <animate attributeName="opacity" values="0;0.5;0.2;0" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
           <animate attributeName="y" values="${startY};${endY}" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
-        </rect>
-      `;
+        </rect>`);
     }
-    svgEl.appendChild(movGroup);
+    parts.push('</g>');
   }
 
-  container.appendChild(svgEl);
+  // Single innerHTML write with proper SVG namespace
+  container.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${viewW}" height="${viewH}" viewBox="0 0 ${viewW} ${viewH}" shape-rendering="crispEdges" style="display:block">${parts.join('')}</svg>`;
 }

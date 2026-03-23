@@ -228,12 +228,13 @@ function applyGForceEffects(member, gForce, isSecured = false, resources = null)
 
   const b = member.body;
   const h = member.heart;
+  const conditions = member.conditions;
 
   // ---- DEATH SYSTEM ----
   // Heart health 0% → CRITICAL state, death timer starts
   // Critical ONLY clears via medical intervention (stabilizeCrew)
   // Death happens after a random delay (2-30 minutes)
-  const isCritical = member.conditions.includes('critical');
+  const isCritical = conditions.includes('critical');
 
   if (h.health <= 0 || isCritical) {
     if (h.health <= 0) h.health = 0;
@@ -296,7 +297,7 @@ function applyGForceEffects(member, gForce, isSecured = false, resources = null)
     b.rightArm = clamp(b.rightArm + 0.02);
     b.leftLeg = clamp(b.leftLeg + 0.02);
     b.rightLeg = clamp(b.rightLeg + 0.02);
-    if (!member.conditions.includes('brain-damage')) {
+    if (!conditions.includes('brain-damage')) {
       b.head = clamp(b.head + 0.01);
     }
     removeCondition(member, 'crushed');
@@ -310,8 +311,8 @@ function applyGForceEffects(member, gForce, isSecured = false, resources = null)
 
   // ---- HEART RECOVERY ----
   // Heart heals slowly when no cardiac-stress or critical condition is active
-  if (!member.conditions.includes('cardiac-stress') &&
-      !member.conditions.includes('critical') &&
+  if (!conditions.includes('cardiac-stress') &&
+      !conditions.includes('critical') &&
       h.health < 100) {
     h.health = clamp(h.health + 0.15);
   }
@@ -343,7 +344,7 @@ function applyGForceEffects(member, gForce, isSecured = false, resources = null)
   // ---- CONSCIOUSNESS ----
   // Consciousness bottoms at 10% (alive but incapacitated)
   const consciousnessFloor = 10;
-  const consciousnessCap = member.conditions.includes('brain-damage') ? 50 : 100;
+  const consciousnessCap = conditions.includes('brain-damage') ? 50 : 100;
 
   // Consciousness pressure from injuries
   if (b.head < 20) member.consciousness -= 2;
@@ -360,7 +361,7 @@ function applyGForceEffects(member, gForce, isSecured = false, resources = null)
   // ---- CARDIAC STRESS DURATION & HEART DEGRADATION ----
   // Heart only degrades when under DANGEROUS+ G — HIGH G is uncomfortable but survivable.
   // This means juiced crew in couches (6G → 2G effective = HIGH range) survive long burns.
-  if (member.conditions.includes('cardiac-stress')) {
+  if (conditions.includes('cardiac-stress')) {
     if (effectiveG >= G_THRESHOLDS.DANGEROUS) {
       h.stressMinutes = (h.stressMinutes || 0) + 1;
       // After 10 minutes of sustained dangerous cardiac stress, heart health degrades
@@ -383,11 +384,12 @@ function applyGForceEffects(member, gForce, isSecured = false, resources = null)
   // Blood pressure: stress and G-force driven
   // Normal: 120/80. Stress raises both. Will spike with bleeding (future).
   const stressFactor = h.stress / 100;
-  h.bpSystolic = Math.round(120 + stressFactor * 60 + Math.max(0, gForce - 1) * 15);
-  h.bpDiastolic = Math.round(80 + stressFactor * 30 + Math.max(0, gForce - 1) * 8);
+  const gForceAbove1 = gForce > 1 ? gForce - 1 : 0;
+  h.bpSystolic = Math.round(120 + stressFactor * 60 + gForceAbove1 * 15);
+  h.bpDiastolic = Math.round(80 + stressFactor * 30 + gForceAbove1 * 8);
 
   // ---- DERIVED CONDITIONS ----
-  const anyInjured = [b.head, b.torso, b.leftArm, b.rightArm, b.leftLeg, b.rightLeg].some(v => v < 70);
+  const anyInjured = b.head < 70 || b.torso < 70 || b.leftArm < 70 || b.rightArm < 70 || b.leftLeg < 70 || b.rightLeg < 70;
   if (anyInjured) addCondition(member, 'injured');
   else removeCondition(member, 'injured');
 
@@ -511,10 +513,8 @@ export function medbayHealTick(member) {
   member.consciousness = clamp(member.consciousness + 0.8, 10, cap);
 
   // Check if fully healed
-  const parts = [b.head, b.torso, b.leftArm, b.rightArm, b.leftLeg, b.rightLeg];
-  const bodyOk = parts.every(v => v >= 99.5);
-  const heartOk = h.health >= 99.5;
-  return bodyOk && heartOk;
+  const bodyOk = b.head >= 99.5 && b.torso >= 99.5 && b.leftArm >= 99.5 && b.rightArm >= 99.5 && b.leftLeg >= 99.5 && b.rightLeg >= 99.5;
+  return bodyOk && h.health >= 99.5;
 }
 
 // ---- THRUST CONTROL ----

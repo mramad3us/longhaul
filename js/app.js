@@ -39,6 +39,12 @@ let tacZoomLevel = 0;
 let flipAnimFrame = null;
 let crewMoveFrame = null;
 
+// ---- DOM CACHES (populated by initHudCache) ----
+let _hud = {};
+let _resCache = {};    // keyed by resource key, e.g. _resCache['fuel'] = { val, bar, item }
+let _solarCache = {};
+let _thrustSliderActive = false;
+
 // ---- FPS COUNTER ----
 let fpsEnabled = false;
 let _fpsFrames = 0;
@@ -745,7 +751,7 @@ function renderSolarTab(forceRender) {
     }
   }
 
-  // Throttle SVG re-render to every 30 ticks (~0.5s at 60fps) unless forced
+  // Throttle SVG re-render to every 60 ticks (~1s at 60fps) unless forced
   solarRenderCounter++;
   if (forceRender || solarRenderCounter % 60 === 0) {
     renderSolarSystem(solarScreen, gameState, routeInfo);
@@ -753,21 +759,21 @@ function renderSolarTab(forceRender) {
 
   // Update info bar every tick (cheap DOM updates)
   const ms = getMapState();
-  const velEl = document.getElementById('tac-modal-velocity');
-  const headEl = document.getElementById('tac-modal-heading');
-  const thrEl = document.getElementById('tac-modal-thrust');
-  const plotBtn = document.getElementById('route-plot-btn');
+  const velEl = _hud.tacModalVel;
+  const headEl = _hud.tacModalHead;
+  const thrEl = _hud.tacModalThr;
+  const plotBtn = _solarCache.routePlotBtn;
   const phys = gameState.physics;
 
   // Active route status bar
-  const statusBar = document.getElementById('route-status-bar');
+  const statusBar = _solarCache.routeStatusBar;
   const progress = getRouteProgress();
   if (progress) {
     if (statusBar) statusBar.style.display = 'flex';
-    const destEl = document.getElementById('route-status-dest');
-    const phaseEl = document.getElementById('route-status-phase');
-    const fillEl = document.getElementById('route-status-fill');
-    const etaEl = document.getElementById('route-status-eta');
+    const destEl = _solarCache.routeStatusDest;
+    const phaseEl = _solarCache.routeStatusPhase;
+    const fillEl = _solarCache.routeStatusFill;
+    const etaEl = _solarCache.routeStatusEta;
     if (destEl) destEl.textContent = `→ ${progress.destinationName}`;
     if (phaseEl) phaseEl.textContent = progress.currentPhase?.type?.toUpperCase() || '';
     if (fillEl) fillEl.style.width = `${(progress.fraction * 100).toFixed(1)}%`;
@@ -781,7 +787,7 @@ function renderSolarTab(forceRender) {
   if (velEl) velEl.textContent = `VEL ${formatVelocity(getRelativeVelocity(phys))}`;
 
   // Show body selection info or default zoom/pos display
-  const zoomBtn = document.getElementById('route-zoom-btn');
+  const zoomBtn = _solarCache.routeZoomBtn;
   if (selBody) {
     const body = findBody(selBody.name);
     if (body && headEl) {
@@ -794,7 +800,7 @@ function renderSolarTab(forceRender) {
     if (zoomBtn) zoomBtn.style.display = '';
     if (plotBtn) plotBtn.style.display = getActiveRoute() ? 'none' : '';
     if (thrEl) thrEl.textContent = '';
-    const sepThr = document.getElementById('tac-sep-thrust');
+    const sepThr = _solarCache.tacSepThrust;
     if (sepThr) sepThr.style.display = 'none';
   } else {
     if (headEl) headEl.textContent = `ZOOM ${ms.zoom.toFixed(ms.zoom < 1 ? 3 : 1)} AU`;
@@ -805,7 +811,7 @@ function renderSolarTab(forceRender) {
         thrEl.textContent = `POS ${dist.toFixed(2)} AU`;
       }
     }
-    const sepThr = document.getElementById('tac-sep-thrust');
+    const sepThr = _solarCache.tacSepThrust;
     if (sepThr) sepThr.style.display = '';
     if (zoomBtn) zoomBtn.style.display = 'none';
     if (plotBtn) plotBtn.style.display = 'none';
@@ -815,8 +821,8 @@ function renderSolarTab(forceRender) {
 // ---- ROUTE PLANNING UI ----
 
 function handleBodySelect(body) {
-  const plotBtn = document.getElementById('route-plot-btn');
-  const zoomBtn = document.getElementById('route-zoom-btn');
+  const plotBtn = _solarCache.routePlotBtn;
+  const zoomBtn = _solarCache.routeZoomBtn;
   if (body) {
     if (zoomBtn) zoomBtn.style.display = '';
     if (plotBtn) plotBtn.style.display = getActiveRoute() ? 'none' : '';
@@ -1116,12 +1122,9 @@ function renderTacModal() {
 
   // Update info bar
   const vel = getRelativeVelocity(phys);
-  const velEl = document.getElementById('tac-modal-velocity');
-  const headEl = document.getElementById('tac-modal-heading');
-  const thrEl = document.getElementById('tac-modal-thrust');
-  if (velEl) velEl.textContent = `VEL ${formatVelocity(vel)}`;
-  if (headEl) headEl.textContent = phys.flipping ? 'FLIPPING' : (vel >= 0 ? 'PROGRADE' : 'RETROGRADE');
-  if (thrEl) thrEl.textContent = phys.thrustActive ? `BURN ${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G` : 'COAST';
+  if (_hud.tacModalVel) _hud.tacModalVel.textContent = `VEL ${formatVelocity(vel)}`;
+  if (_hud.tacModalHead) _hud.tacModalHead.textContent = phys.flipping ? 'FLIPPING' : (vel >= 0 ? 'PROGRADE' : 'RETROGRADE');
+  if (_hud.tacModalThr) _hud.tacModalThr.textContent = phys.thrustActive ? `BURN ${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G` : 'COAST';
 }
 
 // ---- RCS THRUSTER VISUALS (main view) ----
@@ -1875,7 +1878,7 @@ function initResourcePanel() {
 let prevResourceLevels = {};
 
 function updateResourcePanel(state) {
-  document.getElementById('res-val-crew').textContent = state.ship.crew.length;
+  _resCache._crew.textContent = state.ship.crew.length;
 
   let hasCritical = false;
   const alerts = [];
@@ -1885,9 +1888,10 @@ function updateResourcePanel(state) {
     if (!res) return;
 
     const pct = (res.current / res.max) * 100;
-    const valEl = document.getElementById(`res-val-${cfg.key}`);
-    const barEl = document.getElementById(`res-bar-${cfg.key}`);
-    const itemEl = document.getElementById(`resource-${cfg.key}`);
+    const cached = _resCache[cfg.key];
+    const valEl = cached.val;
+    const barEl = cached.bar;
+    const itemEl = cached.item;
 
     valEl.textContent = `${Math.round(res.current)} / ${res.max}`;
     barEl.style.width = `${pct}%`;
@@ -1919,7 +1923,7 @@ function updateResourcePanel(state) {
   });
 
   // Alert border
-  const alertBorder = document.getElementById('alert-border');
+  const alertBorder = _resCache._alertBorder;
   if (alertBorder) {
     if (hasCritical) {
       alertBorder.classList.add('critical');
@@ -1992,64 +1996,115 @@ function updateSpeedUI(speed) {
 
 // ---- HUD UPDATE ----
 
+function initHudCache() {
+  // HUD elements
+  _hud = {
+    date:         document.getElementById('hud-date'),
+    time:         document.getElementById('hud-time'),
+    shipName:     document.getElementById('hud-ship-name'),
+    infoTorch:    document.getElementById('info-torch'),
+    infoThrust:   document.getElementById('info-thrust'),
+    infoHeading:  document.getElementById('info-heading'),
+    infoVelocity: document.getElementById('info-velocity'),
+    infoMass:     document.getElementById('info-mass'),
+    thrustToggle: document.getElementById('thrust-toggle'),
+    thrustStatus: document.getElementById('thrust-status'),
+    thrustSlider: document.getElementById('thrust-slider'),
+    enginePlume:  document.getElementById('engine-plume'),
+    flipHeading:  document.getElementById('flip-heading'),
+    tacModalVel:  document.getElementById('tac-modal-velocity'),
+    tacModalHead: document.getElementById('tac-modal-heading'),
+    tacModalThr:  document.getElementById('tac-modal-thrust'),
+    shipContainer: document.getElementById('ship-container'),
+    tacScreen:    document.getElementById('tac-screen'),
+  };
+
+  // Resource panel elements
+  _resCache = {};
+  _resCache._crew = document.getElementById('res-val-crew');
+  _resCache._alertBorder = document.getElementById('alert-border');
+  RESOURCE_CONFIG.forEach(cfg => {
+    _resCache[cfg.key] = {
+      val:  document.getElementById(`res-val-${cfg.key}`),
+      bar:  document.getElementById(`res-bar-${cfg.key}`),
+      item: document.getElementById(`resource-${cfg.key}`),
+    };
+  });
+
+  // Solar tab info bar elements
+  _solarCache = {
+    routeZoomBtn:   document.getElementById('route-zoom-btn'),
+    routePlotBtn:   document.getElementById('route-plot-btn'),
+    routeStatusBar: document.getElementById('route-status-bar'),
+    routeStatusDest: document.getElementById('route-status-dest'),
+    routeStatusPhase: document.getElementById('route-status-phase'),
+    routeStatusFill: document.getElementById('route-status-fill'),
+    routeStatusEta: document.getElementById('route-status-eta'),
+    tacSepThrust:   document.getElementById('tac-sep-thrust'),
+  };
+
+  // Track thrust slider active state via pointer events instead of :active matches
+  _thrustSliderActive = false;
+  if (_hud.thrustSlider) {
+    _hud.thrustSlider.addEventListener('pointerdown', () => { _thrustSliderActive = true; });
+    _hud.thrustSlider.addEventListener('pointerup', () => { _thrustSliderActive = false; });
+    _hud.thrustSlider.addEventListener('pointercancel', () => { _thrustSliderActive = false; });
+  }
+}
+
 function updateHud(state) {
-  document.getElementById('hud-date').textContent = formatDate(state.time);
-  document.getElementById('hud-time').textContent = formatTime(state.time);
-  document.getElementById('hud-ship-name').textContent = state.ship.name;
+  _hud.date.textContent = formatDate(state.time);
+  _hud.time.textContent = formatTime(state.time);
+  _hud.shipName.textContent = state.ship.name;
 
   const phys = state.physics;
   const hasGravity = state.navigation.thrust > 0;
 
   // Ship status info
-  document.getElementById('info-torch').textContent =
+  _hud.infoTorch.textContent =
     phys.thrustActive ? `BURNING (${(phys.thrustLevel * phys.maxThrust).toFixed(1)}g)` : 'CUTOFF';
-  document.getElementById('info-torch').style.color =
+  _hud.infoTorch.style.color =
     phys.thrustActive ? '#FFFFFF' : '';
-  document.getElementById('info-thrust').textContent =
+  _hud.infoThrust.textContent =
     hasGravity ? `${state.navigation.thrust.toFixed(1)}g` : '0.0g';
   const relVelForHeading = getRelativeVelocity(phys);
   const headingText = phys.flipping ? 'FLIPPING' :
     (relVelForHeading >= 0 ? 'PROGRADE' : 'RETROGRADE');
-  document.getElementById('info-heading').textContent = headingText;
-  document.getElementById('info-heading').style.color =
+  _hud.infoHeading.textContent = headingText;
+  _hud.infoHeading.style.color =
     phys.flipping ? '#E2A355' : '';
-  const flipHeadingEl = document.getElementById('flip-heading');
-  if (flipHeadingEl && !phys.flipping) {
-    flipHeadingEl.textContent = relVelForHeading >= 0 ? 'PRO' : 'RETRO';
+  if (_hud.flipHeading && !phys.flipping) {
+    _hud.flipHeading.textContent = relVelForHeading >= 0 ? 'PRO' : 'RETRO';
   }
   // Velocity displayed relative to ship heading (camera follows ship)
-  document.getElementById('info-velocity').textContent =
+  _hud.infoVelocity.textContent =
     formatVelocity(getRelativeVelocity(phys));
-  document.getElementById('info-mass').textContent =
+  _hud.infoMass.textContent =
     `${(phys.shipMass / 1000).toFixed(1)} t`;
 
   // Thrust button + slider state
-  const thrustBtn = document.getElementById('thrust-toggle');
-  const thrustStatus = document.getElementById('thrust-status');
-  const thrustSlider = document.getElementById('thrust-slider');
   if (phys.thrustActive) {
-    thrustBtn.classList.add('active');
-    thrustStatus.textContent = `${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G`;
+    _hud.thrustToggle.classList.add('active');
+    _hud.thrustStatus.textContent = `${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G`;
   } else {
-    thrustBtn.classList.remove('active');
-    thrustStatus.textContent = 'OFF';
+    _hud.thrustToggle.classList.remove('active');
+    _hud.thrustStatus.textContent = 'OFF';
   }
   // Sync slider if physics changed thrust externally (fuel out, etc.)
-  if (thrustSlider && !thrustSlider.matches(':active')) {
-    thrustSlider.value = phys.thrustLevel * 100;
+  if (_hud.thrustSlider && !_thrustSliderActive) {
+    _hud.thrustSlider.value = phys.thrustLevel * 100;
     updateThrustSliderUI(phys.thrustLevel);
   }
 
   // Engine plume visibility + intensity scaling with thrust level
-  const plume = document.getElementById('engine-plume');
-  if (plume) {
+  if (_hud.enginePlume) {
     if (!phys.thrustActive) {
-      plume.setAttribute('display', 'none');
+      _hud.enginePlume.setAttribute('display', 'none');
     } else {
-      plume.setAttribute('display', 'inline');
+      _hud.enginePlume.setAttribute('display', 'inline');
       // Scale opacity: min thrust = 0.4, max thrust = 1.0
       const intensity = 0.4 + phys.thrustLevel * 0.6;
-      plume.setAttribute('opacity', intensity.toFixed(2));
+      _hud.enginePlume.setAttribute('opacity', intensity.toFixed(2));
     }
   }
 
@@ -2063,9 +2118,8 @@ function updateHud(state) {
     lastThrustActive = phys.thrustActive;
     lastTacVelocityBucket = velBucket;
     lastOrienting = !!phys.orienting;
-    const tacScreen = document.getElementById('tac-screen');
-    if (tacScreen) {
-      renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting);
+    if (_hud.tacScreen) {
+      renderTacView(state.ship, _hud.tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting);
     }
     // Keep modal tac in sync (full re-render on significant change)
     if (tacModalOpen && tacModalTab === 'tactical') renderTacModal();
@@ -2094,19 +2148,16 @@ function updateHud(state) {
   if (tacModalOpen) {
     if (tacModalTab === 'tactical') {
       const vel = getRelativeVelocity(phys);
-      const velEl = document.getElementById('tac-modal-velocity');
-      const headEl = document.getElementById('tac-modal-heading');
-      const thrEl = document.getElementById('tac-modal-thrust');
-      if (velEl) velEl.textContent = `VEL ${formatVelocity(vel)}`;
-      if (headEl) headEl.textContent = phys.flipping ? 'FLIPPING' : (vel >= 0 ? 'PROGRADE' : 'RETROGRADE');
-      if (thrEl) thrEl.textContent = phys.thrustActive ? `BURN ${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G` : 'COAST';
+      if (_hud.tacModalVel) _hud.tacModalVel.textContent = `VEL ${formatVelocity(vel)}`;
+      if (_hud.tacModalHead) _hud.tacModalHead.textContent = phys.flipping ? 'FLIPPING' : (vel >= 0 ? 'PROGRADE' : 'RETROGRADE');
+      if (_hud.tacModalThr) _hud.tacModalThr.textContent = phys.thrustActive ? `BURN ${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G` : 'COAST';
     } else if (tacModalTab === 'solar') {
       renderSolarTab();
     }
   }
 
   // Update crew visual states from physics
-  const shipContainer = document.getElementById('ship-container');
+  const shipContainer = _hud.shipContainer;
   if (shipContainer) {
     // Tag crew with location flags for sprite display
     gameState.ship.crew.forEach(c => {
@@ -2233,6 +2284,9 @@ function startGame() {
 
   // Start particles
   initParticles();
+
+  // Cache all HUD/resource/solar DOM refs for per-frame access
+  initHudCache();
 
   // Update HUD
   updateHud(gameState);

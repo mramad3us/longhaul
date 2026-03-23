@@ -27,6 +27,12 @@ const BASE_SPEED = 0.5;
 // Per-crew movement state
 const moveState = new Map();
 
+// Cached DOM element references (crew id → DOM element), cleared on init
+const _crewElements = new Map();
+
+// Cached deckStartY results (deck index → cumulative Y offset), cleared on init
+let _deckYCache = [];
+
 // ---- MISSION TYPES ----
 // null          = patrolling (default)
 // 'recover'     = walk self to medbay, heal there
@@ -122,12 +128,14 @@ function pickPatrolCorners(floorTiles) {
   return corners.length >= 2 ? corners : [floorTiles[0], floorTiles[Math.floor(floorTiles.length / 2)]];
 }
 
-// Cumulative tile-row offset for a given deck index
+// Cumulative tile-row offset for a given deck index (cached)
 function deckStartY(ship, deckIdx) {
+  if (_deckYCache[deckIdx] !== undefined) return _deckYCache[deckIdx];
   let y = 0;
   for (let i = 0; i < deckIdx; i++) {
     y += ship.decks[i].tiles.length + DECK_GAP;
   }
+  _deckYCache[deckIdx] = y;
   return y;
 }
 
@@ -195,7 +203,11 @@ function snapTo(ms, member, pos) {
 }
 
 function updateCrewVisual(ship, ms, member) {
-  const el = document.querySelector(`[data-crew-id="${member.id}"]`);
+  let el = _crewElements.get(member.id);
+  if (el === undefined || (el && !el.isConnected)) {
+    el = document.querySelector(`[data-crew-id="${member.id}"]`);
+    _crewElements.set(member.id, el);
+  }
   if (el) {
     const dsy = deckStartY(ship, ms.deckIdx);
     const px = OFFSET_X + ms.x * TILE_SIZE;
@@ -208,6 +220,8 @@ function updateCrewVisual(ship, ms, member) {
 
 export function initCrewMovement(ship) {
   moveState.clear();
+  _crewElements.clear();
+  _deckYCache = [];
 
   const deckFloors = ship.decks.map(d => getFloorTiles(d));
 
@@ -536,6 +550,8 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
   const speedScale = [0, 1, 4, 10][gameSpeed] || 0;
   const dt = Math.min(deltaSec * speedScale, 0.5);
 
+  const crewById = new Map(ship.crew.map(c => [c.id, c]));
+
   ship.crew.forEach(member => {
     if (member.dead) return;
 
@@ -661,7 +677,7 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
     if (ms.mission === 'rescue' && ms.rescueTargetId != null) {
       if (ms.pause > 0) { ms.pause -= dt; updateCrewVisual(ship, ms, member); return; }
 
-      const patient = ship.crew.find(c => c.id === ms.rescueTargetId);
+      const patient = crewById.get(ms.rescueTargetId);
       if (!patient || patient.dead) {
         // Patient died — abort
         cancelMission(member.id);
@@ -724,7 +740,7 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
       const arrived = moveToward(ms, ms.missionTarget, speed * 0.5, dt);
 
       // Drag patient along
-      const patient = ship.crew.find(c => c.id === ms.rescueTargetId);
+      const patient = crewById.get(ms.rescueTargetId);
       if (patient && !patient.dead) {
         const patientMs = moveState.get(patient.id);
         if (patientMs) {

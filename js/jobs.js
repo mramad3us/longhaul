@@ -206,11 +206,27 @@ export function clearJobs() {
 export function generateAutoJobs(ship, physics, devMode, lsEquipment, gameState) {
   const logs = [];
 
+  // Build job index Set for O(1) lookups instead of scanning jobQueue each time
+  const jobIndex = new Set();
+  for (let i = 0; i < jobQueue.length; i++) {
+    const j = jobQueue[i];
+    if (j.status === 'pending' || j.status === 'assigned') {
+      if (j.targetCrewId != null) jobIndex.add(j.type + ':' + j.targetCrewId);
+      if (j.target && j.target.deckIdx != null) jobIndex.add(j.type + ':deck:' + j.target.deckIdx);
+    }
+  }
+
+  // Build crewById Map for O(1) crew lookups
+  const crewById = new Map();
+  for (let i = 0; i < ship.crew.length; i++) {
+    crewById.set(ship.crew[i].id, ship.crew[i]);
+  }
+
   ship.crew.forEach(member => {
     if (member.dead) return;
 
     // Rescue job for unconscious crew
-    if (member.consciousness <= 10 && !hasJobForTarget(JobType.RESCUE, member.id)) {
+    if (member.consciousness <= 10 && !jobIndex.has(JobType.RESCUE + ':' + member.id)) {
       const job = createJob({
         type: JobType.RESCUE,
         priority: JobPriority.CRITICAL,
@@ -222,7 +238,7 @@ export function generateAutoJobs(ship, physics, devMode, lsEquipment, gameState)
 
     // First aid for critical crew (non-unconscious)
     if (member.conditions.includes('critical') && member.consciousness > 10 &&
-        !hasJobForTarget(JobType.FIRST_AID, member.id)) {
+        !jobIndex.has(JobType.FIRST_AID + ':' + member.id)) {
       const job = createJob({
         type: JobType.FIRST_AID,
         priority: JobPriority.CRITICAL,
@@ -241,7 +257,7 @@ export function generateAutoJobs(ship, physics, devMode, lsEquipment, gameState)
     ship.crew.forEach(member => {
       if (member.dead || member.consciousness <= 10) return;
       // Don't create if already has a secure-burn job
-      if (hasJobForTarget(JobType.SECURE_FOR_BURN, member.id)) return;
+      if (jobIndex.has(JobType.SECURE_FOR_BURN + ':' + member.id)) return;
       const job = createJob({
         type: JobType.SECURE_FOR_BURN,
         priority: JobPriority.HIGH,
@@ -274,7 +290,7 @@ export function generateAutoJobs(ship, physics, devMode, lsEquipment, gameState)
     Object.entries(lsEquipment).forEach(([deckIdxStr, eq]) => {
       const deckIdx = parseInt(deckIdxStr);
       if (eq.enabled !== false && (eq.status === 'failed' || eq.status === 'degraded') &&
-          !hasJobForDeck(JobType.REPAIR_LS, deckIdx)) {
+          !jobIndex.has(JobType.REPAIR_LS + ':deck:' + deckIdx)) {
         const deckName = ship.decks[deckIdx]?.name || `Deck ${deckIdx}`;
         const job = createJob({
           type: JobType.REPAIR_LS,
@@ -292,7 +308,7 @@ export function generateAutoJobs(ship, physics, devMode, lsEquipment, gameState)
     ship.crew.forEach(member => {
       if (member.dead || member.consciousness <= 10) return;
       if (member.evaSuit && member.evaSuit.wearing) return; // already suited
-      if (hasJobForTarget(JobType.EQUIP_EVA, member.id)) return; // already has job
+      if (jobIndex.has(JobType.EQUIP_EVA + ':' + member.id)) return; // already has job
 
       const deck = ship.decks[member.deck];
       if (!deck || !deck.atmosphere) return;
@@ -321,7 +337,7 @@ export function generateAutoJobs(ship, physics, devMode, lsEquipment, gameState)
     jobQueue.forEach(j => {
       if (j.type !== JobType.EQUIP_EVA) return;
       if (j.status !== 'pending' && j.status !== 'assigned') return;
-      const member = ship.crew.find(c => c.id === j.targetCrewId);
+      const member = crewById.get(j.targetCrewId);
       if (!member) return;
       const deck = ship.decks[member.deck];
       if (!deck || !deck.atmosphere) return;

@@ -217,11 +217,23 @@ export function lifeSupportTick(gameState) {
   const res = gameState.resources;
   const lsEquip = gameState.lsEquipment;
 
+  // --- PRE-BUILD CREW BY DECK MAP ---
+  const crewByDeck = new Map();
+  for (let i = 0; i < ship.crew.length; i++) {
+    const c = ship.crew[i];
+    if (!c.dead && !(c.evaSuit && c.evaSuit.wearing)) {
+      let arr = crewByDeck.get(c.deck);
+      if (!arr) { arr = []; crewByDeck.set(c.deck, arr); }
+      arr.push(c);
+    }
+  }
+
   // --- SHIP-WIDE LS CHECK ---
   // Any working LS module services the entire ship's atmosphere
   let shipHasWorkingLS = false;
   let bestLSEfficiency = 0;
-  for (const [, eq] of Object.entries(lsEquip)) {
+  for (const key in lsEquip) {
+    const eq = lsEquip[key];
     if (eq.enabled !== false && (eq.status === 'operational' || eq.status === 'patched')) {
       shipHasWorkingLS = true;
       const eff = eq.status === 'patched' ? PATCH_EFFICIENCY : 1.0;
@@ -264,10 +276,8 @@ export function lifeSupportTick(gameState) {
     if (isVacuum) return; // nothing more to do in vacuum
 
     // 3. CREW BREATHING — consume O2, produce CO2
-    const crewInDeck = ship.crew.filter(c =>
-      !c.dead && c.deck === di && !(c.evaSuit && c.evaSuit.wearing)
-    );
-    const breathingCount = crewInDeck.length;
+    const crewInDeck = crewByDeck.get(di);
+    const breathingCount = crewInDeck ? crewInDeck.length : 0;
 
     if (breathingCount > 0 && atmo.volume > 0) {
       // Air density at current pressure (proportional to sea-level)
