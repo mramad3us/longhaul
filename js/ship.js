@@ -573,22 +573,50 @@ export function renderTacView(ship, container, thrustActive) {
   `;
   svgEl.appendChild(chGroup);
 
-  // Ship outline — tiny simplified silhouette
-  const shipW = 8; // pixels wide
-  const shipH = 20; // pixels tall
-  const shipX = cx - shipW / 2;
+  // Ship outline — actual hull path scaled down to fit tac view
+  const deckGapTac = 1;
+  const hullPath = buildHullPath(ship, 0, 0, deckGapTac);
 
-  // Simplified ship body
+  // Compute the hull bounding box from ship data
+  const maxTileCols = Math.max(...ship.decks.map(d => d.tiles[0].length));
+  const totalTileRows = ship.decks.reduce((sum, d) => sum + d.tiles.length, 0);
+  const totalWithGaps = totalTileRows + (ship.decks.length - 1) * deckGapTac;
+  const hullRawW = maxTileCols * TILE_SIZE;
+  const hullRawH = totalWithGaps * TILE_SIZE;
+
+  // Scale to fit roughly 20px wide in tac view (small but recognizable)
+  const targetW = 16;
+  const scaleFactor = targetW / hullRawW;
+  const shipH = hullRawH * scaleFactor;
+
   const shipGroup = document.createElementNS(SVG_NS, 'g');
-  shipGroup.innerHTML = `
-    <!-- Bow (pointed top) -->
-    <polygon points="${cx},${shipY - shipH / 2} ${shipX},${shipY - shipH / 2 + 4} ${shipX + shipW},${shipY - shipH / 2 + 4}" fill="#2D5A6A" stroke="#3D7A8A" stroke-width="0.5"/>
-    <!-- Hull body -->
-    <rect x="${shipX}" y="${shipY - shipH / 2 + 4}" width="${shipW}" height="${shipH - 6}" fill="#1A2A3A" stroke="#2D5A6A" stroke-width="0.5"/>
-    <!-- Stern (slightly tapered) -->
-    <polygon points="${shipX},${shipY + shipH / 2 - 2} ${shipX + 1},${shipY + shipH / 2} ${shipX + shipW - 1},${shipY + shipH / 2} ${shipX + shipW},${shipY + shipH / 2 - 2}" fill="#1A2A3A" stroke="#2D5A6A" stroke-width="0.5"/>
-    <!-- Ship label dot -->
-    <rect x="${cx - 1}" y="${shipY - 1}" width="2" height="2" fill="#4FD1C5" opacity="0.8">
+  if (hullPath) {
+    // Transform: scale down and translate so hull is centered at (cx, cy)
+    const tx = cx - (hullRawW * scaleFactor) / 2;
+    const ty = cy - (hullRawH * scaleFactor) / 2;
+
+    const hullEl = document.createElementNS(SVG_NS, 'path');
+    hullEl.setAttribute('d', hullPath);
+    hullEl.setAttribute('fill', '#0C1420');
+    hullEl.setAttribute('stroke', '#2D5A6A');
+    hullEl.setAttribute('stroke-width', `${1 / scaleFactor}`);
+    hullEl.setAttribute('transform', `translate(${tx},${ty}) scale(${scaleFactor})`);
+    shipGroup.appendChild(hullEl);
+
+    // Glow outline
+    const hullGlow = document.createElementNS(SVG_NS, 'path');
+    hullGlow.setAttribute('d', hullPath);
+    hullGlow.setAttribute('fill', 'none');
+    hullGlow.setAttribute('stroke', '#3D7A8A');
+    hullGlow.setAttribute('stroke-width', `${2 / scaleFactor}`);
+    hullGlow.setAttribute('opacity', '0.3');
+    hullGlow.setAttribute('transform', `translate(${tx},${ty}) scale(${scaleFactor})`);
+    shipGroup.appendChild(hullGlow);
+  }
+
+  // Blinking center dot
+  shipGroup.innerHTML += `
+    <rect x="${cx - 1}" y="${cy - 1}" width="2" height="2" fill="#4FD1C5" opacity="0.8">
       <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
     </rect>
   `;
@@ -600,7 +628,7 @@ export function renderTacView(ship, container, thrustActive) {
   plumeGroup.setAttribute('display', thrustActive ? 'inline' : 'none');
 
   if (thrustActive) {
-    const plumeStartY = shipY + shipH / 2;
+    const plumeStartY = cy + shipH / 2;
     const plumeLen = viewH * 2; // massive — extends far past the tac screen
     const maxPlumeW = viewW * 0.7; // plume fills most of the tac view width
 
@@ -670,8 +698,8 @@ export function renderTacView(ship, container, thrustActive) {
 
   // Ship label
   const label = document.createElementNS(SVG_NS, 'text');
-  label.setAttribute('x', cx + shipW / 2 + 4);
-  label.setAttribute('y', shipY + 2);
+  label.setAttribute('x', cx + targetW / 2 + 4);
+  label.setAttribute('y', cy + 2);
   label.setAttribute('font-family', '"Press Start 2P", monospace');
   label.setAttribute('font-size', '4');
   label.setAttribute('fill', '#3A4E62');
