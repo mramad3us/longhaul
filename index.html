@@ -353,6 +353,7 @@
             <span id="tac-modal-velocity"></span>
             <span id="tac-modal-heading"></span>
             <span id="tac-modal-thrust"></span>
+            <button class="route-zoom-btn" id="route-zoom-btn" style="display:none">ZOOM</button>
             <button class="route-plot-btn" id="route-plot-btn" style="display:none">PLOT ROUTE</button>
           </div>
 
@@ -376,15 +377,20 @@
             </div>
           </div>
 
-          <!-- Active Route Status Bar -->
+          <!-- Active Route Status Bar (clickable to expand) -->
           <div class="route-status-bar" id="route-status-bar" style="display:none">
-            <span class="route-status-dest" id="route-status-dest"></span>
-            <span class="route-status-phase" id="route-status-phase"></span>
-            <div class="route-status-progress">
-              <div class="route-status-fill" id="route-status-fill"></div>
+            <div class="route-status-summary" id="route-status-summary">
+              <span class="route-status-dest" id="route-status-dest"></span>
+              <span class="route-status-phase" id="route-status-phase"></span>
+              <div class="route-status-progress">
+                <div class="route-status-fill" id="route-status-fill"></div>
+              </div>
+              <span class="route-status-eta" id="route-status-eta"></span>
+              <button class="route-abort-btn" id="route-abort-btn">ABORT</button>
             </div>
-            <span class="route-status-eta" id="route-status-eta"></span>
-            <button class="route-abort-btn" id="route-abort-btn">ABORT</button>
+            <div class="route-detail-panel" id="route-detail-panel" style="display:none">
+              <!-- Populated by JS -->
+            </div>
           </div>
         </div>
       </div>

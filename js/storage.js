@@ -60,7 +60,8 @@ function promisify(request) {
 export async function saveGame(gameState, saveName = 'Quicksave') {
   await openDB();
   const saveData = {
-    id: `save_${Date.now()}`,
+    // Autosaves use a fixed ID so put() overwrites the previous one
+    id: saveName === 'Autosave' ? 'autosave' : `save_${Date.now()}`,
     name: saveName,
     timestamp: Date.now(),
     version: VERSION,

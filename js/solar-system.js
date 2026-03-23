@@ -532,6 +532,23 @@ export function renderSolarSystem(container, gameState, routeInfo) {
     }
   }
 
+  // ---- HOVER RING ----
+  if (mapState.hoveredBody && (!mapState.selectedBody || mapState.hoveredBody !== mapState.selectedBody.name)) {
+    const hbp = bodyPositions.find(b => b.name === mapState.hoveredBody);
+    if (hbp) {
+      const hR = Math.max(hbp.r * 2, mapState.zoom * 0.007);
+      const hoverRing = document.createElementNS(SVG_NS, 'circle');
+      hoverRing.setAttribute('cx', hbp.x);
+      hoverRing.setAttribute('cy', hbp.y);
+      hoverRing.setAttribute('r', hR);
+      hoverRing.setAttribute('fill', 'none');
+      hoverRing.setAttribute('stroke', '#4FD1C5');
+      hoverRing.setAttribute('stroke-width', mapState.zoom * 0.001);
+      hoverRing.setAttribute('opacity', '0.4');
+      svg.appendChild(hoverRing);
+    }
+  }
+
   // ---- ROUTE LINE ----
   if (routeInfo && gameState?.shipPosition) {
     const sp = gameState.shipPosition;
@@ -640,6 +657,32 @@ export function renderSolarSystem(container, gameState, routeInfo) {
   return svg;
 }
 
+// ---- HELPERS: screen → world coordinate conversion ----
+
+function screenToWorld(e, container) {
+  const rect = container.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) / rect.width;
+  const my = (e.clientY - rect.top) / rect.height;
+  const aspect = rect.width / rect.height;
+  const halfW = mapState.zoom * aspect;
+  const halfH = mapState.zoom;
+  return {
+    wx: mapState.cx - halfW + mx * halfW * 2,
+    wy: mapState.cy - halfH + my * halfH * 2,
+  };
+}
+
+function findNearestBody(wx, wy) {
+  const threshold = mapState.zoom * 0.03;
+  let best = null;
+  let bestD = threshold;
+  bodyPositions.forEach(bp => {
+    const d = Math.sqrt((bp.x - wx) * (bp.x - wx) + (bp.y - wy) * (bp.y - wy));
+    if (d < bestD) { bestD = d; best = bp; }
+  });
+  return best;
+}
+
 // ---- INTERACTION HANDLERS ----
 
 export function initSolarMapInteraction(container) {
@@ -671,18 +714,36 @@ export function initSolarMapInteraction(container) {
 
   // Mouse drag pan — track drag distance for click vs drag detection
   let dragDist = 0;
+  let mouseDownPos = null;
 
   container.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     mapState.dragging = true;
     dragDist = 0;
+    mouseDownPos = { x: e.clientX, y: e.clientY };
     mapState.dragStart = { x: e.clientX, y: e.clientY };
     mapState.dragCenterStart = { x: mapState.cx, y: mapState.cy };
     container.style.cursor = 'grabbing';
   });
 
   window.addEventListener('mousemove', (e) => {
-    if (!mapState.dragging) return;
+    if (!mapState.dragging) {
+      // Hover detection — change cursor when over a selectable body
+      const rect = container.getBoundingClientRect();
+      if (e.clientX >= rect.left && e.clientX <= rect.right &&
+          e.clientY >= rect.top && e.clientY <= rect.bottom) {
+        const { wx, wy } = screenToWorld(e, container);
+        const body = findNearestBody(wx, wy);
+        if (body) {
+          mapState.hoveredBody = body.name;
+          container.style.cursor = 'pointer';
+        } else {
+          mapState.hoveredBody = null;
+          container.style.cursor = 'grab';
+        }
+      }
+      return;
+    }
     const rect = container.getBoundingClientRect();
     const aspect = rect.width / rect.height;
     const dx = (e.clientX - mapState.dragStart.x) / rect.width * mapState.zoom * aspect * 2;
@@ -692,46 +753,35 @@ export function initSolarMapInteraction(container) {
     dragDist += Math.abs(e.movementX) + Math.abs(e.movementY);
   });
 
-  window.addEventListener('mouseup', () => {
-    if (mapState.dragging) {
-      mapState.dragging = false;
+  // Use mouseup for selection instead of click — re-renders during drag can
+  // remove the SVG element that received mousedown, which kills the click event.
+  window.addEventListener('mouseup', (e) => {
+    if (!mapState.dragging) return;
+    mapState.dragging = false;
+
+    // Was it a click (not a drag)?
+    if (dragDist <= 5 && mouseDownPos) {
+      const { wx, wy } = screenToWorld(e, container);
+      const best = findNearestBody(wx, wy);
+
+      if (best) {
+        mapState.selectedBody = { name: best.name, type: best.type, x: best.x, y: best.y };
+      } else {
+        mapState.selectedBody = null;
+      }
+      if (onBodySelectCallback) onBodySelectCallback(mapState.selectedBody);
+    }
+
+    mouseDownPos = null;
+    // Restore hover cursor
+    const rect = container.getBoundingClientRect();
+    if (e.clientX >= rect.left && e.clientX <= rect.right &&
+        e.clientY >= rect.top && e.clientY <= rect.bottom) {
+      const { wx, wy } = screenToWorld(e, container);
+      container.style.cursor = findNearestBody(wx, wy) ? 'pointer' : 'grab';
+    } else {
       container.style.cursor = 'grab';
     }
-  });
-
-  // Click-to-select bodies (only if not dragging)
-  container.addEventListener('click', (e) => {
-    if (dragDist > 5) return; // was a drag, not a click
-
-    const rect = container.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) / rect.width;
-    const my = (e.clientY - rect.top) / rect.height;
-    const aspect = rect.width / rect.height;
-    const halfW = mapState.zoom * aspect;
-    const halfH = mapState.zoom;
-    const wx = mapState.cx - halfW + mx * halfW * 2;
-    const wy = mapState.cy - halfH + my * halfH * 2;
-
-    // Find nearest body within click threshold
-    const threshold = mapState.zoom * 0.03; // ~3% of view width
-    let best = null;
-    let bestD = threshold;
-
-    bodyPositions.forEach(bp => {
-      const d = Math.sqrt((bp.x - wx) * (bp.x - wx) + (bp.y - wy) * (bp.y - wy));
-      if (d < bestD) {
-        bestD = d;
-        best = bp;
-      }
-    });
-
-    if (best) {
-      mapState.selectedBody = { name: best.name, type: best.type, x: best.x, y: best.y };
-    } else {
-      mapState.selectedBody = null;
-    }
-
-    if (onBodySelectCallback) onBodySelectCallback(mapState.selectedBody);
   });
 
   container.style.cursor = 'grab';
@@ -752,6 +802,57 @@ export function zoomToPlanet(planetName, gameState, zoomLevel) {
   mapState.cx = pos.x;
   mapState.cy = pos.y;
   mapState.zoom = zoomLevel || planet.a * 0.15;
+}
+
+// Zoom to any body — centers on it and picks a zoom level that shows its moons/context
+export function zoomToBody(bodyName, gameState) {
+  const days = gameState ? gameTimeToDays(gameState.time, gameState.stats) : 0;
+
+  if (bodyName === 'Sol') {
+    mapState.cx = 0;
+    mapState.cy = 0;
+    mapState.zoom = 2.5;
+    return;
+  }
+
+  // Check planets
+  const planet = PLANETS.find(p => p.name === bodyName);
+  if (planet) {
+    const pos = orbitalPos(planet, days);
+    mapState.cx = pos.x;
+    mapState.cy = pos.y;
+    // Zoom level: show moons if it has any, otherwise show orbital context
+    if (planet.moons.length > 0) {
+      const outerMoon = Math.max(...planet.moons.map(m => m.a));
+      mapState.zoom = outerMoon * 3; // show all moons with margin
+    } else {
+      mapState.zoom = planet.a * 0.15;
+    }
+    return;
+  }
+
+  // Check moons — zoom to parent planet's moon system
+  for (const p of PLANETS) {
+    const moon = p.moons.find(m => m.name === bodyName);
+    if (moon) {
+      const pPos = orbitalPos(p, days);
+      mapState.cx = pPos.x;
+      mapState.cy = pPos.y;
+      const outerMoon = Math.max(...p.moons.map(m => m.a));
+      mapState.zoom = outerMoon * 3;
+      return;
+    }
+  }
+
+  // Check asteroids
+  const ast = ASTEROIDS.find(a => a.name === bodyName);
+  if (ast) {
+    const pos = orbitalPos(ast, days);
+    mapState.cx = pos.x;
+    mapState.cy = pos.y;
+    mapState.zoom = 1.5;
+    return;
+  }
 }
 
 export function getMapState() {

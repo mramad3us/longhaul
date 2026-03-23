@@ -16,10 +16,10 @@ import { createGameState, formatDate, formatTime, GameLoop } from './game.js';
 import { renderShip, renderTacView, getOverallHealth } from './ship.js';
 import { VERSION } from './version.js';
 import { toggleThrust, setThrustLevel, startFlip, updateFlip, CrewState, stabilizeCrew } from './physics.js';
-import { initCrewMovement, updateCrewMovement, getCrewMission, isBeingRescued, assignRecoverMission, assignRescueMission, cancelMission, assignSecureBurnMission, releaseSecureBurn, isSeatedInCouch, assignRepairLSMission, isRepairComplete, assignEquipSuitMission, isSuitDonned } from './crew-movement.js';
+import { initCrewMovement, updateCrewMovement, getCrewMission, isBeingRescued, assignRecoverMission, assignRescueMission, cancelMission, assignSecureBurnMission, releaseSecureBurn, isSeatedInCouch, assignRepairLSMission, isRepairComplete, assignEquipSuitMission, isSuitDonned, serializeCrewMovement, restoreCrewMovement } from './crew-movement.js';
 import { generateAutoJobs, clearJobs, getJobQueue, getCrewJobs, completeJob, JobPriority, JobType } from './jobs.js';
 import { getAtmoStatus, getEquipmentStatusLabel, depressurizeCompartment, repressurizeCompartment, quickPatchLS, toggleLS, countSuitsOnDeck, donEvaSuit, removeEvaSuit, findNearestSuitLocker } from './life-support.js';
-import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet, SOLAR_ZOOM_PRESETS, resetMapState, getMapState, setOnBodySelect, getSelectedBody, setSelectedBody } from './solar-system.js';
+import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet, zoomToBody, SOLAR_ZOOM_PRESETS, resetMapState, getMapState, setOnBodySelect, getSelectedBody, setSelectedBody } from './solar-system.js';
 import { findBody, getBodyWorldPos, calculateRoutes, activateRoute, cancelRoute, getActiveRoute, getRouteProgress, formatDuration, formatDeltaV, serializeRoute, deserializeRoute, resetRoute } from './navigation.js';
 
 // ---- STATE ----
@@ -682,8 +682,15 @@ function switchTacTab(tab) {
       initSolarMapInteraction(solarScreen);
       // Re-render on user zoom/pan interaction
       solarScreen.addEventListener('wheel', () => requestAnimationFrame(() => renderSolarTab(true)));
+      let _lastHover = null;
       solarScreen.addEventListener('mousemove', () => {
-        if (getMapState().dragging) requestAnimationFrame(() => renderSolarTab(true));
+        const ms = getMapState();
+        if (ms.dragging) {
+          requestAnimationFrame(() => renderSolarTab(true));
+        } else if (ms.hoveredBody !== _lastHover) {
+          _lastHover = ms.hoveredBody;
+          requestAnimationFrame(() => renderSolarTab(true));
+        }
       });
       solarMapInitialized = true;
     }
@@ -750,14 +757,17 @@ function renderSolarTab(forceRender) {
     if (phaseEl) phaseEl.textContent = progress.currentPhase?.type?.toUpperCase() || '';
     if (fillEl) fillEl.style.width = `${(progress.fraction * 100).toFixed(1)}%`;
     if (etaEl) etaEl.textContent = `ETA ${formatDuration(progress.etaMin)}`;
+    if (routeDetailOpen) updateRouteDetail();
   } else {
     if (statusBar) statusBar.style.display = 'none';
+    routeDetailOpen = false;
   }
 
   if (velEl) velEl.textContent = `VEL ${formatVelocity(getRelativeVelocity(phys))}`;
 
   // Show body selection info or default zoom/pos display
-  if (selBody && !getActiveRoute()) {
+  const zoomBtn = document.getElementById('route-zoom-btn');
+  if (selBody) {
     const body = findBody(selBody.name);
     if (body && headEl) {
       const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
@@ -766,7 +776,8 @@ function renderSolarTab(forceRender) {
       const d = Math.sqrt((dp.x - sp.x) ** 2 + (dp.y - sp.y) ** 2);
       headEl.textContent = `${selBody.name.toUpperCase()} ${d.toFixed(2)} AU`;
     }
-    if (plotBtn) plotBtn.style.display = '';
+    if (zoomBtn) zoomBtn.style.display = '';
+    if (plotBtn) plotBtn.style.display = getActiveRoute() ? 'none' : '';
     if (thrEl) thrEl.textContent = '';
   } else {
     if (headEl) headEl.textContent = `ZOOM ${ms.zoom.toFixed(ms.zoom < 1 ? 3 : 1)} AU`;
@@ -777,6 +788,7 @@ function renderSolarTab(forceRender) {
         thrEl.textContent = `POS ${dist.toFixed(2)} AU`;
       }
     }
+    if (zoomBtn) zoomBtn.style.display = 'none';
     if (plotBtn) plotBtn.style.display = 'none';
   }
 }
@@ -785,9 +797,12 @@ function renderSolarTab(forceRender) {
 
 function handleBodySelect(body) {
   const plotBtn = document.getElementById('route-plot-btn');
-  if (body && !getActiveRoute()) {
-    if (plotBtn) plotBtn.style.display = '';
+  const zoomBtn = document.getElementById('route-zoom-btn');
+  if (body) {
+    if (zoomBtn) zoomBtn.style.display = '';
+    if (plotBtn) plotBtn.style.display = getActiveRoute() ? 'none' : '';
   } else {
+    if (zoomBtn) zoomBtn.style.display = 'none';
     if (plotBtn) plotBtn.style.display = 'none';
   }
   renderSolarTab(true);
@@ -914,13 +929,25 @@ function abortRoute() {
   cancelRoute(gameState);
   _orientState = null;
   hideManeuverPrompt();
+  routeDetailOpen = false;
   showRcsThrusters(false);
   addLogEntry('Navigation route ABORTED — engines cut', 'warn');
   showToast('Route aborted', 'warn');
   renderSolarTab(true);
 }
 
+let routeDetailOpen = false;
+
 function initRoutePanel() {
+  // Zoom to selected body
+  document.getElementById('route-zoom-btn')?.addEventListener('click', () => {
+    const sel = getSelectedBody();
+    if (sel && gameState) {
+      zoomToBody(sel.name, gameState);
+      renderSolarTab(true);
+    }
+  });
+
   // Plot Route button
   document.getElementById('route-plot-btn')?.addEventListener('click', openRoutePanel);
 
@@ -932,8 +959,102 @@ function initRoutePanel() {
   // Abort route button
   document.getElementById('route-abort-btn')?.addEventListener('click', abortRoute);
 
+  // Click status bar summary to toggle detail panel
+  document.getElementById('route-status-summary')?.addEventListener('click', (e) => {
+    // Don't toggle if clicking the abort button
+    if (e.target.closest('.route-abort-btn')) return;
+    routeDetailOpen = !routeDetailOpen;
+    const panel = document.getElementById('route-detail-panel');
+    if (panel) {
+      panel.style.display = routeDetailOpen ? 'flex' : 'none';
+      if (routeDetailOpen) updateRouteDetail();
+    }
+  });
+
   // Body selection callback
   setOnBodySelect(handleBodySelect);
+}
+
+function updateRouteDetail() {
+  const panel = document.getElementById('route-detail-panel');
+  if (!panel || !routeDetailOpen) return;
+
+  const rt = getActiveRoute();
+  const progress = getRouteProgress();
+  if (!rt || !progress) { panel.style.display = 'none'; return; }
+
+  const phys = gameState.physics;
+  const res = gameState.resources;
+  const fuelUsed = (rt.fuelRequired * progress.fraction).toFixed(0);
+  const fuelRemaining = res.fuel.current.toFixed(0);
+  const vel = getRelativeVelocity(phys);
+  const elapsed = progress.elapsed;
+  const remaining = progress.etaMin;
+
+  // Phase color map
+  const phaseColors = {
+    orient: '#5A8A9A', secure: '#8B8B4A', burn: '#D16A4B',
+    coast: '#2A5A7A', flip: '#E8D56B', arrive: '#6BCB77',
+  };
+
+  // Phase timeline
+  const phasesHtml = rt.phases.filter(p => p.durationMin > 0 || p.type === 'arrive').map((p, i) => {
+    const isCurrent = i === progress.phaseIndex;
+    const isDone = i < progress.phaseIndex;
+    const dotClass = isCurrent ? 'current' : isDone ? 'done' : '';
+    const nameClass = isCurrent ? 'current' : isDone ? 'done' : '';
+    const color = phaseColors[p.type] || '#444';
+    const dur = p.durationMin > 0 ? formatDuration(p.durationMin) : '';
+    const phaseProgress = isCurrent && p.durationMin > 0
+      ? ` (${Math.round(progress.phaseElapsed / p.durationMin * 100)}%)`
+      : '';
+    return `<div class="rd-phase">
+      <div class="rd-phase-dot ${dotClass}" style="background:${color};color:${color}"></div>
+      <span class="rd-phase-name ${nameClass}">${p.type}</span>
+      <span class="rd-phase-dur">${dur}${phaseProgress}</span>
+      <span class="rd-phase-desc">${p.description || ''}</span>
+    </div>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="rd-row">
+      <div class="rd-stat">
+        <span class="rd-stat-label">Route</span>
+        <span class="rd-stat-val rd-accent">${rt.name || rt.type}</span>
+      </div>
+      <div class="rd-stat">
+        <span class="rd-stat-label">Max G</span>
+        <span class="rd-stat-val">${rt.accelG.toFixed(1)}G</span>
+      </div>
+      <div class="rd-stat">
+        <span class="rd-stat-label">Distance</span>
+        <span class="rd-stat-val">${rt.distanceAU?.toFixed(3) || '—'} AU</span>
+      </div>
+      <div class="rd-stat">
+        <span class="rd-stat-label">ΔV</span>
+        <span class="rd-stat-val">${formatDeltaV(rt.deltaV)}</span>
+      </div>
+    </div>
+    <div class="rd-row">
+      <div class="rd-stat">
+        <span class="rd-stat-label">Velocity</span>
+        <span class="rd-stat-val rd-accent">${formatVelocity(vel)}</span>
+      </div>
+      <div class="rd-stat">
+        <span class="rd-stat-label">Elapsed</span>
+        <span class="rd-stat-val">${formatDuration(elapsed)}</span>
+      </div>
+      <div class="rd-stat">
+        <span class="rd-stat-label">Remaining</span>
+        <span class="rd-stat-val">${formatDuration(remaining)}</span>
+      </div>
+      <div class="rd-stat">
+        <span class="rd-stat-label">Fuel used</span>
+        <span class="rd-stat-val ${res.fuel.current / res.fuel.max < 0.15 ? 'rd-warn' : ''}">${fuelUsed} / ${fuelRemaining} kg</span>
+      </div>
+    </div>
+    <div class="rd-phases">${phasesHtml}</div>
+  `;
 }
 
 function openTacModal() {
@@ -2054,8 +2175,13 @@ function startGame() {
     renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, getRelativeVelocity(gameState.physics));
   }
 
-  // Init crew movement patrol system
-  initCrewMovement(gameState.ship);
+  // Init crew movement patrol system — restore saved state if available
+  if (gameState._crewMovement) {
+    restoreCrewMovement(gameState.ship, gameState._crewMovement);
+    delete gameState._crewMovement;
+  } else {
+    initCrewMovement(gameState.ship);
+  }
   clearJobs();
   startCrewMovementLoop();
 
@@ -2247,7 +2373,11 @@ function startGame() {
   }, async (event, data) => {
     if (event === 'autosave') {
       try {
+        gameState._activeRoute = serializeRoute();
+        gameState._crewMovement = serializeCrewMovement();
         await saveGame(gameState, 'Autosave');
+        delete gameState._activeRoute;
+        delete gameState._crewMovement;
         addLogEntry('Autosave complete', 'system');
       } catch (e) {
         addLogEntry('Autosave failed', 'warn');
@@ -2381,8 +2511,10 @@ function initHudActions() {
     const name = document.getElementById('input-save-name').value.trim() || 'Quicksave';
     // Attach active route to save data
     gameState._activeRoute = serializeRoute();
+    gameState._crewMovement = serializeCrewMovement();
     await saveGame(gameState, name);
     delete gameState._activeRoute;
+    delete gameState._crewMovement;
     document.getElementById('dialog-save').style.display = 'none';
     showToast('Mission saved', 'ok');
     addLogEntry(`Mission saved: "${name}"`, 'system');

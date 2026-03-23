@@ -135,8 +135,13 @@ function deckStartY(ship, deckIdx) {
 
 function crewSpeed(_gState, gForce, member) {
   const legHealth = (member.body.leftLeg + member.body.rightLeg) / 2;
-  if (legHealth <= 0) return 0;
-  const legFactor = legHealth / 100;
+  const legsGone = legHealth <= 0;
+
+  // No legs + any gravity = can't move (need legs to walk/stand)
+  // No legs + zero-G = can pull yourself along at half speed (arms only)
+  if (legsGone && gForce >= 0.01) return 0;
+
+  if (member.consciousness <= 10) return 0;
 
   let speed;
   if (gForce < 0.01) speed = BASE_SPEED * 0.5;
@@ -145,8 +150,10 @@ function crewSpeed(_gState, gForce, member) {
   else if (gForce < 2.5) speed = BASE_SPEED * Math.max(0, 1.0 - (gForce - 1.0) / 1.5);
   else return 0;
 
-  if (member.consciousness <= 10) return 0;
+  // No legs in zero-G: half speed (pulling with arms)
+  if (legsGone) return speed * 0.5;
 
+  const legFactor = legHealth / 100;
   return speed * legFactor;
 }
 
@@ -225,6 +232,54 @@ export function initCrewMovement(ship) {
       stabilizeTimer: 0,    // seconds remaining for first-aid
     });
   });
+}
+
+// ---- SERIALIZATION (save/load) ----
+
+export function serializeCrewMovement() {
+  const data = {};
+  for (const [id, ms] of moveState) {
+    data[id] = {
+      x: ms.x, y: ms.y, deckIdx: ms.deckIdx,
+      mission: ms.mission,
+      missionTarget: ms.missionTarget,
+      _couchPos: ms._couchPos || null,
+      _arrivedAtCouch: ms._arrivedAtCouch || false,
+    };
+  }
+  const couches = {};
+  for (const [id, pos] of couchOccupants) {
+    couches[id] = pos;
+  }
+  return { moveStates: data, couchOccupants: couches };
+}
+
+export function restoreCrewMovement(ship, saved) {
+  if (!saved || !saved.moveStates) return;
+  // Init first to set up waypoints, then overlay saved state
+  initCrewMovement(ship);
+
+  for (const [id, ms] of moveState) {
+    const s = saved.moveStates[id];
+    if (!s) continue;
+    ms.x = s.x;
+    ms.y = s.y;
+    ms.deckIdx = s.deckIdx;
+    ms.mission = s.mission;
+    ms.missionTarget = s.missionTarget;
+    if (s._couchPos) ms._couchPos = s._couchPos;
+    if (s._arrivedAtCouch) ms._arrivedAtCouch = true;
+    ms.pause = 0;
+    ms.segDist = 0;
+    ms.traveled = 0;
+  }
+
+  couchOccupants.clear();
+  if (saved.couchOccupants) {
+    for (const [id, pos] of Object.entries(saved.couchOccupants)) {
+      couchOccupants.set(id, pos);
+    }
+  }
 }
 
 // Get mission state for a crew member (for UI)
