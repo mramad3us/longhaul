@@ -5,6 +5,7 @@
 
 import { createDefaultShip } from './ship.js';
 import { VERSION } from './version.js';
+import { createPhysicsState, computeShipMass, physicsTick } from './physics.js';
 
 // Speed multipliers: game-minutes per real-second
 const SPEED_MULTIPLIERS = {
@@ -20,9 +21,18 @@ export function createGameState(shipName, captainName, crewCount) {
   ship.crew[0].name = captainName;
   ship.crew[0].role = 'Captain';
 
+  const physics = createPhysicsState();
+  physics.shipMass = computeShipMass(ship);
+
+  // Initialize crew physics states
+  ship.crew.forEach(member => {
+    physics.crewStates[member.id] = 'floating'; // start in micro-G
+  });
+
   return {
     version: VERSION,
     ship,
+    physics,
     // Game time: start date far future
     time: {
       year: 2351,
@@ -90,9 +100,10 @@ export function formatTime(time) {
 // ---- GAME LOOP ----
 
 export class GameLoop {
-  constructor(state, onTick) {
+  constructor(state, onTick, onPhysicsEvent) {
     this.state = state;
     this.onTick = onTick;
+    this.onPhysicsEvent = onPhysicsEvent || (() => {});
     this.lastTime = null;
     this.accumulator = 0;
     this.running = false;
@@ -143,7 +154,13 @@ export class GameLoop {
   _processMinute() {
     advanceTime(this.state.time, 1);
 
-    // Resource consumption per game-minute (basic)
+    // --- PHYSICS ---
+    const stateChanges = physicsTick(this.state, this.state.physics);
+    if (stateChanges.length > 0) {
+      this.onPhysicsEvent('crewStateChange', stateChanges);
+    }
+
+    // Resource consumption per game-minute
     const crewCount = this.state.ship.crew.length;
     const res = this.state.resources;
 
@@ -156,7 +173,7 @@ export class GameLoop {
     // Food: consumed at meal times (simplified: steady drain)
     res.food.current = Math.max(0, res.food.current - (crewCount * 0.001));
 
-    // Fuel: consumed only under thrust
+    // Fuel: consumed only under thrust (physics drives this now via nav.thrust)
     if (this.state.navigation.thrust > 0) {
       res.fuel.current = Math.max(0, res.fuel.current - (this.state.navigation.thrust * 0.05));
     }

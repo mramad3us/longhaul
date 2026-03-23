@@ -141,6 +141,12 @@
             <button class="speed-btn" data-speed="2" title="1 hr/s">2x</button>
             <button class="speed-btn" data-speed="3" title="1 day/s">3x</button>
           </div>
+          <div class="hud-divider"></div>
+          <button class="thrust-btn" id="thrust-toggle" title="Toggle Torch Engine (T)">
+            <span class="thrust-btn-icon" id="icon-thrust"></span>
+            <span class="thrust-btn-label">THRUST</span>
+            <span class="thrust-btn-status" id="thrust-status">OFF</span>
+          </button>
         </div>
         <div class="hud-center">
           <span class="hud-ship-name" id="hud-ship-name">RSV Canterbury</span>
@@ -176,9 +182,11 @@
           <div class="info-section">
             <h3 class="info-title">Ship Status</h3>
             <div class="info-content" id="ship-status-info">
+              <p class="info-line"><span class="info-key">Torch</span> <span class="info-val" id="info-torch">OFF</span></p>
               <p class="info-line"><span class="info-key">Thrust</span> <span class="info-val" id="info-thrust">0.0g</span></p>
               <p class="info-line"><span class="info-key">Heading</span> <span class="info-val" id="info-heading">---</span></p>
               <p class="info-line"><span class="info-key">Velocity</span> <span class="info-val" id="info-velocity">0 m/s</span></p>
+              <p class="info-line"><span class="info-key">Ship Mass</span> <span class="info-val" id="info-mass">--- t</span></p>
             </div>
           </div>
           <div class="info-section">

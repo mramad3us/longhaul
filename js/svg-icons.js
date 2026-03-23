@@ -244,6 +244,29 @@ export function iconHudExit() {
   ], p, 1), 'hud-svg');
 }
 
+export function iconThrust() {
+  // Flame/rocket icon in amber/white
+  const p = { w: C.white, a: C.amber, A: C.amberLt, r: C.red, d: C.amberDk, m: C.metalDk };
+  return svg(16, 16, '0 0 16 16', sprite([
+    '......ww........',
+    '.....wwww.......',
+    '.....wAAw.......',
+    '....wwAAww......',
+    '....wAAAAw......',
+    '...wwAAAAww.....',
+    '...wAaaaAw......',
+    '..mwAaaaAwm.....',
+    '..mwAaaaAwm.....',
+    '..mmwaaaaWmm....',
+    '..mm.aaaa.mm....',
+    '..mm..rr..mm....',
+    '..mm..rr..mm....',
+    '...m......m.....',
+    '................',
+    '................',
+  ], p, 1));
+}
+
 export function iconMinus() {
   return svg(20, 20, '0 0 12 12', sprite([
     '............',
@@ -984,6 +1007,25 @@ function buildCrewSprite(def) {
         '...B........B...',
       ],
     ],
+    // Prone: crushed flat under heavy G, face down on deck
+    prone: [
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '..BBBBBBBBBBbb..',
+      '..BuuUUUUUUuBb..',
+      '..ssuuUUUUuuss..',
+      '..sdhhhhhhhhds..',
+      '..ssddddddddss..',
+    ],
   };
 }
 
@@ -1048,6 +1090,21 @@ export function renderCrewMember(x, y, memberIndex, name) {
 
   g.appendChild(floatingGroup);
 
+  // Prone sprite (shown under dangerous G without crash couch)
+  const proneGroup = document.createElementNS(SVG_NS, 'g');
+  proneGroup.setAttribute('class', 'crew-prone');
+  proneGroup.setAttribute('display', 'none');
+  proneGroup.innerHTML = sprite(crewSprite.prone, crewSprite.palette, PX);
+  // Subtle shake animation to convey strain
+  const proneShake = document.createElementNS(SVG_NS, 'animateTransform');
+  proneShake.setAttribute('attributeName', 'transform');
+  proneShake.setAttribute('type', 'translate');
+  proneShake.setAttribute('values', '0 0; 1 0; -1 0; 0 1; 0 0');
+  proneShake.setAttribute('dur', '0.3s');
+  proneShake.setAttribute('repeatCount', 'indefinite');
+  proneGroup.appendChild(proneShake);
+  g.appendChild(proneGroup);
+
   // Eye blink (works for both states)
   const blink = document.createElementNS(SVG_NS, 'g');
   blink.setAttribute('class', 'crew-blink');
@@ -1081,18 +1138,37 @@ export function renderCrewMember(x, y, memberIndex, name) {
   return g;
 }
 
-// Toggle all crew between standing and floating states
-export function setCrewGravity(container, hasGravity) {
+// Set crew visual state: 'standing', 'floating', or 'prone'
+// Can be called per-crew with crewId, or for all crew (crewId = null)
+export function setCrewGravity(container, hasGravity, crewStates = null) {
   container.querySelectorAll('.crew-symbol').forEach(crew => {
+    const crewId = crew.getAttribute('data-crew-id');
     const standing = crew.querySelector('.crew-standing');
     const floating = crew.querySelector('.crew-floating');
+    const prone = crew.querySelector('.crew-prone');
     const blinkStanding = crew.querySelector('.blink-standing');
     const blinkFloating = crew.querySelector('.blink-floating');
+    const blink = crew.querySelector('.crew-blink');
 
-    if (standing) standing.setAttribute('display', hasGravity ? 'inline' : 'none');
-    if (floating) floating.setAttribute('display', hasGravity ? 'none' : 'inline');
-    if (blinkStanding) blinkStanding.setAttribute('display', hasGravity ? 'inline' : 'none');
-    if (blinkFloating) blinkFloating.setAttribute('display', hasGravity ? 'none' : 'inline');
+    // Determine state for this crew member
+    let state;
+    if (crewStates && crewId !== null && crewStates[crewId]) {
+      state = crewStates[crewId];
+    } else {
+      state = hasGravity ? 'standing' : 'floating';
+    }
+
+    const isStanding = state === 'standing' || state === 'strained' || state === 'secured';
+    const isFloating = state === 'floating';
+    const isProne = state === 'prone';
+
+    if (standing) standing.setAttribute('display', isStanding ? 'inline' : 'none');
+    if (floating) floating.setAttribute('display', isFloating ? 'inline' : 'none');
+    if (prone) prone.setAttribute('display', isProne ? 'inline' : 'none');
+    if (blinkStanding) blinkStanding.setAttribute('display', isStanding ? 'inline' : 'none');
+    if (blinkFloating) blinkFloating.setAttribute('display', isFloating ? 'inline' : 'none');
+    // Hide blink entirely when prone (face down)
+    if (blink) blink.setAttribute('display', isProne ? 'none' : 'inline');
   });
 }
 

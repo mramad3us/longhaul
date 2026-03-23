@@ -1,12 +1,12 @@
 // ============================================================
-// LONGHAUL — Main Application Controller (AAA Edition)
+// LONGHAUL — Main Application Controller
 // Crew selection, toasts, particles, critical alerts
 // ============================================================
 
 import {
   iconNewGame, iconLoadGame, iconSettings, iconPause,
   iconHudSettings, iconHudSave, iconHudExit,
-  iconMinus, iconPlus, iconDelete,
+  iconMinus, iconPlus, iconDelete, iconThrust,
   iconFuel, iconOxygen, iconWater, iconFood, iconCrew, iconPower,
   logoShip, createStarfield, setCrewGravity,
 } from './svg-icons.js';
@@ -15,6 +15,7 @@ import { initStorage, saveGame, loadGame, listSaves, deleteSave } from './storag
 import { createGameState, formatDate, formatTime, GameLoop } from './game.js';
 import { renderShip } from './ship.js';
 import { VERSION } from './version.js';
+import { toggleThrust, CrewState } from './physics.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -23,7 +24,7 @@ let gameLoop = null;
 let crewCount = 4;
 let selectedCrew = null;
 let particleInterval = null;
-let lastGravityState = null;
+let lastCrewStateKey = null;
 
 // ---- SCREEN MANAGEMENT ----
 
@@ -198,6 +199,18 @@ function initHud() {
   document.getElementById('icon-hud-settings').appendChild(iconHudSettings());
   document.getElementById('icon-hud-save').appendChild(iconHudSave());
   document.getElementById('icon-hud-exit').appendChild(iconHudExit());
+  document.getElementById('icon-thrust').appendChild(iconThrust());
+
+  // Thrust toggle button
+  document.getElementById('thrust-toggle').addEventListener('click', () => {
+    if (!gameState) return;
+    const isActive = toggleThrust(gameState.physics);
+    if (isActive) {
+      showToast(`Torch engine firing — ${gameState.physics.maxThrust}G thrust`, 'warn');
+    } else {
+      showToast('Torch engine off — entering micro-G');
+    }
+  });
 }
 
 // ---- CREW SELECTION ----
@@ -373,6 +386,17 @@ function updateSpeedUI(speed) {
       btn.classList.add(speed === 0 ? 'paused' : 'active');
     }
   });
+
+  // Pause/unpause all animations
+  const gameScreen = document.getElementById('screen-game');
+  const shipSvg = document.querySelector('#ship-container svg');
+  if (speed === 0) {
+    gameScreen.classList.add('game-paused');
+    if (shipSvg) shipSvg.pauseAnimations();
+  } else {
+    gameScreen.classList.remove('game-paused');
+    if (shipSvg) shipSvg.unpauseAnimations();
+  }
 }
 
 // ---- HUD UPDATE ----
@@ -382,20 +406,57 @@ function updateHud(state) {
   document.getElementById('hud-time').textContent = formatTime(state.time);
   document.getElementById('hud-ship-name').textContent = state.ship.name;
 
+  const phys = state.physics;
   const hasGravity = state.navigation.thrust > 0;
+
+  // Ship status info
+  document.getElementById('info-torch').textContent =
+    phys.thrustActive ? `ON (${(phys.thrustLevel * phys.maxThrust).toFixed(1)}g)` : 'OFF';
+  document.getElementById('info-torch').style.color =
+    phys.thrustActive ? '#FFFFFF' : '';
   document.getElementById('info-thrust').textContent =
     hasGravity ? `${state.navigation.thrust.toFixed(1)}g` : '0.0g';
   document.getElementById('info-heading').textContent =
     state.navigation.heading || '---';
   document.getElementById('info-velocity').textContent =
-    `${Math.round(state.navigation.velocity).toLocaleString()} m/s`;
+    formatVelocity(state.navigation.velocity);
+  document.getElementById('info-mass').textContent =
+    `${(phys.shipMass / 1000).toFixed(1)} t`;
 
-  // Update crew gravity animation when thrust state changes
-  if (hasGravity !== lastGravityState) {
-    lastGravityState = hasGravity;
-    const shipContainer = document.getElementById('ship-container');
-    if (shipContainer) setCrewGravity(shipContainer, hasGravity);
+  // Thrust button state
+  const thrustBtn = document.getElementById('thrust-toggle');
+  const thrustStatus = document.getElementById('thrust-status');
+  if (phys.thrustActive) {
+    thrustBtn.classList.add('active');
+    thrustStatus.textContent = `${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G`;
+  } else {
+    thrustBtn.classList.remove('active');
+    thrustStatus.textContent = 'OFF';
   }
+
+  // Engine plume visibility
+  const plume = document.getElementById('engine-plume');
+  if (plume) {
+    plume.setAttribute('display', phys.thrustActive ? 'inline' : 'none');
+  }
+
+  // Update crew visual states from physics
+  const shipContainer = document.getElementById('ship-container');
+  if (shipContainer) {
+    // Build a serialized key of all crew states to detect changes
+    const crewStateKey = JSON.stringify(phys.crewStates);
+    if (crewStateKey !== lastCrewStateKey) {
+      lastCrewStateKey = crewStateKey;
+      setCrewGravity(shipContainer, hasGravity, phys.crewStates);
+    }
+  }
+}
+
+function formatVelocity(v) {
+  const abs = Math.abs(v);
+  if (abs < 1000) return `${Math.round(abs)} m/s`;
+  if (abs < 1000000) return `${(abs / 1000).toFixed(1)} km/s`;
+  return `${(abs / 1000000).toFixed(2)} Mm/s`;
 }
 
 // ---- START GAME ----
@@ -418,8 +479,8 @@ function startGame() {
 
   // Set initial gravity state (thrust=0 at start = micro-G)
   const hasGravity = gameState.navigation.thrust > 0;
-  lastGravityState = hasGravity;
-  setCrewGravity(shipContainer, hasGravity);
+  lastCrewStateKey = null;
+  setCrewGravity(shipContainer, hasGravity, gameState.physics.crewStates);
 
   // Start particles
   initParticles();
@@ -434,6 +495,18 @@ function startGame() {
   gameLoop = new GameLoop(gameState, (state) => {
     updateHud(state);
     updateResourcePanel(state);
+  }, (event, data) => {
+    if (event === 'crewStateChange') {
+      data.forEach(({ member, oldState, newState }) => {
+        if (newState === CrewState.PRONE) {
+          showToast(`${member.name} crushed under high-G!`, 'danger');
+        } else if (newState === CrewState.STRAINED) {
+          showToast(`${member.name} struggling under ${gameState.physics.gForce.toFixed(1)}G`, 'warn');
+        } else if (oldState === CrewState.PRONE && newState !== CrewState.PRONE) {
+          showToast(`${member.name} recovering from high-G`, 'ok');
+        }
+      });
+    }
   });
   gameLoop.start();
 }
@@ -550,6 +623,17 @@ function initKeyboard() {
         break;
       case '3':
         if (gameLoop) { gameLoop.setSpeed(3); updateSpeedUI(3); }
+        break;
+      case 't':
+      case 'T':
+        if (gameState) {
+          const isActive = toggleThrust(gameState.physics);
+          if (isActive) {
+            showToast(`Torch engine firing — ${gameState.physics.maxThrust}G thrust`, 'warn');
+          } else {
+            showToast('Torch engine off — entering micro-G');
+          }
+        }
         break;
       case 'Escape':
         // Deselect crew

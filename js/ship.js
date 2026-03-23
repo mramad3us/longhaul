@@ -418,35 +418,106 @@ export function renderShip(ship, container, onCrewClick) {
 
   svgEl.appendChild(crewLayer);
 
-  // --- ENGINE EXHAUST (below reactor) ---
+  // --- TORCH ENGINE PLUME (below reactor) ---
+  // Epic Epstein drive plume: blindingly white core, blue-white corona
+  // Completely dark when off, supernova-bright when firing
   const exhaustY = offsetY + (currentY - deckGap) * TILE_SIZE;
   const exhaustX = offsetX + 3 * TILE_SIZE;
+  const nozzleCenterX = exhaustX + 3 * TILE_SIZE / 2; // center of 3-tile reactor base
+  const plumeW = TILE_SIZE * 3;
+
+  // Add plume glow filter to defs
+  const plumeFilter = document.createElementNS(SVG_NS, 'filter');
+  plumeFilter.id = 'torch-glow';
+  plumeFilter.setAttribute('x', '-100%');
+  plumeFilter.setAttribute('y', '-50%');
+  plumeFilter.setAttribute('width', '300%');
+  plumeFilter.setAttribute('height', '300%');
+  plumeFilter.innerHTML = `
+    <feGaussianBlur stdDeviation="8" result="blur1"/>
+    <feGaussianBlur stdDeviation="16" result="blur2"/>
+    <feMerge>
+      <feMergeNode in="blur2"/>
+      <feMergeNode in="blur1"/>
+      <feMergeNode in="SourceGraphic"/>
+    </feMerge>
+  `;
+  defs.appendChild(plumeFilter);
+
   const exhaust = document.createElementNS(SVG_NS, 'g');
   exhaust.setAttribute('class', 'engine-exhaust');
+  exhaust.setAttribute('id', 'engine-plume');
+  exhaust.setAttribute('display', 'none'); // OFF by default
+
+  // Nozzle opening (always dark metallic)
+  const nozzleY = exhaustY - 2;
   exhaust.innerHTML = `
-    <!-- Main exhaust plume -->
-    <rect x="${exhaustX + 12}" y="${exhaustY}" width="24" height="4" fill="#E2A355" opacity="0.5">
-      <animate attributeName="opacity" values="0.3;0.6;0.3" dur="0.5s" repeatCount="indefinite"/>
+    <!-- Nozzle ring -->
+    <rect x="${nozzleCenterX - 20}" y="${nozzleY}" width="40" height="4" fill="#1A2A3A"/>
+
+    <!-- PLUME CORE: pure white, maximum intensity -->
+    <rect x="${nozzleCenterX - 12}" y="${exhaustY}" width="24" height="8" fill="#FFFFFF" opacity="1">
+      <animate attributeName="opacity" values="0.95;1;0.95" dur="0.08s" repeatCount="indefinite"/>
     </rect>
-    <rect x="${exhaustX + 56}" y="${exhaustY}" width="24" height="4" fill="#E2A355" opacity="0.5">
-      <animate attributeName="opacity" values="0.4;0.7;0.4" dur="0.4s" repeatCount="indefinite"/>
+    <!-- Core taper -->
+    <rect x="${nozzleCenterX - 10}" y="${exhaustY + 8}" width="20" height="8" fill="#FFFFFF" opacity="0.95">
+      <animate attributeName="opacity" values="0.85;0.95;0.85" dur="0.1s" repeatCount="indefinite"/>
     </rect>
-    <rect x="${exhaustX + 16}" y="${exhaustY + 4}" width="16" height="4" fill="#FBBF24" opacity="0.3">
-      <animate attributeName="opacity" values="0.1;0.4;0.1" dur="0.6s" repeatCount="indefinite"/>
-      <animate attributeName="height" values="4;8;4" dur="0.8s" repeatCount="indefinite"/>
+    <rect x="${nozzleCenterX - 8}" y="${exhaustY + 16}" width="16" height="8" fill="#FFFFFF" opacity="0.9">
+      <animate attributeName="opacity" values="0.8;0.95;0.8" dur="0.12s" repeatCount="indefinite"/>
     </rect>
-    <rect x="${exhaustX + 60}" y="${exhaustY + 4}" width="16" height="4" fill="#FBBF24" opacity="0.3">
-      <animate attributeName="opacity" values="0.2;0.5;0.2" dur="0.5s" repeatCount="indefinite"/>
-      <animate attributeName="height" values="4;6;4" dur="0.7s" repeatCount="indefinite"/>
+    <rect x="${nozzleCenterX - 6}" y="${exhaustY + 24}" width="12" height="8" fill="#F0F4FF" opacity="0.85">
+      <animate attributeName="opacity" values="0.7;0.9;0.7" dur="0.15s" repeatCount="indefinite"/>
+      <animate attributeName="height" values="8;12;8" dur="0.2s" repeatCount="indefinite"/>
     </rect>
-    <!-- Particles -->
-    <rect x="${exhaustX + 22}" y="${exhaustY + 8}" width="2" height="2" fill="#E2A355" opacity="0">
-      <animate attributeName="opacity" values="0;0.5;0" dur="0.8s" repeatCount="indefinite"/>
-      <animate attributeName="y" values="${exhaustY + 8};${exhaustY + 20}" dur="0.8s" repeatCount="indefinite"/>
+
+    <!-- INNER CORONA: blue-white -->
+    <rect x="${nozzleCenterX - 16}" y="${exhaustY + 2}" width="4" height="14" fill="#D0E8FF" opacity="0.8">
+      <animate attributeName="opacity" values="0.6;0.9;0.6" dur="0.12s" repeatCount="indefinite"/>
     </rect>
-    <rect x="${exhaustX + 66}" y="${exhaustY + 8}" width="2" height="2" fill="#FBBF24" opacity="0">
-      <animate attributeName="opacity" values="0;0.4;0" dur="0.6s" begin="0.2s" repeatCount="indefinite"/>
-      <animate attributeName="y" values="${exhaustY + 8};${exhaustY + 18}" dur="0.6s" begin="0.2s" repeatCount="indefinite"/>
+    <rect x="${nozzleCenterX + 12}" y="${exhaustY + 2}" width="4" height="14" fill="#D0E8FF" opacity="0.8">
+      <animate attributeName="opacity" values="0.7;0.95;0.7" dur="0.1s" repeatCount="indefinite"/>
+    </rect>
+
+    <!-- OUTER CORONA: spreading blue glow -->
+    <rect x="${nozzleCenterX - 20}" y="${exhaustY + 4}" width="4" height="10" fill="#8ECAFF" opacity="0.5">
+      <animate attributeName="opacity" values="0.3;0.6;0.3" dur="0.15s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="${nozzleCenterX + 16}" y="${exhaustY + 4}" width="4" height="10" fill="#8ECAFF" opacity="0.5">
+      <animate attributeName="opacity" values="0.35;0.65;0.35" dur="0.13s" repeatCount="indefinite"/>
+    </rect>
+
+    <!-- PLUME TAIL: fading blue-white tendrils -->
+    <rect x="${nozzleCenterX - 4}" y="${exhaustY + 32}" width="8" height="6" fill="#B0D8FF" opacity="0.6">
+      <animate attributeName="opacity" values="0.3;0.7;0.3" dur="0.2s" repeatCount="indefinite"/>
+      <animate attributeName="height" values="6;14;6" dur="0.3s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="${nozzleCenterX - 2}" y="${exhaustY + 40}" width="4" height="4" fill="#80B8FF" opacity="0.4">
+      <animate attributeName="opacity" values="0.1;0.5;0.1" dur="0.25s" repeatCount="indefinite"/>
+      <animate attributeName="height" values="4;10;4" dur="0.35s" repeatCount="indefinite"/>
+    </rect>
+
+    <!-- EXHAUST PARTICLES: white-hot sparks shooting out -->
+    <rect x="${nozzleCenterX - 1}" y="${exhaustY + 46}" width="2" height="2" fill="#FFFFFF" opacity="0">
+      <animate attributeName="opacity" values="0;0.9;0.5;0" dur="0.4s" repeatCount="indefinite"/>
+      <animate attributeName="y" values="${exhaustY + 46};${exhaustY + 70}" dur="0.4s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="${nozzleCenterX + 3}" y="${exhaustY + 44}" width="2" height="2" fill="#D0E8FF" opacity="0">
+      <animate attributeName="opacity" values="0;0.7;0.3;0" dur="0.5s" begin="0.15s" repeatCount="indefinite"/>
+      <animate attributeName="y" values="${exhaustY + 44};${exhaustY + 68}" dur="0.5s" begin="0.15s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="${nozzleCenterX - 5}" y="${exhaustY + 48}" width="2" height="2" fill="#FFFFFF" opacity="0">
+      <animate attributeName="opacity" values="0;0.8;0.2;0" dur="0.35s" begin="0.08s" repeatCount="indefinite"/>
+      <animate attributeName="y" values="${exhaustY + 48};${exhaustY + 72}" dur="0.35s" begin="0.08s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="${nozzleCenterX + 5}" y="${exhaustY + 42}" width="2" height="2" fill="#8ECAFF" opacity="0">
+      <animate attributeName="opacity" values="0;0.6;0" dur="0.6s" begin="0.25s" repeatCount="indefinite"/>
+      <animate attributeName="y" values="${exhaustY + 42};${exhaustY + 66}" dur="0.6s" begin="0.25s" repeatCount="indefinite"/>
+    </rect>
+
+    <!-- GLOW: massive bloom effect behind everything -->
+    <rect x="${nozzleCenterX - 24}" y="${exhaustY - 4}" width="48" height="56" fill="#FFFFFF" opacity="0.15" filter="url(#torch-glow)">
+      <animate attributeName="opacity" values="0.1;0.2;0.1" dur="0.15s" repeatCount="indefinite"/>
     </rect>
   `;
   svgEl.appendChild(exhaust);
