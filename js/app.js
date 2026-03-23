@@ -16,6 +16,7 @@ import { createGameState, formatDate, formatTime, GameLoop } from './game.js';
 import { renderShip, renderTacView } from './ship.js';
 import { VERSION } from './version.js';
 import { toggleThrust, setThrustLevel, startFlip, updateFlip, CrewState } from './physics.js';
+import { initCrewMovement, updateCrewMovement } from './crew-movement.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -29,6 +30,7 @@ let lastThrustActive = null;
 let lastTacVelocityBucket = null;
 let tacZoomLevel = 0;
 let flipAnimFrame = null;
+let crewMoveFrame = null;
 
 // ---- SHIP'S LOG ----
 const MAX_LOG_ENTRIES = 200;
@@ -825,6 +827,35 @@ function formatVelocity(v) {
   return `${sign}${(abs / 1000000).toFixed(2)} Mm/s`;
 }
 
+// ---- CREW MOVEMENT ANIMATION LOOP ----
+
+function startCrewMovementLoop() {
+  if (crewMoveFrame) cancelAnimationFrame(crewMoveFrame);
+  let lastTime = performance.now();
+
+  function tick(now) {
+    if (currentScreen !== 'game') {
+      crewMoveFrame = null;
+      return;
+    }
+    const deltaSec = Math.min((now - lastTime) / 1000, 0.1); // cap at 100ms
+    lastTime = now;
+
+    if (gameState) {
+      updateCrewMovement(
+        gameState.ship,
+        gameState.physics,
+        deltaSec,
+        gameState.speed
+      );
+    }
+
+    crewMoveFrame = requestAnimationFrame(tick);
+  }
+
+  crewMoveFrame = requestAnimationFrame(tick);
+}
+
 // ---- START GAME ----
 
 function startGame() {
@@ -848,6 +879,10 @@ function startGame() {
   if (tacScreen) {
     renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, getRelativeVelocity(gameState.physics));
   }
+
+  // Init crew movement patrol system
+  initCrewMovement(gameState.ship);
+  startCrewMovementLoop();
 
   // Set initial gravity state (thrust=0 at start = micro-G)
   const hasGravity = gameState.navigation.thrust > 0;
@@ -939,6 +974,7 @@ function initHudActions() {
     document.getElementById('dialog-exit').style.display = 'none';
     if (gameLoop) gameLoop.stop();
     if (particleInterval) clearTimeout(particleInterval);
+    if (crewMoveFrame) { cancelAnimationFrame(crewMoveFrame); crewMoveFrame = null; }
     gameState = null;
     selectedCrew = null;
     showScreen('landing');
