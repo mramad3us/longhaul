@@ -174,7 +174,12 @@
           <div class="tac-view" id="tac-view">
             <div class="tac-header">
               <span class="tac-label">TAC</span>
-              <span class="tac-range" id="tac-range">50km</span>
+              <div class="tac-zoom-controls">
+                <button class="tac-zoom-btn active" data-tac-zoom="0" title="Close">1</button>
+                <button class="tac-zoom-btn" data-tac-zoom="1" title="Medium">2</button>
+                <button class="tac-zoom-btn" data-tac-zoom="2" title="Far">3</button>
+              </div>
+              <span class="tac-range" id="tac-range">1 km</span>
             </div>
             <div class="tac-screen" id="tac-screen">
               <!-- Tactical SVG rendered by JS -->

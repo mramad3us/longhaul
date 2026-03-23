@@ -901,6 +901,39 @@ body.dev-mode .info-section.dev-only {
   text-transform: uppercase;
 }
 
+.tac-zoom-controls {
+  display: flex;
+  gap: 2px;
+}
+
+.tac-zoom-btn {
+  width: 16px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-void);
+  border: 1px solid var(--hull-primary);
+  border-radius: 0;
+  color: var(--text-dim);
+  font-family: var(--font-pixel);
+  font-size: 0.22rem;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.1s;
+}
+
+.tac-zoom-btn:hover {
+  border-color: var(--accent-dim);
+  color: var(--text-secondary);
+}
+
+.tac-zoom-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
 .tac-range {
   font-family: var(--font-mono);
   font-size: 0.6rem;

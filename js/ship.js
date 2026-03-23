@@ -451,70 +451,93 @@ export function renderShip(ship, container, onCrewClick) {
   exhaust.setAttribute('id', 'engine-plume');
   exhaust.setAttribute('display', 'none'); // OFF by default
 
-  // Build the plume as expanding cone sections
+  // Build the plume as fireball near nozzle + long tapered tail
+  // Fireball: expands fast to max width close to ship, then tapers
   const sections = [];
-  const numSections = 20;
+  const nozzleHalfW = 18;
+  const fireballLen = plumeLength * 0.15; // fireball is 15% of total plume
+  const tailLen = plumeLength * 0.85;
+  const numSections = 24;
+
   for (let i = 0; i < numSections; i++) {
     const t = i / numSections;
-    const y = exhaustY + t * plumeLength;
-    const h = plumeLength / numSections;
-    // Cone expands: starts at nozzle width, reaches plumeHalfW
-    const nozzleHalfW = 16;
-    const w = nozzleHalfW + (plumeHalfW - nozzleHalfW) * Math.pow(t, 0.6);
-    // Opacity decreases, color shifts from white to blue
-    const opacity = Math.max(0.03, 1.0 - t * 0.9);
-    // Color: white core fades to blue-white
-    const r = Math.round(255 - t * 80);
-    const g = Math.round(255 - t * 50);
-    const b = 255;
-    const color = `rgb(${r},${g},${b})`;
+    const dist = t * plumeLength;
+    const y = exhaustY + dist;
+    const h = plumeLength / numSections + 2;
 
-    sections.push(`<rect x="${nozzleCenterX - w}" y="${y}" width="${w * 2}" height="${h + 2}"
+    // Width: fast expansion to fireball peak, then taper
+    let w;
+    if (dist < fireballLen) {
+      const ft = dist / fireballLen;
+      w = nozzleHalfW + (plumeHalfW - nozzleHalfW) * Math.sin(ft * Math.PI * 0.7);
+    } else {
+      const tt = (dist - fireballLen) / tailLen;
+      const peakW = nozzleHalfW + (plumeHalfW - nozzleHalfW) * Math.sin(0.7 * Math.PI);
+      w = peakW * Math.pow(1 - tt, 0.6);
+      w = Math.max(w, 2);
+    }
+
+    // Color + opacity
+    let color, opacity;
+    if (dist < fireballLen * 0.3) {
+      color = '#FFFFFF';
+      opacity = 1.0 - t * 0.3;
+    } else if (dist < fireballLen) {
+      const ft = (dist - fireballLen * 0.3) / (fireballLen * 0.7);
+      color = `rgb(${Math.round(255 - ft * 50)},${Math.round(255 - ft * 25)},255)`;
+      opacity = 0.8 - ft * 0.2;
+    } else {
+      const tt = (dist - fireballLen) / tailLen;
+      const r = Math.max(80, Math.round(205 - tt * 140));
+      const g = Math.max(120, Math.round(230 - tt * 120));
+      color = `rgb(${r},${g},255)`;
+      opacity = Math.max(0.02, 0.6 - tt * 0.58);
+    }
+
+    sections.push(`<rect x="${nozzleCenterX - w}" y="${y}" width="${w * 2}" height="${h}"
       fill="${color}" opacity="${opacity.toFixed(3)}">
       <animate attributeName="opacity"
         values="${(opacity * 0.85).toFixed(3)};${opacity.toFixed(3)};${(opacity * 0.85).toFixed(3)}"
-        dur="${(0.06 + t * 0.15).toFixed(2)}s" repeatCount="indefinite"/>
+        dur="${(0.05 + t * 0.12).toFixed(2)}s" repeatCount="indefinite"/>
     </rect>`);
   }
 
-  // Inner core: very narrow, pure white, hottest part
-  const coreH = plumeLength * 0.4;
-  for (let i = 0; i < 8; i++) {
-    const t = i / 8;
-    const y = exhaustY + t * coreH;
-    const h = coreH / 8;
-    const w = 10 + t * 6;
-    const op = 1.0 - t * 0.3;
-    sections.push(`<rect x="${nozzleCenterX - w}" y="${y}" width="${w * 2}" height="${h + 1}"
+  // White-hot nozzle core
+  const coreLen = fireballLen * 0.5;
+  for (let i = 0; i < 6; i++) {
+    const t = i / 6;
+    const y = exhaustY + t * coreLen;
+    const h = coreLen / 6 + 1;
+    const w = nozzleHalfW * (0.6 + t * 0.8);
+    const op = 1.0 - t * 0.15;
+    sections.push(`<rect x="${nozzleCenterX - w}" y="${y}" width="${w * 2}" height="${h}"
       fill="#FFFFFF" opacity="${op.toFixed(2)}">
       <animate attributeName="opacity"
         values="${(op * 0.9).toFixed(2)};${op.toFixed(2)};${(op * 0.9).toFixed(2)}"
-        dur="${(0.04 + t * 0.08).toFixed(2)}s" repeatCount="indefinite"/>
+        dur="0.05s" repeatCount="indefinite"/>
     </rect>`);
   }
 
-  // Exhaust particles — streaking out from nozzle
+  // Exhaust particles
   for (let i = 0; i < 8; i++) {
-    const px = nozzleCenterX + (Math.random() - 0.5) * 30;
+    const px = nozzleCenterX + (Math.random() - 0.5) * 40;
     const startY = exhaustY + 10;
-    const endY = exhaustY + 100 + Math.random() * 120;
-    const dur = (0.3 + Math.random() * 0.4).toFixed(2);
+    const endY = exhaustY + 60 + Math.random() * 100;
+    const dur = (0.25 + Math.random() * 0.35).toFixed(2);
     const begin = (Math.random() * 0.5).toFixed(2);
-    const size = 2;
     const colors = ['#FFFFFF', '#D0E8FF', '#8ECAFF', '#FFFFFF'];
-    const col = colors[i % colors.length];
-    sections.push(`<rect x="${px}" y="${startY}" width="${size}" height="${size}" fill="${col}" opacity="0">
+    sections.push(`<rect x="${px}" y="${startY}" width="2" height="2" fill="${colors[i % 4]}" opacity="0">
       <animate attributeName="opacity" values="0;0.9;0.4;0" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
       <animate attributeName="y" values="${startY};${endY}" dur="${dur}s" begin="${begin}s" repeatCount="indefinite"/>
     </rect>`);
   }
 
-  // Massive bloom glow behind everything
-  sections.push(`<rect x="${nozzleCenterX - plumeHalfW}" y="${exhaustY - 20}"
-    width="${plumeHalfW * 2}" height="${plumeLength * 0.6}"
-    fill="#FFFFFF" opacity="0.08" filter="url(#torch-bloom)">
-    <animate attributeName="opacity" values="0.05;0.1;0.05" dur="0.2s" repeatCount="indefinite"/>
-  </rect>`);
+  // Fireball bloom glow
+  sections.push(`<ellipse cx="${nozzleCenterX}" cy="${exhaustY + fireballLen * 0.4}"
+    rx="${plumeHalfW * 1.3}" ry="${fireballLen * 0.7}"
+    fill="#FFFFFF" opacity="0.06" filter="url(#torch-bloom)">
+    <animate attributeName="opacity" values="0.03;0.08;0.03" dur="0.2s" repeatCount="indefinite"/>
+  </ellipse>`);
 
   // Nozzle ring (on top)
   sections.push(`<rect x="${nozzleCenterX - 22}" y="${exhaustY - 3}" width="44" height="5" fill="#1A2A3A"/>`);
@@ -526,72 +549,219 @@ export function renderShip(ship, container, onCrewClick) {
 }
 
 // ---- TACTICAL VIEW RENDERER ----
-// Shows the ship as a tiny outline with a massive plume when thrusting.
-// The plume dwarfs the ship 10-20:1 — true Epstein drive scale.
+// Three zoom levels. Ship centered. Plume = fireball near ship + long taper.
+// At far zoom ship is a dot and the plume is a blazing sun.
 
-export function renderTacView(ship, container, thrustActive) {
+// Zoom configs: scale multiplier, range label, ship render mode
+const TAC_ZOOM_LEVELS = [
+  { scale: 1,   range: '1 km',   shipMode: 'hull' },   // Close: hull outline visible
+  { scale: 5,   range: '5 km',   shipMode: 'icon' },   // Medium: ship is small icon, full plume
+  { scale: 25,  range: '25 km',  shipMode: 'dot' },    // Far: ship is dot, plume is a star
+];
+
+export function renderTacView(ship, container, thrustActive, zoomLevel = 0) {
   container.innerHTML = '';
 
   const viewW = container.clientWidth || 186;
   const viewH = container.clientHeight || 220;
+  const zoom = TAC_ZOOM_LEVELS[zoomLevel];
 
   const svgEl = document.createElementNS(SVG_NS, 'svg');
   svgEl.setAttribute('width', viewW);
   svgEl.setAttribute('height', viewH);
   svgEl.setAttribute('viewBox', `0 0 ${viewW} ${viewH}`);
   svgEl.setAttribute('shape-rendering', 'crispEdges');
+  svgEl.style.display = 'block';
 
-  // Grid lines (subtle)
+  const cx = viewW / 2;
+  const cy = viewH / 2;
+
+  // Defs (filters)
+  const defs = document.createElementNS(SVG_NS, 'defs');
+  defs.innerHTML = `
+    <filter id="tac-glow" x="-100%" y="-50%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+    <filter id="tac-bloom" x="-200%" y="-100%" width="500%" height="400%">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+    <filter id="tac-sun" x="-300%" y="-300%" width="700%" height="700%">
+      <feGaussianBlur stdDeviation="20"/>
+    </filter>
+  `;
+  svgEl.appendChild(defs);
+
+  // Grid
   const gridGroup = document.createElementNS(SVG_NS, 'g');
-  gridGroup.setAttribute('opacity', '0.08');
-  const gridSpacing = 20;
-  for (let x = gridSpacing; x < viewW; x += gridSpacing) {
+  gridGroup.setAttribute('opacity', '0.06');
+  const gridSpacing = viewW / (4 + zoomLevel * 2);
+  for (let x = cx % gridSpacing; x < viewW; x += gridSpacing) {
     gridGroup.innerHTML += `<line x1="${x}" y1="0" x2="${x}" y2="${viewH}" stroke="#4FD1C5" stroke-width="0.5"/>`;
   }
-  for (let y = gridSpacing; y < viewH; y += gridSpacing) {
+  for (let y = cy % gridSpacing; y < viewH; y += gridSpacing) {
     gridGroup.innerHTML += `<line x1="0" y1="${y}" x2="${viewW}" y2="${y}" stroke="#4FD1C5" stroke-width="0.5"/>`;
   }
   svgEl.appendChild(gridGroup);
 
-  // Range rings (concentric from ship center)
-  const cx = viewW / 2;
-  const cy = viewH / 2; // ship centered
-  const shipY = cy;
+  // Range rings
   const ringGroup = document.createElementNS(SVG_NS, 'g');
-  ringGroup.setAttribute('opacity', '0.06');
-  [30, 60, 90].forEach(r => {
+  ringGroup.setAttribute('opacity', '0.05');
+  const ringSpacing = viewW / (3 + zoomLevel);
+  for (let r = ringSpacing; r < viewW; r += ringSpacing) {
     ringGroup.innerHTML += `<ellipse cx="${cx}" cy="${cy}" rx="${r}" ry="${r}" fill="none" stroke="#4FD1C5" stroke-width="0.5"/>`;
-  });
+  }
   svgEl.appendChild(ringGroup);
 
-  // Crosshair at center
+  // Crosshair
   const chGroup = document.createElementNS(SVG_NS, 'g');
-  chGroup.setAttribute('opacity', '0.1');
+  chGroup.setAttribute('opacity', '0.08');
   chGroup.innerHTML = `
     <line x1="${cx}" y1="0" x2="${cx}" y2="${viewH}" stroke="#4FD1C5" stroke-width="0.5"/>
     <line x1="0" y1="${cy}" x2="${viewW}" y2="${cy}" stroke="#4FD1C5" stroke-width="0.5"/>
   `;
   svgEl.appendChild(chGroup);
 
-  // Ship outline — actual hull path scaled down to fit tac view
+  // ---- COMPUTE SHIP DIMENSIONS ----
   const deckGapTac = 1;
   const hullPath = buildHullPath(ship, 0, 0, deckGapTac);
-
-  // Compute the hull bounding box from ship data
   const maxTileCols = Math.max(...ship.decks.map(d => d.tiles[0].length));
   const totalTileRows = ship.decks.reduce((sum, d) => sum + d.tiles.length, 0);
   const totalWithGaps = totalTileRows + (ship.decks.length - 1) * deckGapTac;
   const hullRawW = maxTileCols * TILE_SIZE;
   const hullRawH = totalWithGaps * TILE_SIZE;
 
-  // Scale to fit roughly 20px wide in tac view (small but recognizable)
-  const targetW = 16;
-  const scaleFactor = targetW / hullRawW;
-  const shipH = hullRawH * scaleFactor;
+  // Ship size at each zoom: close = ~16px wide, gets smaller with zoom
+  const shipPixelW = Math.max(2, 16 / zoom.scale);
+  const scaleFactor = shipPixelW / hullRawW;
+  const shipPixelH = hullRawH * scaleFactor;
 
+  // ---- PLUME (rendered behind ship) ----
+  if (thrustActive) {
+    const plumeGroup = document.createElementNS(SVG_NS, 'g');
+    const nozzleY = cy + shipPixelH / 2;
+
+    // Plume geometry: fireball near ship then long taper
+    // Fireball = 2x ship length, width = wider than ship
+    // Total plume = 15x ship length
+    const fireballLen = shipPixelH * 2;
+    const fireballHalfW = shipPixelW * 2.5; // much wider than ship
+    const tailLen = shipPixelH * 13;
+    const totalPlumeLen = fireballLen + tailLen;
+
+    if (zoom.shipMode === 'dot') {
+      // FAR ZOOM: plume is a blazing star
+      const starR = Math.min(viewW, viewH) * 0.3;
+      plumeGroup.innerHTML += `
+        <ellipse cx="${cx}" cy="${cy + 2}" rx="${starR}" ry="${starR * 1.3}"
+          fill="#FFFFFF" opacity="0.06" filter="url(#tac-sun)">
+          <animate attributeName="opacity" values="0.03;0.08;0.03" dur="0.3s" repeatCount="indefinite"/>
+        </ellipse>
+        <ellipse cx="${cx}" cy="${cy + 2}" rx="${starR * 0.5}" ry="${starR * 0.7}"
+          fill="#D0E8FF" opacity="0.1" filter="url(#tac-bloom)">
+          <animate attributeName="opacity" values="0.06;0.14;0.06" dur="0.2s" repeatCount="indefinite"/>
+        </ellipse>
+        <ellipse cx="${cx}" cy="${cy + 1}" rx="${starR * 0.15}" ry="${starR * 0.2}"
+          fill="#FFFFFF" opacity="0.7" filter="url(#tac-glow)">
+          <animate attributeName="opacity" values="0.5;0.8;0.5" dur="0.1s" repeatCount="indefinite"/>
+        </ellipse>
+        <rect x="${cx - 1}" y="${cy}" width="2" height="2" fill="#FFFFFF" opacity="1">
+          <animate attributeName="opacity" values="0.8;1;0.8" dur="0.08s" repeatCount="indefinite"/>
+        </rect>
+      `;
+    } else {
+      // CLOSE / MEDIUM: render fireball + tail shape
+      const numSections = 24;
+      const sections = [];
+
+      for (let i = 0; i < numSections; i++) {
+        const t = i / numSections;
+        const dist = t * totalPlumeLen;
+        const y = nozzleY + dist;
+        const h = totalPlumeLen / numSections + 0.5;
+
+        // Width profile: expands fast to fireball, then tapers
+        let halfW;
+        const fireballT = dist / fireballLen; // 0-1 within fireball zone
+        if (dist < fireballLen) {
+          // Fireball: fast expansion with peak ~60% through
+          halfW = fireballHalfW * Math.sin(fireballT * Math.PI * 0.7);
+          halfW = Math.max(halfW, 1);
+        } else {
+          // Tail: gradual taper from fireball width
+          const tailT = (dist - fireballLen) / tailLen;
+          const startW = fireballHalfW * Math.sin(0.7 * Math.PI);
+          halfW = startW * Math.pow(1 - tailT, 0.7);
+          halfW = Math.max(halfW, 0.5);
+        }
+
+        // Color: white core → blue-white → blue → dim blue
+        let color, opacity;
+        if (dist < fireballLen * 0.3) {
+          color = '#FFFFFF';
+          opacity = 0.9 - t * 0.5;
+        } else if (dist < fireballLen) {
+          const ft = (dist - fireballLen * 0.3) / (fireballLen * 0.7);
+          const r = Math.round(255 - ft * 60);
+          const g = Math.round(255 - ft * 30);
+          color = `rgb(${r},${g},255)`;
+          opacity = 0.7 - ft * 0.3;
+        } else {
+          const tt = (dist - fireballLen) / tailLen;
+          const r = Math.round(195 - tt * 100);
+          const g = Math.round(225 - tt * 80);
+          color = `rgb(${Math.max(60, r)},${Math.max(100, g)},255)`;
+          opacity = Math.max(0.02, 0.4 - tt * 0.38);
+        }
+
+        sections.push(`<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
+          fill="${color}" opacity="${opacity.toFixed(3)}">
+          <animate attributeName="opacity"
+            values="${(opacity * 0.8).toFixed(3)};${opacity.toFixed(3)};${(opacity * 0.8).toFixed(3)}"
+            dur="${(0.05 + t * 0.15).toFixed(2)}s" repeatCount="indefinite"/>
+        </rect>`);
+      }
+
+      // White-hot nozzle core
+      const coreLen = fireballLen * 0.3;
+      for (let i = 0; i < 5; i++) {
+        const t = i / 5;
+        const y = nozzleY + t * coreLen;
+        const h = coreLen / 5 + 0.5;
+        const halfW = Math.max(1, shipPixelW * 0.4 * (1 + t * 2));
+        const op = 1.0 - t * 0.2;
+        sections.push(`<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
+          fill="#FFFFFF" opacity="${op.toFixed(2)}">
+          <animate attributeName="opacity"
+            values="${(op * 0.9).toFixed(2)};${op.toFixed(2)};${(op * 0.9).toFixed(2)}"
+            dur="0.05s" repeatCount="indefinite"/>
+        </rect>`);
+      }
+
+      // Fireball bloom
+      sections.push(`<ellipse cx="${cx}" cy="${nozzleY + fireballLen * 0.4}"
+        rx="${fireballHalfW * 1.2}" ry="${fireballLen * 0.6}"
+        fill="#FFFFFF" opacity="0.05" filter="url(#tac-bloom)">
+        <animate attributeName="opacity" values="0.03;0.07;0.03" dur="0.2s" repeatCount="indefinite"/>
+      </ellipse>`);
+
+      // Nozzle flash
+      sections.push(`<ellipse cx="${cx}" cy="${nozzleY + 1}"
+        rx="${shipPixelW * 0.6}" ry="${shipPixelW * 0.3}"
+        fill="#FFFFFF" opacity="0.4" filter="url(#tac-glow)">
+        <animate attributeName="opacity" values="0.3;0.5;0.3" dur="0.1s" repeatCount="indefinite"/>
+      </ellipse>`);
+
+      plumeGroup.innerHTML = sections.join('\n');
+    }
+
+    svgEl.appendChild(plumeGroup);
+  }
+
+  // ---- SHIP ----
   const shipGroup = document.createElementNS(SVG_NS, 'g');
-  if (hullPath) {
-    // Transform: scale down and translate so hull is centered at (cx, cy)
+
+  if (zoom.shipMode === 'hull' && hullPath) {
+    // Close zoom: actual hull outline
     const tx = cx - (hullRawW * scaleFactor) / 2;
     const ty = cy - (hullRawH * scaleFactor) / 2;
 
@@ -603,7 +773,6 @@ export function renderTacView(ship, container, thrustActive) {
     hullEl.setAttribute('transform', `translate(${tx},${ty}) scale(${scaleFactor})`);
     shipGroup.appendChild(hullEl);
 
-    // Glow outline
     const hullGlow = document.createElementNS(SVG_NS, 'path');
     hullGlow.setAttribute('d', hullPath);
     hullGlow.setAttribute('fill', 'none');
@@ -612,99 +781,34 @@ export function renderTacView(ship, container, thrustActive) {
     hullGlow.setAttribute('opacity', '0.3');
     hullGlow.setAttribute('transform', `translate(${tx},${ty}) scale(${scaleFactor})`);
     shipGroup.appendChild(hullGlow);
-  }
 
-  // Blinking center dot
+    // Label next to ship
+    const labelEl = document.createElementNS(SVG_NS, 'text');
+    labelEl.setAttribute('x', cx + shipPixelW / 2 + 4);
+    labelEl.setAttribute('y', cy + 2);
+    labelEl.setAttribute('font-family', '"Press Start 2P", monospace');
+    labelEl.setAttribute('font-size', '4');
+    labelEl.setAttribute('fill', '#3A4E62');
+    labelEl.textContent = ship.name.substring(0, 10).toUpperCase();
+    shipGroup.appendChild(labelEl);
+  } else if (zoom.shipMode === 'icon') {
+    // Medium zoom: small diamond icon
+    const s = 3;
+    shipGroup.innerHTML += `
+      <polygon points="${cx},${cy - s} ${cx + s * 0.6},${cy} ${cx},${cy + s} ${cx - s * 0.6},${cy}"
+        fill="#1A2A3A" stroke="#3D7A8A" stroke-width="0.5"/>
+    `;
+  }
+  // dot mode: blinking dot only (below)
+
+  // Blinking center dot (always visible)
+  const dotSize = zoom.shipMode === 'dot' ? 2 : 1;
   shipGroup.innerHTML += `
-    <rect x="${cx - 1}" y="${cy - 1}" width="2" height="2" fill="#4FD1C5" opacity="0.8">
-      <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
+    <rect x="${cx - dotSize / 2}" y="${cy - dotSize / 2}" width="${dotSize}" height="${dotSize}" fill="#4FD1C5" opacity="0.9">
+      <animate attributeName="opacity" values="0.5;1;0.5" dur="1.5s" repeatCount="indefinite"/>
     </rect>
   `;
   svgEl.appendChild(shipGroup);
-
-  // PLUME — massive, dwarfs the ship
-  const plumeGroup = document.createElementNS(SVG_NS, 'g');
-  plumeGroup.setAttribute('id', 'tac-plume');
-  plumeGroup.setAttribute('display', thrustActive ? 'inline' : 'none');
-
-  if (thrustActive) {
-    const plumeStartY = cy + shipH / 2;
-    const plumeLen = viewH * 2; // massive — extends far past the tac screen
-    const maxPlumeW = viewW * 0.7; // plume fills most of the tac view width
-
-    // Defs for tac plume glow
-    const tacDefs = document.createElementNS(SVG_NS, 'defs');
-    tacDefs.innerHTML = `
-      <filter id="tac-glow" x="-100%" y="-50%" width="300%" height="300%">
-        <feGaussianBlur stdDeviation="6"/>
-      </filter>
-      <filter id="tac-bloom" x="-200%" y="-100%" width="500%" height="400%">
-        <feGaussianBlur stdDeviation="14"/>
-      </filter>
-    `;
-    svgEl.appendChild(tacDefs);
-
-    // Outer bloom
-    plumeGroup.innerHTML += `<ellipse cx="${cx}" cy="${plumeStartY + plumeLen * 0.3}"
-      rx="${maxPlumeW * 0.4}" ry="${plumeLen * 0.4}"
-      fill="#FFFFFF" opacity="0.04" filter="url(#tac-bloom)">
-      <animate attributeName="opacity" values="0.02;0.06;0.02" dur="0.3s" repeatCount="indefinite"/>
-    </ellipse>`;
-
-    // Build expanding cone sections
-    const numSections = 16;
-    for (let i = 0; i < numSections; i++) {
-      const t = i / numSections;
-      const y = plumeStartY + t * plumeLen;
-      const h = plumeLen / numSections + 1;
-      const halfW = 2 + (maxPlumeW / 2 - 2) * Math.pow(t, 0.5);
-      const opacity = Math.max(0.02, 0.8 - t * 0.7);
-      const r = Math.round(255 - t * 100);
-      const g = Math.round(255 - t * 60);
-      const color = `rgb(${r},${g},255)`;
-
-      plumeGroup.innerHTML += `<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
-        fill="${color}" opacity="${opacity.toFixed(3)}">
-        <animate attributeName="opacity"
-          values="${(opacity * 0.8).toFixed(3)};${opacity.toFixed(3)};${(opacity * 0.8).toFixed(3)}"
-          dur="${(0.08 + t * 0.2).toFixed(2)}s" repeatCount="indefinite"/>
-      </rect>`;
-    }
-
-    // White-hot inner core
-    const coreLen = plumeLen * 0.3;
-    for (let i = 0; i < 6; i++) {
-      const t = i / 6;
-      const y = plumeStartY + t * coreLen;
-      const h = coreLen / 6 + 1;
-      const halfW = 1.5 + t * 3;
-      const op = 1.0 - t * 0.4;
-      plumeGroup.innerHTML += `<rect x="${cx - halfW}" y="${y}" width="${halfW * 2}" height="${h}"
-        fill="#FFFFFF" opacity="${op.toFixed(2)}">
-        <animate attributeName="opacity"
-          values="${(op * 0.85).toFixed(2)};${op.toFixed(2)};${(op * 0.85).toFixed(2)}"
-          dur="0.06s" repeatCount="indefinite"/>
-      </rect>`;
-    }
-
-    // Glow halo around nozzle
-    plumeGroup.innerHTML += `<ellipse cx="${cx}" cy="${plumeStartY + 4}"
-      rx="12" ry="8" fill="#FFFFFF" opacity="0.2" filter="url(#tac-glow)">
-      <animate attributeName="opacity" values="0.15;0.3;0.15" dur="0.15s" repeatCount="indefinite"/>
-    </ellipse>`;
-  }
-
-  svgEl.appendChild(plumeGroup);
-
-  // Ship label
-  const label = document.createElementNS(SVG_NS, 'text');
-  label.setAttribute('x', cx + targetW / 2 + 4);
-  label.setAttribute('y', cy + 2);
-  label.setAttribute('font-family', '"Press Start 2P", monospace');
-  label.setAttribute('font-size', '4');
-  label.setAttribute('fill', '#3A4E62');
-  label.textContent = ship.name.substring(0, 10).toUpperCase();
-  svgEl.appendChild(label);
 
   container.appendChild(svgEl);
 }

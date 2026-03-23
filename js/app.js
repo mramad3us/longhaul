@@ -26,6 +26,7 @@ let selectedCrew = null;
 let particleInterval = null;
 let lastCrewStateKey = null;
 let lastThrustActive = null;
+let tacZoomLevel = 0;
 
 // ---- SHIP'S LOG ----
 const MAX_LOG_ENTRIES = 200;
@@ -321,6 +322,22 @@ function initHud() {
   });
 
   initLog();
+
+  // Tac zoom controls
+  const rangeLabels = ['1 km', '5 km', '25 km'];
+  document.querySelectorAll('.tac-zoom-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      tacZoomLevel = parseInt(btn.dataset.tacZoom);
+      document.querySelectorAll('.tac-zoom-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tac-range').textContent = rangeLabels[tacZoomLevel];
+      // Re-render tac view
+      const tacScreen = document.getElementById('tac-screen');
+      if (tacScreen && gameState) {
+        renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel);
+      }
+    });
+  });
 }
 
 function updateThrustSliderUI(level) {
@@ -575,7 +592,7 @@ function updateHud(state) {
     lastThrustActive = phys.thrustActive;
     const tacScreen = document.getElementById('tac-screen');
     if (tacScreen) {
-      renderTacView(state.ship, tacScreen, phys.thrustActive);
+      renderTacView(state.ship, tacScreen, phys.thrustActive, tacZoomLevel);
     }
   }
 
@@ -619,7 +636,7 @@ function startGame() {
   // Render tactical view
   const tacScreen = document.getElementById('tac-screen');
   if (tacScreen) {
-    renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive);
+    renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel);
   }
 
   // Set initial gravity state (thrust=0 at start = micro-G)
