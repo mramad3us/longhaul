@@ -21,7 +21,7 @@ import { generateAutoJobs, clearJobs, getJobQueue, getCrewJobs, completeJob, Job
 import { getAtmoStatus, getEquipmentStatusLabel, depressurizeCompartment, repressurizeCompartment, quickPatchLS, toggleLS, countSuitsOnDeck, donEvaSuit, removeEvaSuit, findNearestSuitLocker } from './life-support.js';
 import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet, zoomToBody, SOLAR_ZOOM_PRESETS, resetMapState, getMapState, setOnBodySelect, getSelectedBody, setSelectedBody } from './solar-system.js';
 import { findBody, getBodyWorldPos, calculateRoutes, activateRoute, cancelRoute, getActiveRoute, getRouteProgress, formatDuration, formatDeltaV, serializeRoute, deserializeRoute, resetRoute } from './navigation.js';
-import { initReactor, ReactorState, isReactorOnline, getReactorStatusText, beginShutdown, cancelShutdown, beginEmergencyShutoff, cancelEmergencyShutoff, beginStartup, patchReactor, STARTUP_MIN_ENGINEERING, STARTUP_MIN_FUEL } from './reactor.js';
+import { initReactor, ReactorState, isReactorOnline, getReactorStatusText, beginShutdown, cancelShutdown, beginEmergencyShutoff, immediateEmergencyShutoff, cancelEmergencyShutoff, beginStartup, patchReactor, STARTUP_MIN_ENGINEERING, STARTUP_MIN_FUEL } from './reactor.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -1320,8 +1320,8 @@ function selectCrew(member) {
   const hc = v => v >= 70 ? 'var(--ok)' : v >= 40 ? 'var(--warning)' : 'var(--danger)';
   const bc = v => v >= 70 ? 'ok' : v >= 40 ? 'warning' : 'danger';
 
-  // Heartbeat speed: faster BPM = faster animation, flatline if dead
-  const beatDuration = h.bpm > 0 ? Math.max(0.25, 60 / h.bpm) : 0;
+  // Heartbeat pulse: scaled so 110bpm ≈ 0.83s, slower BPM = slower pulse
+  const beatDuration = h.bpm > 0 ? Math.max(0.5, 91.7 / h.bpm) : 0;
 
   // Conditions display
   const condLabels = {
@@ -1719,7 +1719,8 @@ function selectTile(tileType, deckIdx, tx, ty) {
           html += `<button class="crew-action-btn crew-action-recover" data-tile-action="reactor-shutdown" data-crew="${eng.id}">SHUTDOWN (${escapeHtml(eng.name)})</button>`;
         });
       }
-      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-emergency">\u26A0 EMERGENCY SHUTOFF</button>`;
+      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-emergency">\u26A0 EMERGENCY SHUTOFF (1h)</button>`;
+      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-immediate" style="border-color:var(--danger)">\u26A0 IMMEDIATE SHUTOFF (dumps ALL fuel)</button>`;
     }
 
     if (r.status === 'shutdown-countdown') {
@@ -1759,7 +1760,8 @@ function selectTile(tileType, deckIdx, tx, ty) {
           html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-shutdown" data-crew="${eng.id}">EMERGENCY SCRAM (${escapeHtml(eng.name)})</button>`;
         });
       }
-      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-emergency">\u26A0 EMERGENCY SHUTOFF (dumps fuel)</button>`;
+      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-emergency">\u26A0 EMERGENCY SHUTOFF (1h, keeps 10 fuel)</button>`;
+      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-immediate" style="border-color:var(--danger)">\u26A0 IMMEDIATE SHUTOFF (dumps ALL fuel)</button>`;
     }
 
     if (r.status === 'shutting-down') {
@@ -1817,6 +1819,17 @@ function selectTile(tileType, deckIdx, tx, ty) {
         if (result.success) {
           showToast(result.message, 'danger');
           addLogEntry(result.message, 'danger');
+        } else {
+          showToast(result.message, 'danger');
+        }
+        selectTile(selectedTile.tileType, selectedTile.deckIdx, selectedTile.tx, selectedTile.ty);
+      }
+      if (action === 'reactor-immediate') {
+        const result = immediateEmergencyShutoff(gameState);
+        if (result.success) {
+          showToast(result.message, 'danger');
+          addLogEntry(result.message, 'danger');
+          document.body.classList.add('reactor-offline');
         } else {
           showToast(result.message, 'danger');
         }

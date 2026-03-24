@@ -1541,14 +1541,13 @@ body.dev-mode .info-section.dev-only {
   stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
-  animation: heartbeatTrace linear infinite;
-  stroke-dasharray: 80;
-  stroke-dashoffset: 0;
+  animation: heartbeatPulse ease-in-out infinite;
 }
 
-@keyframes heartbeatTrace {
-  0% { stroke-dashoffset: 0; }
-  100% { stroke-dashoffset: -80; }
+@keyframes heartbeatPulse {
+  0%, 100% { opacity: 0.5; stroke-width: 1.5; }
+  35% { opacity: 1; stroke-width: 2.2; }
+  55% { opacity: 0.7; stroke-width: 1.5; }
 }
 
 .crew-heart-bpm {
