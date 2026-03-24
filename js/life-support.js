@@ -293,9 +293,11 @@ export function lifeSupportTick(gameState) {
 
     // 4. LIFE SUPPORT EQUIPMENT — scrub CO2, inject O2/N2
     // Any working LS module on the ship services all compartments
+    // Blackout: no power = no life support
+    const blackout = res.power.current <= 0 && gameState.reactor && gameState.reactor.status === 'offline';
     const eq = lsEquip[di];
 
-    if (shipHasWorkingLS && !atmo.breached && !atmo.depressurized) {
+    if (shipHasWorkingLS && !atmo.breached && !atmo.depressurized && !blackout) {
       const eff = bestLSEfficiency;
 
       // CO2 scrubbing

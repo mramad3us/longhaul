@@ -26,7 +26,7 @@ const EMERGENCY_SHUTOFF_MINUTES = 60;  // 1 hour countdown
 const EMERGENCY_FUEL_RESERVE = 10;     // Fuel kept after emergency shutoff
 const POWER_REGEN_PER_MINUTE = 10 / 60; // 10 units/hour when online
 const POWER_DRAIN_PER_MINUTE = 1 / 60;  // 1 unit/hour when offline (emergency power)
-const CONTAINMENT_FAILURE_MINUTES = 30;  // 30 minutes to supercritical
+const CONTAINMENT_FAILURE_MINUTES = 90;  // 1h30m to supercritical
 
 // ---- INITIALIZATION ----
 
@@ -132,6 +132,14 @@ export function reactorTick(gameState) {
       if (gameState.physics.thrustActive) {
         gameState.physics.thrustActive = false;
         gameState.physics.thrustLevel = 0;
+      }
+      // Blackout: emergency power exhausted
+      if (res.power.current <= 0 && !r._blackout) {
+        r._blackout = true;
+        events.push({ type: 'blackout' });
+      } else if (res.power.current > 0 && r._blackout) {
+        r._blackout = false;
+        events.push({ type: 'blackout-end' });
       }
       break;
 
@@ -263,7 +271,7 @@ export function cancelShutdown(gameState) {
 
 /**
  * Begin emergency shutoff. Anyone can trigger this.
- * 1-hour countdown, then dumps all fuel except reserve.
+ * 1-hour countdown, then dumps fuel to reserve (10 units).
  */
 export function beginEmergencyShutoff(gameState) {
   const r = gameState.reactor;
@@ -282,6 +290,32 @@ export function beginEmergencyShutoff(gameState) {
   r.containmentTriggered = false;
   r.containmentTimer = 0;
   return { success: true, message: `EMERGENCY SHUTOFF — fuel dump in ${EMERGENCY_SHUTOFF_MINUTES} min` };
+}
+
+/**
+ * Immediate emergency shutoff — skips the 1h countdown but dumps ALL fuel.
+ * Use when you can't wait (e.g. containment failure with no engineer).
+ */
+export function immediateEmergencyShutoff(gameState) {
+  const r = gameState.reactor;
+  if (!r) return { success: false, message: 'No reactor' };
+  if (r.status === ReactorState.OFFLINE || r.status === ReactorState.STARTING_UP) {
+    return { success: false, message: 'Reactor already offline' };
+  }
+
+  r.status = ReactorState.OFFLINE;
+  r.emergencyCountdown = 0;
+  r.shutdownProgress = 0;
+  r.shutdownEngineerId = null;
+  r.containmentTimer = 0;
+  // Containment stays triggered if it was — needs patching
+  // Dump ALL fuel
+  gameState.resources.fuel.current = 0;
+  if (gameState.physics.thrustActive) {
+    gameState.physics.thrustActive = false;
+    gameState.physics.thrustLevel = 0;
+  }
+  return { success: true, message: 'IMMEDIATE SHUTOFF — ALL FUEL DUMPED' };
 }
 
 /**

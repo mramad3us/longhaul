@@ -285,8 +285,9 @@ export function generateAutoJobs(ship, physics, devMode, lsEquipment, gameState)
     }
   }
 
-  // Life support repair jobs
-  if (lsEquipment) {
+  // Life support repair jobs (skip during blackout — no power)
+  const blackout = gameState && gameState.resources.power.current <= 0 && gameState.reactor && gameState.reactor.status === 'offline';
+  if (lsEquipment && !blackout) {
     Object.entries(lsEquipment).forEach(([deckIdxStr, eq]) => {
       const deckIdx = parseInt(deckIdxStr);
       if (eq.enabled !== false && (eq.status === 'failed' || eq.status === 'degraded') &&

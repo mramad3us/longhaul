@@ -1541,7 +1541,7 @@ body.dev-mode .info-section.dev-only {
   stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
-  animation: heartbeatPulse ease-in-out infinite;
+  animation: heartbeatPulse 1.2s ease-in-out infinite;
 }
 
 @keyframes heartbeatPulse {
@@ -3458,4 +3458,31 @@ body.reactor-offline #screen-game::after {
 @keyframes reactorPulse {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 1; }
+}
+
+/* ---- TOTAL BLACKOUT — NO POWER ---- */
+body.ship-blackout #screen-game::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+  z-index: 100;
+  animation: blackoutFlicker 6s ease-in-out infinite;
+}
+body.ship-blackout .tac-screen {
+  background: #000 !important;
+}
+body.ship-blackout .tac-view {
+  pointer-events: none;
+}
+
+@keyframes blackoutFlicker {
+  0%, 100% { opacity: 0.85; }
+  48% { opacity: 0.85; }
+  50% { opacity: 0.5; }
+  52% { opacity: 0.85; }
+  70% { opacity: 0.85; }
+  71% { opacity: 0.6; }
+  72% { opacity: 0.85; }
 }

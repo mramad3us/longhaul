@@ -23,6 +23,11 @@ import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet,
 import { findBody, getBodyWorldPos, calculateRoutes, activateRoute, cancelRoute, getActiveRoute, getRouteProgress, formatDuration, formatDeltaV, serializeRoute, deserializeRoute, resetRoute } from './navigation.js';
 import { initReactor, ReactorState, isReactorOnline, getReactorStatusText, beginShutdown, cancelShutdown, beginEmergencyShutoff, immediateEmergencyShutoff, cancelEmergencyShutoff, beginStartup, patchReactor, STARTUP_MIN_ENGINEERING, STARTUP_MIN_FUEL } from './reactor.js';
 
+// ---- HELPERS ----
+function isBlackout() {
+  return gameState && gameState.resources.power.current <= 0 && gameState.reactor && gameState.reactor.status === 'offline';
+}
+
 // ---- STATE ----
 let currentScreen = 'landing';
 let gameState = null;
@@ -761,9 +766,14 @@ function renderSolarTab(forceRender) {
   }
 
   // Throttle SVG re-render to every 60 ticks (~1s at 60fps) unless forced
-  solarRenderCounter++;
-  if (forceRender || solarRenderCounter % 60 === 0) {
-    renderSolarSystem(solarScreen, gameState, routeInfo);
+  // Skip render during blackout
+  if (isBlackout()) {
+    if (solarScreen) solarScreen.innerHTML = '';
+  } else {
+    solarRenderCounter++;
+    if (forceRender || solarRenderCounter % 60 === 0) {
+      renderSolarSystem(solarScreen, gameState, routeInfo);
+    }
   }
 
   // Update info bar every tick (cheap DOM updates)
@@ -1097,6 +1107,7 @@ function updateRouteDetail() {
 }
 
 function openTacModal() {
+  if (isBlackout()) return;
   const modal = document.getElementById('tac-modal');
   if (!modal) return;
   tacModalOpen = true;
@@ -1720,7 +1731,6 @@ function selectTile(tileType, deckIdx, tx, ty) {
         });
       }
       html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-emergency">\u26A0 EMERGENCY SHUTOFF (1h)</button>`;
-      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-immediate" style="border-color:var(--danger)">\u26A0 IMMEDIATE SHUTOFF (dumps ALL fuel)</button>`;
     }
 
     if (r.status === 'shutdown-countdown') {
@@ -1729,6 +1739,7 @@ function selectTile(tileType, deckIdx, tx, ty) {
 
     if (r.status === 'emergency-shutoff') {
       html += `<button class="crew-action-btn crew-action-recover" data-tile-action="reactor-cancel-emergency">CANCEL EMERGENCY</button>`;
+      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-immediate" style="border-color:var(--danger)">\u26A0 IMMEDIATE SHUTOFF (dumps ALL fuel)</button>`;
     }
 
     if (r.status === 'offline') {
@@ -1760,8 +1771,7 @@ function selectTile(tileType, deckIdx, tx, ty) {
           html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-shutdown" data-crew="${eng.id}">EMERGENCY SCRAM (${escapeHtml(eng.name)})</button>`;
         });
       }
-      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-emergency">\u26A0 EMERGENCY SHUTOFF (1h, keeps 10 fuel)</button>`;
-      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-immediate" style="border-color:var(--danger)">\u26A0 IMMEDIATE SHUTOFF (dumps ALL fuel)</button>`;
+      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-emergency">\u26A0 EMERGENCY SHUTOFF (1h)</button>`;
     }
 
     if (r.status === 'shutting-down') {
@@ -2025,6 +2035,7 @@ function initResourcePanel() {
 
 // Track previous resource levels for alerts
 let prevResourceLevels = {};
+let _lastResourceAlertTime = {};
 
 function updateResourcePanel(state) {
   _resCache._crew.textContent = state.ship.crew.length;
@@ -2051,9 +2062,12 @@ function updateResourcePanel(state) {
       hasCritical = true;
       alerts.push(`${cfg.name} critical: ${Math.round(pct)}%`);
 
-      // Toast + log on first entry to critical
-      const prevPct = prevResourceLevels[cfg.key] || 100;
-      if (prevPct >= 15 && pct < 15) {
+      // Toast + log on first entry to critical (debounced 10s)
+      const now = Date.now();
+      const lastAlert = _lastResourceAlertTime[cfg.key] || 0;
+      const prevPct = prevResourceLevels[cfg.key] ?? 100;
+      if (prevPct >= 15 && pct < 15 && now - lastAlert > 10000) {
+        _lastResourceAlertTime[cfg.key] = now;
         showToast(`${cfg.name} CRITICAL`, 'danger');
         addLogEntry(`${cfg.name} critical — ${Math.round(pct)}% remaining`, 'danger');
       }
@@ -2061,8 +2075,11 @@ function updateResourcePanel(state) {
       itemEl.classList.add('warning');
       alerts.push(`${cfg.name} low: ${Math.round(pct)}%`);
 
-      const prevPct = prevResourceLevels[cfg.key] || 100;
-      if (prevPct >= 30 && pct < 30) {
+      const now = Date.now();
+      const lastAlert = _lastResourceAlertTime[cfg.key] || 0;
+      const prevPct = prevResourceLevels[cfg.key] ?? 100;
+      if (prevPct >= 30 && pct < 30 && now - lastAlert > 10000) {
+        _lastResourceAlertTime[cfg.key] = now;
         showToast(`${cfg.name} running low`, 'warn');
         addLogEntry(`${cfg.name} low — ${Math.round(pct)}% remaining`, 'warn');
       }
@@ -2268,10 +2285,14 @@ function updateHud(state) {
     lastTacVelocityBucket = velBucket;
     lastOrienting = !!phys.orienting;
     if (_hud.tacScreen) {
-      renderTacView(state.ship, _hud.tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting);
+      if (isBlackout()) {
+        _hud.tacScreen.innerHTML = '';
+      } else {
+        renderTacView(state.ship, _hud.tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting);
+      }
     }
     // Keep modal tac in sync (full re-render on significant change)
-    if (tacModalOpen && tacModalTab === 'tactical') renderTacModal();
+    if (tacModalOpen && tacModalTab === 'tactical' && !isBlackout()) renderTacModal();
   }
   // Orient maneuver gating: pilot must be at helm, then wait for crew (or player override)
   if (_orientState === 'waiting-pilot') {
@@ -2370,6 +2391,7 @@ function startGame() {
   showScreen('game');
   initResourcePanel();
   prevResourceLevels = {};
+  _lastResourceAlertTime = {};
   selectedCrew = null;
 
   // Reset crew info panel
@@ -2636,6 +2658,7 @@ function startGame() {
           showToast('Reactor online', 'ok');
           addLogEntry('Fusion reactor online. All systems nominal.', 'ok');
           document.body.classList.remove('reactor-offline');
+          document.body.classList.remove('ship-blackout');
         } else if (evt.type === 'shutdown-countdown-started') {
           showToast('Reactor shutdown \u2014 1h countdown', 'warn');
           addLogEntry('Reactor shutdown sequence complete. 1 hour to offline.', 'warn');
@@ -2649,6 +2672,12 @@ function startGame() {
           showToast('FUEL DUMPED \u2014 Reactor offline', 'danger');
           addLogEntry(`Emergency shutoff complete. Fuel dumped to ${evt.fuelRemaining} units.`, 'danger');
           document.body.classList.add('reactor-offline');
+        } else if (evt.type === 'blackout') {
+          showToast('TOTAL BLACKOUT \u2014 All systems down', 'danger');
+          addLogEntry('Emergency power exhausted. Life support, navigation, and all systems offline.', 'danger');
+          document.body.classList.add('ship-blackout');
+        } else if (evt.type === 'blackout-end') {
+          document.body.classList.remove('ship-blackout');
         }
       });
       return;
