@@ -569,7 +569,7 @@ export const TILE_NAMES = {
   [TileType.BUNK]: 'Bunk',
   [TileType.TABLE]: 'Table',
   [TileType.ENGINE]: 'Epstein Drive',
-  [TileType.REACTOR]: 'Reactor',
+  [TileType.REACTOR]: 'Fusion Reactor',
   [TileType.STORAGE]: 'Storage Bay',
   [TileType.LIFE_SUPPORT]: 'Life Support',
   [TileType.AIRLOCK]: 'Airlock',

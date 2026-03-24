@@ -21,6 +21,7 @@ import { generateAutoJobs, clearJobs, getJobQueue, getCrewJobs, completeJob, Job
 import { getAtmoStatus, getEquipmentStatusLabel, depressurizeCompartment, repressurizeCompartment, quickPatchLS, toggleLS, countSuitsOnDeck, donEvaSuit, removeEvaSuit, findNearestSuitLocker } from './life-support.js';
 import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet, zoomToBody, SOLAR_ZOOM_PRESETS, resetMapState, getMapState, setOnBodySelect, getSelectedBody, setSelectedBody } from './solar-system.js';
 import { findBody, getBodyWorldPos, calculateRoutes, activateRoute, cancelRoute, getActiveRoute, getRouteProgress, formatDuration, formatDeltaV, serializeRoute, deserializeRoute, resetRoute } from './navigation.js';
+import { initReactor, ReactorState, isReactorOnline, getReactorStatusText, beginShutdown, cancelShutdown, beginEmergencyShutoff, cancelEmergencyShutoff, beginStartup, patchReactor, STARTUP_MIN_ENGINEERING, STARTUP_MIN_FUEL } from './reactor.js';
 
 // ---- STATE ----
 let currentScreen = 'landing';
@@ -424,6 +425,10 @@ async function refreshSaveList() {
         const { initLifeSupport } = await import('./life-support.js');
         initLifeSupport(gameState);
       }
+      // Migrate old saves: add reactor if missing
+      if (!gameState.reactor) {
+        initReactor(gameState);
+      }
       // Migrate: add ship position if missing
       if (!gameState.shipPosition) {
         gameState.shipPosition = { x: 2.77, y: 0.0 };
@@ -469,6 +474,10 @@ function initHud() {
   // Thrust toggle button — toggles between off and last slider value
   document.getElementById('thrust-toggle').addEventListener('click', () => {
     if (!gameState) return;
+    if (!isReactorOnline(gameState)) {
+      showToast('Cannot thrust \u2014 reactor offline', 'danger');
+      return;
+    }
     const phys = gameState.physics;
     const slider = document.getElementById('thrust-slider');
 
@@ -1576,7 +1585,7 @@ const TILE_DESCRIPTIONS = {
   [TileType.CONSOLE]: 'General-purpose ship terminal. Used for comms, sensors, and system monitoring.',
   [TileType.NAV_CONSOLE]: 'Navigation and flight control. Plots courses and manages burn sequences.',
   [TileType.ENGINE]: 'Epstein fusion drive. Provides thrust for interplanetary travel.',
-  [TileType.REACTOR]: 'Fusion reactor core. Powers all ship systems.',
+  [TileType.REACTOR]: 'Fusion reactor core. Powers all ship systems including the Epstein drive. Containment failure is catastrophic.',
   [TileType.STORAGE]: 'Cargo and supply storage. Holds provisions and spare parts.',
   [TileType.LIFE_SUPPORT]: 'Atmospheric recycling and O2 generation. Keeps the crew breathing.',
   [TileType.AIRLOCK]: 'Pressurized airlock for EVA operations.',
@@ -1592,7 +1601,10 @@ const TILE_STATUS_FN = {
     const p = gameState.physics;
     return p.thrustActive ? `Active — ${p.gForce.toFixed(1)}G` : 'Idle';
   },
-  [TileType.REACTOR]: () => 'Online',
+  [TileType.REACTOR]: () => {
+    if (!gameState || !gameState.reactor) return 'Online';
+    return getReactorStatusText(gameState);
+  },
   [TileType.LIFE_SUPPORT]: (deckIdx) => {
     if (!gameState) return '—';
     const eq = gameState.lsEquipment?.[deckIdx];
@@ -1694,6 +1706,73 @@ function selectTile(tileType, deckIdx, tx, ty) {
     }
   }
 
+  // Reactor action buttons
+  if (tileType === TileType.REACTOR && gameState.reactor) {
+    const r = gameState.reactor;
+    html += '<div class="tile-actions">';
+
+    if (r.status === 'online') {
+      // Find engineers for shutdown
+      const engineers = gameState.ship.crew.filter(c => !c.dead && c.consciousness > 10 && c.role === 'Engineer');
+      if (engineers.length > 0) {
+        engineers.forEach(eng => {
+          html += `<button class="crew-action-btn crew-action-recover" data-tile-action="reactor-shutdown" data-crew="${eng.id}">SHUTDOWN (${escapeHtml(eng.name)})</button>`;
+        });
+      }
+      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-emergency">\u26A0 EMERGENCY SHUTOFF</button>`;
+    }
+
+    if (r.status === 'shutdown-countdown') {
+      html += `<button class="crew-action-btn crew-action-recover" data-tile-action="reactor-cancel-shutdown">CANCEL SHUTDOWN</button>`;
+    }
+
+    if (r.status === 'emergency-shutoff') {
+      html += `<button class="crew-action-btn crew-action-recover" data-tile-action="reactor-cancel-emergency">CANCEL EMERGENCY</button>`;
+    }
+
+    if (r.status === 'offline') {
+      if (r.containmentTriggered) {
+        // Need to patch first
+        const patchCrew = gameState.ship.crew.filter(c => !c.dead && c.consciousness > 10 && (c.skills?.engineering || 0) >= 10);
+        patchCrew.forEach(eng => {
+          html += `<button class="crew-action-btn crew-action-recover" data-tile-action="reactor-patch" data-crew="${eng.id}">PATCH CONTAINMENT (${escapeHtml(eng.name)})</button>`;
+        });
+      } else {
+        // Startup
+        const startCrew = gameState.ship.crew.filter(c => !c.dead && c.consciousness > 10 && (c.skills?.engineering || 0) >= STARTUP_MIN_ENGINEERING);
+        if (startCrew.length > 0 && gameState.resources.fuel.current >= STARTUP_MIN_FUEL) {
+          startCrew.forEach(eng => {
+            html += `<button class="crew-action-btn crew-action-recover" data-tile-action="reactor-startup" data-crew="${eng.id}">START REACTOR (${escapeHtml(eng.name)})</button>`;
+          });
+        } else if (gameState.resources.fuel.current < STARTUP_MIN_FUEL) {
+          html += `<span class="tile-status-value" style="color:var(--danger)">Insufficient fuel (need ${STARTUP_MIN_FUEL})</span>`;
+        } else {
+          html += `<span class="tile-status-value" style="color:var(--danger)">No qualified engineer (need eng \u2265 ${STARTUP_MIN_ENGINEERING})</span>`;
+        }
+      }
+    }
+
+    if (r.status === 'containment-failure') {
+      const engineers = gameState.ship.crew.filter(c => !c.dead && c.consciousness > 10 && c.role === 'Engineer');
+      if (engineers.length > 0) {
+        engineers.forEach(eng => {
+          html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-shutdown" data-crew="${eng.id}">EMERGENCY SCRAM (${escapeHtml(eng.name)})</button>`;
+        });
+      }
+      html += `<button class="crew-action-btn crew-action-rescue" data-tile-action="reactor-emergency">\u26A0 EMERGENCY SHUTOFF (dumps fuel)</button>`;
+    }
+
+    if (r.status === 'shutting-down') {
+      html += `<span class="tile-status-value">Engineer working on shutdown...</span>`;
+    }
+
+    if (r.status === 'starting-up') {
+      html += `<span class="tile-status-value">Engineer working on startup...</span>`;
+    }
+
+    html += '</div>';
+  }
+
   crewInfo.innerHTML = html;
 
   // Wire up tile action buttons
@@ -1713,6 +1792,63 @@ function selectTile(tileType, deckIdx, tx, ty) {
         }
         // Re-render the tile detail
         selectTile(tileType, deckIdx, tx, ty);
+      }
+      if (action === 'reactor-shutdown') {
+        const crewId = parseInt(btn.getAttribute('data-crew'));
+        const result = beginShutdown(gameState, crewId);
+        if (result.success) {
+          showToast(result.message, 'ok');
+          addLogEntry(result.message, 'system');
+          // If reactor went offline (containment scram), apply red tint
+          if (!isReactorOnline(gameState)) document.body.classList.add('reactor-offline');
+        } else {
+          showToast(result.message, 'danger');
+        }
+        selectTile(selectedTile.tileType, selectedTile.deckIdx, selectedTile.tx, selectedTile.ty);
+      }
+      if (action === 'reactor-cancel-shutdown') {
+        const result = cancelShutdown(gameState);
+        showToast(result.message, result.success ? 'ok' : 'danger');
+        if (result.success) addLogEntry(result.message, 'system');
+        selectTile(selectedTile.tileType, selectedTile.deckIdx, selectedTile.tx, selectedTile.ty);
+      }
+      if (action === 'reactor-emergency') {
+        const result = beginEmergencyShutoff(gameState);
+        if (result.success) {
+          showToast(result.message, 'danger');
+          addLogEntry(result.message, 'danger');
+        } else {
+          showToast(result.message, 'danger');
+        }
+        selectTile(selectedTile.tileType, selectedTile.deckIdx, selectedTile.tx, selectedTile.ty);
+      }
+      if (action === 'reactor-cancel-emergency') {
+        const result = cancelEmergencyShutoff(gameState);
+        showToast(result.message, result.success ? 'ok' : 'danger');
+        if (result.success) addLogEntry(result.message, 'system');
+        selectTile(selectedTile.tileType, selectedTile.deckIdx, selectedTile.tx, selectedTile.ty);
+      }
+      if (action === 'reactor-startup') {
+        const crewId = parseInt(btn.getAttribute('data-crew'));
+        const result = beginStartup(gameState, crewId);
+        if (result.success) {
+          showToast(result.message, 'ok');
+          addLogEntry(result.message, 'system');
+        } else {
+          showToast(result.message, 'danger');
+        }
+        selectTile(selectedTile.tileType, selectedTile.deckIdx, selectedTile.tx, selectedTile.ty);
+      }
+      if (action === 'reactor-patch') {
+        const crewId = parseInt(btn.getAttribute('data-crew'));
+        const result = patchReactor(gameState, crewId);
+        if (result.success) {
+          showToast(result.message, 'ok');
+          addLogEntry(result.message, 'ok');
+        } else {
+          showToast(result.message, 'danger');
+        }
+        selectTile(selectedTile.tileType, selectedTile.deckIdx, selectedTile.tx, selectedTile.ty);
       }
     });
   });
@@ -2260,6 +2396,13 @@ function startGame() {
   clearJobs();
   startCrewMovementLoop();
 
+  // Init reactor — ensure state exists
+  if (!gameState.reactor) initReactor(gameState);
+  document.body.classList.remove('reactor-offline');
+  if (gameState.reactor && !isReactorOnline(gameState)) {
+    document.body.classList.add('reactor-offline');
+  }
+
   // Set initial gravity state (thrust=0 at start = micro-G)
   const hasGravity = gameState.navigation.thrust > 0;
   lastCrewStateKey = null;
@@ -2465,6 +2608,38 @@ function startGame() {
       if (jobsDlg && jobsDlg.style.display !== 'none') renderJobsDialog();
     }
   }, async (event, data) => {
+    if (event === 'reactorEvents') {
+      data.forEach(evt => {
+        if (evt.type === 'supercritical') {
+          showToast('REACTOR SUPERCRITICAL \u2014 CATASTROPHIC FAILURE', 'danger');
+          addLogEntry('Fusion reactor went supercritical. Ship destroyed.', 'danger');
+          // TODO: game over screen
+          if (gameLoop) gameLoop.stop();
+        } else if (evt.type === 'reactor-offline') {
+          showToast('Reactor offline \u2014 emergency power', 'danger');
+          addLogEntry('Fusion reactor offline. Emergency power active.', 'danger');
+          document.body.classList.add('reactor-offline');
+        } else if (evt.type === 'reactor-online') {
+          showToast('Reactor online', 'ok');
+          addLogEntry('Fusion reactor online. All systems nominal.', 'ok');
+          document.body.classList.remove('reactor-offline');
+        } else if (evt.type === 'shutdown-countdown-started') {
+          showToast('Reactor shutdown \u2014 1h countdown', 'warn');
+          addLogEntry('Reactor shutdown sequence complete. 1 hour to offline.', 'warn');
+        } else if (evt.type === 'shutdown-aborted') {
+          showToast('Reactor shutdown aborted', 'danger');
+          addLogEntry(`Reactor shutdown aborted: ${evt.reason}`, 'danger');
+        } else if (evt.type === 'startup-aborted') {
+          showToast('Reactor startup aborted', 'danger');
+          addLogEntry(`Reactor startup aborted: ${evt.reason}`, 'danger');
+        } else if (evt.type === 'emergency-shutoff-complete') {
+          showToast('FUEL DUMPED \u2014 Reactor offline', 'danger');
+          addLogEntry(`Emergency shutoff complete. Fuel dumped to ${evt.fuelRemaining} units.`, 'danger');
+          document.body.classList.add('reactor-offline');
+        }
+      });
+      return;
+    }
     if (event === 'autosave') {
       try {
         gameState._activeRoute = serializeRoute();

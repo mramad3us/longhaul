@@ -3444,3 +3444,19 @@ body.dev-mode .info-section.dev-only {
   color: var(--text-dim);
   flex: 1;
 }
+
+/* ---- REACTOR OFFLINE — EMERGENCY POWER RED TINT ---- */
+body.reactor-offline #screen-game::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(180, 40, 40, 0.08);
+  pointer-events: none;
+  z-index: 100;
+  animation: reactorPulse 4s ease-in-out infinite;
+}
+
+@keyframes reactorPulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
