@@ -573,9 +573,16 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
   // not for a fixed duration. The thrust direction updates each tick in
   // routeTick to track the current relative velocity vector.
   //
-  // Skip for thrusting targets — their velocity changes faster than we can
-  // kill it. Those use continuous heading correction instead.
-  const needsVelocityKill = relSpeed > 50 && !entity.thrustActive;
+  // Velocity kill needed when relative velocity is significantly MISALIGNED
+  // with the intercept heading. If we're already closing on the target
+  // (velocity roughly toward it), the brachistochrone handles it — no kill needed.
+  //
+  // cosAngle: 1 = perfectly toward target, 0 = perpendicular, -1 = flying away
+  // Kill when < 0.3 (>72° off from target heading) — mostly cross-track or receding
+  //
+  // Skip for thrusting targets — their velocity changes faster than we can kill it.
+  const cosAngle = relSpeed > 1 ? closingSpeed / relSpeed : 1;
+  const needsVelocityKill = relSpeed > 500 && cosAngle < 0.3 && !entity.thrustActive;
 
   let brakingPhases = [];
   let brakeDeltaV = 0;
