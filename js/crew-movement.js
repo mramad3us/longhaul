@@ -658,13 +658,11 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
       return;
     }
 
-    if (speed === 0) {
-      updateCrewVisual(ship, ms, member);
-      return;
-    }
-
     // ---- SECURE FOR BURN ----
+    // Processed BEFORE the speed===0 check: crew crawl to couches even under
+    // extreme G. Getting to the couch is the priority — they drag themselves.
     if (ms.mission === 'secure-burn') {
+      const secureSpeed = Math.max(BASE_SPEED * 0.15, speed); // minimum crawl speed
       if (ms._arrivedAtCouch) {
         // Already seated — stay put
         updateCrewVisual(ship, ms, member);
@@ -673,7 +671,7 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
       if (ms.missionTarget) {
         if (ms.pause > 0) { ms.pause -= dt; updateCrewVisual(ship, ms, member); return; }
 
-        const arrived = moveToward(ms, ms.missionTarget, speed, dt);
+        const arrived = moveToward(ms, ms.missionTarget, secureSpeed, dt);
         if (arrived) {
           // Snap onto the actual crash couch tile
           const couchPos = ms._couchPos || ms.missionTarget;
@@ -683,6 +681,11 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
         member.x = ms.x;
         member.y = ms.y;
       }
+      updateCrewVisual(ship, ms, member);
+      return;
+    }
+
+    if (speed === 0) {
       updateCrewVisual(ship, ms, member);
       return;
     }

@@ -870,7 +870,8 @@ function initHud() {
           if (currentMission && currentMission !== 'secure-burn' && currentMission !== 'healing') {
             cancelMission(member.id, gameState.ship);
           }
-          assignSecureBurnMission(gameState.ship, member);
+          const result = assignSecureBurnMission(gameState.ship, member);
+          console.log(`[COMBAT] ${member.name}: assignSecureBurn=${result}, mission=${getCrewMission(member.id)}, deck=${member.deck}`);
         }
       });
       // Red combat lighting overlay on ship view
