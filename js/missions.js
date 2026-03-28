@@ -6,8 +6,7 @@
 
 import { createEntity, EntityType, EntityState, entityDistanceAU, relativeSpeed, bearingTo, computeOrbitalVelocity } from './entities.js';
 import { getActiveRoute } from './navigation.js';
-// Scanner ranges imported if needed for spawn distance calibration
-// import { SCANNER_RANGES } from './scanner.js';
+import { stationMissionTick, initStationMissions, serializeStationMissions, deserializeStationMissions } from './station-missions.js';
 
 // ---- CONSTANTS ----
 
@@ -105,6 +104,7 @@ export function initMissions(gameState) {
   eventCooldown = 180; // 3-hour grace period at game start
   interceptState = null;
   nextMissionId = 1;
+  initStationMissions();
 }
 
 // ---- MISSION CRUD ----
@@ -761,6 +761,10 @@ export function missionTick(gameState, days) {
     }
   }
 
+  // Station mission board tick (refresh boards, phase transitions)
+  const stationEvents = stationMissionTick(gameState);
+  if (stationEvents.length > 0) events.push(...stationEvents);
+
   // Check for new random events
   const event = checkRandomEvents(gameState, days);
   if (event) {
@@ -939,6 +943,7 @@ export function serializeMissions() {
     eventCooldown,
     interceptState: interceptState ? { ...interceptState } : null,
     nextMissionId,
+    stationMissions: serializeStationMissions(),
   };
 }
 
@@ -948,6 +953,7 @@ export function deserializeMissions(data) {
   eventCooldown = data.eventCooldown || 0;
   interceptState = data.interceptState || null;
   nextMissionId = data.nextMissionId || (missions.length + 1);
+  deserializeStationMissions(data.stationMissions);
 }
 
 // ---- HELPERS ----

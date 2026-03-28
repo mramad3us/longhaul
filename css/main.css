@@ -3145,6 +3145,172 @@ body.dev-mode .info-section.dev-only {
   margin-left: auto;
 }
 
+/* ---- STATION MISSION BOARD DIALOG ---- */
+.dialog-station {
+  min-width: 480px;
+  max-width: 560px;
+  max-height: 85vh;
+  overflow-y: auto;
+  border: 1px solid var(--hull-accent);
+  background: rgba(4, 8, 14, 0.97);
+  background-image: var(--noise);
+}
+.station-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hull-accent);
+  background: rgba(10, 20, 32, 0.5);
+}
+.station-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+}
+.station-faction {
+  font-family: var(--font-pixel);
+  font-size: 0.3rem;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+.station-signal {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--accent-dim);
+}
+.station-greeting {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hull-primary);
+  font-style: italic;
+}
+.station-board {
+  padding: 8px 12px;
+}
+.station-board-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 4px 8px;
+}
+.station-board-title {
+  font-family: var(--font-pixel);
+  font-size: 0.35rem;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+.station-board-count {
+  font-family: var(--font-pixel);
+  font-size: 0.28rem;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.station-board-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Mission card */
+.station-mission-card {
+  border: 1px solid var(--hull-accent);
+  padding: 10px 12px;
+  cursor: default;
+  transition: border-color 0.15s;
+}
+.station-mission-card:hover {
+  border-color: var(--accent-dim);
+}
+.station-mission-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.station-mission-type {
+  font-family: var(--font-pixel);
+  font-size: 0.28rem;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+.station-mission-deadline {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-dim);
+}
+.station-mission-desc {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.station-mission-meta {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.station-mission-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.station-mission-reward {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+.station-mission-accept {
+  background: none;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--font-pixel);
+  font-size: 0.3rem;
+  padding: 5px 12px;
+  cursor: pointer;
+  letter-spacing: 0.08em;
+  transition: all 0.15s;
+}
+.station-mission-accept:hover {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+  box-shadow: var(--glow-accent);
+}
+/* Active missions section */
+.station-active {
+  padding: 8px 12px;
+  border-top: 1px solid var(--hull-primary);
+}
+.station-active-header {
+  font-family: var(--font-pixel);
+  font-size: 0.3rem;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.station-active-list {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.station-mission-empty {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 16px 4px;
+  text-align: center;
+}
+
 /* ---- TACTICAL MAP MODAL ---- */
 .tac-modal-overlay {
   position: fixed;

@@ -54,6 +54,7 @@ export function createGameState(shipName, captainName, crewCount) {
     speed: 1,
     paused: false,
     resources: {
+      credits: { current: 5000, max: Infinity, unit: 'MCR' },
       fuel: { current: 8500, max: 10000, unit: 'kg' },
       oxygen: { current: 950, max: 1000, unit: 'hr' },
       water: { current: 4200, max: 5000, unit: 'L' },

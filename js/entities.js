@@ -121,6 +121,13 @@ export function createEntity(opts) {
     faction: opts.faction || 'independent',
     // Tracking data (revealed over time by scanner)
     mass: opts.mass || 0, // metric tons
+    // Station mission board (stations only)
+    _missionBoard: (opts.type === EntityType.STATION) ? {
+      missions: [],
+      lastRefresh: 0,
+      refreshInterval: 720,  // new missions every 12 game-hours
+      maxMissions: 5,
+    } : undefined,
   };
 }
 
@@ -139,6 +146,42 @@ export function createDefaultEntities() {
       faction: 'OPA',
       shipClass: 'Tycho-class station',
       mass: 850000,
+    }),
+    // Ceres Station — main Belt hub, Belter-run
+    createEntity({
+      id: 'ceres-station',
+      name: 'Ceres Station',
+      type: EntityType.STATION,
+      state: EntityState.STATIONARY,
+      orbitBody: 'Ceres',
+      orbitOffset: { x: 0.0001, y: 0.00015 },
+      faction: 'Belter',
+      shipClass: 'Ceres-class station',
+      mass: 1200000,
+    }),
+    // Vesta Depot — independent mining station
+    createEntity({
+      id: 'vesta-depot',
+      name: 'Vesta Depot',
+      type: EntityType.STATION,
+      state: EntityState.STATIONARY,
+      orbitBody: 'Vesta',
+      orbitOffset: { x: -0.0002, y: 0.0001 },
+      faction: 'independent',
+      shipClass: 'Mining depot',
+      mass: 450000,
+    }),
+    // Hygiea Ring — OPA refueling station
+    createEntity({
+      id: 'hygiea-ring',
+      name: 'Hygiea Ring',
+      type: EntityType.STATION,
+      state: EntityState.STATIONARY,
+      orbitBody: 'Hygiea',
+      orbitOffset: { x: 0.00015, y: -0.0001 },
+      faction: 'OPA',
+      shipClass: 'Ring station',
+      mass: 320000,
     }),
     // MCRN Scirocco — patrol ship near Mars
     createEntity({

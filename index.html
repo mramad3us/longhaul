@@ -525,6 +525,34 @@
         </div>
       </div>
 
+      <!-- Station Mission Board Dialog -->
+      <div class="dialog-overlay" id="dialog-station" style="display:none">
+        <div class="dialog dialog-station">
+          <div class="station-header">
+            <span class="station-name" id="station-name">---</span>
+            <span class="station-faction" id="station-faction"></span>
+            <span class="station-signal">◈ <span id="station-signal-str">■■■■■</span></span>
+          </div>
+          <div class="station-greeting" id="station-greeting"></div>
+          <div class="station-board">
+            <div class="station-board-header">
+              <span class="station-board-title">MISSION BOARD</span>
+              <span class="station-board-count" id="station-board-count">0 AVAILABLE</span>
+            </div>
+            <div class="station-board-list" id="station-board-list">
+              <!-- Mission cards rendered by JS -->
+            </div>
+          </div>
+          <div class="station-active" id="station-active-missions" style="display:none">
+            <div class="station-active-header">ACTIVE MISSIONS</div>
+            <div class="station-active-list" id="station-active-list"></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" data-action="close-station">CLOSE CHANNEL</button>
+          </div>
+        </div>
+      </div>
+
       <div class="dialog-overlay" id="dialog-exit" style="display:none">
         <div class="dialog">
           <h3 class="dialog-title">Exit to Menu</h3>

@@ -26,6 +26,7 @@ import { createDefaultEntities, entityTick, computeOrbitalVelocity, getEntityByI
 import { initComms, commsTick, toggleTransponder, triggerSOS, getRadioContacts, isTransponderOn, isSosActive, getHailDialogue } from './comms.js';
 import { initScanner, scannerTick, renderScanner, selectContact, deselectContact, startTracking, stopTracking, setRange, getTrackedEntity, getSelectedContact, SCANNER_RANGES, getShipFacing } from './scanner.js';
 import { initMissions, acceptMission, declineMission, startIntercept, cancelIntercept, computeInterceptRoute, computeFineTuneRoute, completeMissionViaHail, getActiveMissions, getMissionLog, getMissionForEntity, getInterceptState, startFineApproach, isFineApproaching, serializeMissions, deserializeMissions, INTERCEPT_TYPE, INTERCEPT_RANGE_AU } from './missions.js';
+import { acceptStationMission, completeStationMission, getActiveStationMissions, StationMissionType, MissionPhase } from './station-missions.js';
 import { initInertia, triggerManeuverEvent, updateInertiaFrame, isInertiaActive, ManeuverType, enterCinematicTime, exitCinematicTime, isInCinematicTime, drainImpactEvents, internalBleedingTick } from './inertia.js';
 
 // ---- HELPERS ----
@@ -2877,6 +2878,19 @@ function initResourcePanel() {
   panel.appendChild(crewItem);
   document.getElementById('res-icon-crew').appendChild(iconCrew());
 
+  // Credits (no bar — no max cap)
+  const creditsItem = document.createElement('div');
+  creditsItem.className = 'resource-item';
+  creditsItem.id = 'resource-credits';
+  creditsItem.innerHTML = `
+    <div class="resource-icon"><span style="font-size:0.7rem;color:var(--accent)">MCR</span></div>
+    <div class="resource-info">
+      <div class="resource-name">Credits</div>
+      <div class="resource-value" id="res-val-credits">0</div>
+    </div>
+  `;
+  panel.appendChild(creditsItem);
+
   // Resources
   RESOURCE_CONFIG.forEach(cfg => {
     const item = document.createElement('div');
@@ -2901,6 +2915,9 @@ let _lastResourceAlertTime = {};
 
 function updateResourcePanel(state) {
   _resCache._crew.textContent = state.ship.crew.length;
+  if (_resCache._credits && state.resources.credits) {
+    _resCache._credits.textContent = `${Math.round(state.resources.credits.current).toLocaleString()} MCR`;
+  }
 
   let hasCritical = false;
   const alerts = [];
@@ -3104,6 +3121,7 @@ function initHudCache() {
   // Resource panel elements
   _resCache = {};
   _resCache._crew = document.getElementById('res-val-crew');
+  _resCache._credits = document.getElementById('res-val-credits');
   _resCache._alertBorder = document.getElementById('alert-border');
   RESOURCE_CONFIG.forEach(cfg => {
     _resCache[cfg.key] = {
@@ -3793,6 +3811,14 @@ function startGame() {
           const reason = evt.reason || 'did not reach in time';
           showToast(`Mission failed: ${evt.title}`, 'danger');
           addLogEntry(`Mission failed: ${evt.title} — ${reason}`, 'danger');
+        } else if (evt.type === 'station-mission-failed') {
+          showToast(`Contract failed: ${evt.mission?.title}`, 'danger');
+          addLogEntry(`Contract failed: ${evt.mission?.title} — ${evt.reason}`, 'danger');
+        } else if (evt.type === 'station-mission-phase') {
+          if (evt.message) {
+            showToast(evt.message, 'nav');
+            addLogEntry(evt.message, 'nav');
+          }
         }
       });
       updateMissionsCount();
@@ -3913,6 +3939,11 @@ function initHudActions() {
   // Hail dialog
   document.querySelector('[data-action="close-hail"]').addEventListener('click', () => {
     document.getElementById('dialog-hail').style.display = 'none';
+  });
+
+  // Station dialog — Close
+  document.querySelector('[data-action="close-station"]').addEventListener('click', () => {
+    document.getElementById('dialog-station').style.display = 'none';
   });
 
   // SOS Event modal — Accept
@@ -4106,6 +4137,12 @@ function openHailModal(entityId) {
   if (!gameState || !gameState.entities) return;
   const entity = gameState.entities.find(e => e.id === entityId);
   if (!entity) return;
+
+  // Stations get the mission board dialog instead of simple hail
+  if (entity.type === 'station' && entity._missionBoard) {
+    openStationDialog(entity);
+    return;
+  }
 
   // Check if this is a rescue target and we're in formation
   const intercept = getInterceptState();
@@ -4382,6 +4419,161 @@ function openEventModal(eventData) {
   if (gameLoop && gameState.speed > 0) {
     gameLoop.setSpeed(0);
     updateSpeedUI(0);
+  }
+}
+
+// ---- STATION MISSION BOARD ----
+
+function openStationDialog(station) {
+  const dialog = document.getElementById('dialog-station');
+  document.getElementById('station-name').textContent = station.name;
+  document.getElementById('station-faction').textContent = station.faction !== 'independent' ? station.faction.toUpperCase() : '';
+
+  // Signal strength
+  const contact = (gameState.comms?.radioContacts || []).find(c => c.entityId === station.id);
+  const dist = contact ? contact.distance : entityDistanceAU(gameState.shipPosition, station.position);
+  const bars = Math.max(1, Math.min(5, Math.round((1 - dist / 0.1) * 5)));
+  document.getElementById('station-signal-str').textContent = '■'.repeat(bars) + '□'.repeat(5 - bars);
+
+  // Greeting
+  const greeting = getHailDialogue(station);
+  document.getElementById('station-greeting').textContent = greeting;
+
+  // Mission board
+  const board = station._missionBoard;
+  const boardList = document.getElementById('station-board-list');
+  const available = board?.missions?.filter(m => m.phase === 'available') || [];
+  document.getElementById('station-board-count').textContent = `${available.length} AVAILABLE`;
+
+  if (available.length === 0) {
+    boardList.innerHTML = '<div class="station-mission-empty">No contracts available. Check back later.</div>';
+  } else {
+    boardList.innerHTML = available.map(m => {
+      const deadline = formatMissionDeadline(m.urgencyTimerMin);
+      const rewardStr = formatMissionReward(m.reward);
+      const meta = getMissionMeta(m);
+      const typeLabel = STATION_MISSION_LABELS[m.type] || m.type;
+
+      return `
+        <div class="station-mission-card" data-mission-id="${m.id}">
+          <div class="station-mission-top">
+            <span class="station-mission-type">${typeLabel}</span>
+            <span class="station-mission-deadline">${deadline}</span>
+          </div>
+          <div class="station-mission-desc">${escapeHtml(m.description)}</div>
+          ${meta ? `<div class="station-mission-meta">${meta}</div>` : ''}
+          <div class="station-mission-bottom">
+            <span class="station-mission-reward">${rewardStr}</span>
+            <button class="station-mission-accept" data-accept-mission="${m.id}" data-station-id="${station.id}">ACCEPT</button>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  // Bind accept buttons
+  boardList.querySelectorAll('.station-mission-accept').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const missionId = btn.dataset.acceptMission;
+      const stationId = btn.dataset.stationId;
+      const result = acceptStationMission(stationId, missionId, gameState);
+      if (result) {
+        showToast(`Contract accepted: ${result.title}`, 'ok');
+        addLogEntry(`Accepted contract: ${result.title}`, 'nav');
+        openStationDialog(station); // refresh
+      } else {
+        showToast('Cannot accept contract', 'danger');
+      }
+    });
+  });
+
+  // Active missions section
+  const activeList = document.getElementById('station-active-list');
+  const activeSection = document.getElementById('station-active-missions');
+  const activeMissions = getActiveStationMissions();
+  if (activeMissions.length > 0) {
+    activeSection.style.display = '';
+    activeList.innerHTML = activeMissions.map(m => {
+      const phaseLabel = PHASE_LABELS[m.phase] || m.phase;
+      // Check if this mission can be turned in at this station
+      const canTurnIn = m.stationId === station.id &&
+        (m.phase === 'objective_complete' || m.phase === 'returning' || m.phase === 'at_objective');
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0">
+        <span>· ${escapeHtml(m.title)} — ${phaseLabel}</span>
+        ${canTurnIn ? `<button class="station-mission-accept" data-turnin-mission="${m.id}">TURN IN</button>` : ''}
+      </div>`;
+    }).join('');
+
+    // Bind turn-in buttons
+    activeList.querySelectorAll('[data-turnin-mission]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const result = completeStationMission(btn.dataset.turninMission, gameState);
+        if (result.success) {
+          const rewardParts = Object.entries(result.rewards).map(([k, v]) => `+${v} ${k}`);
+          showToast(`Contract complete! ${rewardParts.join(', ')}`, 'ok');
+          addLogEntry(`Contract complete: ${result.narrative}`, 'ok');
+          openStationDialog(station); // refresh
+        } else {
+          showToast(result.narrative, 'danger');
+        }
+      });
+    });
+  } else {
+    activeSection.style.display = 'none';
+  }
+
+  dialog.style.display = 'flex';
+  addLogEntry(`Opened channel with ${station.name}`, 'system');
+}
+
+const STATION_MISSION_LABELS = {
+  [StationMissionType.CARGO_HAUL]: 'CARGO HAUL',
+  [StationMissionType.PASSENGER_TRANSPORT]: 'PASSENGER TRANSPORT',
+  [StationMissionType.FUEL_RESUPPLY]: 'FUEL RESUPPLY',
+  [StationMissionType.INVESTIGATE_DISAPPEARANCE]: 'INVESTIGATE',
+  [StationMissionType.SALVAGE]: 'SALVAGE',
+  [StationMissionType.SURVEY]: 'SURVEY',
+  [StationMissionType.MEDICAL_EVAC]: 'MEDICAL EVAC',
+};
+
+const PHASE_LABELS = {
+  [MissionPhase.ACCEPTED]: 'accepted',
+  [MissionPhase.IN_TRANSIT]: 'en route',
+  [MissionPhase.AT_OBJECTIVE]: 'at objective',
+  [MissionPhase.OBJECTIVE_COMPLETE]: 'objective done — return to station',
+  [MissionPhase.RETURNING]: 'returning',
+};
+
+function formatMissionDeadline(minutes) {
+  if (minutes >= 1440) return `${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h`;
+  if (minutes >= 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  return `${minutes}m`;
+}
+
+function formatMissionReward(reward) {
+  const parts = [];
+  if (reward.credits) parts.push(`${reward.credits.toLocaleString()} MCR`);
+  if (reward.fuel) parts.push(`+${reward.fuel} fuel`);
+  if (reward.water) parts.push(`+${reward.water} water`);
+  if (reward.food) parts.push(`+${reward.food} food`);
+  if (reward.medSupplies) parts.push(`+${reward.medSupplies} med`);
+  return parts.join(' · ') || 'none';
+}
+
+function getMissionMeta(m) {
+  switch (m.type) {
+    case StationMissionType.CARGO_HAUL:
+      return m.cargo ? `${m.cargo.mass?.toLocaleString()} kg · ${m.destinationName}` : '';
+    case StationMissionType.PASSENGER_TRANSPORT:
+      return `${m.passengerCount} passengers · ${m.destinationName}`;
+    case StationMissionType.FUEL_RESUPPLY:
+      return `${m.fuelRequired?.toLocaleString()} kg fuel · ${m.destinationName}`;
+    case StationMissionType.SURVEY:
+      return `${m.scanDuration} min scan`;
+    case StationMissionType.MEDICAL_EVAC:
+      return `${m.patientCount} casualties`;
+    default: return '';
   }
 }
 
