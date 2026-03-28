@@ -438,8 +438,8 @@ export function assessInterceptFeasibility(gameState, entity) {
   // Current distance
   const dist = entityDistanceAU(shipPos, entity.position);
 
-  // Time to kill relative velocity at 1.5G (max before juice)
-  const killG = 1.5;
+  // Time to kill relative velocity — 1.5G standard, up to 5G in combat stations
+  const killG = gameState.combatStations ? 5.0 : 1.5;
   const killTimeSec = relSpeed / (killG * G_ACCEL);
 
   // Distance the ship drifts during velocity kill (worst case: moving directly away)
@@ -514,7 +514,7 @@ export function cancelIntercept() {
  *
  * @param {object} gameState
  * @param {string} targetEntityId
- * @param {object} opts - { targetRangeAU: number } — stop at this distance from target instead of exact position
+ * @param {object} opts - { targetRangeAU, accelG } — accelG overrides default burn G (for combat intercepts)
  */
 export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
   const entity = (gameState.entities || []).find(e => e.id === targetEntityId);
@@ -524,9 +524,10 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
   const shipPos = gameState.shipPosition;
   const shipVel = gameState.physics.velocity;
   // Runaway targets are accelerating — need to exceed their thrust to catch them
-  // Standard rescues use 1G, runaways need target's G + margin (capped at 5G for crew)
+  // Burn G: override from opts (combat intercepts), or default 1G / runaway pursuit G
   const targetG = (entity.thrustActive && entity.thrustG > 0) ? entity.thrustG : 0;
-  const maxG = targetG > 0 ? Math.min(targetG + 1.0, 5.0) : 1.0;
+  const maxG = opts.accelG > 0 ? opts.accelG :
+               (targetG > 0 ? Math.min(targetG + 1.0, 5.0) : 1.0);
 
   // If ship is already within target range, no route needed
   const dist0 = entityDistanceAU(shipPos, entity.position);
@@ -584,9 +585,8 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
     const velAngle = Math.atan2(relVy, relVx);
     const brakeDir = velAngle + Math.PI;
 
-    // Velocity kill at max G before juice (1.5G threshold).
-    // Crew are in crash couches but juice isn't automatic for velocity kills.
-    const killG = 1.5;
+    // Velocity kill: 1.5G standard (max before juice), 5G in combat stations
+    const killG = gameState.combatStations ? 5.0 : 1.5;
 
     // Duration is a generous upper bound — the phase ends on condition (relV < 50),
     // not on timer. Cap prevents infinite burn if something goes wrong.

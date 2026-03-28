@@ -839,6 +839,48 @@ function initHud() {
     }
   });
 
+  // Combat stations toggle
+  document.getElementById('combat-toggle').addEventListener('click', () => {
+    if (!gameState) return;
+    const btn = document.getElementById('combat-toggle');
+    const statusEl = document.getElementById('combat-status');
+
+    if (gameState.combatStations) {
+      // Deactivate
+      gameState.combatStations = false;
+      btn.classList.remove('active');
+      statusEl.textContent = 'OFF';
+      // Release all crew from couches
+      gameState.ship.crew.forEach(member => {
+        if (!member.dead) releaseSecureBurn(member.id);
+      });
+      // Remove red lighting
+      document.querySelector('.ship-combat-lighting')?.remove();
+      showToast('Combat stations secured', 'ok');
+      addLogEntry('Combat stations secured — all hands resume stations', 'system');
+    } else {
+      // Activate
+      gameState.combatStations = true;
+      btn.classList.add('active');
+      statusEl.textContent = 'ON';
+      // All crew to crash couches
+      gameState.ship.crew.forEach(member => {
+        if (!member.dead && member.consciousness > 10) {
+          assignSecureBurnMission(gameState.ship, member);
+        }
+      });
+      // Red combat lighting overlay on ship view
+      const shipContainer = document.getElementById('ship-container');
+      if (shipContainer && !shipContainer.querySelector('.ship-combat-lighting')) {
+        const overlay = document.createElement('div');
+        overlay.className = 'ship-combat-lighting';
+        shipContainer.appendChild(overlay);
+      }
+      showToast('COMBAT STATIONS', 'danger');
+      addLogEntry('COMBAT STATIONS — all hands to crash couches, juice standing by', 'danger');
+    }
+  });
+
   // Tac zoom controls
   const rangeLabels = ['1 km', '5 km', '25 km'];
   document.querySelectorAll('.tac-zoom-btn').forEach(btn => {
@@ -1349,11 +1391,11 @@ function getApproachSliderMin(currentDistKm) {
 
 // ---- INTERCEPT TYPE PANEL ----
 
-function buildInterceptTypeCard(type, label, rangeLabel, desc, currentDistKm) {
+function buildInterceptTypeCard(type, label, rangeLabel, desc, currentDistKm, accelG = 0) {
   const targetKm = INTERCEPT_RANGE_AU[type] * 149_597_870.7;
   const inRange = currentDistKm <= targetKm;
   return `
-    <div class="itp-card${inRange ? ' itp-card-inrange' : ''}" data-type="${type}">
+    <div class="itp-card${inRange ? ' itp-card-inrange' : ''}${accelG > 1.5 ? ' itp-card-combat' : ''}" data-type="${type}" data-accel-g="${accelG}">
       <div class="itp-card-top">
         <span class="itp-card-label">${label}</span>
         <span class="itp-card-range">${rangeLabel}</span>
@@ -1382,6 +1424,10 @@ function showInterceptTypePanel(entityId) {
       ${buildInterceptTypeCard(INTERCEPT_TYPE.SCANNER,  'SCANNER RANGE', '15M km',  'Enter sensor detection range', distKm)}
       ${buildInterceptTypeCard(INTERCEPT_TYPE.CLOSE,    'CLOSE APPROACH', '100k km', 'Full sensor lock · comms range', distKm)}
       ${buildInterceptTypeCard(INTERCEPT_TYPE.TACTICAL, 'TACTICAL', '< 5 km', 'Boarding · tow · combat · EVA', distKm)}
+      ${gameState.combatStations ? `
+        ${buildInterceptTypeCard(INTERCEPT_TYPE.TACTICAL, 'COMBAT 5G', '< 5 km', 'High-G tactical · juice required', distKm, 5)}
+        ${buildInterceptTypeCard(INTERCEPT_TYPE.TACTICAL, 'ASSAULT 7G', '< 5 km', 'Maximum burn · extreme G-force', distKm, 7)}
+      ` : ''}
     </div>
     <div class="itp-actions">
       <button class="btn btn-secondary" id="itp-cancel-btn">CANCEL</button>
@@ -1392,9 +1438,11 @@ function showInterceptTypePanel(entityId) {
   panel.querySelector('#itp-cancel-btn').addEventListener('click', hideInterceptTypePanel);
 
   let selectedType = null;
+  let selectedAccelG = 0;
   panel.querySelectorAll('.itp-card:not(.itp-card-inrange)').forEach(card => {
     card.addEventListener('click', () => {
       selectedType = card.dataset.type;
+      selectedAccelG = parseFloat(card.dataset.accelG) || 0;
       panel.querySelectorAll('.itp-card').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
       panel.querySelector('#itp-confirm-btn').disabled = false;
@@ -1404,7 +1452,9 @@ function showInterceptTypePanel(entityId) {
   panel.querySelector('#itp-confirm-btn').addEventListener('click', () => {
     if (!selectedType) return;
     const targetRangeAU = INTERCEPT_RANGE_AU[selectedType];
-    const route = computeInterceptRoute(gameState, entityId, { targetRangeAU });
+    const opts = { targetRangeAU };
+    if (selectedAccelG > 0) opts.accelG = selectedAccelG;
+    const route = computeInterceptRoute(gameState, entityId, opts);
     if (!route) {
       showToast('Cannot compute intercept — already in range', 'warn');
       hideInterceptTypePanel();
@@ -4269,6 +4319,10 @@ function initKeyboard() {
         if (document.body.classList.contains('dev-mode')) {
           document.getElementById('flip-toggle').click();
         }
+        break;
+      case 'c':
+      case 'C':
+        document.getElementById('combat-toggle').click();
         break;
       case 'm':
       case 'M': {

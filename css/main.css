@@ -976,6 +976,62 @@ body.dev-mode .info-section.dev-only {
   color: var(--warm);
 }
 
+/* ---- COMBAT STATIONS BUTTON ---- */
+.combat-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  margin-left: 4px;
+  background: var(--bg-raised);
+  border: 2px solid var(--text-dim);
+  border-radius: 0;
+  color: var(--text-dim);
+  font-family: var(--font-pixel);
+  font-size: 0.45rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.combat-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.combat-btn.active {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: rgba(226, 85, 85, 0.1);
+  animation: combatPulse 2s ease-in-out infinite;
+}
+.combat-btn-status {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-dim);
+}
+.combat-btn.active .combat-btn-status {
+  color: var(--danger);
+}
+@keyframes combatPulse {
+  0%, 100% { border-color: var(--danger); box-shadow: none; }
+  50% { border-color: #FF4444; box-shadow: 0 0 12px rgba(226, 85, 85, 0.4); }
+}
+
+/* Combat stations red ambient lighting on ship view */
+.ship-combat-lighting {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  background: radial-gradient(ellipse at 50% 40%, rgba(226, 50, 50, 0.08) 0%, transparent 70%);
+  mix-blend-mode: screen;
+  animation: combatAmbient 3s ease-in-out infinite;
+}
+@keyframes combatAmbient {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
 @keyframes flipPulse {
   0%, 100% { box-shadow: 0 0 8px rgba(226, 163, 85, 0.2); }
   50% { box-shadow: 0 0 14px rgba(226, 163, 85, 0.4); }
@@ -4041,6 +4097,12 @@ body.ship-blackout .tac-view {
   cursor: default;
   pointer-events: none;
 }
+.itp-card.itp-card-combat {
+  border-color: rgba(226, 85, 85, 0.3);
+}
+.itp-card.itp-card-combat::before { background: var(--danger); }
+.itp-card.itp-card-combat .itp-card-label { color: var(--danger); }
+.itp-card.itp-card-combat .itp-card-desc { color: var(--danger); opacity: 0.7; }
 
 .itp-card-top {
   display: flex;

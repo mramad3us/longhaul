@@ -78,6 +78,8 @@ export function createGameState(shipName, captainName, crewCount) {
       x: 2.77,
       y: 0.0,
     },
+    // Combat stations: all crew to couches, high-G burns unlocked
+    combatStations: false,
   };
 
   // Initialize ship orbital velocity at starting position

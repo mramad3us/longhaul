@@ -275,7 +275,31 @@ export function calculateRoutes(gameState, destBody) {
     routes.push(r);
   }
 
-  // 4. Hohmann — minimum energy transfer (only for celestial bodies with known orbits)
+  // 4. Combat burns (only when combat stations active)
+  if (gameState.combatStations) {
+    // 5G combat burn
+    {
+      const cDest = destPosAt(2 * Math.sqrt(dist * AU_M / (5.0 * G_ACCEL)) / 60);
+      const cDist = distAU(shipPos, cDest);
+      const r = calcBrachistochrone(cDist, 5.0, shipPos, cDest);
+      r.name = 'COMBAT 5G';
+      r.label = '5G Brachistochrone';
+      r.description = 'Combat burn — juice required. Crew in crash couches under high-G the entire transit.';
+      routes.push(r);
+    }
+    // 7G assault burn
+    {
+      const aDest = destPosAt(2 * Math.sqrt(dist * AU_M / (7.0 * G_ACCEL)) / 60);
+      const aDist = distAU(shipPos, aDest);
+      const r = calcBrachistochrone(aDist, 7.0, shipPos, aDest);
+      r.name = 'ASSAULT 7G';
+      r.label = '7G Brachistochrone';
+      r.description = 'Maximum assault burn — extreme G-force. Crew will suffer. Use only in emergencies.';
+      routes.push(r);
+    }
+  }
+
+  // 5. Hohmann — minimum energy transfer (only for celestial bodies with known orbits)
   if (destBody.type !== 'entity') {
     const shipR = Math.sqrt(shipPos.x * shipPos.x + shipPos.y * shipPos.y);
     const destR = (destBody.type === 'moon' && destBody.parent) ? destBody.parent.a : destBody.a;
