@@ -7,6 +7,23 @@
 import { getEntitiesInRange, entityDistanceAU, bearingTo, relativeApproachSpeed } from './entities.js';
 import { isTransponderOn } from './comms.js';
 
+// ---- SHIP FACING ----
+// Compute the direction the ship's nose is pointing, for ship-relative radar.
+// When on a route: facing along routeHeading (flipped 180° if retrograde).
+// When coasting: facing along velocity vector.
+export function getShipFacing(gameState) {
+  const nav = gameState.navigation;
+  const phys = gameState.physics;
+  if (nav && nav.routeHeading != null) {
+    return nav.routeHeading + (phys.heading === 180 ? Math.PI : 0);
+  }
+  const vel = phys?.velocity;
+  if (vel && (vel.vx !== 0 || vel.vy !== 0)) {
+    return Math.atan2(vel.vy, vel.vx);
+  }
+  return 0;
+}
+
 // ---- CONSTANTS ----
 
 // Range levels in AU
@@ -262,9 +279,17 @@ export function renderScanner(container, gameState) {
   parts.push(`<line x1="${cx - radius * 0.707}" y1="${cy - radius * 0.707}" x2="${cx + radius * 0.707}" y2="${cy + radius * 0.707}" stroke="#1A3A4A" stroke-width="0.2"/>`);
   parts.push(`<line x1="${cx - radius * 0.707}" y1="${cy + radius * 0.707}" x2="${cx + radius * 0.707}" y2="${cy - radius * 0.707}" stroke="#1A3A4A" stroke-width="0.2"/>`);
 
-  // Ship at center
-  parts.push(`<circle cx="${cx}" cy="${cy}" r="3" fill="#4FD1C5" opacity="0.9"/>`);
+  // Compute ship facing angle for ship-relative radar display.
+  // Forward = up on the display. All contacts rotate with the ship.
+  const shipFacing = getShipFacing(gameState);
+
+  // Ship at center — small triangle pointing up (forward)
+  parts.push(`<polygon points="${cx},${cy - 5} ${cx - 3},${cy + 3} ${cx + 3},${cy + 3}" fill="#4FD1C5" opacity="0.9"/>`);
   parts.push(`<circle cx="${cx}" cy="${cy}" r="6" fill="none" stroke="#4FD1C5" stroke-width="0.5" opacity="0.5"/>`);
+
+  // Forward heading tick at edge of display
+  parts.push(`<line x1="${cx}" y1="${cy - radius + 6}" x2="${cx}" y2="${cy - radius - 2}" stroke="#4FD1C5" stroke-width="1.5" opacity="0.7"/>`);
+  parts.push(`<text x="${cx}" y="${cy - radius - 5}" fill="#4FD1C5" font-size="7" font-family="var(--font-pixel)" text-anchor="middle" opacity="0.6">FWD</text>`);
 
   // Contacts
   for (const contact of contacts) {
@@ -272,8 +297,10 @@ export function renderScanner(container, gameState) {
     if (dist > rangeAU) continue;
 
     const frac = dist / rangeAU;
-    const px = cx + Math.cos(contact.bearing) * frac * radius;
-    const py = cy + Math.sin(contact.bearing) * frac * radius;
+    // Ship-relative bearing: subtract ship facing, use sin/cos so forward = up
+    const rel = contact.bearing - shipFacing;
+    const px = cx + Math.sin(rel) * frac * radius;
+    const py = cy - Math.cos(rel) * frac * radius;
 
     // Color based on type/faction
     let color = '#8A8A6A'; // unknown

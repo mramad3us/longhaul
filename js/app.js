@@ -24,7 +24,7 @@ import { findBody, getBodyWorldPos, calculateRoutes, activateRoute, cancelRoute,
 import { initReactor, ReactorState, isReactorOnline, getReactorStatusText, beginShutdown, cancelShutdown, beginEmergencyShutoff, immediateEmergencyShutoff, cancelEmergencyShutoff, beginStartup, patchReactor, STARTUP_MIN_ENGINEERING, STARTUP_MIN_FUEL } from './reactor.js';
 import { createDefaultEntities, entityTick, computeOrbitalVelocity, getEntityById, initializeEntityOrbit } from './entities.js';
 import { initComms, commsTick, toggleTransponder, triggerSOS, getRadioContacts, isTransponderOn, isSosActive, getHailDialogue } from './comms.js';
-import { initScanner, scannerTick, renderScanner, selectContact, deselectContact, startTracking, stopTracking, setRange, getTrackedEntity, getSelectedContact, SCANNER_RANGES } from './scanner.js';
+import { initScanner, scannerTick, renderScanner, selectContact, deselectContact, startTracking, stopTracking, setRange, getTrackedEntity, getSelectedContact, SCANNER_RANGES, getShipFacing } from './scanner.js';
 import { initMissions, acceptMission, declineMission, startIntercept, cancelIntercept, computeInterceptRoute, computeFineTuneRoute, completeMissionViaHail, getActiveMissions, getMissionLog, getMissionForEntity, getInterceptState, serializeMissions, deserializeMissions, INTERCEPT_TYPE, INTERCEPT_RANGE_AU } from './missions.js';
 import { initInertia, triggerManeuverEvent, updateInertiaFrame, isInertiaActive, ManeuverType, enterCinematicTime, exitCinematicTime, isInCinematicTime, drainImpactEvents, internalBleedingTick } from './inertia.js';
 
@@ -1226,7 +1226,10 @@ function updateScannerInfoBar() {
       const bearingEl = document.getElementById('scanner-contact-bearing');
       if (nameEl) nameEl.textContent = contact.name || contact.driveSignature || 'UNKNOWN';
       if (rangeEl) rangeEl.textContent = formatScannerRange(contact.range);
-      if (bearingEl) bearingEl.textContent = `${((contact.bearing * 180 / Math.PI + 360) % 360).toFixed(0)}°`;
+      if (bearingEl) {
+        const relBearing = ((contact.bearing - getShipFacing(gameState)) * 180 / Math.PI + 360) % 360;
+        bearingEl.textContent = `${relBearing.toFixed(0)}°`;
+      }
     }
 
     // Lock/Unlock button
@@ -1252,7 +1255,7 @@ function updateScannerInfoBar() {
 
     if (detailPanel && !itpOpen) {
       detailPanel.style.display = '';
-      const bearingDeg = ((contact.bearing * 180 / Math.PI + 360) % 360).toFixed(0);
+      const bearingDeg = (((contact.bearing - getShipFacing(gameState)) * 180 / Math.PI + 360) % 360).toFixed(0);
       const el = (id) => document.getElementById(id);
       const header = el('scanner-detail-header');
       if (header) {
