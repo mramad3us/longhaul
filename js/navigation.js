@@ -449,58 +449,84 @@ export function routeTick(gameState) {
     }
   }
 
-  // ---- INTERCEPT BURN COURSE CORRECTION ----
-  // During any burn phase of an intercept route, continuously update routeHeading
-  // to point toward the target. Without this, target drift causes the decel burn
-  // to thrust in the wrong direction — relV increases instead of decreasing.
-  if (phase.type === 'burn' && !phase.velocityKill && activeRoute.targetEntityId) {
+  // ---- INTERCEPT GUIDANCE SYSTEM ----
+  // Intercepts are pursuit problems, not pre-computed transfers. Every tick:
+  //   1. Course correction: heading always tracks the target
+  //   2. Flip decision: condition-based, not timer-based (flip when it's time to brake)
+  //   3. Decel termination: stop when relV is low, not after N minutes
+  //   4. Thrust modulation: reduce G when close to avoid overshoot
+  if (activeRoute.targetEntityId && (phase.type === 'burn' || phase.type === 'flip' || phase.type === 'match') && !phase.velocityKill) {
     const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
     if (target) {
-      const correctedHeading = bearingTo(gameState.shipPosition, target.position);
-      gameState.navigation.routeHeading = correctedHeading;
-      // Store previous relV for drift detection
+      const shipPos = gameState.shipPosition;
       const vel = gameState.physics.velocity;
       const relVx = vel.vx - target.velocity.vx;
       const relVy = vel.vy - target.velocity.vy;
       const relV = Math.sqrt(relVx * relVx + relVy * relVy);
-      const prevRelV = activeRoute._prevRelV ?? relV;
-      activeRoute._prevRelV = relV;
+      const dist = entityDistanceAU(shipPos, target.position);
+      const dist_m = dist * AU_M;
 
-      // If relV is increasing during a decel burn, something is wrong —
-      // force heading correction: ensure we're thrusting AGAINST approach vector
+      // -- 1. COURSE CORRECTION: always point toward target --
+      const targetBearing = bearingTo(shipPos, target.position);
+      if (phase.type === 'burn') {
+        gameState.navigation.routeHeading = targetBearing;
+      }
+
+      // -- 2. ACCEL→FLIP TRANSITION: flip when braking distance = remaining distance --
       const flipIdx = activeRoute.phases.findIndex(p => p.type === 'flip');
-      const isDecelBurn = activeRoute.currentPhase > flipIdx;
-      if (isDecelBurn && relV > prevRelV + 10) {
-        // Thrust should oppose relative velocity, not just be retrograde on routeHeading
-        const relAngle = Math.atan2(relVy, relVx);
-        gameState.navigation.routeHeading = relAngle; // point heading along relV
-        gameState.physics.heading = 180; // retrograde = thrust opposes relV
-      }
-    }
-  }
+      const isAccelBurn = phase.type === 'burn' && activeRoute.currentPhase < flipIdx;
+      if (isAccelBurn && flipIdx >= 0) {
+        // Braking distance at current relV and current G
+        const thrustG = phase.thrustG || 1.0;
+        const brakeDist_m = (relV * relV) / (2 * thrustG * G_ACCEL);
+        const targetRangeAU = activeRoute.targetRangeAU || 0;
+        const remainDist_m = Math.max(0, dist_m - targetRangeAU * AU_M);
 
-  // ---- MATCH PHASE: velocity convergence ----
-  // Handles residual velocity from minute-granularity rounding in the
-  // brachistochrone burns. Exponential reduction → snap when close.
-  // Once matched, force phase end so interceptTick can trigger fine approach.
-  if (phase.type === 'match' && activeRoute.targetEntityId) {
-    const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
-    if (target) {
-      const vel = gameState.physics.velocity;
-      const relVx = vel.vx - target.velocity.vx;
-      const relVy = vel.vy - target.velocity.vy;
-      const relV = Math.sqrt(relVx * relVx + relVy * relVy);
-      if (relV > 20) {
-        const keep = relV > 1000 ? 0.3 : relV > 100 ? 0.5 : 0.7;
-        vel.vx = target.velocity.vx + relVx * keep;
-        vel.vy = target.velocity.vy + relVy * keep;
-      } else {
-        // Velocity matched — snap and force phase end
-        vel.vx = target.velocity.vx;
-        vel.vy = target.velocity.vy;
-        activeRoute.phaseElapsed = phase.durationMin;
+        // When braking distance >= remaining distance, it's time to flip
+        if (brakeDist_m >= remainDist_m * 0.95) {
+          // Force accel burn to end → flip phase starts next
+          activeRoute.phaseElapsed = phase.durationMin;
+        }
       }
-      gameState.physics.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+
+      // -- 3. DECEL BURN: condition-based termination --
+      const isDecelBurn = phase.type === 'burn' && activeRoute.currentPhase > flipIdx;
+      if (isDecelBurn) {
+        // Thrust opposes relative velocity, not just retrograde on heading
+        const relAngle = Math.atan2(relVy, relVx);
+        gameState.navigation.routeHeading = relAngle;
+        gameState.physics.heading = 180;
+
+        // Throttle down as relV decreases — prevents oscillation at low speeds
+        if (relV < 500) {
+          const reducedG = Math.max(0.1, (relV / 500) * (phase.thrustG || 1.0));
+          gameState.physics.thrustLevel = Math.min(1, reducedG / gameState.physics.maxThrust);
+          gameState.navigation.thrust = reducedG;
+          gameState.physics.gForce = reducedG;
+        }
+
+        // Done decelerating — end the burn
+        if (relV < 50) {
+          vel.vx = target.velocity.vx;
+          vel.vy = target.velocity.vy;
+          gameState.physics.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+          activeRoute.phaseElapsed = phase.durationMin;
+        }
+      }
+
+      // -- 4. MATCH PHASE: exponential convergence + early termination --
+      if (phase.type === 'match') {
+        if (relV > 20) {
+          const keep = relV > 1000 ? 0.3 : relV > 100 ? 0.5 : 0.7;
+          vel.vx = target.velocity.vx + relVx * keep;
+          vel.vy = target.velocity.vy + relVy * keep;
+        } else {
+          vel.vx = target.velocity.vx;
+          vel.vy = target.velocity.vy;
+          activeRoute.phaseElapsed = phase.durationMin;
+        }
+        gameState.physics.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+      }
     }
   }
 
