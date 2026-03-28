@@ -581,12 +581,12 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
   // Kill when < 0.3 (>72° off from target heading) — mostly cross-track or receding
   //
   // Skip for thrusting targets — their velocity changes faster than we can kill it.
+  const closingSpeed = relVx * Math.cos(headingAngle) + relVy * Math.sin(headingAngle);
   const cosAngle = relSpeed > 1 ? closingSpeed / relSpeed : 1;
   const needsVelocityKill = relSpeed > 500 && cosAngle < 0.3 && !entity.thrustActive;
 
   let brakingPhases = [];
   let brakeDeltaV = 0;
-  const closingSpeed = relVx * Math.cos(headingAngle) + relVy * Math.sin(headingAngle);
   let postBrakeDist_m = Math.max(entityDistanceAU(shipPos, targetPos) - targetRangeAU, dist0 * 0.01) * AU_M;
 
   if (needsVelocityKill) {
