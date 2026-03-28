@@ -430,13 +430,16 @@ export function routeTick(gameState) {
       const isDecelBurn = activeRoute.currentPhase > flipIdx;
       if (isDecelBurn && activeRoute.phaseElapsed < phase.durationMin * 4) {
         const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
-        if (target) {
+        if (target && !target.thrustActive) {
+          // Only extend decel burn for non-thrusting targets.
+          // For thrusting targets (runaways), relV never converges — the target
+          // keeps accelerating. Let the burn end on schedule; match phase and
+          // interceptTick handle convergence via continuous heading correction.
           const vel = gameState.physics.velocity;
           const relVx = vel.vx - target.velocity.vx;
           const relVy = vel.vy - target.velocity.vy;
           const relV = Math.sqrt(relVx * relVx + relVy * relVy);
           if (relV > 100) {
-            // Still too fast — keep burning (up to 4x original duration as safety cap)
             return events.length > 0 ? events : null;
           }
         }

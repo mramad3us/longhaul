@@ -481,7 +481,9 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
 
   // Determine if a velocity kill burn is needed before approach
   // Threshold: > 500 m/s relative AND velocity is more than 60° off from target heading
-  const needsVelocityKill = relSpeed > 500 && cosAngle < 0.5;
+  // Skip for thrusting targets — their velocity changes continuously, so a fixed-direction
+  // braking burn goes stale and ends up thrusting the wrong way
+  const needsVelocityKill = relSpeed > 500 && cosAngle < 0.5 && !entity.thrustActive;
 
   let brakingPhases = [];
   let brakeDeltaV = 0;
