@@ -1558,16 +1558,28 @@ function buildApproachSliderDOM(container, contact) {
     const targetKm = Math.pow(10, logMin + frac * (logMax - logMin));
     const targetAU = targetKm / 149_597_870.7;
 
+    // Ensure an intercept state exists for the target
+    let currentIntercept = getInterceptState();
+    if (!currentIntercept || currentIntercept.targetEntityId !== currentContact.entityId) {
+      const mission = getMissionForEntity(currentContact.entityId);
+      startIntercept(gameState, currentContact.entityId, mission?.id, INTERCEPT_TYPE.TACTICAL);
+      currentIntercept = getInterceptState();
+    }
+
+    // Within 500km with low relV: use RCS fine approach (no burn-flip-burn, no overshoot)
+    if (currentDistKm < 500 && currentIntercept && !currentIntercept.fineApproach) {
+      startFineApproach(gameState);
+      showRcsThrusters('orient');
+      showToast(`RCS FINE APPROACH — ${currentContact.name || 'contact'}`, 'nav');
+      addLogEntry(`RCS fine approach: closing on ${currentContact.name || 'contact'} at ${formatApproachDist(currentDistKm)}`, 'nav');
+      renderScannerTab();
+      return;
+    }
+
     const route = computeFineTuneRoute(gameState, currentContact.entityId, targetAU);
     if (!route) {
       showToast('Already at target distance', 'ok');
       return;
-    }
-
-    // Ensure an intercept state exists
-    const currentIntercept = getInterceptState();
-    if (!currentIntercept || currentIntercept.targetEntityId !== currentContact.entityId) {
-      startIntercept(gameState, currentContact.entityId, null, INTERCEPT_TYPE.SCANNER);
     }
 
     activateRoute(gameState, route);

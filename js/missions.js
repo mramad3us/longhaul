@@ -862,8 +862,10 @@ export function interceptTick(gameState) {
     }
   }
 
-  // Auto-trigger fine approach when within range and velocity is matched
-  if (interceptState && !interceptState.fineApproach && !interceptState.formation && dist <= FINE_APPROACH_RANGE_AU && relVel < 100) {
+  // Auto-trigger fine approach when velocity is matched and not yet approaching.
+  // No distance gate — if relV is matched, fine approach handles any remaining distance.
+  // The closure rate scales with distance anyway (5 km/min at >100km, 50m/min at <1km).
+  if (interceptState && !interceptState.fineApproach && !interceptState.formation && relVel < 100) {
     interceptState.fineApproach = true;
     gameState.physics.thrustActive = false;
     gameState.physics.thrustLevel = 0;
