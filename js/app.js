@@ -3473,9 +3473,28 @@ function startGame() {
 
     // Secure-for-burn & crew dispatch — every 15 ticks
     if (slowTick) {
-      const routePhase = getRouteProgress()?.currentPhase?.type;
-      const routeHoldingCrew = routePhase === 'secure' || routePhase === 'burn' || routePhase === 'orient' || routePhase === 'flip';
+      const routeProgress = getRouteProgress();
+      const routePhase = routeProgress?.currentPhase?.type;
+      const routeElapsed = routeProgress?.phaseElapsed || 0;
       const gForce = state.physics.gForce || 0;
+
+      // Crew can move during sustained burns after the first hour IF:
+      // - G-force is ≤ 1.5 (acceptable without juice)
+      // - Not in combat stations
+      // - Not in the last 10 minutes before a flip (need to re-secure)
+      let burnCrewFree = false;
+      if (routePhase === 'burn' && routeElapsed >= 60 && gForce <= 1.5 && !state.combatStations) {
+        // Check if next phase is a flip — re-secure in the last 10 min
+        const route = getActiveRoute();
+        if (route) {
+          const nextPhase = route.phases[route.currentPhase + 1];
+          const currentDuration = routeProgress.currentPhase?.durationMin || Infinity;
+          const minutesLeft = currentDuration - routeElapsed;
+          burnCrewFree = !(nextPhase?.type === 'flip' && minutesLeft <= 60);
+        }
+      }
+
+      const routeHoldingCrew = !burnCrewFree && (routePhase === 'secure' || routePhase === 'burn' || routePhase === 'orient' || routePhase === 'flip');
       if (gForce >= 1.5) {
         state.ship.crew.forEach(member => {
           if (member.dead || member.consciousness <= 10) return;
