@@ -438,8 +438,8 @@ export function assessInterceptFeasibility(gameState, entity) {
   // Current distance
   const dist = entityDistanceAU(shipPos, entity.position);
 
-  // Time to kill relative velocity at 5G (velocity kill burn)
-  const killG = 5.0;
+  // Time to kill relative velocity at 1.5G (max before juice)
+  const killG = 1.5;
   const killTimeSec = relSpeed / (killG * G_ACCEL);
 
   // Distance the ship drifts during velocity kill (worst case: moving directly away)
@@ -475,7 +475,7 @@ export function assessInterceptFeasibility(gameState, entity) {
   if (relSpeed > 50000 && driftDist_AU > MAX_SENSOR_RANGE_AU * 0.5) {
     return {
       feasible: false,
-      reason: `Nav computer: INTERCEPT MARGINAL. Relative velocity ${Math.round(relSpeed / 1000)} km/s — velocity kill would take ${Math.ceil(killTimeSec / 60)} minutes at 5G. Ship drift during braking: ${formatDistKm(driftDist_AU)}. High risk of losing sensor contact.`,
+      reason: `Nav computer: INTERCEPT MARGINAL. Relative velocity ${Math.round(relSpeed / 1000)} km/s — velocity kill would take ${Math.ceil(killTimeSec / 60)} minutes at 1.5G. Ship drift during braking: ${formatDistKm(driftDist_AU)}. High risk of losing sensor contact.`,
     };
   }
 
@@ -584,9 +584,9 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
     const velAngle = Math.atan2(relVy, relVx);
     const brakeDir = velAngle + Math.PI;
 
-    // Velocity kill at high G — crew are in crash couches (secure phase runs first).
-    // 5G is aggressive but survivable when strapped in, no juice needed in couches.
-    const killG = Math.min(5.0, maxG > 1 ? maxG : 5.0);
+    // Velocity kill at max G before juice (1.5G threshold).
+    // Crew are in crash couches but juice isn't automatic for velocity kills.
+    const killG = 1.5;
 
     // Duration is a generous upper bound — the phase ends on condition (relV < 50),
     // not on timer. Cap prevents infinite burn if something goes wrong.
