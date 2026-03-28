@@ -896,7 +896,7 @@ export function interceptTick(gameState) {
         interceptType: interceptState.interceptType,
         targetName: entity.name,
       });
-      if (!interceptState.missionId) {
+      if (!interceptState.missionId && !interceptState.fineApproach) {
         interceptState = null;
       }
     }
