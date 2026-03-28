@@ -30,8 +30,9 @@ export const MissionStatus = {
 };
 
 // Intercept route thresholds
-const FORMATION_RANGE_AU = 0.0000035;        // ~500m
+const FORMATION_RANGE_AU = 0.0000067;        // ~1km
 const FORMATION_REL_VEL = 20;                // m/s — close enough to match
+const FINE_APPROACH_RANGE_AU = 0.00334;       // ~500km — RCS takeover threshold
 
 // Intercept type enum and target distances
 export const INTERCEPT_TYPE = {
@@ -192,6 +193,23 @@ export function getMissionForEntity(entityId) {
 
 export function getInterceptState() {
   return interceptState;
+}
+
+// ---- RCS FINE APPROACH ----
+// Below ~500km, burn-flip-burn breaks down (minute granularity → overshoot).
+// RCS fine approach closes distance at a steady rate — no overshooting possible.
+
+export function startFineApproach(gameState) {
+  if (!interceptState) return false;
+  interceptState.fineApproach = true;
+  // Kill thrust — RCS takes over
+  gameState.physics.thrustActive = false;
+  gameState.physics.thrustLevel = 0;
+  return true;
+}
+
+export function isFineApproaching() {
+  return interceptState?.fineApproach === true;
 }
 
 // ---- EVENT NARRATIVES ----
@@ -408,6 +426,7 @@ export function startIntercept(gameState, targetEntityId, missionId, interceptTy
     targetEntityId,
     missionId: missionId || null,
     formation: false,
+    fineApproach: false,
     interceptType,
     targetRangeAU: INTERCEPT_RANGE_AU[interceptType] ?? INTERCEPT_RANGE_AU[INTERCEPT_TYPE.SCANNER],
     rangeReached: false,
@@ -685,10 +704,47 @@ export function interceptTick(gameState) {
   const dist = entityDistanceAU(shipPos, entity.position);
   const relVel = relativeSpeed(shipVel, entity.velocity);
 
-  // Check formation condition
+  // ---- RCS FINE APPROACH ----
+  // When active, smoothly close distance at a rate proportional to range.
+  // No burn-flip-burn — just steady RCS closure. Can't overshoot.
+  if (interceptState.fineApproach && !interceptState.formation) {
+    // Closure rate scales with distance (km/min → AU/min)
+    const distKm = dist * 149_597_870.7;
+    let closureKmPerMin;
+    if (distKm > 100)      closureKmPerMin = 5;
+    else if (distKm > 10)  closureKmPerMin = 1;
+    else if (distKm > 1)   closureKmPerMin = 0.2;
+    else                   closureKmPerMin = 0.05;  // 50m/min final approach
+
+    const closureAU = closureKmPerMin / 149_597_870.7;
+    const step = Math.min(closureAU, dist * 0.9); // never overshoot
+
+    // Move ship toward target
+    const dx = entity.position.x - shipPos.x;
+    const dy = entity.position.y - shipPos.y;
+    const dNorm = Math.sqrt(dx * dx + dy * dy);
+    if (dNorm > 0) {
+      shipPos.x += (dx / dNorm) * step;
+      shipPos.y += (dy / dNorm) * step;
+    }
+
+    // Keep velocity matched to target (RCS station-keeping)
+    gameState.physics.velocity.vx = entity.velocity.vx;
+    gameState.physics.velocity.vy = entity.velocity.vy;
+    gameState.physics.speed = Math.sqrt(entity.velocity.vx ** 2 + entity.velocity.vy ** 2);
+    gameState.physics.thrustActive = false;
+    gameState.physics.thrustLevel = 0;
+
+    // Update heading to face target
+    gameState.navigation.routeHeading = bearingTo(shipPos, entity.position);
+    gameState.physics.heading = 0;
+  }
+
+  // Check formation condition (~1km and low relative velocity)
   if (dist <= FORMATION_RANGE_AU && relVel <= FORMATION_REL_VEL) {
     if (!interceptState.formation) {
       interceptState.formation = true;
+      interceptState.fineApproach = false; // fine approach complete
       events.push({ type: 'formation-entered', targetName: entity.name });
     }
     // Maintain formation: match velocity
@@ -696,23 +752,29 @@ export function interceptTick(gameState) {
     gameState.physics.velocity.vy = entity.velocity.vy;
     gameState.physics.speed = Math.sqrt(entity.velocity.vx ** 2 + entity.velocity.vy ** 2);
   } else if (interceptState.formation) {
-    // Lost formation
     interceptState.formation = false;
     events.push({ type: 'formation-lost', targetName: entity.name });
   }
 
   // For intercepts with continuous correction (runaway), update route heading
-  if (interceptState && interceptState.formation === false && gameState.navigation?.routeActive) {
+  if (interceptState && !interceptState.formation && !interceptState.fineApproach && gameState.navigation?.routeActive) {
     const headingAngle = bearingTo(shipPos, entity.position);
     gameState.navigation.routeHeading = headingAngle;
   }
 
-  // Check if we've entered the intercept target range (non-formation completion)
+  // Auto-trigger fine approach when within range and velocity is matched
+  if (interceptState && !interceptState.fineApproach && !interceptState.formation && dist <= FINE_APPROACH_RANGE_AU && relVel < 100) {
+    interceptState.fineApproach = true;
+    gameState.physics.thrustActive = false;
+    gameState.physics.thrustLevel = 0;
+    events.push({ type: 'fine-approach-start', targetName: entity.name, distKm: dist * 149_597_870.7 });
+  }
+
+  // Check if we've entered the intercept target range (non-formation, non-tactical)
   if (interceptState && !interceptState.rangeReached && !interceptState.formation) {
     const targetRange = interceptState.targetRangeAU ?? INTERCEPT_RANGE_AU[INTERCEPT_TYPE.SCANNER];
     if (dist <= targetRange) {
       interceptState.rangeReached = true;
-      // Match velocity and kill thrust — prevent overshoot
       gameState.physics.velocity.vx = entity.velocity.vx;
       gameState.physics.velocity.vy = entity.velocity.vy;
       gameState.physics.speed = Math.sqrt(entity.velocity.vx ** 2 + entity.velocity.vy ** 2);
@@ -724,7 +786,6 @@ export function interceptTick(gameState) {
         interceptType: interceptState.interceptType,
         targetName: entity.name,
       });
-      // Auto-clear if no mission attached — intercept is complete
       if (!interceptState.missionId) {
         interceptState = null;
       }
@@ -735,14 +796,19 @@ export function interceptTick(gameState) {
 }
 
 /**
- * Complete a mission via hail when in formation.
- * Returns { success, narrative, rewards } for UI.
+ * Complete a mission via hail — requires being within formation range (~1km).
  */
 export function completeMissionViaHail(missionId, gameState) {
   const mission = missions.find(m => m.id === missionId);
   if (!mission) return { success: false, narrative: 'No such mission.' };
-  if (!interceptState || !interceptState.formation) {
-    return { success: false, narrative: 'Must be in formation with target to complete rescue.' };
+  if (!interceptState) {
+    return { success: false, narrative: 'No active intercept.' };
+  }
+  // Allow completion if in formation OR within formation range during fine approach
+  const entity = (gameState.entities || []).find(e => e.id === interceptState.targetEntityId);
+  const dist = entity ? entityDistanceAU(gameState.shipPosition, entity.position) : Infinity;
+  if (!interceptState.formation && dist > FORMATION_RANGE_AU) {
+    return { success: false, narrative: 'Must be within 1km of target to complete rescue.' };
   }
 
   completeMission(mission, gameState);

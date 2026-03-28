@@ -428,6 +428,7 @@ export function routeTick(gameState) {
   // ---- MATCH PHASE: velocity convergence ----
   // Handles residual velocity from minute-granularity rounding in the
   // brachistochrone burns. Exponential reduction → snap when close.
+  // Once matched, force phase end so interceptTick can trigger fine approach.
   if (phase.type === 'match' && activeRoute.targetEntityId) {
     const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
     if (target) {
@@ -440,8 +441,10 @@ export function routeTick(gameState) {
         vel.vx = target.velocity.vx + relVx * keep;
         vel.vy = target.velocity.vy + relVy * keep;
       } else {
+        // Velocity matched — snap and force phase end
         vel.vx = target.velocity.vx;
         vel.vy = target.velocity.vy;
+        activeRoute.phaseElapsed = phase.durationMin;
       }
       gameState.physics.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
     }

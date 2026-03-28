@@ -25,7 +25,7 @@ import { initReactor, ReactorState, isReactorOnline, getReactorStatusText, begin
 import { createDefaultEntities, entityTick, computeOrbitalVelocity, getEntityById, initializeEntityOrbit } from './entities.js';
 import { initComms, commsTick, toggleTransponder, triggerSOS, getRadioContacts, isTransponderOn, isSosActive, getHailDialogue } from './comms.js';
 import { initScanner, scannerTick, renderScanner, selectContact, deselectContact, startTracking, stopTracking, setRange, getTrackedEntity, getSelectedContact, SCANNER_RANGES, getShipFacing } from './scanner.js';
-import { initMissions, acceptMission, declineMission, startIntercept, cancelIntercept, computeInterceptRoute, computeFineTuneRoute, completeMissionViaHail, getActiveMissions, getMissionLog, getMissionForEntity, getInterceptState, serializeMissions, deserializeMissions, INTERCEPT_TYPE, INTERCEPT_RANGE_AU } from './missions.js';
+import { initMissions, acceptMission, declineMission, startIntercept, cancelIntercept, computeInterceptRoute, computeFineTuneRoute, completeMissionViaHail, getActiveMissions, getMissionLog, getMissionForEntity, getInterceptState, startFineApproach, isFineApproaching, serializeMissions, deserializeMissions, INTERCEPT_TYPE, INTERCEPT_RANGE_AU } from './missions.js';
 import { initInertia, triggerManeuverEvent, updateInertiaFrame, isInertiaActive, ManeuverType, enterCinematicTime, exitCinematicTime, isInCinematicTime, drainImpactEvents, internalBleedingTick } from './inertia.js';
 
 // ---- HELPERS ----
@@ -1832,7 +1832,7 @@ function renderTacModal() {
     const ref = tacVel.ref ? ` [${tacVel.ref}]` : '';
     _hud.tacModalVel.textContent = `VEL ${tacVel.text}${ref}`;
   }
-  if (_hud.tacModalHead) _hud.tacModalHead.textContent = phys.flipping ? 'FLIPPING' : (getRelativeVelocity(phys) >= 0 ? 'PROGRADE' : 'RETROGRADE');
+  if (_hud.tacModalHead) _hud.tacModalHead.textContent = isFineApproaching() ? 'FINE APPROACH' : phys.flipping ? 'FLIPPING' : (getRelativeVelocity(phys) >= 0 ? 'PROGRADE' : 'RETROGRADE');
   if (_hud.tacModalThr) _hud.tacModalThr.textContent = phys.thrustActive ? `BURN ${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G` : 'COAST';
 }
 
@@ -2994,13 +2994,15 @@ function updateHud(state) {
   _hud.infoThrust.textContent =
     hasGravity ? `${state.navigation.thrust.toFixed(1)}g` : '0.0g';
   const relVelForHeading = getRelativeVelocity(phys);
-  const headingText = phys.flipping ? 'FLIPPING' :
+  const fineApproach = isFineApproaching();
+  const headingText = fineApproach ? 'FINE APPROACH' :
+    phys.flipping ? 'FLIPPING' :
     (relVelForHeading >= 0 ? 'PROGRADE' : 'RETROGRADE');
   _hud.infoHeading.textContent = headingText;
   _hud.infoHeading.style.color =
-    phys.flipping ? '#E2A355' : '';
+    fineApproach ? '#4FD1C5' : phys.flipping ? '#E2A355' : '';
   if (_hud.flipHeading && !phys.flipping) {
-    _hud.flipHeading.textContent = relVelForHeading >= 0 ? 'PRO' : 'RETRO';
+    _hud.flipHeading.textContent = fineApproach ? 'RCS' : (relVelForHeading >= 0 ? 'PRO' : 'RETRO');
   }
   // Velocity displayed relative to target (or "---" if none)
   const velDisplay = getDisplayVelocity();
@@ -3623,6 +3625,7 @@ function startGame() {
     } else if (event === 'interceptEvents') {
       data.forEach(evt => {
         if (evt.type === 'formation-entered') {
+          showRcsThrusters(false); // fine approach complete — kill RCS visuals
           showToast(`Formation with ${evt.targetName}`, 'ok');
           addLogEntry(`Formation achieved with ${evt.targetName}`, 'nav');
         } else if (evt.type === 'formation-lost') {
@@ -3631,12 +3634,16 @@ function startGame() {
         } else if (evt.type === 'intercept-lost') {
           showToast('Intercept target lost', 'danger');
           addLogEntry('Intercept target lost from sensors', 'danger');
+        } else if (evt.type === 'fine-approach-start') {
+          showRcsThrusters('orient');
+          showToast(`RCS FINE APPROACH — ${evt.targetName}`, 'nav');
+          addLogEntry(`RCS fine approach: closing on ${evt.targetName} at ${evt.distKm?.toFixed(0) || '?'} km`, 'nav');
         } else if (evt.type === 'intercept-range-reached') {
           const typeLabel = { scanner: 'SCANNER RANGE', close: 'CLOSE APPROACH', tactical: 'TACTICAL RANGE' };
           const label = typeLabel[evt.interceptType] || 'TARGET RANGE';
           showToast(`${evt.targetName} — ${label} REACHED`, 'ok');
           addLogEntry(`Intercept complete: ${evt.targetName} within ${label.toLowerCase()}`, 'nav');
-          renderScannerTab(); // update intercept button state
+          renderScannerTab();
         }
       });
       updateFormationIndicator();
