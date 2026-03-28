@@ -482,13 +482,6 @@ export function assessInterceptFeasibility(gameState, entity) {
   return { feasible: true, reason: '' };
 }
 
-function formatDistKm(au) {
-  const km = au * 149_597_870.7;
-  if (km >= 1e6) return `${(km / 1e6).toFixed(1)}M km`;
-  if (km >= 1000) return `${Math.round(km / 1000)}k km`;
-  return `${Math.round(km)} km`;
-}
-
 // ---- INTERCEPT ----
 
 export function startIntercept(gameState, targetEntityId, missionId, interceptType = INTERCEPT_TYPE.SCANNER) {
