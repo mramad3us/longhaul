@@ -814,7 +814,7 @@ function initHud() {
         // Update RCS on tac view during flip (close zoom only)
         const tacScreen = document.getElementById('tac-screen');
         if (tacScreen && tacZoomLevel === 0) {
-          renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting);
+          renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting, getTacNearbyEntities(gameState, tacZoomLevel));
         }
 
         if (complete) {
@@ -828,7 +828,7 @@ function initHud() {
           if (isInCinematicTime()) exitCinematicTime(gameState);
           // Re-render tac view
           if (tacScreen) {
-            renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, false, phys.speed);
+            renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, false, phys.speed, false, getTacNearbyEntities(gameState, tacZoomLevel));
           }
           flipAnimFrame = null;
           return;
@@ -897,7 +897,7 @@ function initHud() {
       // Re-render tac view
       const tacScreen = document.getElementById('tac-screen');
       if (tacScreen && gameState) {
-        renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, getRelativeVelocity(gameState.physics));
+        renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, getRelativeVelocity(gameState.physics), false, getTacNearbyEntities(gameState, tacZoomLevel));
       }
     });
   });
@@ -1908,6 +1908,7 @@ function getTacNearbyEntities(state, zoomLevel) {
       faction: entity.faction,
       sosActive: entity.sosActive,
       thrustActive: entity.thrustActive,
+      mass: entity.mass || 50000,
     });
   }
   return result.length > 0 ? result : null;
@@ -3295,7 +3296,7 @@ function startGame() {
   // Render tactical view
   const tacScreen = document.getElementById('tac-screen');
   if (tacScreen) {
-    renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, getRelativeVelocity(gameState.physics));
+    renderTacView(gameState.ship, tacScreen, gameState.physics.thrustActive, tacZoomLevel, false, getRelativeVelocity(gameState.physics), false, getTacNearbyEntities(gameState, tacZoomLevel));
   }
 
   // Init crew movement patrol system — restore saved state if available

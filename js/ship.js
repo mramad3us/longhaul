@@ -1304,24 +1304,80 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
       else if (ne.faction === 'UNN') color = '#4A90D9';
       else if (ne.faction === 'OPA' || ne.faction === 'Belter') color = '#7EC8D9';
 
-      const dotSize = zoom.shipMode === 'hull' ? 4 : zoom.shipMode === 'icon' ? 3 : 2;
+      if (zoom.shipMode === 'hull') {
+        // Close zoom: draw ship silhouette (oriented with nose toward their heading)
+        // Ship shape: elongated hexagon/diamond, scaled by mass
+        const massScale = ne.mass ? Math.min(2, Math.max(0.5, ne.mass / 80000)) : 1;
+        const shipH = 18 * massScale;  // hull length in px
+        const shipW = 6 * massScale;   // hull width in px
 
-      // Entity dot
-      parts.push(`<circle cx="${ex}" cy="${ey}" r="${dotSize}" fill="${color}" opacity="0.9"/>`);
-      // Glow ring
-      parts.push(`<circle cx="${ex}" cy="${ey}" r="${dotSize + 2}" fill="none" stroke="${color}" stroke-width="0.5" opacity="0.4"/>`);
+        // Rotate entity shape to face its heading relative to our view
+        const entRot = ne.entHeading != null ? (ne.entHeading - (ne.relBearing + (typeof shipFacing !== 'undefined' ? 0 : 0))) : 0;
 
-      // SOS pulse
-      if (ne.sosActive) {
-        parts.push(`<circle cx="${ex}" cy="${ey}" r="${dotSize}" fill="none" stroke="#E25555" stroke-width="0.6" opacity="0">
-          <animate attributeName="r" values="${dotSize};${dotSize + 8}" dur="1.5s" repeatCount="indefinite"/>
-          <animate attributeName="opacity" values="0.5;0" dur="1.5s" repeatCount="indefinite"/>
-        </circle>`);
-      }
+        parts.push(`<g transform="translate(${ex},${ey})">`);
+        // Hull outline — pointed bow, flat stern
+        const bow = -shipH / 2;
+        const stern = shipH / 2;
+        const mid = shipW / 2;
+        parts.push(`<polygon points="0,${bow} ${mid},${bow + shipH * 0.3} ${mid},${stern} -${mid},${stern} -${mid},${bow + shipH * 0.3}"
+          fill="none" stroke="${color}" stroke-width="1" opacity="0.85"/>`);
+        // Engine glow at stern
+        if (ne.thrustActive) {
+          parts.push(`<rect x="-${mid - 1}" y="${stern}" width="${shipW - 2}" height="4" fill="#E2A355" opacity="0.7">
+            <animate attributeName="opacity" values="0.5;0.8;0.5" dur="0.3s" repeatCount="indefinite"/>
+          </rect>`);
+        }
+        // Center dot
+        parts.push(`<circle cx="0" cy="0" r="1.5" fill="${color}" opacity="0.6"/>`);
+        parts.push('</g>');
 
-      // Label
-      if (ne.name && zoom.shipMode !== 'dot') {
-        parts.push(`<text x="${ex + dotSize + 3}" y="${ey + 3}" fill="${color}" font-size="7" font-family="monospace" opacity="0.8">${ne.name}</text>`);
+        // SOS pulse
+        if (ne.sosActive) {
+          parts.push(`<circle cx="${ex}" cy="${ey}" r="10" fill="none" stroke="#E25555" stroke-width="0.8" opacity="0">
+            <animate attributeName="r" values="10;22" dur="1.5s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="0.5;0" dur="1.5s" repeatCount="indefinite"/>
+          </circle>`);
+        }
+
+        // Label below
+        if (ne.name) {
+          parts.push(`<text x="${ex}" y="${ey + shipH / 2 + 10}" fill="${color}" font-size="7" font-family="monospace" text-anchor="middle" opacity="0.8">${ne.name}</text>`);
+        }
+
+      } else if (zoom.shipMode === 'icon') {
+        // Medium zoom: small diamond icon
+        const sz = 5;
+        parts.push(`<polygon points="${ex},${ey - sz} ${ex + sz * 0.6},${ey} ${ex},${ey + sz * 0.7} ${ex - sz * 0.6},${ey}"
+          fill="none" stroke="${color}" stroke-width="0.8" opacity="0.85"/>`);
+        if (ne.thrustActive) {
+          parts.push(`<line x1="${ex}" y1="${ey + sz * 0.7}" x2="${ex}" y2="${ey + sz * 0.7 + 4}" stroke="#E2A355" stroke-width="1" opacity="0.7">
+            <animate attributeName="opacity" values="0.4;0.8;0.4" dur="0.3s" repeatCount="indefinite"/>
+          </line>`);
+        }
+        // Glow ring
+        parts.push(`<circle cx="${ex}" cy="${ey}" r="${sz + 2}" fill="none" stroke="${color}" stroke-width="0.4" opacity="0.3"/>`);
+
+        if (ne.sosActive) {
+          parts.push(`<circle cx="${ex}" cy="${ey}" r="${sz}" fill="none" stroke="#E25555" stroke-width="0.6" opacity="0">
+            <animate attributeName="r" values="${sz};${sz + 10}" dur="1.5s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="0.5;0" dur="1.5s" repeatCount="indefinite"/>
+          </circle>`);
+        }
+
+        if (ne.name) {
+          parts.push(`<text x="${ex + sz + 3}" y="${ey + 3}" fill="${color}" font-size="7" font-family="monospace" opacity="0.8">${ne.name}</text>`);
+        }
+
+      } else {
+        // Far zoom: simple dot
+        parts.push(`<circle cx="${ex}" cy="${ey}" r="2" fill="${color}" opacity="0.9"/>`);
+        parts.push(`<circle cx="${ex}" cy="${ey}" r="4" fill="none" stroke="${color}" stroke-width="0.4" opacity="0.3"/>`);
+        if (ne.sosActive) {
+          parts.push(`<circle cx="${ex}" cy="${ey}" r="2" fill="none" stroke="#E25555" stroke-width="0.6" opacity="0">
+            <animate attributeName="r" values="2;8" dur="1.5s" repeatCount="indefinite"/>
+            <animate attributeName="opacity" values="0.5;0" dur="1.5s" repeatCount="indefinite"/>
+          </circle>`);
+        }
       }
     }
   }
