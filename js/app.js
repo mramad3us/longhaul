@@ -22,7 +22,7 @@ import { getAtmoStatus, getEquipmentStatusLabel, depressurizeCompartment, repres
 import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet, zoomToBody, SOLAR_ZOOM_PRESETS, resetMapState, getMapState, setOnBodySelect, getSelectedBody, setSelectedBody } from './solar-system.js';
 import { findBody, getBodyWorldPos, calculateRoutes, activateRoute, cancelRoute, getActiveRoute, getRouteProgress, formatDuration, formatDeltaV, serializeRoute, deserializeRoute, resetRoute, overrideSecure, markSecureComplete, isSecureBlocking } from './navigation.js';
 import { initReactor, ReactorState, isReactorOnline, getReactorStatusText, beginShutdown, cancelShutdown, beginEmergencyShutoff, immediateEmergencyShutoff, cancelEmergencyShutoff, beginStartup, patchReactor, STARTUP_MIN_ENGINEERING, STARTUP_MIN_FUEL } from './reactor.js';
-import { createDefaultEntities, entityTick, computeOrbitalVelocity, getEntityById, initializeEntityOrbit } from './entities.js';
+import { createDefaultEntities, entityTick, computeOrbitalVelocity, getEntityById, initializeEntityOrbit, entityDistanceAU, bearingTo } from './entities.js';
 import { initComms, commsTick, toggleTransponder, triggerSOS, getRadioContacts, isTransponderOn, isSosActive, getHailDialogue } from './comms.js';
 import { initScanner, scannerTick, renderScanner, selectContact, deselectContact, startTracking, stopTracking, setRange, getTrackedEntity, getSelectedContact, SCANNER_RANGES, getShipFacing } from './scanner.js';
 import { initMissions, acceptMission, declineMission, startIntercept, cancelIntercept, computeInterceptRoute, computeFineTuneRoute, completeMissionViaHail, getActiveMissions, getMissionLog, getMissionForEntity, getInterceptState, startFineApproach, isFineApproaching, serializeMissions, deserializeMissions, INTERCEPT_TYPE, INTERCEPT_RANGE_AU } from './missions.js';
@@ -1886,12 +1886,39 @@ function closeTacModal() {
   tacModalTab = 'tactical';
 }
 
+// Compute nearby entities for the tac screen (within zoom range)
+function getTacNearbyEntities(state, zoomLevel) {
+  if (!state?.entities || !state.shipPosition) return null;
+  const rangeKm = [1, 5, 25][zoomLevel] || 25;
+  const rangeAU = rangeKm / 149_597_870.7;
+  const shipPos = state.shipPosition;
+  const shipFacing = getShipFacing(state);
+  const AU_M = 149_597_870_700;
+
+  const result = [];
+  for (const entity of state.entities) {
+    const dist = entityDistanceAU(shipPos, entity.position);
+    if (dist > rangeAU) continue;
+    const distM = dist * AU_M;
+    const absBearing = bearingTo(shipPos, entity.position);
+    result.push({
+      name: entity.name,
+      distM,
+      relBearing: absBearing - shipFacing,
+      faction: entity.faction,
+      sosActive: entity.sosActive,
+      thrustActive: entity.thrustActive,
+    });
+  }
+  return result.length > 0 ? result : null;
+}
+
 function renderTacModal() {
   if (!tacModalOpen || !gameState) return;
   const tacScreen = document.getElementById('tac-screen-modal');
   if (!tacScreen) return;
   const phys = gameState.physics;
-  renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacModalZoom, phys.flipping, getRelativeVelocity(phys), phys.orienting);
+  renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacModalZoom, phys.flipping, getRelativeVelocity(phys), phys.orienting, getTacNearbyEntities(gameState, tacModalZoom));
 
   // Update info bar
   const tacVel = getDisplayVelocity();
@@ -3123,7 +3150,7 @@ function updateHud(state) {
       if (isBlackout()) {
         _hud.tacScreen.innerHTML = '';
       } else {
-        renderTacView(state.ship, _hud.tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting);
+        renderTacView(state.ship, _hud.tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting, getTacNearbyEntities(state, tacZoomLevel));
       }
     }
     // Keep modal tac in sync (full re-render on significant change)

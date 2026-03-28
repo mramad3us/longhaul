@@ -984,7 +984,7 @@ const TAC_ZOOM_LEVELS = [
   { scale: 25,  range: '25 km',  shipMode: 'dot' },    // Far: ship is dot, plume is a star
 ];
 
-export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flipping = false, velocity = 0, orienting = false) {
+export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flipping = false, velocity = 0, orienting = false, nearbyEntities = null) {
   const viewW = container.clientWidth || 186;
   const viewH = container.clientHeight || 220;
   const zoom = TAC_ZOOM_LEVELS[zoomLevel];
@@ -1277,6 +1277,53 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
         </rect>`);
     }
     parts.push('</g>');
+  }
+
+  // ---- NEARBY ENTITIES ----
+  // Draw other ships/stations within the tac view range
+  if (nearbyEntities && nearbyEntities.length > 0) {
+    const rangeKm = zoom.scale; // 1, 5, or 25 km
+    const rangeM = rangeKm * 1000;
+    const pxPerM = (viewH / 2) / rangeM; // pixels per meter for this zoom
+
+    for (const ne of nearbyEntities) {
+      if (ne.distM > rangeM) continue;
+
+      // Position relative to ship (bearing + distance → screen coords)
+      // bearing is relative to ship facing (forward = up on tac screen)
+      const ex = cx + Math.sin(ne.relBearing) * ne.distM * pxPerM;
+      const ey = cy - Math.cos(ne.relBearing) * ne.distM * pxPerM;
+
+      // Skip if offscreen
+      if (ex < -10 || ex > viewW + 10 || ey < -10 || ey > viewH + 10) continue;
+
+      // Color by faction/SOS
+      let color = '#7A8EA2';
+      if (ne.sosActive) color = '#E25555';
+      else if (ne.faction === 'MCRN') color = '#C1553B';
+      else if (ne.faction === 'UNN') color = '#4A90D9';
+      else if (ne.faction === 'OPA' || ne.faction === 'Belter') color = '#7EC8D9';
+
+      const dotSize = zoom.shipMode === 'hull' ? 4 : zoom.shipMode === 'icon' ? 3 : 2;
+
+      // Entity dot
+      parts.push(`<circle cx="${ex}" cy="${ey}" r="${dotSize}" fill="${color}" opacity="0.9"/>`);
+      // Glow ring
+      parts.push(`<circle cx="${ex}" cy="${ey}" r="${dotSize + 2}" fill="none" stroke="${color}" stroke-width="0.5" opacity="0.4"/>`);
+
+      // SOS pulse
+      if (ne.sosActive) {
+        parts.push(`<circle cx="${ex}" cy="${ey}" r="${dotSize}" fill="none" stroke="#E25555" stroke-width="0.6" opacity="0">
+          <animate attributeName="r" values="${dotSize};${dotSize + 8}" dur="1.5s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0.5;0" dur="1.5s" repeatCount="indefinite"/>
+        </circle>`);
+      }
+
+      // Label
+      if (ne.name && zoom.shipMode !== 'dot') {
+        parts.push(`<text x="${ex + dotSize + 3}" y="${ey + 3}" fill="${color}" font-size="7" font-family="monospace" opacity="0.8">${ne.name}</text>`);
+      }
+    }
   }
 
   // Single innerHTML write with proper SVG namespace
