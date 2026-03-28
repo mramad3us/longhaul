@@ -386,6 +386,31 @@ export function findNearestCrashCouch(ship, fromDeck, fromX, fromY, excludeCrewI
   return best;
 }
 
+// ---- DECK TRANSIT ----
+// Move a crew member to a different deck before walking to a mission target.
+// Transitions are instant (no ladder animation yet) — crew appears at the
+// entry point of the target deck and walks from there.
+
+function transitToDeck(ship, ms, member, targetDeckIdx) {
+  if (ms.deckIdx === targetDeckIdx) return; // already there
+
+  const deckFloors = getFloorTiles(ship.decks[targetDeckIdx]);
+  if (deckFloors.length === 0) return;
+
+  // Place crew at a central floor tile on the new deck
+  const entryTile = deckFloors[Math.floor(deckFloors.length / 2)];
+  ms.deckIdx = targetDeckIdx;
+  ms.x = entryTile.x;
+  ms.y = entryTile.y;
+  member.deck = targetDeckIdx;
+  member.x = entryTile.x;
+  member.y = entryTile.y;
+
+  // Rebuild patrol waypoints for the new deck
+  ms.waypoints = pickPatrolCorners(deckFloors);
+  ms.wpIdx = 0;
+}
+
 // ---- MISSION DISPATCH ----
 
 // Send a crew member to the nearest crash couch for high-G burn
@@ -397,12 +422,15 @@ export function assignSecureBurnMission(ship, member) {
   const couch = findNearestCrashCouch(ship, ms.deckIdx, ms.x, ms.y, member.id);
   if (!couch) return false;
 
+  // Transit to couch's deck if needed
+  transitToDeck(ship, ms, member, couch.deckIdx);
+
   // Walk to the tile adjacent to the crash couch (it's not walkable itself)
   const dest = nearestWalkableTo(ship.decks[couch.deckIdx], couch.x, couch.y);
 
   ms.mission = 'secure-burn';
   ms.missionTarget = { x: dest.x, y: dest.y };
-  ms._couchPos = { x: couch.x, y: couch.y }; // actual couch tile to snap onto when arrived
+  ms._couchPos = { x: couch.x, y: couch.y };
   ms._arrivedAtCouch = false;
   ms.pause = 0;
   ms.segDist = 0;
@@ -422,6 +450,9 @@ export function assignEquipSuitMission(ship, member, lockerX, lockerY, lockerDec
   const ms = moveState.get(member.id);
   if (!ms || member.dead) return false;
   if (ms.mission) return false;
+
+  // Transit to locker's deck if needed
+  transitToDeck(ship, ms, member, lockerDeckIdx);
 
   const dest = nearestWalkableTo(ship.decks[lockerDeckIdx], lockerX, lockerY);
 
@@ -450,6 +481,9 @@ export function assignRepairLSMission(ship, member, deckIdx, tileX, tileY) {
   if (!ms || member.dead) return false;
   if (ms.mission) return false;
 
+  // Transit to the LS equipment's deck if needed
+  transitToDeck(ship, ms, member, deckIdx);
+
   const dest = nearestWalkableTo(ship.decks[deckIdx], tileX, tileY);
 
   ms.mission = 'repair-ls';
@@ -472,8 +506,9 @@ export function assignRecoverMission(ship, member) {
   const medbay = findNearestMedbay(ship, ms.deckIdx, ms.x, ms.y);
   if (!medbay) return false;
 
-  // For now, crew can only go to medbay on their own deck
-  // (cross-deck movement is a future feature)
+  // Transit to medbay's deck if needed
+  transitToDeck(ship, ms, member, medbay.deckIdx);
+
   const dest = nearestWalkableTo(ship.decks[medbay.deckIdx], medbay.x, medbay.y);
 
   ms.mission = 'recover';
@@ -515,6 +550,10 @@ export function assignRescueMission(ship, patient) {
 
   const patientMs = moveState.get(patient.id);
   const patientPos = patientMs ? { x: patientMs.x, y: patientMs.y } : { x: patient.x, y: patient.y };
+  const patientDeck = patientMs ? patientMs.deckIdx : patient.deck;
+
+  // Transit medic to patient's deck if needed
+  transitToDeck(ship, ms, medic, patientDeck);
 
   ms.mission = 'rescue';
   ms.rescueTargetId = patient.id;

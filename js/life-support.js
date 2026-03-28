@@ -337,33 +337,7 @@ export function lifeSupportTick(gameState) {
       }
     }
 
-    // 5. RANDOM EQUIPMENT FAILURES (stress-weighted)
-    // Higher chance under high-G (vibration/strain) or low power
-    if (eq && eq.status === 'operational') {
-      let failChance = FAILURE_CHANCE_BASE;
-      const gForce = gameState.physics?.gForce || 0;
-      const power = gameState.resources?.power?.current || 100;
-      // High-G stress: 3x at 2G, 6x at 5G
-      if (gForce > 1.5) failChance *= 1 + (gForce - 1.5) * 1.5;
-      // Low power stress: 2x at 50%, 4x at 25%
-      if (power < 60) failChance *= 1 + (60 - power) / 20;
-
-      if (Math.random() < failChance) {
-        const roll = Math.random();
-        if (roll < 0.4) {
-          eq.co2Scrubber = false;
-          eq.status = 'degraded';
-        } else if (roll < 0.7) {
-          eq.o2Injector = false;
-          eq.status = 'degraded';
-        } else {
-          eq.co2Scrubber = false;
-          eq.o2Injector = false;
-          eq.n2Injector = false;
-          eq.status = 'failed';
-        }
-      }
-    }
+    // 5. RANDOM EQUIPMENT FAILURES — disabled (was stress-weighted during burns)
 
     // 6. PATCH DURABILITY COUNTDOWN
     if (eq && eq.status === 'patched' && eq.patchDurability > 0) {
