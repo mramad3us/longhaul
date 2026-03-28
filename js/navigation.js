@@ -262,7 +262,19 @@ export function calculateRoutes(gameState, destBody) {
     routes.push(r);
   }
 
-  // 3. Economy — 0.3G burns, 70% coast
+  // 3. Belter Standard — 0.3G brachistochrone (constant thrust, no coast)
+  {
+    const bG = 0.3;
+    const bDest = destPosAt(2 * Math.sqrt(dist * AU_M / (bG * G_ACCEL)) / 60);
+    const bDist = distAU(shipPos, bDest);
+    const r = calcBrachistochrone(bDist, bG, shipPos, bDest);
+    r.name = 'BELTER';
+    r.label = '0.3G Brachistochrone';
+    r.description = 'Belter standard — low-G constant thrust. Easy on the body, easy on the drive.';
+    routes.push(r);
+  }
+
+  // 4. Economy — 0.3G burns, 70% coast
   {
     const econ = calcEconomy(dist, 0.3, 0.7, shipPos, destPos);
     // Refine intercept
