@@ -454,15 +454,8 @@ export function physicsTick(gameState, physicsState) {
 
     if (nav.routeActive && nav.routeHeading != null) {
       // Thrust along route heading
-      const dvx = thrustSign * accel * Math.cos(nav.routeHeading) * dt;
-      const dvy = thrustSign * accel * Math.sin(nav.routeHeading) * dt;
-      // DEBUG: thrust application (log every 60th frame ≈ once per second)
-      if (!physicsState._dbgFrame) physicsState._dbgFrame = 0;
-      if (++physicsState._dbgFrame % 60 === 0) {
-        console.log(`[PHYS] thrustSign=${thrustSign} accel=${accel.toFixed(2)} routeHead=${nav.routeHeading.toFixed(3)} heading=${physicsState.heading} dvx=${dvx.toFixed(2)} dvy=${dvy.toFixed(2)} dt=${dt.toFixed(4)}`);
-      }
-      vel.vx += dvx;
-      vel.vy += dvy;
+      vel.vx += thrustSign * accel * Math.cos(nav.routeHeading) * dt;
+      vel.vy += thrustSign * accel * Math.sin(nav.routeHeading) * dt;
     } else {
       // No active route — thrust along current velocity direction, or x-axis if stationary
       const speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);

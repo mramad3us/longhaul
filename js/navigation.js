@@ -433,14 +433,7 @@ export function routeTick(gameState) {
       const relVy = vel.vy - target.velocity.vy;
       const relV = Math.sqrt(relVx * relVx + relVy * relVy);
 
-      // DEBUG: velocity kill telemetry
-      const prevRelV = activeRoute._vkPrevRelV ?? relV;
-      const thrustG = gameState.physics.thrustLevel * gameState.physics.maxThrust;
       const liveDir = Math.atan2(relVy, relVx) + Math.PI;
-      const currentRouteHeading = gameState.navigation.routeHeading;
-      const headingDelta = currentRouteHeading != null ? ((liveDir - currentRouteHeading + Math.PI) % (2 * Math.PI) - Math.PI) : 0;
-      console.log(`[VK] relV=${relV.toFixed(1)} m/s | Δ=${(relV - prevRelV).toFixed(1)} | thrustG=${thrustG.toFixed(2)} | heading=${gameState.physics.heading} | routeHead=${currentRouteHeading?.toFixed(3) ?? 'null'} | liveDir=${liveDir.toFixed(3)} | headingDelta=${(headingDelta * 180 / Math.PI).toFixed(1)}° | shipVel=(${vel.vx.toFixed(1)},${vel.vy.toFixed(1)}) | targVel=(${target.velocity.vx.toFixed(1)},${target.velocity.vy.toFixed(1)}) | elapsed=${activeRoute.phaseElapsed}/${phase.durationMin}`);
-      activeRoute._vkPrevRelV = relV;
 
       // Throttle down as relV approaches zero to prevent oscillation.
       // At 1.5G, each game-minute applies 882 m/s of dV — if relV is 300 m/s,
@@ -450,7 +443,6 @@ export function routeTick(gameState) {
       const tickDv = killG * G_ACCEL * 60; // dV applied per game-minute at full G
 
       if (relV < 50) {
-        console.log(`[VK] KILL COMPLETE — snapping velocity`);
         vel.vx = target.velocity.vx;
         vel.vy = target.velocity.vy;
         gameState.physics.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
@@ -470,10 +462,7 @@ export function routeTick(gameState) {
           gameState.physics.thrustLevel = Math.min(1, clampedG / gameState.physics.maxThrust);
           gameState.physics.acceleration.y = clampedG * G_ACCEL;
           gameState.physics.gForce = clampedG;
-          console.log(`[VK] Throttled: ${clampedG.toFixed(3)}G (relV=${relV.toFixed(0)}, tickDv=${tickDv.toFixed(0)})`);
         }
-
-        console.log(`[VK] Updated thrustDir → ${liveDir.toFixed(3)} rad`);
       }
     }
   }

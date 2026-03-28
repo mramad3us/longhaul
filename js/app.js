@@ -870,8 +870,7 @@ function initHud() {
           if (currentMission && currentMission !== 'secure-burn' && currentMission !== 'healing') {
             cancelMission(member.id, gameState.ship);
           }
-          const result = assignSecureBurnMission(gameState.ship, member);
-          console.log(`[COMBAT] ${member.name}: assignSecureBurn=${result}, mission=${getCrewMission(member.id)}, deck=${member.deck}`);
+          assignSecureBurnMission(gameState.ship, member);
         }
       });
       // Red combat lighting overlay on ship view
@@ -3147,26 +3146,16 @@ function updateHud(state) {
     }
   }
 
-  // Update tactical view when thrust state or velocity changes significantly
-  // Bucket velocity so we don't re-render every frame
-  const relVel = getRelativeVelocity(phys);
-  const velSign = relVel >= 0 ? 1 : -1;
-  const velBucket = velSign * Math.floor(Math.abs(relVel) / 5000);
-  const tacNeedsUpdate = phys.thrustActive !== lastThrustActive || velBucket !== lastTacVelocityBucket || !!phys.orienting !== lastOrienting;
-  if (tacNeedsUpdate) {
-    lastThrustActive = phys.thrustActive;
-    lastTacVelocityBucket = velBucket;
-    lastOrienting = !!phys.orienting;
-    if (_hud.tacScreen) {
-      if (isBlackout()) {
-        _hud.tacScreen.innerHTML = '';
-      } else {
-        renderTacView(state.ship, _hud.tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting, getTacNearbyEntities(state, tacZoomLevel));
-      }
+  // Tactical screen: render EVERY tick — this is the primary combat/docking display,
+  // entity positions must be accurate at all times.
+  if (_hud.tacScreen) {
+    if (isBlackout()) {
+      _hud.tacScreen.innerHTML = '';
+    } else {
+      renderTacView(state.ship, _hud.tacScreen, phys.thrustActive, tacZoomLevel, phys.flipping, getRelativeVelocity(phys), phys.orienting, getTacNearbyEntities(state, tacZoomLevel));
     }
-    // Keep modal tac in sync (full re-render on significant change)
-    if (tacModalOpen && tacModalTab === 'tactical' && !isBlackout()) renderTacModal();
   }
+  if (tacModalOpen && tacModalTab === 'tactical' && !isBlackout()) renderTacModal();
   // Orient maneuver gating: pilot must be at helm, then wait for crew (or player override)
   if (_orientState === 'waiting-pilot') {
     const pilot = state.ship.crew.find(c => c.role === 'Pilot' && !c.dead);
