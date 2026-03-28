@@ -1886,6 +1886,13 @@ function closeTacModal() {
   tacModalTab = 'tactical';
 }
 
+// Deterministic hash from entity ID for consistent random variations
+function hashCode(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
 // Compute nearby entities for the tac screen (within zoom range)
 function getTacNearbyEntities(state, zoomLevel) {
   if (!state?.entities || !state.shipPosition) return null;
@@ -1909,6 +1916,9 @@ function getTacNearbyEntities(state, zoomLevel) {
       sosActive: entity.sosActive,
       thrustActive: entity.thrustActive,
       mass: entity.mass || 50000,
+      shipClass: entity.shipClass || '',
+      entityType: entity.type,
+      seed: entity.id ? hashCode(entity.id) : 0,
     });
   }
   return result.length > 0 ? result : null;

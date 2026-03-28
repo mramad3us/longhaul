@@ -1305,30 +1305,104 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
       else if (ne.faction === 'OPA' || ne.faction === 'Belter') color = '#7EC8D9';
 
       if (zoom.shipMode === 'hull') {
-        // Close zoom: draw ship silhouette (oriented with nose toward their heading)
-        // Ship shape: elongated hexagon/diamond, scaled by mass
-        const massScale = ne.mass ? Math.min(2, Math.max(0.5, ne.mass / 80000)) : 1;
-        const shipH = 18 * massScale;  // hull length in px
-        const shipW = 6 * massScale;   // hull width in px
-
-        // Rotate entity shape to face its heading relative to our view
-        const entRot = ne.entHeading != null ? (ne.entHeading - (ne.relBearing + (typeof shipFacing !== 'undefined' ? 0 : 0))) : 0;
+        // Close zoom: draw ship/station silhouette, shape varies by class & mass
+        const massScale = ne.mass ? Math.min(2.5, Math.max(0.4, ne.mass / 80000)) : 1;
+        const seed = ne.seed || 0;
+        // Seeded pseudo-random for consistent per-entity variation
+        const sv = (i) => ((seed * 2654435761 + i * 340573321) >>> 0) / 4294967296;
+        const cls = (ne.shipClass || '').toLowerCase();
+        const isStation = ne.entityType === 'station';
 
         parts.push(`<g transform="translate(${ex},${ey})">`);
-        // Hull outline — pointed bow, flat stern
-        const bow = -shipH / 2;
-        const stern = shipH / 2;
-        const mid = shipW / 2;
-        parts.push(`<polygon points="0,${bow} ${mid},${bow + shipH * 0.3} ${mid},${stern} -${mid},${stern} -${mid},${bow + shipH * 0.3}"
-          fill="none" stroke="${color}" stroke-width="1" opacity="0.85"/>`);
-        // Engine glow at stern
-        if (ne.thrustActive) {
-          parts.push(`<rect x="-${mid - 1}" y="${stern}" width="${shipW - 2}" height="4" fill="#E2A355" opacity="0.7">
-            <animate attributeName="opacity" values="0.5;0.8;0.5" dur="0.3s" repeatCount="indefinite"/>
-          </rect>`);
+
+        if (isStation) {
+          // STATION: spinning drum/ring shape
+          const r = 12 * massScale;
+          const ringW = r * (0.15 + sv(0) * 0.1);
+          // Outer ring
+          parts.push(`<circle cx="0" cy="0" r="${r}" fill="none" stroke="${color}" stroke-width="${ringW}" opacity="0.7"/>`);
+          // Inner structure spokes
+          const spokes = 3 + (seed % 3);
+          for (let s = 0; s < spokes; s++) {
+            const a = (s / spokes) * Math.PI * 2 + sv(1) * 0.3;
+            parts.push(`<line x1="0" y1="0" x2="${Math.cos(a) * r}" y2="${Math.sin(a) * r}" stroke="${color}" stroke-width="0.6" opacity="0.4"/>`);
+          }
+          // Hub
+          parts.push(`<circle cx="0" cy="0" r="${r * 0.2}" fill="${color}" opacity="0.3"/>`);
+          // Docking arm
+          const dockA = sv(2) * Math.PI * 2;
+          parts.push(`<line x1="${Math.cos(dockA) * r}" y1="${Math.sin(dockA) * r}" x2="${Math.cos(dockA) * (r + 5)}" y2="${Math.sin(dockA) * (r + 5)}" stroke="${color}" stroke-width="1" opacity="0.5"/>`);
+
+        } else {
+          // SHIP: shape varies by class
+          const h = (14 + sv(0) * 6) * massScale;  // hull length
+          const w = (4 + sv(1) * 3) * massScale;   // hull width
+          const bow = -h / 2;
+          const stern = h / 2;
+          const hw = w / 2;
+
+          if (cls.includes('hauler') || cls.includes('barge') || cls.includes('tanker') || cls.includes('freighter')) {
+            // BULK: wide, boxy, blunt bow, cargo pods
+            const boxW = hw * (1.1 + sv(2) * 0.3);
+            const neckW = hw * (0.5 + sv(3) * 0.2);
+            const neckY = bow + h * (0.2 + sv(4) * 0.1);
+            // Narrow neck at bow, wide cargo section
+            parts.push(`<polygon points="0,${bow} ${neckW},${neckY} ${boxW},${neckY + h * 0.15} ${boxW},${stern - 2} ${-boxW},${stern - 2} ${-boxW},${neckY + h * 0.15} ${-neckW},${neckY}"
+              fill="none" stroke="${color}" stroke-width="0.8" opacity="0.8"/>`);
+            // Cargo pod lines
+            const pods = 1 + (seed % 3);
+            for (let p = 0; p < pods; p++) {
+              const py = neckY + h * 0.3 + p * h * 0.15;
+              parts.push(`<line x1="-${boxW}" y1="${py}" x2="${boxW}" y2="${py}" stroke="${color}" stroke-width="0.4" opacity="0.3"/>`);
+            }
+
+          } else if (cls.includes('liner') || cls.includes('donnager') || cls.includes('truman')) {
+            // CAPITAL: long, angular, with fins/nacelles
+            const finW = hw * (0.4 + sv(2) * 0.2);
+            const finStart = stern - h * (0.3 + sv(3) * 0.1);
+            // Main hull — tapered bow
+            parts.push(`<polygon points="0,${bow} ${hw * 0.6},${bow + h * 0.15} ${hw},${bow + h * 0.35} ${hw},${stern} -${hw},${stern} -${hw},${bow + h * 0.35} -${hw * 0.6},${bow + h * 0.15}"
+              fill="none" stroke="${color}" stroke-width="0.8" opacity="0.8"/>`);
+            // Nacelle fins
+            parts.push(`<line x1="${hw}" y1="${finStart}" x2="${hw + finW}" y2="${stern}" stroke="${color}" stroke-width="0.8" opacity="0.6"/>`);
+            parts.push(`<line x1="-${hw}" y1="${finStart}" x2="-${hw + finW}" y2="${stern}" stroke="${color}" stroke-width="0.8" opacity="0.6"/>`);
+            // Bridge stripe
+            parts.push(`<line x1="-${hw * 0.4}" y1="${bow + h * 0.12}" x2="${hw * 0.4}" y2="${bow + h * 0.12}" stroke="${color}" stroke-width="0.6" opacity="0.5"/>`);
+
+          } else if (cls.includes('skiff') || cls.includes('courier') || cls.includes('shuttle')) {
+            // SMALL: compact, narrow, sharp bow
+            const sharpness = 0.35 + sv(2) * 0.15;
+            parts.push(`<polygon points="0,${bow} ${hw},${bow + h * sharpness} ${hw * 0.8},${stern} -${hw * 0.8},${stern} -${hw},${bow + h * sharpness}"
+              fill="none" stroke="${color}" stroke-width="0.7" opacity="0.8"/>`);
+            // Wing stubs
+            if (sv(3) > 0.4) {
+              const wy = bow + h * 0.5;
+              const wExt = hw * (0.6 + sv(4) * 0.5);
+              parts.push(`<line x1="${hw}" y1="${wy}" x2="${hw + wExt}" y2="${wy + 2}" stroke="${color}" stroke-width="0.6" opacity="0.5"/>`);
+              parts.push(`<line x1="-${hw}" y1="${wy}" x2="-${hw + wExt}" y2="${wy + 2}" stroke="${color}" stroke-width="0.6" opacity="0.5"/>`);
+            }
+
+          } else {
+            // DEFAULT: medium ship — pointed bow, tapered stern
+            const bowTaper = 0.25 + sv(2) * 0.1;
+            const sternTaper = 0.8 + sv(3) * 0.15;
+            parts.push(`<polygon points="0,${bow} ${hw},${bow + h * bowTaper} ${hw},${stern * sternTaper} ${hw * 0.6},${stern} -${hw * 0.6},${stern} -${hw},${stern * sternTaper} -${hw},${bow + h * bowTaper}"
+              fill="none" stroke="${color}" stroke-width="0.8" opacity="0.8"/>`);
+            // Mid-section detail
+            parts.push(`<line x1="-${hw * 0.7}" y1="0" x2="${hw * 0.7}" y2="0" stroke="${color}" stroke-width="0.4" opacity="0.3"/>`);
+          }
+
+          // Engine glow at stern (all ships)
+          if (ne.thrustActive) {
+            const glowW = hw * (0.6 + sv(5) * 0.3);
+            parts.push(`<rect x="-${glowW}" y="${stern}" width="${glowW * 2}" height="${3 + massScale}" fill="#E2A355" opacity="0.7">
+              <animate attributeName="opacity" values="0.5;0.9;0.5" dur="0.25s" repeatCount="indefinite"/>
+            </rect>`);
+          }
         }
-        // Center dot
-        parts.push(`<circle cx="0" cy="0" r="1.5" fill="${color}" opacity="0.6"/>`);
+
+        // Center dot (all)
+        parts.push(`<circle cx="0" cy="0" r="1" fill="${color}" opacity="0.5"/>`);
         parts.push('</g>');
 
         // SOS pulse
