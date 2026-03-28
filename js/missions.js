@@ -5,6 +5,7 @@
 // ============================================================
 
 import { createEntity, EntityType, EntityState, entityDistanceAU, relativeSpeed, bearingTo, computeOrbitalVelocity } from './entities.js';
+import { getActiveRoute } from './navigation.js';
 // Scanner ranges imported if needed for spawn distance calibration
 // import { SCANNER_RANGES } from './scanner.js';
 
@@ -842,10 +843,16 @@ export function interceptTick(gameState) {
     events.push({ type: 'formation-lost', targetName: entity.name });
   }
 
-  // For intercepts with continuous correction (runaway), update route heading
+  // For intercepts with continuous correction, update route heading toward target.
+  // BUT NOT during a velocity kill burn — the VK manages its own thrust direction
+  // (opposite to relative velocity, which is different from bearing to target).
   if (interceptState && !interceptState.formation && !interceptState.fineApproach && gameState.navigation?.routeActive) {
-    const headingAngle = bearingTo(shipPos, entity.position);
-    gameState.navigation.routeHeading = headingAngle;
+    const activeRt = getActiveRoute();
+    const currentPhase = activeRt?.phases?.[activeRt.currentPhase];
+    if (!currentPhase?.velocityKill) {
+      const headingAngle = bearingTo(shipPos, entity.position);
+      gameState.navigation.routeHeading = headingAngle;
+    }
   }
 
   // Auto-trigger fine approach when within range and velocity is matched

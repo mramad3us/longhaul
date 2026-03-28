@@ -433,18 +433,27 @@ export function routeTick(gameState) {
       const relVy = vel.vy - target.velocity.vy;
       const relV = Math.sqrt(relVx * relVx + relVy * relVy);
 
+      // DEBUG: velocity kill telemetry
+      const prevRelV = activeRoute._vkPrevRelV ?? relV;
+      const thrustG = gameState.physics.thrustLevel * gameState.physics.maxThrust;
+      const liveDir = Math.atan2(relVy, relVx) + Math.PI;
+      const currentRouteHeading = gameState.navigation.routeHeading;
+      const headingDelta = currentRouteHeading != null ? ((liveDir - currentRouteHeading + Math.PI) % (2 * Math.PI) - Math.PI) : 0;
+      console.log(`[VK] relV=${relV.toFixed(1)} m/s | Δ=${(relV - prevRelV).toFixed(1)} | thrustG=${thrustG.toFixed(2)} | heading=${gameState.physics.heading} | routeHead=${currentRouteHeading?.toFixed(3) ?? 'null'} | liveDir=${liveDir.toFixed(3)} | headingDelta=${(headingDelta * 180 / Math.PI).toFixed(1)}° | shipVel=(${vel.vx.toFixed(1)},${vel.vy.toFixed(1)}) | targVel=(${target.velocity.vx.toFixed(1)},${target.velocity.vy.toFixed(1)}) | elapsed=${activeRoute.phaseElapsed}/${phase.durationMin}`);
+      activeRoute._vkPrevRelV = relV;
+
       if (relV < 50) {
-        // Velocity killed — snap and force phase to end immediately
+        console.log(`[VK] KILL COMPLETE — snapping velocity`);
         vel.vx = target.velocity.vx;
         vel.vy = target.velocity.vy;
         gameState.physics.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
-        activeRoute.phaseElapsed = phase.durationMin; // trigger phase end
+        activeRoute.phaseElapsed = phase.durationMin;
       } else {
         // Update thrust direction to oppose CURRENT relative velocity
-        const liveDir = Math.atan2(relVy, relVx) + Math.PI;
         phase.thrustDirection = liveDir;
         gameState.navigation.routeHeading = liveDir;
         gameState.physics.heading = 0; // prograde relative to brake direction
+        console.log(`[VK] Updated thrustDir → ${liveDir.toFixed(3)} rad`);
       }
     }
   }
