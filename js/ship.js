@@ -26,7 +26,7 @@ export function createDefaultShip(crewCount = 4) {
         glow: { color: 'rgba(91, 192, 235, 0.06)', accent: '#5BC0EB' },
         tiles: [
           [T.EMPTY,     T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.HULL_WALL,  T.EMPTY],
-          [T.HULL_WALL, T.TERMINAL,   T.CRASH_COUCH,T.FLOOR,      T.FLOOR,      T.FLOOR,      T.CRASH_COUCH,T.TERMINAL,   T.HULL_WALL],
+          [T.HULL_WALL, T.RADIO,      T.CRASH_COUCH,T.FLOOR,      T.FLOOR,      T.FLOOR,      T.CRASH_COUCH,T.TRANSPONDER,T.HULL_WALL],
           [T.HULL_WALL, T.EVA_LOCKER, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.FLOOR,      T.EVA_LOCKER, T.HULL_WALL],
           [T.HULL_WALL, T.FLOOR,      T.FLOOR,      T.FLOOR,      T.LADDER,     T.FLOOR,      T.FLOOR,      T.FLOOR,      T.HULL_WALL],
         ],

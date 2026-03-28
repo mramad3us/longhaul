@@ -3,7 +3,7 @@
 PORT=${1:-8090}
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-VERSION=$(grep -oP "(?<=').*(?=')" "$DIR/js/version.js")
+VERSION=$(sed -n "s/.*'\(.*\)'.*/\1/p" "$DIR/js/version.js")
 echo "LONGHAUL v$VERSION — launching on http://localhost:$PORT"
 
 # Kill any existing server on this port

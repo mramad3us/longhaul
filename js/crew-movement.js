@@ -302,6 +302,31 @@ export function getCrewMission(memberId) {
   return ms ? ms.mission : null;
 }
 
+// Get movement state for inertia system (position, deck, mission)
+export function getMoveState(memberId) {
+  const ms = moveState.get(memberId);
+  if (!ms) return null;
+  return { x: ms.x, y: ms.y, deckIdx: ms.deckIdx, mission: ms.mission };
+}
+
+// Sync crew position after inertia slide resolves
+export function syncAfterSlide(memberId, newX, newY, newDeck) {
+  const ms = moveState.get(memberId);
+  if (!ms) return;
+  ms.x = newX;
+  ms.y = newY;
+  if (newDeck !== undefined) ms.deckIdx = newDeck;
+  // Cancel current patrol/movement — they've been flung to a new position
+  if (!ms.mission || ms.mission === 'patrol') {
+    ms.mission = null;
+    ms.missionTarget = null;
+    ms.waypointIdx = 0;
+    ms.pause = 0.5; // Brief pause after impact before resuming patrol
+    ms.segDist = 0;
+    ms.traveled = 0;
+  }
+}
+
 // Check if crew member has completed their LS repair
 export function isRepairComplete(memberId) {
   const ms = moveState.get(memberId);
@@ -557,6 +582,12 @@ export function updateCrewMovement(ship, physics, deltaSec, gameSpeed) {
 
     const ms = moveState.get(member.id);
     if (!ms) return;
+
+    // Skip normal movement while being thrown by inertial forces
+    if (member._sliding) {
+      updateCrewVisual(ship, ms, member);
+      return;
+    }
 
     const gState = physics.crewStates[member.id] || 'floating';
     const speed = crewSpeed(gState, physics.gForce, member);

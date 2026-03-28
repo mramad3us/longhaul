@@ -20,12 +20,80 @@ import { initCrewMovement, updateCrewMovement, getCrewMission, isBeingRescued, a
 import { generateAutoJobs, clearJobs, getJobQueue, getCrewJobs, completeJob, JobPriority, JobType } from './jobs.js';
 import { getAtmoStatus, getEquipmentStatusLabel, depressurizeCompartment, repressurizeCompartment, quickPatchLS, toggleLS, countSuitsOnDeck, donEvaSuit, removeEvaSuit, findNearestSuitLocker } from './life-support.js';
 import { renderSolarSystem, initSolarMapInteraction, zoomToPreset, zoomToPlanet, zoomToBody, SOLAR_ZOOM_PRESETS, resetMapState, getMapState, setOnBodySelect, getSelectedBody, setSelectedBody } from './solar-system.js';
-import { findBody, getBodyWorldPos, calculateRoutes, activateRoute, cancelRoute, getActiveRoute, getRouteProgress, formatDuration, formatDeltaV, serializeRoute, deserializeRoute, resetRoute } from './navigation.js';
+import { findBody, getBodyWorldPos, calculateRoutes, activateRoute, cancelRoute, getActiveRoute, getRouteProgress, formatDuration, formatDeltaV, serializeRoute, deserializeRoute, resetRoute, overrideSecure, markSecureComplete, isSecureBlocking } from './navigation.js';
 import { initReactor, ReactorState, isReactorOnline, getReactorStatusText, beginShutdown, cancelShutdown, beginEmergencyShutoff, immediateEmergencyShutoff, cancelEmergencyShutoff, beginStartup, patchReactor, STARTUP_MIN_ENGINEERING, STARTUP_MIN_FUEL } from './reactor.js';
+import { createDefaultEntities, entityTick, computeOrbitalVelocity, getEntityById, initializeEntityOrbit } from './entities.js';
+import { initComms, commsTick, toggleTransponder, triggerSOS, getRadioContacts, isTransponderOn, isSosActive, getHailDialogue } from './comms.js';
+import { initScanner, scannerTick, renderScanner, selectContact, deselectContact, startTracking, stopTracking, setRange, getTrackedEntity, getSelectedContact, SCANNER_RANGES } from './scanner.js';
+import { initMissions, acceptMission, declineMission, startIntercept, cancelIntercept, computeInterceptRoute, computeFineTuneRoute, completeMissionViaHail, getActiveMissions, getMissionLog, getMissionForEntity, getInterceptState, serializeMissions, deserializeMissions, INTERCEPT_TYPE, INTERCEPT_RANGE_AU } from './missions.js';
+import { initInertia, triggerManeuverEvent, updateInertiaFrame, isInertiaActive, ManeuverType, enterCinematicTime, exitCinematicTime, isInCinematicTime, drainImpactEvents, internalBleedingTick } from './inertia.js';
 
 // ---- HELPERS ----
 function isBlackout() {
   return gameState && gameState.resources.power.current <= 0 && gameState.reactor && gameState.reactor.status === 'offline';
+}
+
+// Get velocity target for relative velocity display
+// Priority: scanner tracked contact > route destination > solar map selection
+function getVelocityTarget() {
+  if (!gameState) return null;
+
+  // Scanner tracked contact
+  const tracked = getTrackedEntity(gameState);
+  if (tracked) {
+    return { name: tracked.name, velocity: tracked.velocity, position: tracked.position, type: 'entity' };
+  }
+
+  // Active route destination
+  const route = getActiveRoute();
+  if (route && route.active && route.destinationName) {
+    const body = findBody(route.destinationName, gameState);
+    if (body) {
+      if (body.type === 'entity' && body.entity) {
+        return { name: body.entity.name, velocity: body.entity.velocity, position: body.entity.position, type: 'entity' };
+      }
+      const days = gameState.stats?.daysElapsed || 0;
+      const vel = computeOrbitalVelocity(route.destinationName, days);
+      const pos = getBodyWorldPos(body, days);
+      return { name: route.destinationName, velocity: vel, position: pos, type: 'body' };
+    }
+  }
+
+  // Solar map selected body (or entity)
+  const selBody = getSelectedBody();
+  if (selBody) {
+    // Check if it's an entity first
+    if (selBody.entityId && gameState.entities) {
+      const entity = gameState.entities.find(e => e.id === selBody.entityId);
+      if (entity) {
+        return { name: entity.name, velocity: entity.velocity, position: entity.position, type: 'entity' };
+      }
+    }
+    const body = findBody(selBody.name, gameState);
+    if (body) {
+      if (body.type === 'entity' && body.entity) {
+        return { name: body.entity.name, velocity: body.entity.velocity, position: body.entity.position, type: 'entity' };
+      }
+      const days = gameState.stats?.daysElapsed || 0;
+      const vel = computeOrbitalVelocity(selBody.name, days);
+      return { name: selBody.name, velocity: vel, position: { x: selBody.x, y: selBody.y }, type: 'body' };
+    }
+  }
+
+  return null;
+}
+
+function getDisplayVelocity() {
+  if (!gameState) return { text: '---', ref: null };
+  const target = getVelocityTarget();
+  if (!target) return { text: '---', ref: null };
+
+  const shipVel = gameState.physics.velocity;
+  const dvx = shipVel.vx - target.velocity.vx;
+  const dvy = shipVel.vy - target.velocity.vy;
+  const relSpeed = Math.sqrt(dvx * dvx + dvy * dvy);
+
+  return { text: formatVelocity(relSpeed), ref: target.name };
 }
 
 // ---- STATE ----
@@ -246,6 +314,122 @@ function hideManeuverPrompt() {
   if (el) el.style.display = 'none';
 }
 
+// ---- INERTIA INTEGRATION ----
+
+/**
+ * Trigger an inertial maneuver event with cinematic slowdown.
+ */
+function handleInertiaEvent(type, opts = {}) {
+  if (!gameState) return;
+
+  const result = triggerManeuverEvent(type, gameState.physics, gameState.ship, opts);
+  if (!result.triggered) return;
+
+  // Enter cinematic time (slow to 1x) so player sees the crew sliding
+  if (result.cinematicSlowdown && gameState.speed > 1) {
+    enterCinematicTime(gameState);
+    // Show cinematic indicator
+    const speedBtns = document.querySelectorAll('.speed-btn');
+    speedBtns.forEach(b => b.classList.add('cinematic-dim'));
+    showToast('INERTIAL EVENT', 'danger');
+  }
+}
+
+/**
+ * Process impact events from the inertia frame update.
+ */
+function processImpactEvents(impacts) {
+  if (!impacts || impacts.length === 0) return;
+
+  for (const impact of impacts) {
+    // Log and toast
+    const severityClass = impact.severity === 'fatal' ? 'danger' :
+                          impact.severity === 'lethal' || impact.severity === 'crushing' ? 'danger' :
+                          impact.severity === 'bone-breaking' ? 'warn' : 'warn';
+
+    addLogEntry(impact.message, severityClass);
+    showToast(impact.message, severityClass);
+  }
+}
+
+// ---- SECURE PHASE BLOCKING UI ----
+
+let _secureBlockingInterval = null;
+
+function showSecureBlockingPrompt() {
+  let el = document.getElementById('secure-blocking-prompt');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'secure-blocking-prompt';
+    el.className = 'secure-blocking-prompt';
+    document.getElementById('screen-game')?.appendChild(el);
+  }
+  el.style.display = 'flex';
+  updateSecureBlockingPrompt();
+
+  // Poll crew status to auto-advance when all seated
+  if (_secureBlockingInterval) clearInterval(_secureBlockingInterval);
+  _secureBlockingInterval = setInterval(() => {
+    if (!gameState || !isSecureBlocking()) {
+      hideSecureBlockingPrompt();
+      return;
+    }
+    updateSecureBlockingPrompt();
+
+    // Check if all crew are seated
+    const aliveCrew = gameState.ship.crew.filter(c => !c.dead && c.consciousness > 10);
+    const allSeated = aliveCrew.every(c => isSeatedInCouch(c.id));
+    if (allSeated) {
+      markSecureComplete();
+      hideSecureBlockingPrompt();
+      addLogEntry('All hands secured — burn sequence proceeding', 'nav');
+    }
+  }, 500);
+}
+
+function updateSecureBlockingPrompt() {
+  const el = document.getElementById('secure-blocking-prompt');
+  if (!el || !gameState) return;
+
+  const aliveCrew = gameState.ship.crew.filter(c => !c.dead && c.consciousness > 10);
+  const secured = aliveCrew.filter(c => isSeatedInCouch(c.id));
+  const unsecuredCount = aliveCrew.length - secured.length;
+
+  const crewDots = aliveCrew.map(c => {
+    const seated = isSeatedInCouch(c.id);
+    const isPilot = c.role === 'Pilot';
+    return `<span class="mp-dot ${seated ? 'mp-dot-ok' : 'mp-dot-wait'} ${isPilot ? 'mp-dot-pilot' : ''}" title="${c.name} — ${seated ? 'secured' : 'moving'}">${isPilot ? 'P' : '·'}</span>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="mp-header">BURN SEQUENCE HOLDING</div>
+    <div class="mp-crew-row">${crewDots}</div>
+    <span class="mp-status mp-caution">${unsecuredCount} CREW UNSECURED</span>
+    <button class="override-btn" id="secure-override-btn">OVERRIDE — EXECUTE NOW</button>
+  `;
+
+  const btn = document.getElementById('secure-override-btn');
+  if (btn) {
+    btn.onclick = () => {
+      overrideSecure();
+      hideSecureBlockingPrompt();
+      addLogEntry('OVERRIDE: burn executing with unsecured crew!', 'danger');
+      showToast('OVERRIDE — UNSECURED CREW!', 'danger');
+    };
+  }
+}
+
+function hideSecureBlockingPrompt() {
+  const el = document.getElementById('secure-blocking-prompt');
+  if (el) el.style.display = 'none';
+  if (_secureBlockingInterval) {
+    clearInterval(_secureBlockingInterval);
+    _secureBlockingInterval = null;
+  }
+  // Remove cinematic dim if present
+  document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('cinematic-dim'));
+}
+
 // ---- FLOATING PARTICLES ----
 
 function initParticles() {
@@ -269,10 +453,10 @@ function initParticles() {
     // relativeVel > 0 = moving forward (particles flow down past us)
     // relativeVel < 0 = moving backward (particles flow up past us)
     const phys = gameState ? gameState.physics : null;
-    const absVelocity = phys ? phys.velocity : 0;     // absolute frame velocity
+    const speed = phys ? phys.speed : 0;
     const heading = phys ? phys.heading : 0;
-    const velocity = heading === 0 ? absVelocity : -absVelocity; // ship-relative
-    const absVel = Math.abs(velocity);
+    const velocity = heading === 0 ? speed : -speed; // ship-relative
+    const absVel = speed;
 
     // Speed factor: 0 = stationary, 1 = very fast (100 km/s+)
     const speedFactor = Math.min(1, absVel / 100000);
@@ -341,12 +525,13 @@ function initParticles() {
 // Positive = moving forward, negative = moving backward.
 function getRelativeVelocity(phys) {
   if (!phys) return 0;
-  return phys.heading === 0 ? phys.velocity : -phys.velocity;
+  const spd = phys.speed || 0;
+  return phys.heading === 0 ? spd : -spd;
 }
 
 function speedParticleRate() {
   if (!gameState) return 400;
-  const absVel = Math.abs(gameState.physics.velocity);
+  const absVel = gameState.physics.speed || 0;
   const speedFactor = Math.min(1, absVel / 100000);
   // More particles at high speed: 400ms → 120ms
   return Math.max(120, 400 - speedFactor * 280);
@@ -438,6 +623,49 @@ async function refreshSaveList() {
       if (!gameState.shipPosition) {
         gameState.shipPosition = { x: 2.77, y: 0.0 };
       }
+      // Migrate: convert scalar velocity to vector
+      if (typeof gameState.physics.velocity === 'number') {
+        const v = gameState.physics.velocity;
+        const heading = gameState.navigation.routeHeading || 0;
+        gameState.physics.velocity = {
+          vx: heading != null ? v * Math.cos(heading) : v,
+          vy: heading != null ? v * Math.sin(heading) : 0,
+        };
+        gameState.physics.speed = Math.abs(v);
+      }
+      // Migrate: add inertia tracking fields
+      if (gameState.physics._prevThrustG === undefined) {
+        gameState.physics._prevThrustG = 0;
+        gameState.physics._thrustDelta = 0;
+      }
+      // Migrate: add entities and initialize orbits for gravity
+      if (!gameState.entities) {
+        gameState.entities = createDefaultEntities();
+      }
+      // Ensure all entities have velocity vectors (pre-gravity saves had snapped positions)
+      const migDays = gameState.stats?.daysElapsed || 0;
+      for (const ent of gameState.entities) {
+        if (!ent.velocity || (ent.velocity.vx === 0 && ent.velocity.vy === 0 && ent.orbitBody)) {
+          initializeEntityOrbit(ent, migDays);
+        }
+      }
+      // Migrate: add comms
+      if (!gameState.comms) {
+        initComms(gameState);
+      }
+      // Migrate: add scanner
+      if (!gameState.scanner) {
+        initScanner(gameState);
+      }
+      // Restore missions
+      if (gameState._missions) {
+        deserializeMissions(gameState._missions);
+        delete gameState._missions;
+      } else {
+        initMissions(gameState);
+      }
+      // Init inertia system
+      initInertia();
       // Migrate: add route navigation fields if missing
       if (!gameState.navigation.routeActive) {
         gameState.navigation.routeActive = false;
@@ -487,19 +715,29 @@ function initHud() {
     const slider = document.getElementById('thrust-slider');
 
     if (phys.thrustActive) {
-      // Turn off
+      // Turn off — surprise thrust cut
+      const prevG = phys.thrustLevel * phys.maxThrust;
       setThrustLevel(phys, 0);
       slider.value = 0;
       updateThrustSliderUI(0);
       addLogEntry('Torch engine shutdown — entering micro-G', 'thrust');
+      // Inertia: surprise burn stop
+      if (prevG > 0.5) {
+        handleInertiaEvent(ManeuverType.BURN_STOP, { deltaG: prevG, surprise: true });
+      }
     } else {
-      // Turn on to slider value or default 20% (2G)
+      // Turn on to slider value or default 20% (2G) — surprise burn start
       const level = parseFloat(slider.value) / 100 || 0.2;
       setThrustLevel(phys, level);
       slider.value = level * 100;
       updateThrustSliderUI(level);
       const gVal = (level * phys.maxThrust).toFixed(1);
       addLogEntry(`Torch engine firing at ${gVal}G`, 'thrust');
+      // Inertia: surprise burn start
+      const newG = level * phys.maxThrust;
+      if (newG > 0.5) {
+        handleInertiaEvent(ManeuverType.THRUST_CHANGE, { deltaG: newG, surprise: true });
+      }
     }
   });
 
@@ -512,16 +750,21 @@ function initHud() {
     updateThrustSliderUI(level);
   });
 
-  // Log on slider release for significant changes
+  // Log on slider release for significant changes + inertia trigger
   let lastLoggedG = 0;
   slider.addEventListener('change', () => {
     if (!gameState) return;
     const gVal = gameState.physics.thrustLevel * gameState.physics.maxThrust;
-    if (Math.abs(gVal - lastLoggedG) > 0.3) {
+    const deltaG = Math.abs(gVal - lastLoggedG);
+    if (deltaG > 0.3) {
       if (gVal === 0) {
         addLogEntry('Torch engine shutdown — entering micro-G', 'thrust');
       } else {
         addLogEntry(`Thrust adjusted to ${gVal.toFixed(1)}G`, 'thrust');
+      }
+      // Inertia: surprise thrust change
+      if (deltaG > 0.5) {
+        handleInertiaEvent(ManeuverType.THRUST_CHANGE, { deltaG, surprise: true });
       }
       lastLoggedG = gVal;
     }
@@ -534,6 +777,9 @@ function initHud() {
     if (!gameState) return;
     const phys = gameState.physics;
     if (phys.flipping) return; // already flipping
+
+    // Record pre-flip thrust for inertia trigger
+    const prevThrustG = phys.thrustActive ? phys.thrustLevel * phys.maxThrust : 0;
 
     if (startFlip(phys)) {
       addLogEntry('Flip maneuver initiated', 'nav');
@@ -549,12 +795,21 @@ function initHud() {
       const flipBtn = document.getElementById('flip-toggle');
       flipBtn.classList.add('flipping');
 
+      // Trigger inertia for the flip (crew get thrown in random direction)
+      handleInertiaEvent(ManeuverType.FLIP, { deltaG: prevThrustG });
+
       // Animate flip in real-time
       let lastTime = performance.now();
       function animateFlip(now) {
-        const deltaSec = (now - lastTime) / 1000;
+        const deltaSec = Math.min((now - lastTime) / 1000, 0.1);
         lastTime = now;
         const complete = updateFlip(phys, deltaSec);
+
+        // Update inertia simulation during flip
+        if (isInertiaActive()) {
+          const impacts = updateInertiaFrame(gameState.ship, gameState.physics, deltaSec);
+          processImpactEvents(impacts);
+        }
 
         // Update RCS on tac view during flip (close zoom only)
         const tacScreen = document.getElementById('tac-screen');
@@ -569,9 +824,11 @@ function initHud() {
           document.getElementById('flip-heading').textContent = headingLabel;
           addLogEntry(`Flip complete — now ${relV >= 0 ? 'prograde' : 'retrograde'}`, 'nav');
           showRcsThrusters(false);
+          // End cinematic time if active
+          if (isInCinematicTime()) exitCinematicTime(gameState);
           // Re-render tac view
           if (tacScreen) {
-            renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, false, phys.velocity);
+            renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacZoomLevel, false, phys.speed);
           }
           flipAnimFrame = null;
           return;
@@ -617,6 +874,8 @@ let tacModalZoom = 0;
 let tacModalTab = 'tactical'; // 'tactical' or 'solar'
 let solarMapInitialized = false;
 let solarRenderCounter = 0;
+// Approach slider state for fine-tune distance control in scanner
+let _approachSlider = { entityId: null, sliderValue: 100 };
 
 function initTacModal() {
   const modal = document.getElementById('tac-modal');
@@ -648,11 +907,12 @@ function initTacModal() {
     });
   });
 
-  // Tab switching (TACTICAL / SOLAR)
+  // Tab switching (TACTICAL / SOLAR / SCANNER)
   document.querySelectorAll('.tac-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const newTab = tab.dataset.tacTab;
       if (newTab === tacModalTab) return;
+      hideInterceptTypePanel();
       tacModalTab = newTab;
       document.querySelectorAll('.tac-tab').forEach(t => t.classList.toggle('active', t.dataset.tacTab === newTab));
       switchTacTab(newTab);
@@ -680,33 +940,122 @@ function initTacModal() {
       renderSolarTab(true);
     });
   });
+
+  // Scanner range buttons
+  document.querySelectorAll('.scanner-range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const level = parseInt(btn.dataset.scannerRange);
+      if (gameState) setRange(gameState, level);
+      document.querySelectorAll('.scanner-range-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderScannerTab();
+    });
+  });
+
+  // Scanner track button
+  const trackBtnEl = document.getElementById('scanner-track-btn');
+  if (trackBtnEl) {
+    trackBtnEl.addEventListener('mousedown', (e) => {
+      e.stopPropagation(); // prevent scanner mousedown handler from firing
+    });
+    trackBtnEl.addEventListener('click', () => {
+      if (!gameState?.scanner?.selectedContact) return;
+      const result = startTracking(gameState, gameState.scanner.selectedContact);
+      if (result.success) {
+        showToast(result.message, result.active ? 'warn' : 'ok');
+        addLogEntry(result.message, result.active ? 'warn' : 'system');
+      }
+      renderScannerTab();
+    });
+  }
+
+  // Scanner intercept button — opens type selector instead of immediate intercept
+  const interceptBtnEl = document.getElementById('scanner-intercept-btn');
+  if (interceptBtnEl) {
+    interceptBtnEl.addEventListener('mousedown', (e) => e.stopPropagation());
+    interceptBtnEl.addEventListener('click', () => {
+      if (!gameState?.scanner?.selectedContact) return;
+      const entityId = gameState.scanner.selectedContact;
+      const currentIntercept = getInterceptState();
+
+      if (currentIntercept && currentIntercept.targetEntityId === entityId) {
+        cancelIntercept();
+        cancelRoute(gameState);
+        hideInterceptTypePanel();
+        showToast('Intercept cancelled', 'ok');
+        addLogEntry('Intercept route cancelled', 'nav');
+        renderScannerTab();
+      } else {
+        showInterceptTypePanel(entityId);
+      }
+    });
+  }
+
+  // Scanner contact clicks — use mousedown because innerHTML is replaced every frame,
+  // which destroys the target element before click (mouseup) fires
+  document.getElementById('scanner-screen-modal')?.addEventListener('mousedown', (e) => {
+    let el = e.target;
+    while (el && el !== e.currentTarget) {
+      const contactId = el.getAttribute?.('data-contact');
+      if (contactId) {
+        if (gameState?.scanner?.selectedContact !== contactId) {
+          hideInterceptTypePanel(); // new contact selected — close ITP if open
+        }
+        selectContact(gameState, contactId);
+        renderScannerTab();
+        return;
+      }
+      el = el.parentElement || el.parentNode;
+    }
+    // Clicked empty space — deselect if not locked
+    if (gameState?.scanner && gameState.scanner.selectedContact !== gameState.scanner.trackedContact) {
+      hideInterceptTypePanel();
+      deselectContact(gameState);
+      renderScannerTab();
+    }
+  });
 }
 
 function switchTacTab(tab) {
   const tacScreen = document.getElementById('tac-screen-modal');
   const solarScreen = document.getElementById('solar-screen-modal');
+  const scannerWrapper = document.getElementById('scanner-screen-wrapper');
   const tacZoomControls = document.getElementById('tac-zoom-controls-modal');
   const solarZoomControls = document.getElementById('solar-zoom-controls');
+  const scannerRangeControls = document.getElementById('scanner-range-controls');
   const rangeEl = document.getElementById('tac-range-modal');
+  const routePlotBtn = document.getElementById('route-plot-btn');
+  const routeZoomBtn = document.getElementById('route-zoom-btn');
+  const scannerInfo = document.getElementById('scanner-contact-info');
+  const scannerTrackBtn = document.getElementById('scanner-track-btn');
+  const scannerInterceptBtn = document.getElementById('scanner-intercept-btn');
+
+  // Hide all screens and controls
+  tacScreen.style.display = 'none';
+  solarScreen.style.display = 'none';
+  if (scannerWrapper) scannerWrapper.style.display = 'none';
+  tacZoomControls.style.display = 'none';
+  solarZoomControls.style.display = 'none';
+  scannerRangeControls.style.display = 'none';
+  rangeEl.style.display = 'none';
+  if (routePlotBtn) routePlotBtn.style.display = 'none';
+  if (routeZoomBtn) routeZoomBtn.style.display = 'none';
+  if (scannerInfo) scannerInfo.style.display = 'none';
+  if (scannerTrackBtn) scannerTrackBtn.style.display = 'none';
+  if (scannerInterceptBtn) scannerInterceptBtn.style.display = 'none';
 
   if (tab === 'tactical') {
     tacScreen.style.display = '';
-    solarScreen.style.display = 'none';
     tacZoomControls.style.display = '';
-    solarZoomControls.style.display = 'none';
     rangeEl.style.display = '';
     renderTacModal();
-  } else {
-    tacScreen.style.display = 'none';
+  } else if (tab === 'solar') {
     solarScreen.style.display = '';
-    tacZoomControls.style.display = 'none';
     solarZoomControls.style.display = '';
-    rangeEl.style.display = 'none';
 
     // Initialize solar map interaction once
     if (!solarMapInitialized) {
       initSolarMapInteraction(solarScreen);
-      // Re-render on user zoom/pan interaction — debounced via single rAF flag
       let _solarRafPending = false;
       const scheduleRender = () => {
         if (_solarRafPending) return;
@@ -730,6 +1079,10 @@ function switchTacTab(tab) {
       solarMapInitialized = true;
     }
     renderSolarTab(true);
+  } else if (tab === 'scanner') {
+    if (scannerWrapper) scannerWrapper.style.display = '';
+    scannerRangeControls.style.display = '';
+    renderScannerTab();
   }
 }
 
@@ -744,7 +1097,7 @@ function renderSolarTab(forceRender) {
   const selBody = getSelectedBody();
   if (activeRt && activeRt.active) {
     const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
-    const destBody = findBody(activeRt.destinationName);
+    const destBody = findBody(activeRt.destinationName, gameState);
     if (destBody) {
       const dp = getBodyWorldPos(destBody, days);
       const progress = getRouteProgress();
@@ -758,7 +1111,7 @@ function renderSolarTab(forceRender) {
   } else if (selBody && !routePanelOpen) {
     // Show dashed line to selected body
     const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
-    const body = findBody(selBody.name);
+    const body = findBody(selBody.name, gameState);
     if (body) {
       const dp = getBodyWorldPos(body, days);
       routeInfo = { destX: dp.x, destY: dp.y, active: false };
@@ -803,12 +1156,16 @@ function renderSolarTab(forceRender) {
     routeDetailOpen = false;
   }
 
-  if (velEl) velEl.textContent = `VEL ${formatVelocity(getRelativeVelocity(phys))}`;
+  const tacVelDisplay = getDisplayVelocity();
+  if (velEl) {
+    const refLabel = tacVelDisplay.ref ? ` [${tacVelDisplay.ref}]` : '';
+    velEl.textContent = `VEL ${tacVelDisplay.text}${refLabel}`;
+  }
 
   // Show body selection info or default zoom/pos display
   const zoomBtn = _solarCache.routeZoomBtn;
   if (selBody) {
-    const body = findBody(selBody.name);
+    const body = findBody(selBody.name, gameState);
     if (body && headEl) {
       const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
       const dp = getBodyWorldPos(body, days);
@@ -837,6 +1194,332 @@ function renderSolarTab(forceRender) {
   }
 }
 
+// ---- SCANNER TAB ----
+
+function renderScannerTab() {
+  if (!tacModalOpen || tacModalTab !== 'scanner' || !gameState) return;
+  const scannerScreen = document.getElementById('scanner-screen-modal');
+  if (!scannerScreen) return;
+
+  if (isBlackout()) {
+    scannerScreen.innerHTML = '';
+    return;
+  }
+
+  renderScanner(scannerScreen, gameState);
+  updateScannerInfoBar();
+}
+
+function updateScannerInfoBar() {
+  const contact = getSelectedContact(gameState);
+  const scannerInfo = document.getElementById('scanner-contact-info');
+  const trackBtn = document.getElementById('scanner-track-btn');
+  const interceptBtn = document.getElementById('scanner-intercept-btn');
+  const detailPanel = document.getElementById('scanner-detail-panel');
+
+  if (contact && tacModalTab === 'scanner') {
+    // Info bar (compact)
+    if (scannerInfo) {
+      scannerInfo.style.display = '';
+      const nameEl = document.getElementById('scanner-contact-name');
+      const rangeEl = document.getElementById('scanner-contact-range');
+      const bearingEl = document.getElementById('scanner-contact-bearing');
+      if (nameEl) nameEl.textContent = contact.name || contact.driveSignature || 'UNKNOWN';
+      if (rangeEl) rangeEl.textContent = formatScannerRange(contact.range);
+      if (bearingEl) bearingEl.textContent = `${((contact.bearing * 180 / Math.PI + 360) % 360).toFixed(0)}°`;
+    }
+
+    // Lock/Unlock button
+    if (trackBtn) {
+      trackBtn.style.display = '';
+      const isTracked = gameState.scanner?.trackedContact === contact.entityId;
+      trackBtn.textContent = isTracked ? 'UNLOCK' : 'LOCK';
+      trackBtn.classList.toggle('tracking', isTracked);
+    }
+
+    // Intercept button
+    if (interceptBtn) {
+      interceptBtn.style.display = '';
+      const currentIntercept = getInterceptState();
+      const isIntercepting = currentIntercept && currentIntercept.targetEntityId === contact.entityId;
+      interceptBtn.textContent = isIntercepting ? 'CANCEL INTERCEPT' : 'INTERCEPT';
+      interceptBtn.classList.toggle('intercepting', isIntercepting);
+    }
+
+    // Detail panel — hide when intercept type panel is open
+    const itpPanel = document.getElementById('intercept-type-panel');
+    const itpOpen = itpPanel && itpPanel.style.display !== 'none';
+
+    if (detailPanel && !itpOpen) {
+      detailPanel.style.display = '';
+      const bearingDeg = ((contact.bearing * 180 / Math.PI + 360) % 360).toFixed(0);
+      const el = (id) => document.getElementById(id);
+      const header = el('scanner-detail-header');
+      if (header) {
+        if (contact.sosActive) {
+          header.innerHTML = `<span class="scanner-sos-tag">&#x26A0; SOS</span> ${escapeHtml(contact.name || contact.driveSignature || 'CONTACT')}`;
+        } else {
+          header.textContent = contact.name || contact.driveSignature || 'CONTACT';
+        }
+      }
+      const nameV = el('scanner-detail-name');
+      if (nameV) {
+        nameV.textContent = contact.name || '---';
+        nameV.className = 'scanner-detail-val' + (contact.name ? ' scanner-val-accent' : ' scanner-val-dim');
+      }
+      const sigV = el('scanner-detail-sig');
+      if (sigV) sigV.textContent = contact.driveSignature || '---';
+      const facV = el('scanner-detail-faction');
+      if (facV) {
+        facV.textContent = contact.faction || '---';
+        facV.className = 'scanner-detail-val' + (contact.faction ? '' : ' scanner-val-dim');
+      }
+      const clsV = el('scanner-detail-class');
+      if (clsV) clsV.textContent = contact.shipClass || '---';
+      const distV = el('scanner-detail-dist');
+      if (distV) distV.textContent = formatScannerRange(contact.range);
+      const relV = el('scanner-detail-relvel');
+      if (relV) {
+        const entity = (gameState.entities || []).find(e => e.id === contact.entityId);
+        if (entity && gameState.physics?.velocity) {
+          const dvx = gameState.physics.velocity.vx - entity.velocity.vx;
+          const dvy = gameState.physics.velocity.vy - entity.velocity.vy;
+          relV.textContent = formatVelocity(Math.sqrt(dvx * dvx + dvy * dvy));
+        } else {
+          relV.textContent = contact.relativeVelocity != null ? formatVelocity(Math.abs(contact.relativeVelocity)) : '---';
+        }
+      }
+      const bearV = el('scanner-detail-bearing');
+      if (bearV) bearV.textContent = `${bearingDeg}°`;
+      const accV = el('scanner-detail-accel');
+      if (accV) {
+        accV.textContent = contact.thrustState || '---';
+        accV.className = 'scanner-detail-val' + (contact.thrustState && contact.thrustState !== 'COASTING' ? ' scanner-val-warn' : '');
+      }
+      const massV = el('scanner-detail-mass');
+      if (massV) massV.textContent = contact.mass ? `${(contact.mass / 1000).toFixed(1)}kt` : '---';
+
+      // Fine-tune approach slider — show when within LONG scanner range (~15M km)
+      const sliderContainer = document.getElementById('approach-slider-container');
+      if (sliderContainer) {
+        const LONG_RANGE_AU = INTERCEPT_RANGE_AU[INTERCEPT_TYPE.SCANNER];
+        if (contact.range < LONG_RANGE_AU) {
+          sliderContainer.style.display = '';
+          updateApproachSlider(contact);
+        } else {
+          sliderContainer.style.display = 'none';
+          if (_approachSlider.entityId !== contact.entityId) {
+            _approachSlider = { entityId: null, sliderValue: 100 };
+          }
+        }
+      }
+    }
+  } else {
+    if (scannerInfo) scannerInfo.style.display = 'none';
+    if (trackBtn) trackBtn.style.display = 'none';
+    if (interceptBtn) interceptBtn.style.display = 'none';
+    if (detailPanel) detailPanel.style.display = 'none';
+    // Close intercept type panel if contact deselected
+    const itp = document.getElementById('intercept-type-panel');
+    if (itp) itp.style.display = 'none';
+  }
+}
+
+function formatScannerRange(au) {
+  const km = au * 149_597_870.7;
+  if (km < 1000) return `${Math.round(km)} km`;
+  if (km < 1_000_000) return `${(km / 1000).toFixed(0)}k km`;
+  return `${(km / 1_000_000).toFixed(1)}M km`;
+}
+
+function formatApproachDist(km) {
+  if (km >= 1e6) return `${(km / 1e6).toFixed(1)}M km`;
+  if (km >= 1000) return `${(km / 1000).toFixed(1)}k km`;
+  if (km >= 1) return `${km.toFixed(1)} km`;
+  return `${Math.round(km * 1000)} m`;
+}
+
+function getApproachSliderMin(currentDistKm) {
+  if (currentDistKm >= 1000) return Math.max(0.5, currentDistKm * 0.1);
+  return 0.5; // 500m floor
+}
+
+// ---- INTERCEPT TYPE PANEL ----
+
+function buildInterceptTypeCard(type, label, rangeLabel, desc, currentDistKm) {
+  const targetKm = INTERCEPT_RANGE_AU[type] * 149_597_870.7;
+  const inRange = currentDistKm <= targetKm;
+  return `
+    <div class="itp-card${inRange ? ' itp-card-inrange' : ''}" data-type="${type}">
+      <div class="itp-card-top">
+        <span class="itp-card-label">${label}</span>
+        <span class="itp-card-range">${rangeLabel}</span>
+      </div>
+      <div class="itp-card-desc">${desc}</div>
+      ${inRange ? '<div class="itp-card-inrange-tag">ALREADY IN RANGE</div>' : ''}
+    </div>`;
+}
+
+function showInterceptTypePanel(entityId) {
+  const panel = document.getElementById('intercept-type-panel');
+  if (!panel) return;
+
+  const entity = (gameState.entities || []).find(e => e.id === entityId);
+  const entityName = entity?.name || 'CONTACT';
+  const contact = (gameState.scanner?.contacts || []).find(c => c.entityId === entityId);
+  const distKm = contact ? contact.range * 149_597_870.7 : Infinity;
+
+  panel.innerHTML = `
+    <div class="itp-header">
+      <span class="itp-title">INTERCEPT — ${escapeHtml(entityName)}</span>
+      <button class="itp-close" id="itp-close-btn">&times;</button>
+    </div>
+    <div class="itp-distance">RANGE ${formatScannerRange(contact?.range ?? 0)}</div>
+    <div class="itp-cards">
+      ${buildInterceptTypeCard(INTERCEPT_TYPE.SCANNER,  'SCANNER RANGE', '15M km',  'Enter sensor detection range', distKm)}
+      ${buildInterceptTypeCard(INTERCEPT_TYPE.CLOSE,    'CLOSE APPROACH', '100k km', 'Full sensor lock · comms range', distKm)}
+      ${buildInterceptTypeCard(INTERCEPT_TYPE.TACTICAL, 'TACTICAL', '< 5 km', 'Boarding · tow · combat · EVA', distKm)}
+    </div>
+    <div class="itp-actions">
+      <button class="btn btn-secondary" id="itp-cancel-btn">CANCEL</button>
+      <button class="btn btn-primary" id="itp-confirm-btn" disabled>CONFIRM</button>
+    </div>`;
+
+  panel.querySelector('#itp-close-btn').addEventListener('click', hideInterceptTypePanel);
+  panel.querySelector('#itp-cancel-btn').addEventListener('click', hideInterceptTypePanel);
+
+  let selectedType = null;
+  panel.querySelectorAll('.itp-card:not(.itp-card-inrange)').forEach(card => {
+    card.addEventListener('click', () => {
+      selectedType = card.dataset.type;
+      panel.querySelectorAll('.itp-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      panel.querySelector('#itp-confirm-btn').disabled = false;
+    });
+  });
+
+  panel.querySelector('#itp-confirm-btn').addEventListener('click', () => {
+    if (!selectedType) return;
+    const targetRangeAU = INTERCEPT_RANGE_AU[selectedType];
+    const route = computeInterceptRoute(gameState, entityId, { targetRangeAU });
+    if (!route) {
+      showToast('Cannot compute intercept — already in range', 'warn');
+      hideInterceptTypePanel();
+      return;
+    }
+    const mission = getMissionForEntity(entityId);
+    startIntercept(gameState, entityId, mission?.id, selectedType);
+    activateRoute(gameState, route);
+    hideInterceptTypePanel();
+    renderScannerTab();
+    showToast(`INTERCEPT: ${entityName} — ${selectedType.toUpperCase()}`, 'warn');
+    addLogEntry(`Plotting ${selectedType} intercept for ${entityName}`, 'nav');
+  });
+
+  // Hide detail panel, show ITP
+  const detailPanel = document.getElementById('scanner-detail-panel');
+  if (detailPanel) detailPanel.style.display = 'none';
+  panel.style.display = '';
+}
+
+function hideInterceptTypePanel() {
+  const panel = document.getElementById('intercept-type-panel');
+  if (panel) panel.style.display = 'none';
+  // Restore detail panel if contact still selected
+  const detailPanel = document.getElementById('scanner-detail-panel');
+  const contact = getSelectedContact(gameState);
+  if (detailPanel && contact) detailPanel.style.display = '';
+}
+
+// ---- APPROACH SLIDER ----
+
+function updateApproachSlider(contact) {
+  const container = document.getElementById('approach-slider-container');
+  if (!container) return;
+
+  const currentDistKm = contact.range * 149_597_870.7;
+  const minKm = getApproachSliderMin(currentDistKm);
+
+  // Rebuild DOM when entity changes
+  if (_approachSlider.entityId !== contact.entityId) {
+    _approachSlider.entityId = contact.entityId;
+    _approachSlider.sliderValue = 100;
+    buildApproachSliderDOM(container, contact);
+  }
+
+  // Update live labels every frame (range bounds shift as ship moves)
+  const logMin = Math.log10(Math.max(minKm, 0.001));
+  const logMax = Math.log10(Math.max(currentDistKm, minKm * 1.01));
+  const frac = _approachSlider.sliderValue / 100;
+  const targetKm = Math.pow(10, logMin + frac * (logMax - logMin));
+
+  const currentEl = document.getElementById('approach-current-dist');
+  const minEl = document.getElementById('approach-slider-min');
+  const maxEl = document.getElementById('approach-slider-max');
+  const targetEl = document.getElementById('approach-target-val');
+  const slider = document.getElementById('approach-range-input');
+
+  if (currentEl) currentEl.textContent = formatApproachDist(currentDistKm);
+  if (minEl) minEl.textContent = formatApproachDist(minKm);
+  if (maxEl) maxEl.textContent = formatApproachDist(currentDistKm);
+  if (targetEl) targetEl.textContent = formatApproachDist(targetKm);
+  // Update CSS fill track
+  if (slider) slider.style.setProperty('--fill-pct', `${_approachSlider.sliderValue}`);
+}
+
+function buildApproachSliderDOM(container, contact) {
+  container.innerHTML = `
+    <div class="approach-slider-header">
+      <span class="approach-slider-label">APPROACH DISTANCE</span>
+      <span class="approach-slider-current" id="approach-current-dist"></span>
+    </div>
+    <div class="approach-slider-row">
+      <span class="approach-range-label" id="approach-slider-min"></span>
+      <input type="range" class="approach-range-input" id="approach-range-input" min="0" max="100" value="100">
+      <span class="approach-range-label right" id="approach-slider-max"></span>
+    </div>
+    <div class="approach-target-row">
+      <span class="approach-target-label">TARGET</span>
+      <span class="approach-target-val" id="approach-target-val"></span>
+    </div>
+    <button class="approach-burn-btn" id="approach-burn-btn">EXECUTE BURN</button>`;
+
+  container.querySelector('#approach-range-input').addEventListener('input', (e) => {
+    _approachSlider.sliderValue = parseInt(e.target.value);
+    updateApproachSlider(getSelectedContact(gameState));
+  });
+
+  container.querySelector('#approach-burn-btn').addEventListener('click', () => {
+    const currentContact = getSelectedContact(gameState);
+    if (!currentContact) return;
+
+    const currentDistKm = currentContact.range * 149_597_870.7;
+    const minKm = getApproachSliderMin(currentDistKm);
+    const logMin = Math.log10(Math.max(minKm, 0.001));
+    const logMax = Math.log10(Math.max(currentDistKm, minKm * 1.01));
+    const frac = _approachSlider.sliderValue / 100;
+    const targetKm = Math.pow(10, logMin + frac * (logMax - logMin));
+    const targetAU = targetKm / 149_597_870.7;
+
+    const route = computeFineTuneRoute(gameState, currentContact.entityId, targetAU);
+    if (!route) {
+      showToast('Already at target distance', 'ok');
+      return;
+    }
+
+    // Ensure an intercept state exists
+    const currentIntercept = getInterceptState();
+    if (!currentIntercept || currentIntercept.targetEntityId !== currentContact.entityId) {
+      startIntercept(gameState, currentContact.entityId, null, INTERCEPT_TYPE.SCANNER);
+    }
+
+    activateRoute(gameState, route);
+    renderScannerTab();
+    showToast(`Approach burn — target ${formatApproachDist(targetKm)}`, 'nav');
+    addLogEntry(`Fine approach to ${currentContact.name || 'contact'}: ${formatApproachDist(targetKm)}`, 'nav');
+  });
+}
+
 // ---- ROUTE PLANNING UI ----
 
 function handleBodySelect(body) {
@@ -856,7 +1539,7 @@ function openRoutePanel() {
   const selBody = getSelectedBody();
   if (!selBody || !gameState) return;
 
-  const body = findBody(selBody.name);
+  const body = findBody(selBody.name, gameState);
   if (!body) return;
 
   computedRoutes = calculateRoutes(gameState, body);
@@ -951,8 +1634,8 @@ function confirmRoute() {
   const route = computedRoutes[selectedRouteIdx];
   activateRoute(gameState, route);
 
-  // Reset velocity for fresh route
-  gameState.physics.velocity = 0;
+  // Reset velocity for fresh route (keep orbital velocity — route accounts for it)
+  gameState.physics.speed = 0;
   gameState.physics.heading = 0;
 
   addLogEntry(`Course plotted for ${route.destinationName} — ${route.name} ${route.label}`, 'nav');
@@ -1073,7 +1756,7 @@ function updateRouteDetail() {
       </div>
       <div class="rd-stat">
         <span class="rd-stat-label">Max G</span>
-        <span class="rd-stat-val">${rt.accelG.toFixed(1)}G</span>
+        <span class="rd-stat-val">${(rt.accelG || rt.maxG || 0).toFixed(1)}G</span>
       </div>
       <div class="rd-stat">
         <span class="rd-stat-label">Distance</span>
@@ -1141,9 +1824,12 @@ function renderTacModal() {
   renderTacView(gameState.ship, tacScreen, phys.thrustActive, tacModalZoom, phys.flipping, getRelativeVelocity(phys), phys.orienting);
 
   // Update info bar
-  const vel = getRelativeVelocity(phys);
-  if (_hud.tacModalVel) _hud.tacModalVel.textContent = `VEL ${formatVelocity(vel)}`;
-  if (_hud.tacModalHead) _hud.tacModalHead.textContent = phys.flipping ? 'FLIPPING' : (vel >= 0 ? 'PROGRADE' : 'RETROGRADE');
+  const tacVel = getDisplayVelocity();
+  if (_hud.tacModalVel) {
+    const ref = tacVel.ref ? ` [${tacVel.ref}]` : '';
+    _hud.tacModalVel.textContent = `VEL ${tacVel.text}${ref}`;
+  }
+  if (_hud.tacModalHead) _hud.tacModalHead.textContent = phys.flipping ? 'FLIPPING' : (getRelativeVelocity(phys) >= 0 ? 'PROGRADE' : 'RETROGRADE');
   if (_hud.tacModalThr) _hud.tacModalThr.textContent = phys.thrustActive ? `BURN ${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G` : 'COAST';
 }
 
@@ -1604,6 +2290,8 @@ const TILE_DESCRIPTIONS = {
   [TileType.CRASH_COUCH]: 'High-G crash couch. Gel-filled acceleration seat for sustained burns above 1G.',
   [TileType.TERMINAL]: 'Workstation terminal. Crew interface for system operations.',
   [TileType.EVA_LOCKER]: 'EVA suit locker. Contains one EVA suit with built-in life support.',
+  [TileType.RADIO]: 'High-gain communications array. Contacts ships and stations within range. Broadcasts SOS in emergencies.',
+  [TileType.TRANSPONDER]: 'Ship identity transponder. Broadcasts vessel identification. Can be disabled for stealth — but drive plume remains visible when thrusting.',
 };
 
 const TILE_STATUS_FN = {
@@ -1643,6 +2331,21 @@ const TILE_STATUS_FN = {
     );
     if (!locker) return 'Empty';
     return locker.hasSuit ? 'EVA Suit — Ready' : 'Empty';
+  },
+  [TileType.RADIO]: () => {
+    if (!gameState?.comms) return '—';
+    const c = gameState.comms;
+    const contacts = c.radioContacts?.length || 0;
+    const sos = c.sosActive ? ' | SOS ACTIVE' : '';
+    return `${contacts} contact${contacts !== 1 ? 's' : ''} in range${sos}`;
+  },
+  [TileType.TRANSPONDER]: () => {
+    if (!gameState?.comms) return '—';
+    const on = gameState.comms.transponderOn;
+    const thrusting = gameState.physics?.thrustActive;
+    let status = on ? 'ACTIVE — Broadcasting' : 'DISABLED — Silent running';
+    if (!on && thrusting) status += '\n⚠ Drive plume visible';
+    return status;
   },
 };
 
@@ -1704,6 +2407,38 @@ function selectTile(tileType, deckIdx, tx, ty) {
   }
 
   // Life support toggle button
+  // Radio actions
+  if (tileType === TileType.RADIO && gameState.comms) {
+    const contacts = gameState.comms.radioContacts || [];
+    const sosActive = gameState.comms.sosActive;
+    html += '<div class="tile-actions">';
+    html += `<button class="crew-action-btn ${sosActive ? 'crew-action-rescue' : 'crew-action-recover'}" data-tile-action="toggle-sos">${sosActive ? 'CANCEL SOS' : 'BROADCAST SOS'}</button>`;
+    if (contacts.length > 0) {
+      html += '<div class="tile-status-value" style="margin-top:6px">CONTACTS:</div>';
+      contacts.forEach(c => {
+        const distKm = (c.distance * 149597870.7).toFixed(0);
+        const label = c.name || 'UNKNOWN';
+        const sosTag = c.sosActive ? ' <span style="color:var(--danger)">[SOS]</span>' : '';
+        html += `<div class="radio-contact-row">`;
+        html += `<span class="radio-contact-info">${escapeHtml(label)} — ${Number(distKm).toLocaleString()} km${sosTag}</span>`;
+        html += `<button class="radio-hail-btn" data-tile-action="hail" data-entity="${escapeHtml(c.entityId)}">HAIL</button>`;
+        html += `</div>`;
+      });
+    }
+    html += '</div>';
+  }
+
+  // Transponder actions
+  if (tileType === TileType.TRANSPONDER && gameState.comms) {
+    const on = gameState.comms.transponderOn;
+    html += '<div class="tile-actions">';
+    html += `<button class="crew-action-btn ${on ? 'crew-action-rescue' : 'crew-action-recover'}" data-tile-action="toggle-transponder">${on ? 'DISABLE TRANSPONDER' : 'ENABLE TRANSPONDER'}</button>`;
+    if (!on && gameState.physics?.thrustActive) {
+      html += '<div class="tile-status-value" style="color:var(--warning);margin-top:4px">⚠ Drive plume is a unique signature — ship identifiable while thrusting</div>';
+    }
+    html += '</div>';
+  }
+
   if (tileType === TileType.LIFE_SUPPORT) {
     const eq = gameState.lsEquipment?.[deckIdx];
     if (eq) {
@@ -1804,6 +2539,26 @@ function selectTile(tileType, deckIdx, tx, ty) {
         }
         // Re-render the tile detail
         selectTile(tileType, deckIdx, tx, ty);
+      }
+      if (action === 'toggle-sos') {
+        const result = triggerSOS(gameState);
+        if (result.success) {
+          showToast(result.message, result.active ? 'danger' : 'ok');
+          addLogEntry(result.message, result.active ? 'danger' : 'system');
+        }
+        selectTile(selectedTile.tileType, selectedTile.deckIdx, selectedTile.tx, selectedTile.ty);
+      }
+      if (action === 'hail') {
+        const entityId = btn.getAttribute('data-entity');
+        openHailModal(entityId);
+      }
+      if (action === 'toggle-transponder') {
+        const result = toggleTransponder(gameState);
+        if (result.success) {
+          showToast(result.message, result.active ? 'ok' : 'warn');
+          addLogEntry(result.message, result.active ? 'system' : 'warn');
+        }
+        selectTile(selectedTile.tileType, selectedTile.deckIdx, selectedTile.tx, selectedTile.ty);
       }
       if (action === 'reactor-shutdown') {
         const crewId = parseInt(btn.getAttribute('data-crew'));
@@ -2172,6 +2927,8 @@ function initHudCache() {
     infoThrust:   document.getElementById('info-thrust'),
     infoHeading:  document.getElementById('info-heading'),
     infoVelocity: document.getElementById('info-velocity'),
+    infoVelRef:   document.getElementById('info-vel-ref'),
+    infoVelRefRow: document.getElementById('info-vel-ref-row'),
     infoMass:     document.getElementById('info-mass'),
     thrustToggle: document.getElementById('thrust-toggle'),
     thrustStatus: document.getElementById('thrust-status'),
@@ -2242,9 +2999,15 @@ function updateHud(state) {
   if (_hud.flipHeading && !phys.flipping) {
     _hud.flipHeading.textContent = relVelForHeading >= 0 ? 'PRO' : 'RETRO';
   }
-  // Velocity displayed relative to ship heading (camera follows ship)
-  _hud.infoVelocity.textContent =
-    formatVelocity(getRelativeVelocity(phys));
+  // Velocity displayed relative to target (or "---" if none)
+  const velDisplay = getDisplayVelocity();
+  _hud.infoVelocity.textContent = velDisplay.text;
+  if (velDisplay.ref && _hud.infoVelRef) {
+    _hud.infoVelRef.textContent = velDisplay.ref;
+    if (_hud.infoVelRefRow) _hud.infoVelRefRow.style.display = '';
+  } else {
+    if (_hud.infoVelRefRow) _hud.infoVelRefRow.style.display = 'none';
+  }
   _hud.infoMass.textContent =
     `${(phys.shipMass / 1000).toFixed(1)} t`;
 
@@ -2317,12 +3080,16 @@ function updateHud(state) {
   // Update tac modal info bar every tick (velocity, heading, thrust always fresh)
   if (tacModalOpen) {
     if (tacModalTab === 'tactical') {
-      const vel = getRelativeVelocity(phys);
-      if (_hud.tacModalVel) _hud.tacModalVel.textContent = `VEL ${formatVelocity(vel)}`;
-      if (_hud.tacModalHead) _hud.tacModalHead.textContent = phys.flipping ? 'FLIPPING' : (vel >= 0 ? 'PROGRADE' : 'RETROGRADE');
+      const tacVD = getDisplayVelocity();
+      const tacRef = tacVD.ref ? ` [${tacVD.ref}]` : '';
+      if (_hud.tacModalVel) _hud.tacModalVel.textContent = `VEL ${tacVD.text}${tacRef}`;
+      const relVel = getRelativeVelocity(phys);
+      if (_hud.tacModalHead) _hud.tacModalHead.textContent = phys.flipping ? 'FLIPPING' : (relVel >= 0 ? 'PROGRADE' : 'RETROGRADE');
       if (_hud.tacModalThr) _hud.tacModalThr.textContent = phys.thrustActive ? `BURN ${(phys.thrustLevel * phys.maxThrust).toFixed(1)}G` : 'COAST';
     } else if (tacModalTab === 'solar') {
       renderSolarTab();
+    } else if (tacModalTab === 'scanner') {
+      renderScannerTab();
     }
   }
 
@@ -2377,6 +3144,17 @@ function startCrewMovementLoop() {
         deltaSec,
         gameState.speed
       );
+
+      // Update inertia sliding (when not being driven by flip animation)
+      if (isInertiaActive() && !gameState.physics.flipping) {
+        const impacts = updateInertiaFrame(gameState.ship, gameState.physics, deltaSec);
+        processImpactEvents(impacts);
+
+        // Check if inertia resolved → exit cinematic time
+        if (!isInertiaActive() && isInCinematicTime()) {
+          exitCinematicTime(gameState);
+        }
+      }
     }
 
     crewMoveFrame = requestAnimationFrame(tick);
@@ -2639,8 +3417,13 @@ function startGame() {
       });
 
       updateJobsCount();
+      updateMissionsCount();
+      updateFormationIndicator();
       const jobsDlg = document.getElementById('dialog-jobs');
       if (jobsDlg && jobsDlg.style.display !== 'none') renderJobsDialog();
+      // Don't re-render missions dialog on every tick — it destroys hover state.
+      // Only update the timer values in-place.
+      updateMissionTimers();
     }
   }, async (event, data) => {
     if (event === 'reactorEvents') {
@@ -2686,10 +3469,11 @@ function startGame() {
       try {
         gameState._activeRoute = serializeRoute();
         gameState._crewMovement = serializeCrewMovement();
+        gameState._missions = serializeMissions();
         await saveGame(gameState, 'Autosave');
         delete gameState._activeRoute;
         delete gameState._crewMovement;
-        addLogEntry('Autosave complete', 'system');
+        delete gameState._missions;
       } catch (e) {
         addLogEntry('Autosave failed', 'warn');
       }
@@ -2748,10 +3532,16 @@ function startGame() {
                 }
               });
               break;
-            case 'burn':
+            case 'burn': {
               addLogEntry(p.description, 'thrust');
-              showToast(`BURN: ${p.thrustG.toFixed(1)}G`, 'thrust');
+              showToast(`BURN: ${(p.thrustG || 0).toFixed(1)}G`, 'thrust');
+              // Inertia: route burn start (not surprise — alarms were blaring)
+              const burnG = p.thrustG || 0;
+              if (burnG > 0) {
+                handleInertiaEvent(ManeuverType.BURN_START, { deltaG: burnG, surprise: false });
+              }
               break;
+            }
             case 'coast':
               addLogEntry('Main engine cut. Coast phase — all hands free to move.', 'nav');
               showToast('COAST — crew released', 'ok');
@@ -2765,15 +3555,27 @@ function startGame() {
             case 'flip':
               addLogEntry('Executing flip maneuver', 'nav');
               showToast('FLIP', 'warn');
+              // Trigger inertia for route-driven flip
+              handleInertiaEvent(ManeuverType.FLIP, { deltaG: 0 });
               break;
             case 'arrive':
               break;
           }
+        } else if (evt.event === 'secure-blocking') {
+          // Secure phase expired but crew not all seated — show blocking prompt
+          showSecureBlockingPrompt();
         } else if (evt.event === 'phase-end') {
           if (evt.phase.type === 'orient') {
             _orientState = null;
             hideManeuverPrompt();
             showRcsThrusters(false);
+          }
+          if (evt.phase.type === 'burn') {
+            // Inertia: burn stop (not surprise — expected transition)
+            const burnG = evt.phase.thrustG || 0;
+            if (burnG > 0) {
+              handleInertiaEvent(ManeuverType.BURN_STOP, { deltaG: burnG, surprise: false });
+            }
           }
           if (evt.phase.type === 'flip') {
             addLogEntry(`Flip complete — heading ${state.physics.heading === 0 ? 'PROGRADE' : 'RETROGRADE'}`, 'nav');
@@ -2803,6 +3605,38 @@ function startGame() {
           });
         }
       });
+    } else if (event === 'missionEvents') {
+      data.forEach(evt => {
+        if (evt.type === 'event-spawned') {
+          openEventModal(evt);
+        } else if (evt.type === 'chatter') {
+          addLogEntry(`[${evt.from}] ${evt.text}`, 'warn');
+        } else if (evt.type === 'mission-failed') {
+          showToast(`Mission failed: ${evt.title}`, 'danger');
+          addLogEntry(`Mission failed: ${evt.title} — did not reach in time`, 'danger');
+        }
+      });
+      updateMissionsCount();
+    } else if (event === 'interceptEvents') {
+      data.forEach(evt => {
+        if (evt.type === 'formation-entered') {
+          showToast(`Formation with ${evt.targetName}`, 'ok');
+          addLogEntry(`Formation achieved with ${evt.targetName}`, 'nav');
+        } else if (evt.type === 'formation-lost') {
+          showToast(`Formation lost with ${evt.targetName}`, 'warn');
+          addLogEntry(`Formation lost with ${evt.targetName}`, 'nav');
+        } else if (evt.type === 'intercept-lost') {
+          showToast('Intercept target lost', 'danger');
+          addLogEntry('Intercept target lost from sensors', 'danger');
+        } else if (evt.type === 'intercept-range-reached') {
+          const typeLabel = { scanner: 'SCANNER RANGE', close: 'CLOSE APPROACH', tactical: 'TACTICAL RANGE' };
+          const label = typeLabel[evt.interceptType] || 'TARGET RANGE';
+          showToast(`${evt.targetName} — ${label} REACHED`, 'ok');
+          addLogEntry(`Intercept complete: ${evt.targetName} within ${label.toLowerCase()}`, 'nav');
+          renderScannerTab(); // update intercept button state
+        }
+      });
+      updateFormationIndicator();
     }
   });
   gameLoop.start();
@@ -2823,9 +3657,11 @@ function initHudActions() {
     // Attach active route to save data
     gameState._activeRoute = serializeRoute();
     gameState._crewMovement = serializeCrewMovement();
+    gameState._missions = serializeMissions();
     await saveGame(gameState, name);
     delete gameState._activeRoute;
     delete gameState._crewMovement;
+    delete gameState._missions;
     document.getElementById('dialog-save').style.display = 'none';
     showToast('Mission saved', 'ok');
     addLogEntry(`Mission saved: "${name}"`, 'system');
@@ -2889,6 +3725,80 @@ function initHudActions() {
   document.querySelector('[data-action="close-jobs"]').addEventListener('click', () => {
     document.getElementById('dialog-jobs').style.display = 'none';
   });
+
+  // Hail dialog
+  document.querySelector('[data-action="close-hail"]').addEventListener('click', () => {
+    document.getElementById('dialog-hail').style.display = 'none';
+  });
+
+  // SOS Event modal — Accept
+  document.querySelector('[data-action="accept-event"]').addEventListener('click', () => {
+    const missionId = document.getElementById('event-mission-id').value;
+    if (!missionId) return;
+    acceptMission(missionId);
+    document.getElementById('dialog-event').style.display = 'none';
+
+    // Auto-start tactical intercept for the mission's entity (need formation proximity)
+    const missions = getMissionLog();
+    const mission = missions.find(m => m.id === missionId);
+    if (mission && gameState) {
+      const route = computeInterceptRoute(gameState, mission.targetEntityId, { targetRangeAU: INTERCEPT_RANGE_AU[INTERCEPT_TYPE.TACTICAL] });
+      if (route) {
+        startIntercept(gameState, mission.targetEntityId, missionId, INTERCEPT_TYPE.TACTICAL);
+        activateRoute(gameState, route);
+        showToast('Rescue intercept plotted', 'warn');
+        addLogEntry(`Rescue intercept plotted — ETA ${route.totalTimeMin} min`, 'nav');
+      }
+    }
+  });
+
+  // SOS Event modal — Decline
+  document.querySelector('[data-action="decline-event"]').addEventListener('click', () => {
+    const missionId = document.getElementById('event-mission-id').value;
+    if (missionId) declineMission(missionId);
+    document.getElementById('dialog-event').style.display = 'none';
+    addLogEntry('Distress signal logged — continuing course', 'system');
+  });
+
+  // Mission log
+  document.querySelector('[data-action="open-missions"]').addEventListener('click', () => {
+    renderMissionsDialog();
+    document.getElementById('dialog-missions').style.display = '';
+  });
+  document.querySelector('[data-action="close-missions"]').addEventListener('click', () => {
+    document.getElementById('dialog-missions').style.display = 'none';
+  });
+
+  // Formation hail button (complete rescue)
+  const formationHailBtn = document.getElementById('formation-hail-btn');
+  if (formationHailBtn) {
+    formationHailBtn.addEventListener('click', () => {
+      const intercept = getInterceptState();
+      if (!intercept || !intercept.formation || !intercept.missionId) return;
+      const result = completeMissionViaHail(intercept.missionId, gameState);
+      if (result.success) {
+        // Show rescue narrative in hail dialog
+        const entity = gameState.entities?.find(e => e.id === intercept.targetEntityId);
+        const dialog = document.getElementById('dialog-hail');
+        document.getElementById('hail-target-name').textContent = entity?.name || 'Rescued vessel';
+        document.getElementById('hail-target-faction').textContent = '';
+        document.getElementById('hail-narrative').textContent = result.narrative;
+        document.getElementById('hail-signal-strength').textContent = '■■■■■';
+        dialog.style.display = 'flex';
+
+        // Show rewards
+        const rewardParts = Object.entries(result.rewards).map(([k, v]) => `+${v} ${k}`);
+        showToast(`Rescue complete! ${rewardParts.join(', ')}`, 'ok');
+        addLogEntry(`Rescue complete — ${rewardParts.join(', ')}`, 'ok');
+
+        // Hide formation indicator
+        const formInd = document.getElementById('formation-indicator');
+        if (formInd) formInd.style.display = 'none';
+      } else {
+        showToast(result.narrative, 'danger');
+      }
+    });
+  }
 
   // In-game FPS toggle
   const ingameFpsBtn = document.getElementById('ingame-fps');
@@ -3001,6 +3911,68 @@ async function loadDevMode() {
   }
 }
 
+// ---- HAIL MODAL ----
+
+function openHailModal(entityId) {
+  if (!gameState || !gameState.entities) return;
+  const entity = gameState.entities.find(e => e.id === entityId);
+  if (!entity) return;
+
+  // Check if this is a rescue target and we're in formation
+  const intercept = getInterceptState();
+  const mission = getMissionForEntity(entityId);
+  if (mission && intercept && intercept.formation && intercept.targetEntityId === entityId) {
+    // Complete rescue via hail
+    const result = completeMissionViaHail(mission.id, gameState);
+    if (result.success) {
+      const dialog = document.getElementById('dialog-hail');
+      document.getElementById('hail-target-name').textContent = entity.name;
+      document.getElementById('hail-target-faction').textContent = '';
+      document.getElementById('hail-narrative').textContent = result.narrative;
+      document.getElementById('hail-signal-strength').textContent = '■■■■■';
+      const factionEl = document.getElementById('hail-target-faction');
+      factionEl.className = 'hail-faction';
+      dialog.style.display = 'flex';
+
+      const rewardParts = Object.entries(result.rewards).map(([k, v]) => `+${v} ${k}`);
+      showToast(`Rescue complete! ${rewardParts.join(', ')}`, 'ok');
+      addLogEntry(`Rescue of ${entity.name} complete — ${rewardParts.join(', ')}`, 'ok');
+      updateFormationIndicator();
+      updateMissionsCount();
+      return;
+    }
+  }
+
+  const dialog = document.getElementById('dialog-hail');
+  const nameEl = document.getElementById('hail-target-name');
+  const factionEl = document.getElementById('hail-target-faction');
+  const narrativeEl = document.getElementById('hail-narrative');
+  const signalEl = document.getElementById('hail-signal-strength');
+
+  nameEl.textContent = entity.name;
+  factionEl.textContent = entity.faction !== 'independent' ? entity.faction : '';
+
+  // Faction color class
+  factionEl.className = 'hail-faction';
+  if (entity.faction === 'MCRN') factionEl.classList.add('hail-faction-mcrn');
+  else if (entity.faction === 'UNN') factionEl.classList.add('hail-faction-unn');
+  else if (entity.faction === 'OPA') factionEl.classList.add('hail-faction-opa');
+  else if (entity.faction === 'Belter') factionEl.classList.add('hail-faction-belter');
+
+  // Get narrative dialogue
+  const narrative = getHailDialogue(entity);
+  narrativeEl.textContent = narrative;
+
+  // Signal strength based on distance
+  const contact = (gameState.comms?.radioContacts || []).find(c => c.entityId === entityId);
+  const dist = contact ? contact.distance : 1;
+  const bars = Math.max(1, Math.min(5, Math.round((1 - dist / 0.1) * 5)));
+  signalEl.textContent = '■'.repeat(bars) + '□'.repeat(5 - bars);
+
+  dialog.style.display = 'flex';
+  addLogEntry(`Hailed ${entity.name} on direct channel`, 'system');
+}
+
 // ---- START GAME FROM NEW GAME SCREEN ----
 
 function initStartGame() {
@@ -3094,6 +4066,136 @@ function updateJobsCount() {
   }
 }
 
+// ---- MISSIONS DIALOG ----
+
+let expandedMissionId = null;
+
+function renderMissionsDialog() {
+  const container = document.getElementById('missions-list');
+  const allMissions = getMissionLog();
+  if (allMissions.length === 0) {
+    container.innerHTML = '<p class="missions-empty">-- No missions --</p>';
+    return;
+  }
+
+  const statusOrder = { offered: 0, accepted: 1, in_progress: 2, completed: 3, failed: 4, declined: 5 };
+  const sorted = [...allMissions].sort((a, b) => (statusOrder[a.status] || 9) - (statusOrder[b.status] || 9));
+
+  container.innerHTML = sorted.map(m => {
+    const timerText = getMissionTimerText(m);
+    const timerClass = getMissionTimerClass(m);
+    const statusLabel = m.status.replace('_', ' ').toUpperCase();
+    const isExpanded = expandedMissionId === m.id;
+    const rewardsHtml = m.rewards ? Object.entries(m.rewards).map(([k, v]) => `<span class="mission-reward-item">+${v} ${k}</span>`).join('') : '';
+
+    return `<div class="mission-row ${isExpanded ? 'mission-row-expanded' : ''}" data-mission-id="${m.id}">
+      <div class="mission-row-header">
+        <div class="mission-status-dot status-${m.status}"></div>
+        <div class="mission-info">
+          <div class="mission-title">${escapeHtml(m.title)}</div>
+          <div class="mission-meta">${statusLabel}</div>
+        </div>
+        <div class="mission-timer ${timerClass}" data-mission-timer="${m.id}">${timerText}</div>
+        <div class="mission-expand-icon">${isExpanded ? '\u25B4' : '\u25BE'}</div>
+      </div>
+      ${isExpanded ? `<div class="mission-detail">
+        <div class="mission-detail-narrative">${escapeHtml(m.description)}</div>
+        <div class="mission-detail-meta">
+          <div class="mission-detail-row"><span class="mission-detail-key">TYPE</span><span class="mission-detail-val">${escapeHtml(m.type.replace(/_/g, ' '))}</span></div>
+          <div class="mission-detail-row"><span class="mission-detail-key">STATUS</span><span class="mission-detail-val">${statusLabel}</span></div>
+          ${rewardsHtml ? `<div class="mission-detail-row"><span class="mission-detail-key">REWARDS</span><span class="mission-detail-val mission-rewards">${rewardsHtml}</span></div>` : ''}
+        </div>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+
+  // Wire click handlers
+  container.querySelectorAll('.mission-row-header').forEach(row => {
+    row.addEventListener('click', () => {
+      const missionId = row.closest('.mission-row').dataset.missionId;
+      expandedMissionId = expandedMissionId === missionId ? null : missionId;
+      renderMissionsDialog();
+    });
+  });
+}
+
+function getMissionTimerText(m) {
+  if (m.status === 'completed') return 'COMPLETE';
+  if (m.status === 'failed') return 'FAILED';
+  if (m.status === 'declined') return 'DECLINED';
+  const mins = m.urgencyTimerMin;
+  if (mins >= 60) return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  return `${mins}m`;
+}
+
+function getMissionTimerClass(m) {
+  if (m.status === 'completed' || m.status === 'failed' || m.status === 'declined') return 'timer-done';
+  const fraction = m.urgencyTimerMin / m.urgencyTimerMax;
+  return fraction < 0.2 ? 'timer-critical' : '';
+}
+
+function updateMissionTimers() {
+  const missionsDlg = document.getElementById('dialog-missions');
+  if (!missionsDlg || missionsDlg.style.display === 'none') return;
+  const allMissions = getMissionLog();
+  for (const m of allMissions) {
+    const timerEl = missionsDlg.querySelector(`[data-mission-timer="${m.id}"]`);
+    if (timerEl) {
+      timerEl.textContent = getMissionTimerText(m);
+      timerEl.className = `mission-timer ${getMissionTimerClass(m)}`;
+    }
+  }
+}
+
+function updateMissionsCount() {
+  const active = getActiveMissions();
+  const count = active.length;
+  const hasSOS = active.some(m => m.status === 'offered');
+  const el = document.getElementById('hud-missions-count');
+  if (el) {
+    el.textContent = count;
+    el.classList.toggle('has-missions', count > 0 && !hasSOS);
+    el.classList.toggle('has-sos', hasSOS);
+  }
+}
+
+function openEventModal(eventData) {
+  const dialog = document.getElementById('dialog-event');
+  document.getElementById('event-mission-id').value = eventData.missionId;
+  document.getElementById('event-ship-name').textContent = eventData.entityName;
+  document.getElementById('event-ship-class').textContent = eventData.shipClass;
+  document.getElementById('event-ship-faction').textContent = eventData.faction;
+  document.getElementById('event-ship-dist').textContent = eventData.distance;
+  document.getElementById('event-narrative').textContent = eventData.narrative;
+  document.getElementById('event-urgency').textContent = eventData.urgencyLabel;
+  document.getElementById('event-accept-btn').textContent = eventData.acceptText;
+  document.getElementById('event-decline-btn').textContent = eventData.declineText;
+  dialog.style.display = 'flex';
+  // Pause game for dramatic effect
+  if (gameLoop && gameState.speed > 0) {
+    gameLoop.setSpeed(0);
+    updateSpeedUI(0);
+  }
+}
+
+function updateFormationIndicator() {
+  const indicator = document.getElementById('formation-indicator');
+  if (!indicator) return;
+  const intercept = getInterceptState();
+  if (intercept && intercept.formation) {
+    indicator.style.display = 'flex';
+    const entity = gameState?.entities?.find(e => e.id === intercept.targetEntityId);
+    document.getElementById('formation-target').textContent = entity?.name || 'contact';
+    // Only show hail button if there's an associated mission
+    const hailBtn = document.getElementById('formation-hail-btn');
+    if (hailBtn) {
+      hailBtn.style.display = intercept.missionId ? '' : 'none';
+    }
+  } else {
+    indicator.style.display = 'none';
+  }
+}
+
 // ---- KEYBOARD SHORTCUTS ----
 
 function initKeyboard() {
@@ -3157,10 +4259,22 @@ function initKeyboard() {
         }
         break;
       }
+      case 'l':
+      case 'L': {
+        // Toggle missions dialog
+        const missionsDlg = document.getElementById('dialog-missions');
+        if (missionsDlg.style.display !== 'none') {
+          missionsDlg.style.display = 'none';
+        } else {
+          renderMissionsDialog();
+          missionsDlg.style.display = '';
+        }
+        break;
+      }
       case 'Escape': {
         e.preventDefault();
         // Close any open dialog first
-        const dialogs = ['dialog-save', 'dialog-exit', 'dialog-settings', 'dialog-jobs'];
+        const dialogs = ['dialog-event', 'dialog-missions', 'dialog-hail', 'dialog-save', 'dialog-exit', 'dialog-settings', 'dialog-jobs'];
         let closedDialog = false;
         for (const id of dialogs) {
           const dlg = document.getElementById(id);

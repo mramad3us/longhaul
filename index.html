@@ -163,7 +163,12 @@
           <span class="hud-ship-name" id="hud-ship-name">RSV Canterbury</span>
         </div>
         <div class="hud-right">
-          <button class="hud-icon-btn hud-jobs-btn" data-action="open-jobs" title="Jobs Queue">
+          <button class="hud-icon-btn hud-missions-btn" data-action="open-missions" title="Mission Log (L)">
+            <span class="hud-missions-label">MISSIONS</span>
+            <span class="hud-missions-count" id="hud-missions-count">0</span>
+          </button>
+          <div class="hud-divider"></div>
+          <button class="hud-icon-btn hud-jobs-btn" data-action="open-jobs" title="Jobs Queue (J)">
             <span class="hud-jobs-label">JOBS</span>
             <span class="hud-jobs-count" id="hud-jobs-count">0</span>
           </button>
@@ -214,7 +219,8 @@
               <p class="info-line"><span class="info-key">Torch</span> <span class="info-val" id="info-torch">OFF</span></p>
               <p class="info-line"><span class="info-key">Thrust</span> <span class="info-val" id="info-thrust">0.0g</span></p>
               <p class="info-line"><span class="info-key">Heading</span> <span class="info-val" id="info-heading">---</span></p>
-              <p class="info-line"><span class="info-key">Velocity</span> <span class="info-val" id="info-velocity">0 m/s</span></p>
+              <p class="info-line"><span class="info-key">Velocity</span> <span class="info-val" id="info-velocity">---</span></p>
+              <p class="info-line info-vel-ref" id="info-vel-ref-row" style="display:none"><span class="info-key">Rel. to</span> <span class="info-val info-val-ref" id="info-vel-ref">---</span></p>
               <p class="info-line"><span class="info-key">Ship Mass</span> <span class="info-val" id="info-mass">--- t</span></p>
             </div>
           </div>
@@ -336,11 +342,17 @@
             <div class="tac-modal-tabs">
               <button class="tac-tab active" data-tac-tab="tactical">TACTICAL</button>
               <button class="tac-tab" data-tac-tab="solar">SOLAR</button>
+              <button class="tac-tab" data-tac-tab="scanner">SCANNER</button>
             </div>
             <div class="tac-zoom-controls" id="tac-zoom-controls-modal">
               <button class="tac-zoom-btn-modal active" data-tac-zoom-modal="0" title="Close">1</button>
               <button class="tac-zoom-btn-modal" data-tac-zoom-modal="1" title="Medium">2</button>
               <button class="tac-zoom-btn-modal" data-tac-zoom-modal="2" title="Far">3</button>
+            </div>
+            <div class="tac-zoom-controls" id="scanner-range-controls" style="display:none">
+              <button class="scanner-range-btn active" data-scanner-range="0">SHORT</button>
+              <button class="scanner-range-btn" data-scanner-range="1">MED</button>
+              <button class="scanner-range-btn" data-scanner-range="2">LONG</button>
             </div>
             <div class="tac-zoom-controls" id="solar-zoom-controls" style="display:none">
               <button class="solar-zoom-btn active" data-solar-preset="0">SYS</button>
@@ -358,6 +370,27 @@
           <div class="tac-screen tac-screen-modal tac-screen-solar" id="solar-screen-modal" style="display:none">
             <!-- Solar system SVG rendered by JS -->
           </div>
+          <div class="scanner-screen-wrapper" style="position:relative;flex:1 1 auto;display:none" id="scanner-screen-wrapper">
+            <div class="tac-screen tac-screen-modal tac-screen-scanner" id="scanner-screen-modal" style="position:absolute;inset:0">
+              <!-- Scanner SVG rendered by JS -->
+            </div>
+            <div class="scanner-detail-panel" id="scanner-detail-panel" style="display:none">
+              <div class="scanner-detail-header" id="scanner-detail-header">CONTACT</div>
+              <div class="scanner-detail-row"><span class="scanner-detail-key">TRANSPONDER</span><span class="scanner-detail-val" id="scanner-detail-name">---</span></div>
+              <div class="scanner-detail-row"><span class="scanner-detail-key">SIGNATURE</span><span class="scanner-detail-val" id="scanner-detail-sig">---</span></div>
+              <div class="scanner-detail-row"><span class="scanner-detail-key">FACTION</span><span class="scanner-detail-val" id="scanner-detail-faction">---</span></div>
+              <div class="scanner-detail-row"><span class="scanner-detail-key">CLASS</span><span class="scanner-detail-val" id="scanner-detail-class">---</span></div>
+              <div class="scanner-detail-row"><span class="scanner-detail-key">DISTANCE</span><span class="scanner-detail-val" id="scanner-detail-dist">---</span></div>
+              <div class="scanner-detail-row"><span class="scanner-detail-key">REL SPEED</span><span class="scanner-detail-val" id="scanner-detail-relvel">---</span></div>
+              <div class="scanner-detail-row"><span class="scanner-detail-key">BEARING</span><span class="scanner-detail-val" id="scanner-detail-bearing">---</span></div>
+              <div class="scanner-detail-row"><span class="scanner-detail-key">ACCEL</span><span class="scanner-detail-val" id="scanner-detail-accel">---</span></div>
+              <div class="scanner-detail-row"><span class="scanner-detail-key">MASS</span><span class="scanner-detail-val" id="scanner-detail-mass">---</span></div>
+              <!-- Fine-tune approach slider (populated by JS when within scanner range) -->
+              <div class="approach-slider-container" id="approach-slider-container" style="display:none"></div>
+            </div>
+            <!-- Intercept type selector panel (populated + shown by JS when INTERCEPT clicked) -->
+            <div class="intercept-type-panel" id="intercept-type-panel" style="display:none"></div>
+          </div>
           <div class="tac-modal-info">
             <span id="tac-modal-velocity"></span>
             <span class="tac-info-sep">·</span>
@@ -367,6 +400,15 @@
             <span style="flex:1"></span>
             <button class="route-zoom-btn" id="route-zoom-btn" style="display:none">ZOOM</button>
             <button class="route-plot-btn" id="route-plot-btn" style="display:none">PLOT ROUTE</button>
+            <span id="scanner-contact-info" style="display:none">
+              <span id="scanner-contact-name"></span>
+              <span class="tac-info-sep">·</span>
+              <span id="scanner-contact-range"></span>
+              <span class="tac-info-sep">·</span>
+              <span id="scanner-contact-bearing"></span>
+            </span>
+            <button class="scanner-track-btn" id="scanner-track-btn" style="display:none">LOCK</button>
+            <button class="scanner-intercept-btn" id="scanner-intercept-btn" style="display:none">INTERCEPT</button>
           </div>
 
           <!-- Route Planning Panel -->
@@ -389,6 +431,14 @@
             </div>
           </div>
 
+          <!-- Formation Indicator -->
+          <div class="formation-indicator" id="formation-indicator" style="display:none">
+            <span class="formation-icon">&#x25C8;</span>
+            <span class="formation-label">FORMATION</span>
+            <span class="formation-target" id="formation-target"></span>
+            <button class="formation-hail-btn" id="formation-hail-btn">HAIL TO COMPLETE</button>
+          </div>
+
           <!-- Active Route Status Bar (clickable to expand) -->
           <div class="route-status-bar" id="route-status-bar" style="display:none">
             <div class="route-status-summary" id="route-status-summary">
@@ -403,6 +453,68 @@
             <div class="route-detail-panel" id="route-detail-panel" style="display:none">
               <!-- Populated by JS -->
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SOS Event Modal -->
+      <div class="dialog-overlay" id="dialog-event" style="display:none">
+        <div class="dialog dialog-event">
+          <div class="event-header">
+            <span class="event-sos-icon">&#x26A0;</span>
+            <span class="event-sos-label">DISTRESS SIGNAL</span>
+            <span class="event-urgency" id="event-urgency"></span>
+          </div>
+          <div class="event-body">
+            <div class="event-ship-info">
+              <span class="event-ship-name" id="event-ship-name"></span>
+              <span class="event-ship-class" id="event-ship-class"></span>
+              <span class="event-ship-faction" id="event-ship-faction"></span>
+              <span class="event-ship-dist" id="event-ship-dist"></span>
+            </div>
+            <div class="event-narrative" id="event-narrative"></div>
+          </div>
+          <div class="form-actions event-actions">
+            <button class="btn btn-secondary event-decline-btn" id="event-decline-btn" data-action="decline-event">Log and continue</button>
+            <button class="btn btn-primary event-accept-btn" id="event-accept-btn" data-action="accept-event">Plot rescue intercept</button>
+          </div>
+          <input type="hidden" id="event-mission-id" value="">
+        </div>
+      </div>
+
+      <!-- Mission Log Panel -->
+      <div class="dialog-overlay" id="dialog-missions" style="display:none">
+        <div class="dialog dialog-missions">
+          <h3 class="dialog-title">Mission Log</h3>
+          <div class="missions-list" id="missions-list">
+            <p class="missions-empty">-- No missions --</p>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" data-action="close-missions">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hail Communications Dialog -->
+      <div class="dialog-overlay" id="dialog-hail" style="display:none">
+        <div class="dialog dialog-hail">
+          <div class="hail-header">
+            <span class="hail-channel">DIRECT CHANNEL</span>
+            <span class="hail-target" id="hail-target-name">---</span>
+            <span class="hail-faction" id="hail-target-faction"></span>
+          </div>
+          <div class="hail-body">
+            <div class="hail-narrative" id="hail-narrative">
+              <!-- Narrative text injected by JS -->
+            </div>
+            <div class="hail-signal-bar">
+              <span class="hail-signal-icon">◈</span>
+              <span class="hail-signal-label">SIGNAL ACTIVE</span>
+              <span class="hail-signal-strength" id="hail-signal-strength">■■■■■</span>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" data-action="close-hail">Close Channel</button>
           </div>
         </div>
       </div>

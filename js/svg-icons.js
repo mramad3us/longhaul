@@ -556,6 +556,8 @@ export const TileType = {
   CRASH_COUCH: 16,
   TERMINAL: 17,
   EVA_LOCKER: 18,
+  RADIO: 19,
+  TRANSPONDER: 20,
 };
 
 // Human-readable tile names (for tooltips and UI)
@@ -578,6 +580,8 @@ export const TILE_NAMES = {
   [TileType.CRASH_COUCH]: 'Crash Couch',
   [TileType.TERMINAL]: 'Terminal',
   [TileType.EVA_LOCKER]: 'EVA Suit Locker',
+  [TileType.RADIO]: 'Communications Array',
+  [TileType.TRANSPONDER]: 'Transponder',
 };
 
 // Tiles that are interactive (clickable for info/actions)
@@ -586,6 +590,7 @@ export const INTERACTIVE_TILES = new Set([
   TileType.REACTOR, TileType.STORAGE, TileType.LIFE_SUPPORT,
   TileType.AIRLOCK, TileType.MEDBAY, TileType.CRASH_COUCH,
   TileType.TERMINAL, TileType.EVA_LOCKER,
+  TileType.RADIO, TileType.TRANSPONDER,
 ]);
 
 // Tile palettes
@@ -905,6 +910,44 @@ const TILE_PATTERNS = {
     'bbimuuuuuuumibb',
     'bbimmmmmmmmmibb',
     'bbiiiiiiiiiiibb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  // Radio: antenna dish with signal waves (teal)
+  [TileType.RADIO]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbtbbbbbbb',
+    'bbbbbbbtTtbbbbbb',
+    'bbbbbbtTTTtbbbbb',
+    'bbbbbbbtTtbbbbbb',
+    'bbbbbbbbtbbbbbbb',
+    'bbbbbbbbtbbbbbbb',
+    'bbbbbbbbtbbbbbbb',
+    'bbbbbbbbtbbbbbbb',
+    'bbbbbbbbtbbbbbbb',
+    'bbbbbbddddbbbbb',
+    'bbbbbddmmddbbbb',
+    'bbbbddddddddbbb',
+    'bbbdddddddddbbb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  // Transponder: beacon with pulse ring (amber)
+  [TileType.TRANSPONDER]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbabbbbbbbb',
+    'bbbbbbbaabbbbbbb',
+    'bbbbbbbaabbbbbbb',
+    'bbbbbbbabbbbbbbb',
+    'bbbbbbbabbbbbbbb',
+    'bbbbbbbabbbbbbbb',
+    'bbbbbbbabbbbbbbb',
+    'bbbbbbDaDbbbbbb',
+    'bbbbbDbaabDbbbb',
+    'bbbbDbbaaabbDbbb',
+    'bbbDbbbaabbDbbb',
+    'bbbbDbbaaDbbbbb',
+    'bbbbbDDaDDbbbb',
     'bbbbbbbbbbbbbbbb',
     'bbbbbbbbbbbbbbbb',
   ],

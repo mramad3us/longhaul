@@ -5,6 +5,7 @@
 // ============================================================
 
 import { PLANETS, ASTEROIDS } from './solar-system.js';
+import { computeOrbitalVelocity } from './entities.js';
 
 // ---- CONSTANTS ----
 
@@ -18,7 +19,7 @@ const SECURE_MIN = 10;               // minutes for crew to reach crash couches
 
 // ---- BODY LOOKUP ----
 
-export function findBody(name) {
+export function findBody(name, gameState) {
   for (const p of PLANETS) {
     if (p.name === name) return { ...p, type: 'planet' };
     for (const m of (p.moons || [])) {
@@ -29,6 +30,13 @@ export function findBody(name) {
     if (a.name === name) return { ...a, type: 'asteroid' };
   }
   if (name === 'Sol') return { name: 'Sol', a: 0, period: 1, initAngle: 0, type: 'star' };
+  // Search entities (stations, ships)
+  if (gameState && gameState.entities) {
+    const entity = gameState.entities.find(e => e.name === name);
+    if (entity) {
+      return { name: entity.name, type: 'entity', entity };
+    }
+  }
   return null;
 }
 
@@ -39,6 +47,9 @@ function orbitalPos(body, days) {
 }
 
 export function getBodyWorldPos(body, days) {
+  if (body.type === 'entity' && body.entity) {
+    return { x: body.entity.position.x, y: body.entity.position.y };
+  }
   if (body.type === 'moon' && body.parent) {
     const pp = orbitalPos(body.parent, days);
     const mp = orbitalPos(body, days);
@@ -94,8 +105,9 @@ function calcBrachistochrone(distAU_, accelG, shipPos, destPos) {
       { type: 'orient', durationMin: ORIENT_MIN, description: 'Orient ship for burn' },
       { type: 'secure', durationMin: SECURE_MIN, description: 'All hands to crash couches' },
       { type: 'burn', durationMin: tBurnMin, thrustG: accelG, deltaV: deltaV / 2, description: `Acceleration burn at ${accelG.toFixed(1)}G` },
-      { type: 'flip', durationMin: 0.15, description: 'Flip maneuver' },
+      { type: 'flip', durationMin: 6, description: 'Flip maneuver' },
       { type: 'burn', durationMin: tBurnMin, thrustG: accelG, deltaV: deltaV / 2, description: `Deceleration burn at ${accelG.toFixed(1)}G` },
+      { type: 'match', durationMin: 3, description: 'Matching target orbit' },
       { type: 'arrive', durationMin: 0, description: 'Arrival' },
     ],
   };
@@ -136,8 +148,9 @@ function calcEconomy(distAU_, accelG, coastFraction, shipPos, destPos) {
       { type: 'burn', durationMin: tBurnMin, thrustG: accelG, deltaV: deltaV / 2, description: `Acceleration burn at ${accelG.toFixed(1)}G` },
       { type: 'coast', durationMin: tCoastMin, description: 'Coast phase — crew free to move' },
       { type: 'secure', durationMin: SECURE_MIN, description: 'All hands to crash couches' },
-      { type: 'flip', durationMin: 0.15, description: 'Flip maneuver' },
+      { type: 'flip', durationMin: 6, description: 'Flip maneuver' },
       { type: 'burn', durationMin: tBurnMin, thrustG: accelG, deltaV: deltaV / 2, description: `Deceleration burn at ${accelG.toFixed(1)}G` },
+      { type: 'match', durationMin: 3, description: 'Matching target orbit' },
       { type: 'arrive', durationMin: 0, description: 'Arrival' },
     ],
   };
@@ -181,8 +194,9 @@ function calcHohmann(r1AU, r2AU, shipPos, destPos) {
       { type: 'burn', durationMin: burn1Min, thrustG: burnG, deltaV: dv1, description: `Departure burn at ${burnG}G` },
       { type: 'coast', durationMin: Math.max(0, coastMin), description: 'Transfer orbit coast' },
       { type: 'secure', durationMin: SECURE_MIN, description: 'All hands to crash couches' },
-      { type: 'flip', durationMin: 0.15, description: 'Flip maneuver' },
+      { type: 'flip', durationMin: 6, description: 'Flip maneuver' },
       { type: 'burn', durationMin: burn2Min, thrustG: burnG, deltaV: dv2, description: `Arrival burn at ${burnG}G` },
+      { type: 'match', durationMin: 3, description: 'Matching target orbit' },
       { type: 'arrive', durationMin: 0, description: 'Arrival' },
     ],
   };
@@ -197,6 +211,15 @@ export function calculateRoutes(gameState, destBody) {
 
   // Iterative intercept: estimate travel time → predict dest position → refine
   function destPosAt(travelMin) {
+    if (destBody.type === 'entity' && destBody.entity) {
+      // Project entity position forward using its velocity vector
+      const e = destBody.entity;
+      const dtSec = travelMin * 60;
+      return {
+        x: e.position.x + (e.velocity.vx * dtSec) / AU_M,
+        y: e.position.y + (e.velocity.vy * dtSec) / AU_M,
+      };
+    }
     return getBodyWorldPos(destBody, days + travelMin / 1440);
   }
 
@@ -252,8 +275,8 @@ export function calculateRoutes(gameState, destBody) {
     routes.push(r);
   }
 
-  // 4. Hohmann — minimum energy transfer
-  {
+  // 4. Hohmann — minimum energy transfer (only for celestial bodies with known orbits)
+  if (destBody.type !== 'entity') {
     const shipR = Math.sqrt(shipPos.x * shipPos.x + shipPos.y * shipPos.y);
     const destR = (destBody.type === 'moon' && destBody.parent) ? destBody.parent.a : destBody.a;
     if (shipR > 0.1 && destR > 0.1 && Math.abs(shipR - destR) > 0.05) {
@@ -290,12 +313,35 @@ export function resetRoute() {
   activeRoute = null;
 }
 
+// Override secure phase blocking (player chose to proceed with unsecured crew)
+export function overrideSecure() {
+  if (!activeRoute) return false;
+  activeRoute._secureComplete = true;
+  activeRoute._secureBlocking = false;
+  return true;
+}
+
+// Mark secure phase as complete (all crew are in crash couches)
+export function markSecureComplete() {
+  if (!activeRoute) return false;
+  activeRoute._secureComplete = true;
+  activeRoute._secureBlocking = false;
+  return true;
+}
+
+// Check if currently blocking on secure phase
+export function isSecureBlocking() {
+  return activeRoute && activeRoute._secureBlocking === true;
+}
+
 export function activateRoute(gameState, route) {
   activeRoute = {
     ...route,
     active: true,
     currentPhase: 0,
     phaseElapsed: 0,
+    _secureComplete: false,
+    _secureBlocking: false,
     startPosition: { ...gameState.shipPosition },
   };
 
@@ -342,11 +388,25 @@ export function routeTick(gameState) {
 
   // Phase complete?
   if (activeRoute.phaseElapsed >= phase.durationMin) {
+    // Secure phase blocks until all crew are in crash couches (or overridden)
+    if (phase.type === 'secure' && !activeRoute._secureComplete) {
+      // Emit blocking event once per tick so the UI can show the prompt
+      if (!activeRoute._secureBlocking) {
+        activeRoute._secureBlocking = true;
+        events.push({ event: 'secure-blocking', phase, phaseIndex: activeRoute.currentPhase });
+      }
+      return events.length > 0 ? events : null;
+    }
+
     events.push({ event: 'phase-end', phase, phaseIndex: activeRoute.currentPhase });
     applyPhaseEnd(gameState, phase);
 
     activeRoute.currentPhase++;
     activeRoute.phaseElapsed = 0;
+
+    // Reset secure flags for next secure phase
+    activeRoute._secureComplete = false;
+    activeRoute._secureBlocking = false;
 
     // Check if all phases done
     if (activeRoute.currentPhase >= activeRoute.phases.length) {
@@ -381,6 +441,10 @@ function applyPhaseStart(gameState, phase) {
     case 'orient':
       phys.orienting = true;
       break;
+    case 'match':
+      phys.thrustActive = false;
+      phys.thrustLevel = 0;
+      break;
     case 'secure':
     case 'arrive':
       break;
@@ -397,10 +461,31 @@ function applyPhaseEnd(gameState, phase) {
 }
 
 function finishRoute(gameState) {
+  const destName = activeRoute?.destinationName;
+  const destType = activeRoute?.destinationType;
+
+  // Match target velocity instead of zeroing — orbit matching
+  let targetVel = { vx: 0, vy: 0 };
+
+  if (destType === 'entity') {
+    const entity = (gameState.entities || []).find(e => e.name === destName);
+    if (entity) {
+      targetVel = { vx: entity.velocity.vx, vy: entity.velocity.vy };
+    }
+  } else if (destName) {
+    const days = (gameState.stats?.daysElapsed || 0) +
+                 (gameState.time?.hour || 0) / 24 +
+                 (gameState.time?.minute || 0) / 1440;
+    const vel = computeOrbitalVelocity(destName, days);
+    targetVel = { vx: vel.vx, vy: vel.vy };
+  }
+
+  gameState.physics.velocity = targetVel;
+  gameState.physics.speed = Math.sqrt(targetVel.vx * targetVel.vx + targetVel.vy * targetVel.vy);
+
   activeRoute = null;
   gameState.physics.thrustActive = false;
   gameState.physics.thrustLevel = 0;
-  gameState.physics.velocity = 0;
   gameState.navigation.routeActive = false;
   gameState.navigation.routeHeading = null;
   gameState.navigation.routeDestination = null;

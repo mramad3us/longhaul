@@ -377,6 +377,70 @@ export function renderSolarSystem(container, gameState, routeInfo) {
     parts.push(`<text x="${sp.x + shipR * 2}" y="${sp.y - shipR}" fill="#4FD1C5" font-family='${F}' font-size="${sFontSize}" opacity="0.8">${shipName}</text>`);
   }
 
+  // ---- ENTITIES (stations, ships) ----
+  if (gameState && gameState.entities) {
+    parts.push('<g>');
+    for (const entity of gameState.entities) {
+      const ep = entity.position;
+      if (!ep) continue;
+
+      // Skip entities way outside view
+      if (ep.x < vx - 0.1 || ep.x > vx + vw + 0.1 || ep.y < vy - 0.1 || ep.y > vy + vh + 0.1) continue;
+
+      // Faction colors
+      let eColor = '#8A8A6A'; // independent/unknown
+      if (entity.faction === 'MCRN') eColor = '#C1553B';
+      else if (entity.faction === 'UNN') eColor = '#4A90D9';
+      else if (entity.faction === 'OPA') eColor = '#E2A355';
+      else if (entity.faction === 'Belter') eColor = '#7EC8D9';
+
+      const eR = Math.max(minBodyR * 0.8, mapState.zoom * 0.003);
+
+      if (entity.type === 'station') {
+        // Station: diamond shape
+        const d = eR * 1.2;
+        parts.push(`<polygon points="${ep.x},${ep.y - d} ${ep.x + d},${ep.y} ${ep.x},${ep.y + d} ${ep.x - d},${ep.y}" fill="${eColor}" opacity="0.85"/>`);
+        // Glow ring
+        parts.push(`<circle cx="${ep.x}" cy="${ep.y}" r="${eR * 2}" fill="none" stroke="${eColor}" stroke-width="${mapState.zoom * 0.0008}" opacity="0.3"/>`);
+      } else {
+        // Ship: triangle
+        const d = eR;
+        const heading = entity.heading || 0;
+        const tx = ep.x + Math.cos(heading) * d * 1.5;
+        const ty = ep.y + Math.sin(heading) * d * 1.5;
+        const lx = ep.x + Math.cos(heading + 2.5) * d;
+        const ly = ep.y + Math.sin(heading + 2.5) * d;
+        const rx = ep.x + Math.cos(heading - 2.5) * d;
+        const ry = ep.y + Math.sin(heading - 2.5) * d;
+        parts.push(`<polygon points="${tx},${ty} ${lx},${ly} ${rx},${ry}" fill="${eColor}" opacity="0.85"/>`);
+
+        // Drive plume indicator
+        if (entity.thrustActive) {
+          parts.push(`<circle cx="${ep.x}" cy="${ep.y}" r="${eR * 2.5}" fill="none" stroke="${eColor}" stroke-width="${mapState.zoom * 0.0006}" opacity="0.4">` +
+            `<animate attributeName="opacity" values="0.4;0.1;0.4" dur="1.5s" repeatCount="indefinite"/></circle>`);
+        }
+      }
+
+      // SOS beacon
+      if (entity.sosActive) {
+        parts.push(`<circle cx="${ep.x}" cy="${ep.y}" r="${eR * 3}" fill="none" stroke="#FF4444" stroke-width="${mapState.zoom * 0.001}" opacity="0.6">` +
+          `<animate attributeName="r" values="${eR * 2};${eR * 4};${eR * 2}" dur="1s" repeatCount="indefinite"/>` +
+          `<animate attributeName="opacity" values="0.6;0.1;0.6" dur="1s" repeatCount="indefinite"/></circle>`);
+      }
+
+      // Label
+      const eFontSize = Math.max(mapState.zoom * 0.01, auPerPx * 7);
+      const label = entity.transponderActive ? entity.name : (entity.thrustActive ? entity.driveSignature : null);
+      if (label && mapState.zoom < 8) {
+        parts.push(`<text x="${ep.x + eR * 2.5}" y="${ep.y + eFontSize * 0.3}" fill="${eColor}" font-family='${F}' font-size="${eFontSize}" opacity="0.6">${escapeXml(label)}</text>`);
+      }
+
+      // Add to clickable positions
+      bodyPositions.push({ name: entity.name, type: entity.type, x: ep.x, y: ep.y, r: eR, entityId: entity.id });
+    }
+    parts.push('</g>');
+  }
+
   // ---- SELECTION RING ----
   if (mapState.selectedBody) {
     const sel = mapState.selectedBody;
@@ -565,7 +629,7 @@ export function initSolarMapInteraction(container) {
       const best = findNearestBody(wx, wy);
 
       if (best) {
-        mapState.selectedBody = { name: best.name, type: best.type, x: best.x, y: best.y };
+        mapState.selectedBody = { name: best.name, type: best.type, x: best.x, y: best.y, entityId: best.entityId || null };
       } else {
         mapState.selectedBody = null;
       }
@@ -665,6 +729,17 @@ export function zoomToBody(bodyName, gameState) {
     }
   }
 
+  // Check entities (stations, ships)
+  if (zoomTarget == null && gameState && gameState.entities) {
+    const entity = gameState.entities.find(e => e.name === bodyName);
+    if (entity && entity.position) {
+      mapState.cx = entity.position.x;
+      mapState.cy = entity.position.y;
+      zoomTarget = entity.type === 'station' ? 0.02 : 0.05;
+      reason = `entity ${bodyName} (${entity.type})`;
+    }
+  }
+
   if (zoomTarget == null) {
     console.warn(`[SolarMap] zoomToBody: unknown body "${bodyName}"`);
     return;
@@ -693,4 +768,8 @@ export function getMapState() {
 function gameTimeToDays(time, stats) {
   // Days elapsed since game start
   return (stats?.daysElapsed || 0) + (time?.hour || 0) / 24 + (time?.minute || 0) / 1440;
+}
+
+function escapeXml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

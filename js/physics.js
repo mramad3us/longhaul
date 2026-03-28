@@ -12,6 +12,10 @@ import { isSeatedInCouch, getCrewMission } from './crew-movement.js';
 // Gravitational acceleration at 1G in m/s²
 const G = 9.81;
 
+// Solar gravitational parameter and AU conversion
+const GM_SUN = 1.327124e20;       // m³/s²
+const METERS_PER_AU = 149_597_870_700;
+
 // Crew G-force thresholds
 export const G_THRESHOLDS = {
   MICRO_G: 0.01,    // Below this = micro-gravity (floating)
@@ -56,6 +60,8 @@ export const TILE_MASS = {
   [TileType.CRASH_COUCH]:   150,   // Gel crash couch with harness
   [TileType.TERMINAL]:      70,    // Control terminal
   [TileType.EVA_LOCKER]:    60,    // EVA suit storage locker
+  [TileType.RADIO]:         90,    // Communications array
+  [TileType.TRANSPONDER]:   45,    // Transponder unit
 };
 
 // Whether each tile type is structurally bolted to the ship
@@ -79,6 +85,8 @@ export const TILE_BOLTED = {
   [TileType.CRASH_COUCH]:   true,   // Bolted for high-G
   [TileType.TERMINAL]:      true,
   [TileType.EVA_LOCKER]:    true,   // Bolted to wall
+  [TileType.RADIO]:         true,   // Communications array
+  [TileType.TRANSPONDER]:   true,   // Transponder beacon
 };
 
 // Average crew member mass in kg
@@ -98,8 +106,10 @@ export function createPhysicsState() {
     // Current G-force magnitude felt inside the ship
     gForce: 0,
 
-    // Ship velocity (m/s) — scalar for now, will be vector later
-    velocity: 0,
+    // Ship velocity (m/s) — 2D vector in solar frame
+    velocity: { vx: 0, vy: 0 },
+    // Scalar speed magnitude (derived, for display)
+    speed: 0,
 
     // Distance traveled (meters)
     distance: 0,
@@ -115,13 +125,17 @@ export function createPhysicsState() {
     // Flip maneuver state
     flipping: false,
     flipProgress: 0,     // 0 to 1 (animation progress)
-    flipDuration: 8,     // seconds of game-time for a full flip
+    flipDuration: 6,     // game-minutes for a full flip (RCS rotation of large ship)
 
     // Per-crew physics state
     crewStates: {},      // crewId -> CrewState
 
     // Loose objects tracking (for future use)
     looseObjects: [],    // { deckIdx, x, y, tileType, mass, velocity: {x, y} }
+
+    // Thrust transition tracking (for inertia system)
+    _prevThrustG: 0,
+    _thrustDelta: 0,     // Change in G this tick (positive = increasing, negative = decreasing)
 
     // Ship total mass (computed)
     shipMass: 0,
@@ -406,11 +420,15 @@ export function physicsTick(gameState, physicsState) {
   // Update acceleration from thrust
   if (physicsState.thrustActive && gameState.resources.fuel.current > 0) {
     const thrustG = physicsState.maxThrust * physicsState.thrustLevel;
+    physicsState._thrustDelta = thrustG - physicsState._prevThrustG;
+    physicsState._prevThrustG = thrustG;
     physicsState.acceleration.y = thrustG * G;
     physicsState.gForce = thrustG;
     nav.thrust = thrustG;
   } else {
     // No thrust = micro-gravity (deep space, no nearby bodies)
+    physicsState._thrustDelta = 0 - physicsState._prevThrustG;
+    physicsState._prevThrustG = 0;
     physicsState.acceleration.y = 0;
     physicsState.gForce = 0;
     nav.thrust = 0;
@@ -422,34 +440,62 @@ export function physicsTick(gameState, physicsState) {
     }
   }
 
-  // Update velocity (m/s) — 1 game-minute = 60 real seconds
-  // Heading 0 = prograde (adds velocity), 180 = retrograde (subtracts velocity)
+  // Update velocity (m/s) — 2D vector in solar frame
+  // 1 game-minute = 60 real seconds
   const dt = 60; // seconds per game-minute
-  const thrustSign = physicsState.heading === 0 ? 1 : -1;
-  physicsState.velocity += thrustSign * physicsState.acceleration.y * dt;
-  nav.velocity = physicsState.velocity;
-  nav.heading = physicsState.heading;
+  const vel = physicsState.velocity;
 
-  // Update distance traveled
-  physicsState.distance += Math.abs(physicsState.velocity) * dt;
-  gameState.stats.distanceTraveled = physicsState.distance;
-
-  // Update ship position in AU (convert velocity m/s → AU displacement over dt seconds)
-  // 1 AU = 149,597,870,700 m
-  if (gameState.shipPosition) {
-    const metersPerAU = 149_597_870_700;
-    const displacementAU = physicsState.velocity * dt / metersPerAU;
+  if (physicsState.acceleration.y > 0) {
+    // Thrust direction in solar frame:
+    //   heading 0 (prograde) = along routeHeading direction
+    //   heading 180 (retrograde) = opposite routeHeading direction
+    const thrustSign = physicsState.heading === 0 ? 1 : -1;
+    const accel = physicsState.acceleration.y;
 
     if (nav.routeActive && nav.routeHeading != null) {
-      // 2D movement along route heading vector
-      // velocity is positive during forward travel, direction given by routeHeading
-      gameState.shipPosition.x += Math.cos(nav.routeHeading) * displacementAU;
-      gameState.shipPosition.y += Math.sin(nav.routeHeading) * displacementAU;
+      // Thrust along route heading
+      vel.vx += thrustSign * accel * Math.cos(nav.routeHeading) * dt;
+      vel.vy += thrustSign * accel * Math.sin(nav.routeHeading) * dt;
     } else {
-      // Legacy 1D: velocity sign is correct from integration (heading determines accel sign)
-      gameState.shipPosition.x += displacementAU;
+      // No active route — thrust along current velocity direction, or x-axis if stationary
+      const speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+      if (speed > 0.1) {
+        vel.vx += thrustSign * accel * (vel.vx / speed) * dt;
+        vel.vy += thrustSign * accel * (vel.vy / speed) * dt;
+      } else {
+        vel.vx += thrustSign * accel * dt;
+      }
     }
   }
+
+  nav.heading = physicsState.heading;
+
+  // Apply solar gravity to player ship, then integrate position (symplectic Euler: velocity first, then position)
+  if (gameState.shipPosition) {
+    const sx = gameState.shipPosition.x;
+    const sy = gameState.shipPosition.y;
+    const sr2 = sx * sx + sy * sy;
+    if (sr2 > 1e-10) {
+      const sr = Math.sqrt(sr2);
+      const sr_m = sr * METERS_PER_AU;
+      const sa = GM_SUN / (sr_m * sr_m); // m/s² toward Sun
+      const inv_r = 1 / sr;
+      vel.vx -= sa * sx * inv_r * dt;
+      vel.vy -= sa * sy * inv_r * dt;
+    }
+
+    // Update speed after gravity
+    physicsState.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+    nav.velocity = physicsState.speed;
+
+    // Position integration with updated velocity
+    gameState.shipPosition.x += vel.vx * dt / METERS_PER_AU;
+    gameState.shipPosition.y += vel.vy * dt / METERS_PER_AU;
+  }
+
+  // Update distance traveled
+  physicsState.distance += physicsState.speed * dt;
+  gameState.stats.distanceTraveled = physicsState.distance;
 
   // Update crew states
   const stateChanges = [];

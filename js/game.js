@@ -7,8 +7,15 @@ import { createDefaultShip } from './ship.js';
 import { VERSION } from './version.js';
 import { createPhysicsState, computeShipMass, physicsTick } from './physics.js';
 import { initLifeSupport, lifeSupportTick } from './life-support.js';
+import { createDefaultEntities, initializeEntityOrbit, rebuildSpatialHash, entityTick } from './entities.js';
+import { initComms } from './comms.js';
+import { initScanner } from './scanner.js';
 import { routeTick } from './navigation.js';
 import { reactorTick } from './reactor.js';
+import { commsTick } from './comms.js';
+import { scannerTick } from './scanner.js';
+import { initMissions, missionTick, interceptTick } from './missions.js';
+import { initInertia, internalBleedingTick } from './inertia.js';
 
 // Speed multipliers: game-minutes per real-second
 const SPEED_MULTIPLIERS = {
@@ -73,8 +80,29 @@ export function createGameState(shipName, captainName, crewCount) {
     },
   };
 
+  // Initialize ship orbital velocity at starting position
+  // v = sqrt(GM/r) for circular orbit, tangent direction at (x,0) = (0, v)
+  const AU_M = 149_597_870_700;
+  const GM_SUN = 1.327124e20;
+  const r_m = state.shipPosition.x * AU_M;
+  const orbitalSpeed = Math.sqrt(GM_SUN / r_m);
+  state.physics.velocity = { vx: 0, vy: orbitalSpeed };
+  state.physics.speed = orbitalSpeed;
+
   // Initialize life support system (adds atmosphere to decks, tanks to resources)
   initLifeSupport(state);
+
+  // Initialize entity system — compute orbital positions and velocities
+  state.entities = createDefaultEntities();
+  for (const entity of state.entities) {
+    initializeEntityOrbit(entity, 0);
+  }
+
+  // Initialize comms, scanner, missions, and inertia
+  initComms(state);
+  initScanner(state);
+  initMissions(state);
+  initInertia();
 
   return state;
 }
@@ -171,12 +199,19 @@ export class GameLoop {
 
   _processMinute() {
     advanceTime(this.state.time, 1);
+    const days = this.state.stats.daysElapsed;
 
-    // --- PHYSICS ---
+    // --- ENTITIES (gravity + position integration) ---
+    entityTick(this.state, days);
+
+    // --- PHYSICS (ship gravity + position integration) ---
     const stateChanges = physicsTick(this.state, this.state.physics);
     if (stateChanges.length > 0) {
       this.onPhysicsEvent('crewStateChange', stateChanges);
     }
+
+    // --- SPATIAL INDEX (rebuild after all positions are updated) ---
+    rebuildSpatialHash(this.state.entities);
 
     // --- ROUTE EXECUTION (must run per game-minute, before resource consumption) ---
     const routeEvents = routeTick(this.state);
@@ -209,6 +244,23 @@ export class GameLoop {
     }
 
     // Power: managed by reactorTick (generation when online, drain when offline)
+
+    // --- SCANNER & COMMS ---
+    scannerTick(this.state, days);
+    commsTick(this.state, days);
+
+    // --- INTERNAL BLEEDING (from inertial impacts) ---
+    this.state.ship.crew.forEach(member => internalBleedingTick(member));
+
+    // --- MISSIONS & INTERCEPT ---
+    const missionEvents = missionTick(this.state, days);
+    if (missionEvents && missionEvents.length > 0) {
+      this.onPhysicsEvent('missionEvents', missionEvents);
+    }
+    const intEvents = interceptTick(this.state);
+    if (intEvents && intEvents.length > 0) {
+      this.onPhysicsEvent('interceptEvents', intEvents);
+    }
 
     // Track elapsed days
     this.state.stats.daysElapsed += 1 / 1440;
