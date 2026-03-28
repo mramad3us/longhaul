@@ -474,47 +474,45 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
 
   const headingAngle = Math.atan2(targetPos.y - shipPos.y, targetPos.x - shipPos.x);
 
-  // Project relative velocity onto intercept heading
-  const closingSpeed = relVx * Math.cos(headingAngle) + relVy * Math.sin(headingAngle);
-  // cosAngle: 1 = perfectly aligned toward target, -1 = flying directly away
-  const cosAngle = relSpeed > 1 ? closingSpeed / relSpeed : 1;
-
-  // Determine if a velocity kill burn is needed before approach
-  // Threshold: > 500 m/s relative AND velocity is more than 60° off from target heading
-  // Skip for thrusting targets — their velocity changes continuously, so a fixed-direction
-  // braking burn goes stale and ends up thrusting the wrong way
-  const needsVelocityKill = relSpeed > 500 && cosAngle < 0.5 && !entity.thrustActive;
+  // ---- VELOCITY KILL ----
+  // Any significant relative velocity must be killed BEFORE the approach
+  // brachistochrone. The brachistochrone assumes starting from rest — if we
+  // skip this, burn durations are wrong and the ship overshoots.
+  //
+  // The velocity kill is CONDITION-BASED: it runs until relV < 50 m/s,
+  // not for a fixed duration. The thrust direction updates each tick in
+  // routeTick to track the current relative velocity vector.
+  //
+  // Skip for thrusting targets — their velocity changes faster than we can
+  // kill it. Those use continuous heading correction instead.
+  const needsVelocityKill = relSpeed > 50 && !entity.thrustActive;
 
   let brakingPhases = [];
   let brakeDeltaV = 0;
+  const closingSpeed = relVx * Math.cos(headingAngle) + relVy * Math.sin(headingAngle);
   let postBrakeDist_m = Math.max(entityDistanceAU(shipPos, targetPos) - targetRangeAU, dist0 * 0.01) * AU_M;
 
   if (needsVelocityKill) {
-    // Kill ALL relative velocity with a single braking burn, then start fresh
-    // Thrust direction = opposite to relative velocity vector
     const velAngle = Math.atan2(relVy, relVx);
-    const brakeDir = velAngle + Math.PI; // opposite to current relative velocity
+    const brakeDir = velAngle + Math.PI;
 
+    // Duration is a generous upper bound — the phase ends on condition (relV < 50),
+    // not on timer. Cap prevents infinite burn if something goes wrong.
     const brakeTimeSec = relSpeed / (maxG * G_ACCEL);
-    const brakeTimeMin = Math.max(1, Math.ceil(brakeTimeSec / 60));
+    const brakeTimeMin = Math.max(1, Math.ceil(brakeTimeSec / 60) * 2); // 2x margin
     brakeDeltaV = relSpeed;
 
-    // Distance traveled during braking: ship moves at average relSpeed/2 along
-    // velocity direction for brakeTimeSec. If diverging, distance to target grows.
+    // Estimate post-brake distance (ship drifts during braking)
     const brakeDist_m = (relSpeed * brakeTimeSec) / 2;
     if (closingSpeed < 0) {
-      // Diverging: distance increases during braking
       postBrakeDist_m += brakeDist_m * Math.abs(closingSpeed) / relSpeed;
-    } else {
-      // Partially closing: some component helps, but cross-track drifts
-      postBrakeDist_m += brakeDist_m * 0.2; // rough correction
     }
 
     brakingPhases = [
       { type: 'orient', durationMin: 2, description: 'Orient retrograde — velocity kill' },
       { type: 'secure', durationMin: 3, description: 'Secure for braking maneuver' },
       { type: 'burn', durationMin: brakeTimeMin, thrustG: maxG, deltaV: relSpeed,
-        thrustDirection: brakeDir,
+        thrustDirection: brakeDir, velocityKill: true,
         description: `Velocity kill at ${maxG.toFixed(1)}G` },
     ];
   }

@@ -396,9 +396,38 @@ export function routeTick(gameState) {
     applyPhaseStart(gameState, phase);
   }
 
-  // Active velocity matching during match phase for intercept routes.
-  // The brachistochrone's decel burn always leaves residual velocity because
-  // phase timers are minute-granular. The match phase actively kills it.
+  // ---- VELOCITY KILL BURN: condition-based ----
+  // These burns (marked with velocityKill: true) run until relative velocity
+  // to the target drops below 50 m/s, then end early. The thrust direction
+  // updates each tick to track the CURRENT relative velocity vector — no stale
+  // direction from route creation time.
+  if (phase.velocityKill && activeRoute.targetEntityId) {
+    const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
+    if (target) {
+      const vel = gameState.physics.velocity;
+      const relVx = vel.vx - target.velocity.vx;
+      const relVy = vel.vy - target.velocity.vy;
+      const relV = Math.sqrt(relVx * relVx + relVy * relVy);
+
+      if (relV < 50) {
+        // Velocity killed — snap and force phase to end immediately
+        vel.vx = target.velocity.vx;
+        vel.vy = target.velocity.vy;
+        gameState.physics.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+        activeRoute.phaseElapsed = phase.durationMin; // trigger phase end
+      } else {
+        // Update thrust direction to oppose CURRENT relative velocity
+        const liveDir = Math.atan2(relVy, relVx) + Math.PI;
+        phase.thrustDirection = liveDir;
+        gameState.navigation.routeHeading = liveDir;
+        gameState.physics.heading = 0; // prograde relative to brake direction
+      }
+    }
+  }
+
+  // ---- MATCH PHASE: velocity convergence ----
+  // Handles residual velocity from minute-granularity rounding in the
+  // brachistochrone burns. Exponential reduction → snap when close.
   if (phase.type === 'match' && activeRoute.targetEntityId) {
     const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
     if (target) {
@@ -407,12 +436,10 @@ export function routeTick(gameState) {
       const relVy = vel.vy - target.velocity.vy;
       const relV = Math.sqrt(relVx * relVx + relVy * relVy);
       if (relV > 20) {
-        // Exponential reduction — stronger for higher residual velocity
         const keep = relV > 1000 ? 0.3 : relV > 100 ? 0.5 : 0.7;
         vel.vx = target.velocity.vx + relVx * keep;
         vel.vy = target.velocity.vy + relVy * keep;
       } else {
-        // Close enough — snap to target velocity
         vel.vx = target.velocity.vx;
         vel.vy = target.velocity.vy;
       }
@@ -422,30 +449,6 @@ export function routeTick(gameState) {
 
   // Phase complete?
   if (activeRoute.phaseElapsed >= phase.durationMin) {
-    // Intercept decel burn: don't end until relative velocity is manageable.
-    // The brachistochrone assumes starting from rest — if the ship had initial
-    // velocity, the symmetric burn times are wrong and the decel burn is too short.
-    if (phase.type === 'burn' && activeRoute.targetEntityId) {
-      const flipIdx = activeRoute.phases.findIndex(p => p.type === 'flip');
-      const isDecelBurn = activeRoute.currentPhase > flipIdx;
-      if (isDecelBurn && activeRoute.phaseElapsed < phase.durationMin * 4) {
-        const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
-        if (target && !target.thrustActive) {
-          // Only extend decel burn for non-thrusting targets.
-          // For thrusting targets (runaways), relV never converges — the target
-          // keeps accelerating. Let the burn end on schedule; match phase and
-          // interceptTick handle convergence via continuous heading correction.
-          const vel = gameState.physics.velocity;
-          const relVx = vel.vx - target.velocity.vx;
-          const relVy = vel.vy - target.velocity.vy;
-          const relV = Math.sqrt(relVx * relVx + relVy * relVy);
-          if (relV > 100) {
-            return events.length > 0 ? events : null;
-          }
-        }
-      }
-    }
-
     // Secure phase blocks until all crew are in crash couches (or overridden)
     if (phase.type === 'secure' && !activeRoute._secureComplete) {
       // Emit blocking event once per tick so the UI can show the prompt
