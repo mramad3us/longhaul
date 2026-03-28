@@ -442,17 +442,37 @@ export function routeTick(gameState) {
       console.log(`[VK] relV=${relV.toFixed(1)} m/s | Δ=${(relV - prevRelV).toFixed(1)} | thrustG=${thrustG.toFixed(2)} | heading=${gameState.physics.heading} | routeHead=${currentRouteHeading?.toFixed(3) ?? 'null'} | liveDir=${liveDir.toFixed(3)} | headingDelta=${(headingDelta * 180 / Math.PI).toFixed(1)}° | shipVel=(${vel.vx.toFixed(1)},${vel.vy.toFixed(1)}) | targVel=(${target.velocity.vx.toFixed(1)},${target.velocity.vy.toFixed(1)}) | elapsed=${activeRoute.phaseElapsed}/${phase.durationMin}`);
       activeRoute._vkPrevRelV = relV;
 
+      // Throttle down as relV approaches zero to prevent oscillation.
+      // At 1.5G, each game-minute applies 882 m/s of dV — if relV is 300 m/s,
+      // full thrust overshoots by 582 m/s, then corrects back, forever.
+      // Solution: reduce thrust so next tick's dV ≈ 80% of remaining relV.
+      const killG = phase.thrustG || 1.5;
+      const tickDv = killG * G_ACCEL * 60; // dV applied per game-minute at full G
+
       if (relV < 50) {
         console.log(`[VK] KILL COMPLETE — snapping velocity`);
         vel.vx = target.velocity.vx;
         vel.vy = target.velocity.vy;
         gameState.physics.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+        gameState.physics.thrustActive = false;
+        gameState.physics.thrustLevel = 0;
         activeRoute.phaseElapsed = phase.durationMin;
       } else {
         // Update thrust direction to oppose CURRENT relative velocity
         phase.thrustDirection = liveDir;
         gameState.navigation.routeHeading = liveDir;
-        gameState.physics.heading = 0; // prograde relative to brake direction
+        gameState.physics.heading = 0;
+
+        // Throttle down when relV < 1.5x per-tick dV to prevent overshoot
+        if (relV < tickDv * 1.5) {
+          const neededG = (relV * 0.7) / (G_ACCEL * 60); // 70% — undershoot slightly, converge next tick
+          const clampedG = Math.max(0.01, Math.min(killG, neededG));
+          gameState.physics.thrustLevel = Math.min(1, clampedG / gameState.physics.maxThrust);
+          gameState.physics.acceleration.y = clampedG * G_ACCEL;
+          gameState.physics.gForce = clampedG;
+          console.log(`[VK] Throttled: ${clampedG.toFixed(3)}G (relV=${relV.toFixed(0)}, tickDv=${tickDv.toFixed(0)})`);
+        }
+
         console.log(`[VK] Updated thrustDir → ${liveDir.toFixed(3)} rad`);
       }
     }
