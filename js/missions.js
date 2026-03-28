@@ -515,9 +515,13 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
     const velAngle = Math.atan2(relVy, relVx);
     const brakeDir = velAngle + Math.PI;
 
+    // Velocity kill at high G — crew are in crash couches (secure phase runs first).
+    // 5G is aggressive but survivable when strapped in, no juice needed in couches.
+    const killG = Math.min(5.0, maxG > 1 ? maxG : 5.0);
+
     // Duration is a generous upper bound — the phase ends on condition (relV < 50),
     // not on timer. Cap prevents infinite burn if something goes wrong.
-    const brakeTimeSec = relSpeed / (maxG * G_ACCEL);
+    const brakeTimeSec = relSpeed / (killG * G_ACCEL);
     const brakeTimeMin = Math.max(1, Math.ceil(brakeTimeSec / 60) * 2); // 2x margin
     brakeDeltaV = relSpeed;
 
@@ -530,9 +534,9 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
     brakingPhases = [
       { type: 'orient', durationMin: 2, description: 'Orient retrograde — velocity kill' },
       { type: 'secure', durationMin: 3, description: 'Secure for braking maneuver' },
-      { type: 'burn', durationMin: brakeTimeMin, thrustG: maxG, deltaV: relSpeed,
+      { type: 'burn', durationMin: brakeTimeMin, thrustG: killG, deltaV: relSpeed,
         thrustDirection: brakeDir, velocityKill: true,
-        description: `Velocity kill at ${maxG.toFixed(1)}G` },
+        description: `Velocity kill at ${killG.toFixed(1)}G` },
     ];
   }
 
