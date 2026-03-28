@@ -2984,13 +2984,65 @@ function updateAtmosphereIndicators(state) {
 
 // ---- SPEED CONTROLS ----
 
+// KSP-style speed restrictions: high speeds only when nothing time-sensitive is happening.
+// 3x (1 day/s): only when coasting in predictable orbit, no route, no intercept, no combat
+// 2x (1 hr/s):  available during route coast/orient phases, NOT during burns/flips/VK/fine-approach
+// 1x (1 min/s): always available
+function getMaxAllowedSpeed() {
+  if (!gameState) return 3;
+
+  const intercept = getInterceptState();
+  const route = getActiveRoute();
+  const phase = route?.phases?.[route.currentPhase];
+  const phaseType = phase?.type;
+
+  // Fine approach or combat stations → 1x only
+  if (intercept?.fineApproach) return 1;
+  if (gameState.combatStations) return 1;
+
+  // Active burn, flip, velocity kill, or match → 1x only
+  if (phaseType === 'burn' || phaseType === 'flip' || phaseType === 'match') return 1;
+
+  // Active route in non-burn phase (orient, secure, coast, arrive) → up to 2x
+  if (route && route.active) return 2;
+
+  // Active intercept (still tracking, route may have finished) → up to 2x
+  if (intercept) return 2;
+
+  // Nothing happening — full speed available
+  return 3;
+}
+
+function enforceSpeedLimit() {
+  if (!gameLoop || !gameState) return;
+  const max = getMaxAllowedSpeed();
+  if (gameState.speed > max) {
+    gameLoop.setSpeed(max);
+    updateSpeedUI(max);
+  }
+  // Dim unavailable speed buttons
+  document.querySelectorAll('.speed-btn').forEach(btn => {
+    const s = parseInt(btn.dataset.speed);
+    if (s > 0 && s > max) {
+      btn.classList.add('speed-restricted');
+    } else {
+      btn.classList.remove('speed-restricted');
+    }
+  });
+}
+
 function initSpeedControls() {
   document.querySelectorAll('.speed-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const speed = parseInt(btn.dataset.speed);
       if (gameLoop) {
-        gameLoop.setSpeed(speed);
-        updateSpeedUI(speed);
+        const max = getMaxAllowedSpeed();
+        const clamped = Math.min(speed, max);
+        gameLoop.setSpeed(clamped);
+        updateSpeedUI(clamped);
+        if (speed > max && max < 3) {
+          showToast(max === 1 ? 'Speed restricted — active maneuver' : 'Speed restricted — route active', 'warn');
+        }
       }
     });
   });
@@ -3083,6 +3135,9 @@ function initHudCache() {
 }
 
 function updateHud(state) {
+  // Enforce speed limits every tick — auto-drop when maneuvers start
+  enforceSpeedLimit();
+
   _hud.date.textContent = formatDate(state.time);
   _hud.time.textContent = formatTime(state.time);
   _hud.shipName.textContent = state.ship.name;
@@ -4350,11 +4405,14 @@ function initKeyboard() {
         if (gameLoop) { gameLoop.setSpeed(1); updateSpeedUI(1); }
         break;
       case '2':
-        if (gameLoop) { gameLoop.setSpeed(2); updateSpeedUI(2); }
+      case '3': {
+        const requested = parseInt(e.key);
+        const max = getMaxAllowedSpeed();
+        const clamped = Math.min(requested, max);
+        if (gameLoop) { gameLoop.setSpeed(clamped); updateSpeedUI(clamped); }
+        if (requested > max) showToast('Speed restricted — active maneuver', 'warn');
         break;
-      case '3':
-        if (gameLoop) { gameLoop.setSpeed(3); updateSpeedUI(3); }
-        break;
+      }
       case 't':
       case 'T':
         // Dev mode only: toggle thrust

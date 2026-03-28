@@ -849,6 +849,11 @@ body {
   box-shadow: 0 0 8px var(--warm-glow);
   animation: pausePulse 2s infinite;
 }
+.speed-btn.speed-restricted {
+  opacity: 0.2;
+  pointer-events: none;
+  cursor: not-allowed;
+}
 
 /* ---- DEV MODE ---- */
 
