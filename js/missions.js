@@ -12,6 +12,7 @@ import { createEntity, EntityType, EntityState, entityDistanceAU, relativeSpeed,
 
 const AU_M = 149_597_870_700;
 const G_ACCEL = 9.81;
+const MAX_SENSOR_RANGE_AU = 0.1002;  // ~15M km — LONG scanner range, beyond = lost
 
 export const MissionType = {
   SOS_FUEL_DRY:       'SOS_FUEL_DRY',
@@ -398,6 +399,10 @@ export function checkRandomEvents(gameState, days) {
   missions.push(mission);
   eventCooldown = EVENT_COOLDOWN_MIN;
 
+  // Feasibility check: can we kill velocity and reach them before they
+  // drift out of max sensor range (~15M km)?
+  const feasibility = assessInterceptFeasibility(gameState, entity);
+
   // Return event descriptor for UI
   return {
     type: eventType,
@@ -410,7 +415,78 @@ export function checkRandomEvents(gameState, days) {
     acceptText: ACCEPT_TEXT[eventType],
     declineText: DECLINE_TEXT[eventType],
     urgencyLabel: `${hours}h estimated survival`,
+    feasibility,
   };
+}
+
+/**
+ * Assess whether an intercept is feasible given the ship's current velocity
+ * and the target's position. Checks if the ship would leave sensor range
+ * during the velocity kill + approach sequence.
+ *
+ * @returns {{ feasible: boolean, reason: string }}
+ */
+export function assessInterceptFeasibility(gameState, entity) {
+  const shipPos = gameState.shipPosition;
+  const shipVel = gameState.physics.velocity;
+
+  // Relative velocity
+  const relVx = shipVel.vx - entity.velocity.vx;
+  const relVy = shipVel.vy - entity.velocity.vy;
+  const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
+
+  // Current distance
+  const dist = entityDistanceAU(shipPos, entity.position);
+
+  // Time to kill relative velocity at 5G (velocity kill burn)
+  const killG = 5.0;
+  const killTimeSec = relSpeed / (killG * G_ACCEL);
+
+  // Distance the ship drifts during velocity kill (worst case: moving directly away)
+  const driftDist_AU = (relSpeed * killTimeSec / 2) / AU_M;
+
+  // Post-kill distance (approximate worst case)
+  const postKillDist = dist + driftDist_AU;
+
+  // Brachistochrone approach time from rest at 1G
+  const approachDist_m = postKillDist * AU_M;
+  const approachTimeSec = 2 * Math.sqrt(approachDist_m / (1.0 * G_ACCEL));
+
+  // During approach, check if target drifts out of sensor range
+  // Target drifts at its own velocity relative to the ship's post-kill position
+  // Conservative: assume target drifts at worst-case velocity for approach duration
+  const totalTimeSec = killTimeSec + approachTimeSec;
+  const totalTimeMin = Math.ceil(totalTimeSec / 60);
+
+  // Estimate max distance at end of sequence
+  // (very rough — we'd need full trajectory integration for precision)
+  if (postKillDist > MAX_SENSOR_RANGE_AU * 0.8) {
+    return {
+      feasible: false,
+      reason: `Nav computer: INTERCEPT NOT FEASIBLE. At current velocity, the ${Math.round(relSpeed / 1000)} km/s velocity kill would carry us ${formatDistKm(driftDist_AU)} past the target's position. Signal would be lost before we could close. Recommend course correction first.`,
+    };
+  }
+
+  // Check if we have enough time before urgency expires
+  // (not checked here — urgency is displayed separately)
+
+  // Check if relative velocity is so high that the kill time alone exceeds
+  // the time the target stays in sensor range
+  if (relSpeed > 50000 && driftDist_AU > MAX_SENSOR_RANGE_AU * 0.5) {
+    return {
+      feasible: false,
+      reason: `Nav computer: INTERCEPT MARGINAL. Relative velocity ${Math.round(relSpeed / 1000)} km/s — velocity kill would take ${Math.ceil(killTimeSec / 60)} minutes at 5G. Ship drift during braking: ${formatDistKm(driftDist_AU)}. High risk of losing sensor contact.`,
+    };
+  }
+
+  return { feasible: true, reason: '' };
+}
+
+function formatDistKm(au) {
+  const km = au * 149_597_870.7;
+  if (km >= 1e6) return `${(km / 1e6).toFixed(1)}M km`;
+  if (km >= 1000) return `${Math.round(km / 1000)}k km`;
+  return `${Math.round(km)} km`;
 }
 
 // ---- INTERCEPT ----
@@ -650,11 +726,24 @@ export function missionTick(gameState, days) {
     // Decrement urgency
     mission.urgencyTimerMin--;
 
-    // Check failure
+    // Check failure — timer expired
     if (mission.urgencyTimerMin <= 0) {
       failMission(mission);
-      events.push({ type: 'mission-failed', missionId: mission.id, title: mission.title });
+      events.push({ type: 'mission-failed', missionId: mission.id, title: mission.title,
+        reason: 'Urgency timer expired — crew did not survive' });
       continue;
+    }
+
+    // Check failure — target left max sensor range (~15M km)
+    const missionEntity = entities.find(e => e.id === mission.targetEntityId);
+    if (missionEntity) {
+      const missionDist = entityDistanceAU(gameState.shipPosition, missionEntity.position);
+      if (missionDist > MAX_SENSOR_RANGE_AU) {
+        failMission(mission);
+        events.push({ type: 'mission-failed', missionId: mission.id, title: mission.title,
+          reason: 'Target left sensor range — signal lost in the dark' });
+        continue;
+      }
     }
 
     // Chatter at intervals (every ~30 minutes, randomized)

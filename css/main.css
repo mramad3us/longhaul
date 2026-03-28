@@ -4356,6 +4356,28 @@ body.ship-blackout .tac-view {
   from { opacity: 0; clip-path: inset(0 100% 0 0); }
   to { opacity: 1; clip-path: inset(0 0 0 0); }
 }
+
+.event-feasibility {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: var(--warning);
+  padding: 10px 14px;
+  margin-top: 8px;
+  background: rgba(226, 163, 85, 0.06);
+  border-left: 2px solid var(--warning);
+  animation: eventReveal 0.8s ease-out 0.4s both;
+}
+.event-feasibility.infeasible {
+  color: var(--danger);
+  background: rgba(226, 85, 85, 0.08);
+  border-left-color: var(--danger);
+}
+.event-accept-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 .event-actions {
   padding: 14px 24px 20px;
   border-top: 1px solid var(--hull-primary);

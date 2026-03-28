@@ -3617,8 +3617,9 @@ function startGame() {
         } else if (evt.type === 'chatter') {
           addLogEntry(`[${evt.from}] ${evt.text}`, 'warn');
         } else if (evt.type === 'mission-failed') {
+          const reason = evt.reason || 'did not reach in time';
           showToast(`Mission failed: ${evt.title}`, 'danger');
-          addLogEntry(`Mission failed: ${evt.title} — did not reach in time`, 'danger');
+          addLogEntry(`Mission failed: ${evt.title} — ${reason}`, 'danger');
         }
       });
       updateMissionsCount();
@@ -4183,8 +4184,26 @@ function openEventModal(eventData) {
   document.getElementById('event-ship-dist').textContent = eventData.distance;
   document.getElementById('event-narrative').textContent = eventData.narrative;
   document.getElementById('event-urgency').textContent = eventData.urgencyLabel;
-  document.getElementById('event-accept-btn').textContent = eventData.acceptText;
-  document.getElementById('event-decline-btn').textContent = eventData.declineText;
+
+  // Feasibility check — can we actually reach them?
+  const feasEl = document.getElementById('event-feasibility');
+  const acceptBtn = document.getElementById('event-accept-btn');
+  const declineBtn = document.getElementById('event-decline-btn');
+
+  if (eventData.feasibility && !eventData.feasibility.feasible) {
+    feasEl.textContent = eventData.feasibility.reason;
+    feasEl.style.display = '';
+    feasEl.className = 'event-feasibility infeasible';
+    acceptBtn.textContent = 'INTERCEPT NOT FEASIBLE';
+    acceptBtn.disabled = true;
+    declineBtn.textContent = eventData.declineText;
+  } else {
+    feasEl.style.display = 'none';
+    acceptBtn.textContent = eventData.acceptText;
+    acceptBtn.disabled = false;
+    declineBtn.textContent = eventData.declineText;
+  }
+
   dialog.style.display = 'flex';
   // Pause game for dramatic effect
   if (gameLoop && gameState.speed > 0) {
