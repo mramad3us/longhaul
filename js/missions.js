@@ -34,7 +34,7 @@ export const MissionStatus = {
 // Intercept route thresholds
 const FORMATION_RANGE_AU = 0.0000067;        // ~1km
 const FORMATION_REL_VEL = 20;                // m/s — close enough to match
-const FINE_APPROACH_RANGE_AU = 0.00334;       // ~500km — RCS takeover threshold
+const FINE_APPROACH_RANGE_AU = 3.34e-6;       // ~500km (500,000m / AU_M)
 
 // Intercept type enum and target distances
 export const INTERCEPT_TYPE = {
