@@ -523,33 +523,19 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
   // Computed from post-brake state (or current state if no braking needed)
   const approachDist_m = postBrakeDist_m;
 
-  // For tactical intercepts: decel burn uses RCS thrusters (0.1-0.3G) for fine
-  // control. At 1G, a 1-minute rounding error = 589 m/s overshoot. At 0.1G
-  // that's 59 m/s — recoverable by the match phase.
-  const isTactical = (targetRangeAU > 0 && targetRangeAU <= INTERCEPT_RANGE_AU[INTERCEPT_TYPE.TACTICAL]);
-  const isClose = (targetRangeAU > 0 && targetRangeAU <= INTERCEPT_RANGE_AU[INTERCEPT_TYPE.CLOSE]);
-  const decelG = isTactical ? Math.min(maxG, 0.15) :
-                 isClose    ? Math.min(maxG, 0.5) : maxG;
-
-  // Accel burn: full power to close distance fast
-  const accelDist_m = approachDist_m / 2;
-  const accelTimeSec = Math.sqrt(2 * accelDist_m / (maxG * G_ACCEL));
-  const accelTimeMin = Math.max(1, Math.ceil(accelTimeSec / 60));
-  const accelDv = maxG * G_ACCEL * accelTimeSec;
-
-  // Decel burn: lower G for close approaches, longer duration
-  const decelTimeSec = accelDv / (decelG * G_ACCEL);
-  const decelTimeMin = Math.max(1, Math.ceil(decelTimeSec / 60));
-  const totalDv = accelDv * 2; // accel + decel cancel out, but decel at lower G takes longer
+  const approachTimeSec = 2 * Math.sqrt(approachDist_m / (maxG * G_ACCEL));
+  const approachTimeMin = Math.ceil(approachTimeSec / 60);
+  const burnMin = Math.max(1, Math.ceil(approachTimeMin * 0.45));
+  const totalDv = 2 * Math.sqrt(approachDist_m * maxG * G_ACCEL);
 
   const approachPhases = [
     { type: 'orient', durationMin: 2, description: 'Orienting for intercept burn' },
     { type: 'secure', durationMin: 3, description: 'Secure for high-G maneuver' },
-    { type: 'burn', durationMin: accelTimeMin, thrustG: maxG, deltaV: accelDv,
+    { type: 'burn', durationMin: burnMin, thrustG: maxG, deltaV: totalDv / 2,
       description: `Intercept burn at ${maxG.toFixed(1)}G` },
     { type: 'flip', durationMin: 6, description: 'Flip maneuver' },
-    { type: 'burn', durationMin: decelTimeMin, thrustG: decelG, deltaV: accelDv,
-      description: `Deceleration ${isTactical ? '(RCS) ' : ''}at ${decelG.toFixed(1)}G` },
+    { type: 'burn', durationMin: burnMin, thrustG: maxG, deltaV: totalDv / 2,
+      description: `Deceleration burn at ${maxG.toFixed(1)}G` },
     { type: 'match', durationMin: 5, description: 'Matching target velocity' },
     { type: 'arrive', durationMin: 1, description: 'Intercept range achieved' },
   ];
