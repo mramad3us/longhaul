@@ -396,6 +396,30 @@ export function routeTick(gameState) {
     applyPhaseStart(gameState, phase);
   }
 
+  // Active velocity matching during match phase for intercept routes.
+  // The brachistochrone's decel burn always leaves residual velocity because
+  // phase timers are minute-granular. The match phase actively kills it.
+  if (phase.type === 'match' && activeRoute.targetEntityId) {
+    const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
+    if (target) {
+      const vel = gameState.physics.velocity;
+      const relVx = vel.vx - target.velocity.vx;
+      const relVy = vel.vy - target.velocity.vy;
+      const relV = Math.sqrt(relVx * relVx + relVy * relVy);
+      if (relV > 20) {
+        // Exponential reduction — stronger for higher residual velocity
+        const keep = relV > 1000 ? 0.3 : relV > 100 ? 0.5 : 0.7;
+        vel.vx = target.velocity.vx + relVx * keep;
+        vel.vy = target.velocity.vy + relVy * keep;
+      } else {
+        // Close enough — snap to target velocity
+        vel.vx = target.velocity.vx;
+        vel.vy = target.velocity.vy;
+      }
+      gameState.physics.speed = Math.sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+    }
+  }
+
   // Phase complete?
   if (activeRoute.phaseElapsed >= phase.durationMin) {
     // Secure phase blocks until all crew are in crash couches (or overridden)

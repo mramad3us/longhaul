@@ -711,6 +711,13 @@ export function interceptTick(gameState) {
     const targetRange = interceptState.targetRangeAU ?? INTERCEPT_RANGE_AU[INTERCEPT_TYPE.SCANNER];
     if (dist <= targetRange) {
       interceptState.rangeReached = true;
+      // Match velocity and kill thrust — prevent overshoot
+      gameState.physics.velocity.vx = entity.velocity.vx;
+      gameState.physics.velocity.vy = entity.velocity.vy;
+      gameState.physics.speed = Math.sqrt(entity.velocity.vx ** 2 + entity.velocity.vy ** 2);
+      gameState.physics.thrustActive = false;
+      gameState.physics.thrustLevel = 0;
+
       events.push({
         type: 'intercept-range-reached',
         interceptType: interceptState.interceptType,
