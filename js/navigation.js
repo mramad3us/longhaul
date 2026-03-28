@@ -5,7 +5,7 @@
 // ============================================================
 
 import { PLANETS, ASTEROIDS } from './solar-system.js';
-import { computeOrbitalVelocity } from './entities.js';
+import { computeOrbitalVelocity, entityDistanceAU, bearingTo } from './entities.js';
 
 // ---- CONSTANTS ----
 
@@ -445,6 +445,36 @@ export function routeTick(gameState) {
         phase.thrustDirection = liveDir;
         gameState.navigation.routeHeading = liveDir;
         gameState.physics.heading = 0; // prograde relative to brake direction
+      }
+    }
+  }
+
+  // ---- INTERCEPT BURN COURSE CORRECTION ----
+  // During any burn phase of an intercept route, continuously update routeHeading
+  // to point toward the target. Without this, target drift causes the decel burn
+  // to thrust in the wrong direction — relV increases instead of decreasing.
+  if (phase.type === 'burn' && !phase.velocityKill && activeRoute.targetEntityId) {
+    const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
+    if (target) {
+      const correctedHeading = bearingTo(gameState.shipPosition, target.position);
+      gameState.navigation.routeHeading = correctedHeading;
+      // Store previous relV for drift detection
+      const vel = gameState.physics.velocity;
+      const relVx = vel.vx - target.velocity.vx;
+      const relVy = vel.vy - target.velocity.vy;
+      const relV = Math.sqrt(relVx * relVx + relVy * relVy);
+      const prevRelV = activeRoute._prevRelV ?? relV;
+      activeRoute._prevRelV = relV;
+
+      // If relV is increasing during a decel burn, something is wrong —
+      // force heading correction: ensure we're thrusting AGAINST approach vector
+      const flipIdx = activeRoute.phases.findIndex(p => p.type === 'flip');
+      const isDecelBurn = activeRoute.currentPhase > flipIdx;
+      if (isDecelBurn && relV > prevRelV + 10) {
+        // Thrust should oppose relative velocity, not just be retrograde on routeHeading
+        const relAngle = Math.atan2(relVy, relVx);
+        gameState.navigation.routeHeading = relAngle; // point heading along relV
+        gameState.physics.heading = 180; // retrograde = thrust opposes relV
       }
     }
   }
