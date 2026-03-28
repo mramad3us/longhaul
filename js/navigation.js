@@ -422,6 +422,27 @@ export function routeTick(gameState) {
 
   // Phase complete?
   if (activeRoute.phaseElapsed >= phase.durationMin) {
+    // Intercept decel burn: don't end until relative velocity is manageable.
+    // The brachistochrone assumes starting from rest — if the ship had initial
+    // velocity, the symmetric burn times are wrong and the decel burn is too short.
+    if (phase.type === 'burn' && activeRoute.targetEntityId) {
+      const flipIdx = activeRoute.phases.findIndex(p => p.type === 'flip');
+      const isDecelBurn = activeRoute.currentPhase > flipIdx;
+      if (isDecelBurn && activeRoute.phaseElapsed < phase.durationMin * 4) {
+        const target = (gameState.entities || []).find(e => e.id === activeRoute.targetEntityId);
+        if (target) {
+          const vel = gameState.physics.velocity;
+          const relVx = vel.vx - target.velocity.vx;
+          const relVy = vel.vy - target.velocity.vy;
+          const relV = Math.sqrt(relVx * relVx + relVy * relVy);
+          if (relV > 100) {
+            // Still too fast — keep burning (up to 4x original duration as safety cap)
+            return events.length > 0 ? events : null;
+          }
+        }
+      }
+    }
+
     // Secure phase blocks until all crew are in crash couches (or overridden)
     if (phase.type === 'secure' && !activeRoute._secureComplete) {
       // Emit blocking event once per tick so the UI can show the prompt
