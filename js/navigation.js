@@ -335,6 +335,12 @@ export function isSecureBlocking() {
 }
 
 export function activateRoute(gameState, route) {
+  // Cancel any existing route cleanly before activating the new one
+  if (activeRoute) {
+    gameState.physics.thrustActive = false;
+    gameState.physics.thrustLevel = 0;
+  }
+
   activeRoute = {
     ...route,
     active: true,
@@ -348,6 +354,10 @@ export function activateRoute(gameState, route) {
   gameState.navigation.routeHeading = route.headingAngle;
   gameState.navigation.routeActive = true;
   gameState.navigation.routeDestination = route.destinationName;
+
+  // Reset heading to prograde for the new route — ship will orient toward
+  // the new heading during orient phase, then burn prograde
+  gameState.physics.heading = 0;
 
   return activeRoute;
 }
@@ -425,9 +435,17 @@ function applyPhaseStart(gameState, phase) {
     case 'burn': {
       phys.thrustActive = true;
       phys.thrustLevel = Math.min(1, phase.thrustG / phys.maxThrust);
-      // Determine heading: burns before flip = prograde (0), after flip = retrograde (180)
-      const flipIdx = activeRoute.phases.findIndex(p => p.type === 'flip');
-      phys.heading = activeRoute.currentPhase > flipIdx ? 180 : 0;
+
+      if (phase.thrustDirection != null) {
+        // Phase-specific thrust direction (e.g. velocity kill burns that point
+        // opposite to current velocity, not toward the route destination)
+        gameState.navigation.routeHeading = phase.thrustDirection;
+        phys.heading = 0; // prograde relative to this phase's direction
+      } else {
+        // Standard: burns before flip = prograde (0), after flip = retrograde (180)
+        const flipIdx = activeRoute.phases.findIndex(p => p.type === 'flip');
+        phys.heading = activeRoute.currentPhase > flipIdx ? 180 : 0;
+      }
       break;
     }
     case 'coast':
@@ -440,6 +458,11 @@ function applyPhaseStart(gameState, phase) {
       break;
     case 'orient':
       phys.orienting = true;
+      // Restore route heading to the route's target heading — clears any
+      // override from a prior velocity-kill burn phase
+      if (activeRoute?.headingAngle != null) {
+        gameState.navigation.routeHeading = activeRoute.headingAngle;
+      }
       break;
     case 'match':
       phys.thrustActive = false;

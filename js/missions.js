@@ -444,12 +444,18 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
   const dist0 = entityDistanceAU(shipPos, entity.position);
   if (targetRangeAU > 0 && dist0 <= targetRangeAU) return null;
 
+  // ---- VELOCITY MISALIGNMENT CHECK ----
+  // Ship may have significant velocity from a prior route that's not aligned
+  // with the new intercept heading. Need to kill it first or the brachistochrone
+  // flip/burn timings will be completely wrong.
+  const relVx = shipVel.vx - entity.velocity.vx;
+  const relVy = shipVel.vy - entity.velocity.vy;
+  const relSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
+
   // Predict target position at estimated arrival time (iterative)
-  // Effective distance to close = currentDist - targetRangeAU
   const effectiveDist0 = Math.max(dist0 - targetRangeAU, dist0 * 0.01) * AU_M;
   let estTimeSec = 2 * Math.sqrt(effectiveDist0 / (maxG * G_ACCEL));
 
-  // 3 iterations of intercept refinement
   let targetPos = { x: entity.position.x, y: entity.position.y };
   for (let i = 0; i < 3; i++) {
     const dt = estTimeSec;
@@ -466,22 +472,73 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
     estTimeSec = 2 * Math.sqrt(newDist / (maxG * G_ACCEL));
   }
 
-  const estTimeMin = Math.ceil(estTimeSec / 60);
   const headingAngle = Math.atan2(targetPos.y - shipPos.y, targetPos.x - shipPos.x);
 
-  const finalDist = Math.max(entityDistanceAU(shipPos, targetPos) - targetRangeAU, dist0 * 0.01) * AU_M;
-  const dv = 2 * Math.sqrt(finalDist * maxG * G_ACCEL);
+  // Project relative velocity onto intercept heading
+  const closingSpeed = relVx * Math.cos(headingAngle) + relVy * Math.sin(headingAngle);
+  // cosAngle: 1 = perfectly aligned toward target, -1 = flying directly away
+  const cosAngle = relSpeed > 1 ? closingSpeed / relSpeed : 1;
 
-  const burnTime = Math.ceil(estTimeMin * 0.45);
-  const phases = [
+  // Determine if a velocity kill burn is needed before approach
+  // Threshold: > 500 m/s relative AND velocity is more than 60° off from target heading
+  const needsVelocityKill = relSpeed > 500 && cosAngle < 0.5;
+
+  let brakingPhases = [];
+  let brakeDeltaV = 0;
+  let postBrakeDist_m = Math.max(entityDistanceAU(shipPos, targetPos) - targetRangeAU, dist0 * 0.01) * AU_M;
+
+  if (needsVelocityKill) {
+    // Kill ALL relative velocity with a single braking burn, then start fresh
+    // Thrust direction = opposite to relative velocity vector
+    const velAngle = Math.atan2(relVy, relVx);
+    const brakeDir = velAngle + Math.PI; // opposite to current relative velocity
+
+    const brakeTimeSec = relSpeed / (maxG * G_ACCEL);
+    const brakeTimeMin = Math.max(1, Math.ceil(brakeTimeSec / 60));
+    brakeDeltaV = relSpeed;
+
+    // Distance traveled during braking: ship moves at average relSpeed/2 along
+    // velocity direction for brakeTimeSec. If diverging, distance to target grows.
+    const brakeDist_m = (relSpeed * brakeTimeSec) / 2;
+    if (closingSpeed < 0) {
+      // Diverging: distance increases during braking
+      postBrakeDist_m += brakeDist_m * Math.abs(closingSpeed) / relSpeed;
+    } else {
+      // Partially closing: some component helps, but cross-track drifts
+      postBrakeDist_m += brakeDist_m * 0.2; // rough correction
+    }
+
+    brakingPhases = [
+      { type: 'orient', durationMin: 2, description: 'Orient retrograde — velocity kill' },
+      { type: 'secure', durationMin: 3, description: 'Secure for braking maneuver' },
+      { type: 'burn', durationMin: brakeTimeMin, thrustG: maxG, deltaV: relSpeed,
+        thrustDirection: brakeDir,
+        description: `Velocity kill at ${maxG.toFixed(1)}G` },
+    ];
+  }
+
+  // ---- APPROACH BRACHISTOCHRONE ----
+  // Computed from post-brake state (or current state if no braking needed)
+  const approachDist_m = postBrakeDist_m;
+  const approachTimeSec = 2 * Math.sqrt(approachDist_m / (maxG * G_ACCEL));
+  const approachTimeMin = Math.ceil(approachTimeSec / 60);
+  const approachBurnMin = Math.ceil(approachTimeMin * 0.45);
+  const approachDv = 2 * Math.sqrt(approachDist_m * maxG * G_ACCEL);
+
+  const approachPhases = [
     { type: 'orient', durationMin: 2, description: 'Orienting for intercept burn' },
     { type: 'secure', durationMin: 3, description: 'Secure for high-G maneuver' },
-    { type: 'burn', durationMin: burnTime, thrustG: maxG, deltaV: dv / 2, description: `Intercept burn at ${maxG.toFixed(1)}G` },
+    { type: 'burn', durationMin: approachBurnMin, thrustG: maxG, deltaV: approachDv / 2,
+      description: `Intercept burn at ${maxG.toFixed(1)}G` },
     { type: 'flip', durationMin: 6, description: 'Flip maneuver' },
-    { type: 'burn', durationMin: burnTime, thrustG: maxG, deltaV: dv / 2, description: `Deceleration burn at ${maxG.toFixed(1)}G` },
+    { type: 'burn', durationMin: approachBurnMin, thrustG: maxG, deltaV: approachDv / 2,
+      description: `Deceleration burn at ${maxG.toFixed(1)}G` },
     { type: 'match', durationMin: 5, description: 'Matching target velocity' },
     { type: 'arrive', durationMin: 1, description: 'Intercept range achieved' },
   ];
+
+  const phases = [...brakingPhases, ...approachPhases];
+  const dv = approachDv + brakeDeltaV;
 
   return {
     type: 'intercept',

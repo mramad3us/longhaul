@@ -3739,9 +3739,14 @@ function initHudActions() {
     document.getElementById('dialog-event').style.display = 'none';
 
     // Auto-start tactical intercept for the mission's entity (need formation proximity)
+    // Cancel any existing route/intercept first
     const missions = getMissionLog();
     const mission = missions.find(m => m.id === missionId);
     if (mission && gameState) {
+      const existingIntercept = getInterceptState();
+      if (existingIntercept) cancelIntercept();
+      cancelRoute(gameState);
+
       const route = computeInterceptRoute(gameState, mission.targetEntityId, { targetRangeAU: INTERCEPT_RANGE_AU[INTERCEPT_TYPE.TACTICAL] });
       if (route) {
         startIntercept(gameState, mission.targetEntityId, missionId, INTERCEPT_TYPE.TACTICAL);

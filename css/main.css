@@ -4108,14 +4108,14 @@ body.ship-blackout .tac-view {
 
 .approach-slider-label {
   font-family: var(--font-pixel);
-  font-size: 0.26rem;
+  font-size: 0.3rem;
   letter-spacing: 0.08em;
   color: var(--text-dim);
 }
 
 .approach-slider-current {
   font-family: var(--font-mono);
-  font-size: 0.65rem;
+  font-size: 0.78rem;
   color: var(--accent);
 }
 
@@ -4127,11 +4127,11 @@ body.ship-blackout .tac-view {
 }
 
 .approach-range-label {
-  font-family: var(--font-pixel);
-  font-size: 0.22rem;
-  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
   white-space: nowrap;
-  min-width: 36px;
+  min-width: 44px;
 }
 .approach-range-label.right { text-align: right; }
 
@@ -4139,44 +4139,46 @@ body.ship-blackout .tac-view {
   flex: 1;
   -webkit-appearance: none;
   appearance: none;
-  height: 3px;
+  height: 4px;
   background: var(--hull-accent);
   outline: none;
   border-radius: 0;
   cursor: pointer;
   position: relative;
+  margin: 0 4px;
 }
 .approach-range-input::-webkit-slider-runnable-track {
-  height: 3px;
+  height: 4px;
   background: linear-gradient(to right, var(--accent) calc(var(--fill-pct, 100%) * 1%), var(--hull-accent) calc(var(--fill-pct, 100%) * 1%));
   border-radius: 0;
 }
 .approach-range-input::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   background: var(--accent);
   border: 2px solid var(--bg-deep);
   border-radius: 50%;
   cursor: pointer;
-  box-shadow: 0 0 8px rgba(79, 209, 197, 0.5);
-  transition: box-shadow 0.1s;
-  margin-top: -4.5px;
+  box-shadow: 0 0 10px rgba(79, 209, 197, 0.5);
+  transition: box-shadow 0.15s, transform 0.1s;
+  margin-top: -6px;
 }
 .approach-range-input::-webkit-slider-thumb:hover {
-  box-shadow: 0 0 14px rgba(79, 209, 197, 0.8);
+  box-shadow: 0 0 16px rgba(79, 209, 197, 0.8);
+  transform: scale(1.15);
 }
 .approach-range-input::-moz-range-track {
-  height: 3px;
+  height: 4px;
   background: var(--hull-accent);
 }
 .approach-range-input::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   background: var(--accent);
   border: 2px solid var(--bg-deep);
   border-radius: 50%;
-  box-shadow: 0 0 8px rgba(79, 209, 197, 0.5);
+  box-shadow: 0 0 10px rgba(79, 209, 197, 0.5);
   cursor: pointer;
 }
 
@@ -4189,15 +4191,15 @@ body.ship-blackout .tac-view {
 
 .approach-target-label {
   font-family: var(--font-pixel);
-  font-size: 0.25rem;
+  font-size: 0.3rem;
   color: var(--text-dim);
   letter-spacing: 0.06em;
 }
 
 .approach-target-val {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--text-primary);
+  font-size: 0.82rem;
+  color: var(--accent);
   letter-spacing: 0.04em;
 }
 
