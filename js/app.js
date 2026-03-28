@@ -863,9 +863,13 @@ function initHud() {
       gameState.combatStations = true;
       btn.classList.add('active');
       statusEl.textContent = 'ON';
-      // All crew to crash couches
+      // All crew to crash couches — cancel any current mission first
       gameState.ship.crew.forEach(member => {
         if (!member.dead && member.consciousness > 10) {
+          const currentMission = getCrewMission(member.id);
+          if (currentMission && currentMission !== 'secure-burn' && currentMission !== 'healing') {
+            cancelMission(member.id, gameState.ship);
+          }
           assignSecureBurnMission(gameState.ship, member);
         }
       });
@@ -3385,7 +3389,8 @@ function startGame() {
             assignSecureBurnMission(state.ship, member);
           }
         });
-      } else if (!routeHoldingCrew) {
+      } else if (!routeHoldingCrew && !state.combatStations) {
+        // Release crew from couches — but NOT during combat stations
         state.ship.crew.forEach(member => {
           if (getCrewMission(member.id) === 'secure-burn') {
             releaseSecureBurn(member.id);
@@ -3599,13 +3604,17 @@ function startGame() {
             }
             case 'coast':
               addLogEntry('Main engine cut. Coast phase — all hands free to move.', 'nav');
-              showToast('COAST — crew released', 'ok');
-              state.ship.crew.forEach(member => {
-                if (getCrewMission(member.id) === 'secure-burn') {
-                  releaseSecureBurn(member.id);
-                  cancelMission(member.id, state.ship);
-                }
-              });
+              if (!state.combatStations) {
+                showToast('COAST — crew released', 'ok');
+                state.ship.crew.forEach(member => {
+                  if (getCrewMission(member.id) === 'secure-burn') {
+                    releaseSecureBurn(member.id);
+                    cancelMission(member.id, state.ship);
+                  }
+                });
+              } else {
+                showToast('COAST — crew remain at battle stations', 'warn');
+              }
               break;
             case 'flip':
               addLogEntry('Executing flip maneuver', 'nav');
@@ -3642,7 +3651,7 @@ function startGame() {
             .filter(p => p.type === 'burn')
             .map(p => p.thrustG || 0), 0);
           state.ship.crew.forEach(member => {
-            if (getCrewMission(member.id) === 'secure-burn') {
+            if (getCrewMission(member.id) === 'secure-burn' && !state.combatStations) {
               releaseSecureBurn(member.id);
               cancelMission(member.id, state.ship);
             }
