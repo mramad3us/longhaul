@@ -555,7 +555,7 @@ export function computeInterceptRoute(gameState, targetEntityId, opts = {}) {
   ];
 
   const phases = [...brakingPhases, ...approachPhases];
-  const dv = approachDv + brakeDeltaV;
+  const dv = totalDv + brakeDeltaV;
 
   return {
     type: 'intercept',
