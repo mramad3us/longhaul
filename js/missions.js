@@ -875,16 +875,21 @@ export function interceptTick(gameState) {
     events.push({ type: 'fine-approach-start', targetName: entity.name, distKm: dist * 149_597_870.7 });
   }
 
-  // Check if we've entered the intercept target range (non-formation, non-tactical)
+  // Check if we've entered the intercept target range
   if (interceptState && !interceptState.rangeReached && !interceptState.formation) {
     const targetRange = interceptState.targetRangeAU ?? INTERCEPT_RANGE_AU[INTERCEPT_TYPE.SCANNER];
     if (dist <= targetRange) {
       interceptState.rangeReached = true;
-      gameState.physics.velocity.vx = entity.velocity.vx;
-      gameState.physics.velocity.vy = entity.velocity.vy;
-      gameState.physics.speed = Math.sqrt(entity.velocity.vx ** 2 + entity.velocity.vy ** 2);
-      gameState.physics.thrustActive = false;
-      gameState.physics.thrustLevel = 0;
+
+      // Only snap velocity if NOT fine-approaching — fine approach manages
+      // its own closing velocity and needs to continue past target range to formation
+      if (!interceptState.fineApproach) {
+        gameState.physics.velocity.vx = entity.velocity.vx;
+        gameState.physics.velocity.vy = entity.velocity.vy;
+        gameState.physics.speed = Math.sqrt(entity.velocity.vx ** 2 + entity.velocity.vy ** 2);
+        gameState.physics.thrustActive = false;
+        gameState.physics.thrustLevel = 0;
+      }
 
       events.push({
         type: 'intercept-range-reached',
