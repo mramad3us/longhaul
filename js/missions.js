@@ -32,7 +32,7 @@ export const MissionStatus = {
 };
 
 // Intercept route thresholds
-const FORMATION_RANGE_AU = 0.0000067;        // ~1km
+const FORMATION_RANGE_AU = 6.685e-9;         // ~1km (1,000m / AU_M)
 const FORMATION_REL_VEL = 20;                // m/s — close enough to match
 const FINE_APPROACH_RANGE_AU = 3.34e-6;       // ~500km (500,000m / AU_M)
 
