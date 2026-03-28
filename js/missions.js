@@ -810,22 +810,27 @@ export function interceptTick(gameState) {
     else if (distKm > 1)   closureKmPerMin = 0.2;
     else                   closureKmPerMin = 0.05;  // 50m/min final approach
 
-    const closureAU = closureKmPerMin / 149_597_870.7;
-    const step = Math.min(closureAU, dist * 0.9); // never overshoot
+    // Convert closure rate to a closing velocity (m/s) added on top of
+    // matched target velocity. physicsTick integrates velocity into position
+    // every frame, so we can't just nudge position — it gets washed out.
+    const closureMs = closureKmPerMin * 1000 / 60; // km/min → m/s
 
-    // Move ship toward target
+    // Direction toward target
     const dx = entity.position.x - shipPos.x;
     const dy = entity.position.y - shipPos.y;
     const dNorm = Math.sqrt(dx * dx + dy * dy);
-    if (dNorm > 0) {
-      shipPos.x += (dx / dNorm) * step;
-      shipPos.y += (dy / dNorm) * step;
-    }
 
-    // Keep velocity matched to target (RCS station-keeping)
-    gameState.physics.velocity.vx = entity.velocity.vx;
-    gameState.physics.velocity.vy = entity.velocity.vy;
-    gameState.physics.speed = Math.sqrt(entity.velocity.vx ** 2 + entity.velocity.vy ** 2);
+    // Set velocity = target velocity + small closing component toward target
+    if (dNorm > 0) {
+      const closureVx = (dx / dNorm) * closureMs;
+      const closureVy = (dy / dNorm) * closureMs;
+      gameState.physics.velocity.vx = entity.velocity.vx + closureVx;
+      gameState.physics.velocity.vy = entity.velocity.vy + closureVy;
+    } else {
+      gameState.physics.velocity.vx = entity.velocity.vx;
+      gameState.physics.velocity.vy = entity.velocity.vy;
+    }
+    gameState.physics.speed = Math.sqrt(gameState.physics.velocity.vx ** 2 + gameState.physics.velocity.vy ** 2);
     gameState.physics.thrustActive = false;
     gameState.physics.thrustLevel = 0;
 
