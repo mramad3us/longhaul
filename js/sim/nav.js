@@ -285,7 +285,8 @@ const OPTION_DEFS = [
 ];
 const COMBAT_DEFS = [
   { name: 'COMBAT 5G', label: '5G brachistochrone', accelG: 5, desc: 'Combat burn. Juice mandatory; hangover guaranteed.' },
-  { name: 'ASSAULT 7G', label: '7G brachistochrone', accelG: 7, desc: 'Maximum assault burn. Expect casualties among the unsecured.' },
+  { name: 'ASSAULT 7G', label: '7G brachistochrone', accelG: 7, desc: 'Rated maximum. Expect casualties among the unsecured.' },
+  { name: 'FLANK 10G', label: '10G — drive overdriven', accelG: 10, flank: true, desc: 'Past rated limits. High-dose juice (2 med per crew + boosters), stroke risk, double fuel above 7G, and every minute risks a containment failure.' },
 ];
 
 /**
@@ -308,7 +309,9 @@ export function planRoutes(state, target, opts = {}) {
   for (const d of defs) {
     const cruise = d.cruiseFrac ? Math.max(500, d.cruiseFrac * Math.sqrt(Math.max(0, distM - standoff) * d.accelG * G0)) : null;
     const plan = createPlan('closing', target, { accelG: d.accelG, cruise, standoff, name: d.name, label: d.label });
-    options.push(finishOption(state, plan, d.desc, fuelAvail));
+    const opt = finishOption(state, plan, d.desc, fuelAvail);
+    opt.flank = !!d.flank;
+    options.push(opt);
   }
 
   const ballisticOK = opts.includeBallistic !== false &&

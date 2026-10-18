@@ -83,7 +83,7 @@ function crewHTML(s, m) {
   const conds = [...m.conditions];
   if (m.juiced) conds.unshift('juiced');
   const condHtml = conds.length ? conds.map(c => {
-    if (c === 'juiced') return '<span class="crew-condition crew-condition-juice">JUICED</span>';
+    if (c === 'juiced') return `<span class="crew-condition crew-condition-juice">${m.juiceDose === 'high' ? 'HIGH-DOSE JUICE' : 'JUICED'}</span>`;
     if (c === 'juice-hangover') return `<span class="crew-condition crew-condition-hangover">HANGOVER ${Math.ceil(m.juiceHangover / 60)}h</span>`;
     const sev = ['dead', 'crushed', 'unconscious', 'decompression', 'internal-bleeding'].includes(c) ? 'danger'
       : c === 'critical' ? 'critical'

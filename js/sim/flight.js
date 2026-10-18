@@ -128,7 +128,11 @@ export function flightStep(f, cmd, dtMin = 1) {
   return { mainG: f.thrustG, rcsG: f.rcsG, turned, rotation };
 }
 
-/** Reaction mass used by one step's output. */
+/** Above this the drive runs past its rated limit: hotter, thirstier, riskier. */
+export const RATED_G = 7;
+
+/** Reaction mass used by one step's output (overdriven thrust costs double). */
 export function fuelUsed(mainG, rcsG, dtMin = 1) {
-  return (mainG * FUEL_PER_G_MIN + rcsG * RCS_FUEL_PER_G_MIN) * dtMin;
+  const over = Math.max(0, mainG - RATED_G);
+  return ((mainG + over) * FUEL_PER_G_MIN + rcsG * RCS_FUEL_PER_G_MIN) * dtMin;
 }

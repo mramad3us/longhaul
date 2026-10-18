@@ -51,11 +51,18 @@ export class ScannerView {
     }
     ctx.strokeStyle = 'rgba(26,58,74,0.7)';
     ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
+    // Sweep turns clockwise; the afterglow trails behind the beam, brightest at the beam itself
     const sweep = (t * 0.8) % (Math.PI * 2);
-    const g = ctx.createConicGradient ? ctx.createConicGradient(sweep - Math.PI / 2, cx, cy) : null;
+    const TRAIL = 0.6;                                   // radians of afterglow
+    const beam = sweep - Math.PI / 2;                    // canvas angle of the beam (0 = east)
+    const g = ctx.createConicGradient ? ctx.createConicGradient(beam - TRAIL, cx, cy) : null;
     if (g) {
-      g.addColorStop(0, 'rgba(79,209,197,0.18)'); g.addColorStop(0.08, 'rgba(79,209,197,0.0)'); g.addColorStop(1, 'rgba(79,209,197,0)');
+      const f = TRAIL / (Math.PI * 2);
+      g.addColorStop(0, 'rgba(79,209,197,0)'); g.addColorStop(f * 0.999, 'rgba(79,209,197,0.2)');
+      g.addColorStop(f, 'rgba(79,209,197,0)'); g.addColorStop(1, 'rgba(79,209,197,0)');
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(79,209,197,0.45)';
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(beam) * R, cy + Math.sin(beam) * R); ctx.stroke();
     }
 
     // Own ship

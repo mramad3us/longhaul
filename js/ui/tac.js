@@ -16,6 +16,9 @@ import { buildHullPath } from './ship-view.js';
 
 export const TAC_RANGES_M = [1000, 5000, 25000];
 export const TAC_LABELS = ['1 km', '5 km', '25 km'];
+// On-screen hull length per zoom level (small panel / modal)
+const SHIP_PX = [30, 12, 4];
+const SHIP_PX_BIG = [60, 24, 8];
 
 const _q = [];
 const prevRel = new Map();     // entity id → { m: minute, x, y } relative position last minute
@@ -109,11 +112,16 @@ export class TacView {
     const cr = Math.cos(rot), sr = Math.sin(rot);
     const toScreen = (x, y) => ({ sx: cx + (x * cr - y * sr) * px, sy: cy - (x * sr + y * cr) * px });
 
-    // Our hull (stylized size) and torch
-    const shipH = big ? 60 : 30;
-    if (f.thrustG > 0.02) drawPlume(ctx, cx, cy + shipH / 2, shipH, f.thrustG, t, big);
-    drawHull(ctx, state, cx, cy, shipH);
-    if (Math.abs(f.turning) > 0.001 || f.rcsG > 0.0005) drawRcs(ctx, cx, cy, shipH, t, Math.abs(f.turning) > 0.2);
+    // Our hull and torch. A 25 m hull is sub-pixel at these ranges, so it's
+    // drawn stylized — but it still shrinks with zoom, and the plume with it.
+    const shipH = (big ? SHIP_PX_BIG : SHIP_PX)[this.zoom];
+    if (f.thrustG > 0.02) {
+      if (this.zoom === 2) drawTorchStar(ctx, cx, cy, f.thrustG, t, big);
+      drawPlume(ctx, cx, cy + shipH / 2, shipH, f.thrustG, t, big && this.zoom === 0);
+    }
+    if (this.zoom < 2) drawHull(ctx, state, cx, cy, shipH);
+    else { ctx.fillStyle = '#4FD1C5'; ctx.fillRect(cx - 1.5, cy - 1.5, 3, 3); }
+    if (this.zoom < 2 && (Math.abs(f.turning) > 0.001 || f.rcsG > 0.0005)) drawRcs(ctx, cx, cy, shipH, t, Math.abs(f.turning) > 0.2);
 
     // Contacts
     const list = nearby(state, rangeM, alpha);
@@ -234,6 +242,18 @@ function drawPlume(ctx, cx, y0, shipH, g, t, big) {
     ctx.fillStyle = `rgba(255,255,255,${0.6 * flick})`;
     ctx.fillRect(cx - shipH * 0.08, y0, shipH * 0.16, fire * 0.3);
   }
+}
+
+/** From 25 km a lit torch is the brightest thing in the sky. */
+function drawTorchStar(ctx, cx, cy, g, t, big) {
+  const r = (big ? 70 : 34) * Math.min(1.6, 0.5 + Math.sqrt(g) * 0.4) * (0.92 + 0.08 * Math.sin(t * 30));
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+  grad.addColorStop(0.08, 'rgba(225,235,255,0.7)');
+  grad.addColorStop(0.3, 'rgba(140,180,255,0.18)');
+  grad.addColorStop(1, 'rgba(80,120,255,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
 }
 
 function drawRcs(ctx, cx, cy, shipH, t, flip) {

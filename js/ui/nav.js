@@ -305,7 +305,10 @@ function renderRoutePanel() {
     : routeUI.options.length === 0 ? '<div class="route-computing">Already there.</div>'
     : routeUI.options.map((o, i) => {
       const est = o.estimate;
-      const juiceNote = o.juice ? `<div class="route-juice-note">⚠ Juice: crash couches the whole burn · ${s.resources.medSupplies.current.toFixed(0)} med supplies aboard</div>` : '';
+      const crew = s.ship.crew.filter(m => !m.dead).length;
+      const juiceNote = o.flank
+        ? `<div class="route-juice-note">☢ OVERDRIVE: high-dose juice ≈ ${crew * 2}+ med (${s.resources.medSupplies.current.toFixed(0)} aboard) · stroke risk · containment failure risk</div>`
+        : o.juice ? `<div class="route-juice-note">⚠ Juice: crash couches the whole burn · ${s.resources.medSupplies.current.toFixed(0)} med supplies aboard</div>` : '';
       return `<div class="route-card ${o.feasible ? '' : 'infeasible'} ${i === routeUI.selected ? 'selected' : ''}" data-act="option" data-i="${i}">
         <div class="route-card-header"><span class="route-card-name">${esc(o.name)}</span><span class="route-card-type">${esc(o.label)}</span></div>
         <div class="route-card-stats">

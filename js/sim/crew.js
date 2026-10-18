@@ -122,24 +122,39 @@ export function mobility(m, gForce) {
 
 // ---- G-FORCE PHYSIOLOGY (per game-minute) ----
 
-/** Effective G after couch and juice protection. Consumes med supplies when juice is first given. */
+/** Above this the couch gives a high dose: more protection, more supplies, real risk. */
+export const HIGH_DOSE_G = 6;
+const HIGH_DOSE_BOOSTER_MIN = 120;   // a high dose needs a booster every 2 h
+
+/**
+ * Effective G after couch and juice protection. Consumes med supplies when a
+ * dose is given (standard: 1; high dose: 2 up front + 1 per booster).
+ */
 export function protectedG(m, gForce, secured, resources) {
-  if (!secured) { m.juiced = false; return gForce; }
-  if (gForce > G_THRESHOLDS.HIGH && resources.medSupplies.current > 0) {
-    if (!m.juiced) {
-      m.juiced = true;
-      resources.medSupplies.current = Math.max(0, resources.medSupplies.current - 1);
+  const med = resources.medSupplies;
+  if (!secured) { m.juiced = false; m.juiceDose = null; return gForce; }
+  if (gForce > G_THRESHOLDS.HIGH && med.current > 0) {
+    const dose = gForce > HIGH_DOSE_G ? 'high' : 'standard';
+    if (!m.juiced || (dose === 'high' && m.juiceDose !== 'high')) {
+      med.current = Math.max(0, med.current - (dose === 'high' ? 2 : 1));
+      m.juiceMin = 0;
+    } else if (dose === 'high' && ++m.juiceMin % HIGH_DOSE_BOOSTER_MIN === 0) {
+      med.current = Math.max(0, med.current - 1);
     }
-    return gForce / 3;              // couch + juice: 6G feels like 2G
+    m.juiced = true;
+    m.juiceDose = dose;
+    return gForce / (dose === 'high' ? 4.5 : 3);   // 6G feels like 2G; 10G like 2.2G
   }
   return gForce * 0.7;              // couch alone
 }
 
-/** When a juiced burn ends, the body pays for it. */
+/** When a juiced burn ends, the body pays for it (high doses twice as hard). */
 export function endJuice(m, peakG) {
-  if (!m.juiced || m.dead) { m.juiced = false; return 0; }
+  if (!m.juiced || m.dead) { m.juiced = false; m.juiceDose = null; return 0; }
+  const high = m.juiceDose === 'high';
   m.juiced = false;
-  const minutes = Math.round(4320 * Math.min(Math.max(peakG, 1.5) / 5, 1));
+  m.juiceDose = null;
+  const minutes = Math.round(4320 * Math.min(Math.max(peakG, 1.5) / 5, high ? 2 : 1));
   m.juiceHangover = Math.max(m.juiceHangover, minutes);
   addCondition(m, 'juice-hangover');
   return minutes;
@@ -212,6 +227,13 @@ export function physiologyTick(m, effectiveG, gForceRaw) {
     h.health = clamp(h.health + 0.15);
   }
 
+  // ---- High-dose juice: the drugs keep you conscious, not intact — stroke risk
+  if (m.juiceDose === 'high' && random() < 0.0006 * Math.max(0, gForceRaw - HIGH_DOSE_G)) {
+    b.head = clamp(b.head - (8 + random() * 10));
+    m.consciousness = clamp(m.consciousness - 20, 10, 100);
+    ev.push('stroke');
+  }
+
   // ---- Juice hangover: brain-bleed risk under G
   if (m.juiceHangover > 0) {
     m.juiceHangover -= 1;
@@ -250,11 +272,13 @@ export function physiologyTick(m, effectiveG, gForceRaw) {
     h.stressMinutes = 0;
   }
 
-  // ---- Vitals
-  h.bpm = Math.round(72 + (h.stress / 100) * 120);
+  // ---- Vitals: stress, raw G-load and juice all drive the heart
+  // (juice is a stimulant cocktail: the couch spares the body, not the pulse)
   const gAbove1 = Math.max(0, gForceRaw - 1);
-  h.bpSystolic = Math.round(120 + (h.stress / 100) * 60 + gAbove1 * 15);
-  h.bpDiastolic = Math.round(80 + (h.stress / 100) * 30 + gAbove1 * 8);
+  const juice = m.juiced ? (m.juiceDose === 'high' ? 2 : 1) : 0;
+  h.bpm = Math.round(Math.min(215, 72 + (h.stress / 100) * 120 + gAbove1 * 5 + juice * 30));
+  h.bpSystolic = Math.round(Math.min(240, 120 + (h.stress / 100) * 60 + gAbove1 * 12 + juice * 22));
+  h.bpDiastolic = Math.round(Math.min(150, 80 + (h.stress / 100) * 30 + gAbove1 * 6 + juice * 12));
 
   refreshDerivedConditions(m);
   return ev;

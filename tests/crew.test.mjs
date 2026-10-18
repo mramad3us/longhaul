@@ -10,6 +10,8 @@ import { planRoutes } from '../js/sim/nav.js';
 import { engageRoute } from '../js/sim/autopilot.js';
 import { orderShutdown, orderStartup, ReactorState } from '../js/sim/reactor.js';
 import { forceDistress } from '../js/sim/missions.js';
+import { protectedG, physiologyTick } from '../js/sim/crew.js';
+import { fuelUsed } from '../js/sim/flight.js';
 import { createPlan, STANDOFF } from '../js/sim/nav.js';
 
 function game(seed = 1, crewCount = 6) {
@@ -131,6 +133,43 @@ export default [
         assert(!s.autopilot, `seed ${seed}: did not arrive`);
         assert(thrown === 0, `seed ${seed}: ${thrown} crew thrown during an autopilot intercept`);
       }
+    },
+  },
+  {
+    name: 'juice shows in the vitals; high dose costs more and protects more',
+    fn: () => {
+      const s = game(9, 2);
+      const [a, b] = s.ship.crew;
+      const res = s.resources;
+      const effA = protectedG(a, 3, true, res); physiologyTick(a, effA, 3);
+      const used1 = 50 - res.medSupplies.current;
+      const effB = protectedG(b, 10, true, res); physiologyTick(b, effB, 10);
+      const used2 = 50 - res.medSupplies.current - used1;
+      console.log(`      3G juiced: eff ${fmt(effA, 2)}G bpm ${a.heart.bpm} BP ${a.heart.bpSystolic}/${a.heart.bpDiastolic} · 10G high dose: eff ${fmt(effB, 2)}G bpm ${b.heart.bpm} · doses ${used1}/${used2}`);
+      assert(a.heart.bpm > 110 && a.heart.bpSystolic > 140, 'juiced crew should show elevated vitals');
+      assert(b.juiceDose === 'high' && used2 === 2 && effB < 2.5, 'high dose: 2 supplies, effective G below dangerous');
+      assert(fuelUsed(10, 0) > 10 * fuelUsed(1, 0), 'overdrive should cost extra reaction mass');
+    },
+  },
+  {
+    name: 'FLANK 10G is offered only at battle stations, and short dashes are survivable',
+    fn: () => {
+      const s = game(10, 4);
+      assert(!planRoutes(s, { kind: 'entity', id: 'vesta-depot' }).some(o => o.name === 'FLANK 10G'), 'flank must need battle stations');
+      s.combatStations = true;
+      let offer = null;
+      bus.on('sos-offered', p => { offer = p; });
+      forceDistress(s, (t, p) => bus.emit(t, p));
+      const flank = planRoutes(s, { kind: 'entity', id: offer.entity.id }, { combat: true, standoff: STANDOFF.TACTICAL }).find(o => o.name === 'FLANK 10G');
+      assert(flank && flank.estimate.arrived, 'flank option should plan');
+      engageRoute(s, flank.plan);
+      let t = 0;
+      while (s.autopilot && t < 3000) { minuteTick(s); while (isInertiaActive(s)) updateInertia(s, 0.05); t++; }
+      const hung = s.ship.crew.filter(m => m.juiceHangover > 4320).length;
+      console.log(`      ${fmt(t / 60)}h dash, dead ${s.ship.crew.filter(m => m.dead).length}, long hangovers ${hung}, med left ${fmt(s.resources.medSupplies.current)}, reactor ${s.reactor.status}`);
+      assert(!s.autopilot, 'flank dash did not arrive');
+      assert(s.ship.crew.every(m => !m.dead), 'a short flank dash should not kill strapped-in crew');
+      assert(hung > 0, 'high dose should leave a long hangover');
     },
   },
   {

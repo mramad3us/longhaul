@@ -16,10 +16,11 @@ import { createDefaultEntities } from './entities.js';
 import { createDefaultLayout, computeShipMass } from './ship-layout.js';
 import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, needsTick, G_THRESHOLDS } from './crew.js';
 import { crewTick, createJobs, placeCrew } from './crew-ai.js';
-import { createFlight, flightStep, fuelUsed, angleDiff, SLEW_RATE } from './flight.js';
+import { createFlight, flightStep, fuelUsed, angleDiff, SLEW_RATE, RATED_G } from './flight.js';
 import { autopilotTick, autopilotAfterStep, holdStep, holdStation, crewPolicy, maxSpeed } from './autopilot.js';
 import { createLifeSupport, lifeSupportTick, repairLS } from './life-support.js';
-import { createReactor, reactorTick, isReactorOnline, isPowered } from './reactor.js';
+import { createReactor, reactorTick, isReactorOnline, isPowered, triggerContainmentFailure } from './reactor.js';
+import { random } from '../core/rng.js';
 import { createComms, commsTick } from './comms.js';
 import { createSensors, sensorsTick } from './sensors.js';
 import { createMissions, missionsTick } from './missions.js';
@@ -146,6 +147,11 @@ export function minuteTick(state, { lite = false } = {}) {
     }
   }
 
+  // Overdriven drive: each minute past the rated limit risks the magnetic bottle
+  if (out.mainG > RATED_G && random() < 0.00012 * (out.mainG - RATED_G) ** 2 && triggerContainmentFailure(state)) {
+    emit('drive-overstress', { g: out.mainG });
+  }
+
   const burn = fuelUsed(out.mainG, out.rcsG);
   res.fuel.current = Math.max(0, res.fuel.current - burn);
   state.stats.fuelBurned += burn;
@@ -178,6 +184,7 @@ export function minuteTick(state, { lite = false } = {}) {
       if (ev === 'died') emit('crew-died', { member: m });
       else if (ev === 'critical' && !wasCritical) emit('crew-critical', { member: m });
       else if (ev === 'brain-damage') emit('crew-brain-damage', { member: m });
+      else if (ev === 'stroke') emit('crew-stroke', { member: m });
     }
     if (m.juiced && g <= G_THRESHOLDS.HIGH) {
       const minutes = endJuice(m, Math.max(prevG, state.autopilot?.peakG || 0));

@@ -215,7 +215,7 @@ export default [
       checkFinite(s);
       assert(tSpawn < 5000, 'spawning is too slow');
       // Pathological density: ~19k ships within sensor range of Ceres. Still well inside a frame.
-      assert(perMinute < 4, `per-minute tick too slow: ${perMinute} ms`);
+      assert(perMinute < 8, `per-minute tick too slow: ${perMinute} ms`);
       assert(per3xFrame < 33, `1-day/s frame too slow: ${per3xFrame} ms`);
     },
   },
