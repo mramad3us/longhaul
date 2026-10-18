@@ -1,0 +1,10 @@
+{
+  "name": "longhaul",
+  "private": true,
+  "type": "module",
+  "description": "LONGHAUL — hard sci-fi deep space operations (browser game, no build step)",
+  "scripts": {
+    "start": "./play.sh",
+    "test": "node tests/run.mjs"
+  }
+}

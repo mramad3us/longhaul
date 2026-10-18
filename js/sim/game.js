@@ -1,0 +1,313 @@
+// ============================================================
+// LONGHAUL — Game state & simulation tick
+//
+// One serializable object holds the whole game. Every subsystem
+// advances in a fixed one-game-minute step, in a fixed order, so the
+// simulation behaves the same at 1 min/s and at 1 day/s. The sim
+// reports what happened through the event bus and never touches the DOM.
+// ============================================================
+
+import { AU_M, G0, SPEED_MIN_PER_SEC } from '../core/constants.js';
+import { createClock } from '../core/clock.js';
+import { bus } from '../core/events.js';
+import { VERSION } from '../version.js';
+import { getWorld, backgroundBudget } from './world.js';
+import { createDefaultEntities } from './entities.js';
+import { createDefaultLayout, computeShipMass } from './ship-layout.js';
+import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, needsTick, G_THRESHOLDS } from './crew.js';
+import { crewTick, createJobs, placeCrew } from './crew-ai.js';
+import { createFlight, flightStep, fuelUsed, angleDiff, SLEW_RATE } from './flight.js';
+import { autopilotTick, autopilotAfterStep, holdStep, holdStation, crewPolicy, maxSpeed } from './autopilot.js';
+import { createLifeSupport, lifeSupportTick, repairLS } from './life-support.js';
+import { createReactor, reactorTick, isReactorOnline, isPowered } from './reactor.js';
+import { createComms, commsTick } from './comms.js';
+import { createSensors, sensorsTick } from './sensors.js';
+import { createMissions, missionsTick } from './missions.js';
+import { createContracts, contractsTick } from './contracts.js';
+import { createTraffic, seedTraffic, trafficTick } from './traffic.js';
+import { triggerManeuver, isInertiaActive, updateInertia, Maneuver } from './inertia.js';
+
+export const SAVE_SCHEMA = 2;
+
+// Consumption per person per minute
+const WATER_PER_MIN = 0.002;   // L  (≈2.9 L/day)
+const FOOD_PER_MIN = 0.001;    // rations (≈1.4/day)
+
+const emit = (type, payload) => bus.emit(type, payload);
+
+export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = 36 } = {}) {
+  const crew = createCrew(crewCount);
+  crew[0].name = captainName;
+  const ship = { name: shipName, decks: createDefaultLayout(), crew };
+
+  const state = {
+    schema: SAVE_SCHEMA,
+    version: VERSION,
+    clock: createClock(),
+    speed: 1,
+    ship,
+    flight: null,
+    autopilot: null,
+    resources: {
+      credits: { current: 5000, max: Infinity, unit: 'MCR' },
+      fuel: { current: 8500, max: 10000, unit: 'kg' },
+      o2Tank: { current: 500, max: 500, unit: 'kg' },
+      n2Tank: { current: 500, max: 500, unit: 'kg' },
+      water: { current: 4200, max: 5000, unit: 'L' },
+      food: { current: 1800, max: 2000, unit: 'rations' },
+      power: { current: 88, max: 100, unit: '%' },
+      medSupplies: { current: 50, max: 50, unit: 'units' },
+    },
+    cargo: [],
+    cargoCapacity: 15_000,
+    passengers: [],
+    berths: 12,
+    lifeSupport: null,
+    reactor: createReactor(),
+    comms: createComms(),
+    sensors: createSensors(),
+    jobs: createJobs(),
+    missions: createMissions(),
+    contracts: createContracts(),
+    traffic: createTraffic(traffic),
+    entities: createDefaultEntities(),
+    nextEntityId: 1,
+    combatStations: false,
+    crewPolicy: 'free',
+    stats: { distance: 0, fuelBurned: 0, peakG: 0 },
+    log: [],
+  };
+  state.lifeSupport = createLifeSupport(ship);
+  state.shipMass = computeShipMass(ship);
+
+  const world = getWorld(state);
+  const home = world.get('ceres-station');
+  state.flight = createFlight({ x: home.pos.x + 3000 / AU_M, y: home.pos.y }, home.vel, Math.PI / 2);
+  holdStation(state, { kind: 'entity', id: home.id });
+  placeCrew(state);
+  seedTraffic(state);
+  return state;
+}
+
+// ---- PER-MINUTE TICK ----
+
+/**
+ * Advance the whole game by one minute.
+ * Order matters: decide (autopilot) → move ship → advance clock & world →
+ * hold station → people → systems → sensors → missions.
+ */
+export function minuteTick(state, { lite = false } = {}) {
+  const f = state.flight;
+  const res = state.resources;
+  const prevG = f.thrustG;
+  const prevTurn = f.turning;
+  const policyBefore = state.crewPolicy;
+
+  // ---- Flight
+  let cmd = autopilotTick(state, emit);
+  if (!cmd && f.manual && f.manual.throttleG > 0) {
+    cmd = { ax: Math.cos(f.facing) * f.manual.throttleG * G0, ay: Math.sin(f.facing) * f.manual.throttleG * G0, maxG: f.manual.throttleG };
+  }
+  if (!cmd && f.manual?.flipTo != null) {
+    if (Math.abs(angleDiff(f.facing, f.manual.flipTo)) < 1e-3) f.manual.flipTo = null;
+    else cmd = { ax: 0, ay: 0, face: f.manual.flipTo };
+  }
+  const driveOK = isReactorOnline(state) && res.fuel.current > 0;
+  let out = { mainG: 0, rcsG: 0, turned: 0 };
+  if (f.hold && !(state.autopilot?.phase === 'active')) {
+    f.thrustG = 0; f.rcsG = 0; f.turning = 0;
+  } else {
+    if (cmd && !driveOK) {
+      // No drive: RCS only while fuel lasts, and no main-drive burns
+      const a = Math.hypot(cmd.ax, cmd.ay);
+      const lim = res.fuel.current > 0 ? 0.02 * G0 : 0;
+      cmd = a > lim ? { ax: cmd.ax * lim / a, ay: cmd.ay * lim / a, face: cmd.face } : cmd;
+    }
+    const before = { x: f.pos.x, y: f.pos.y };
+    out = flightStep(f, cmd, 1);
+    state.stats.distance += Math.hypot(f.pos.x - before.x, f.pos.y - before.y) * AU_M;
+    autopilotAfterStep(state, out);
+  }
+
+  // ---- Time & world
+  state.clock.minute++;
+  const world = getWorld(state);
+  // Lite minutes (intermediate minutes of a heavy time-warp frame) skip the
+  // observation work; the frame's final minute brings everything up to date.
+  if (!lite) world.tick(state.clock.minute, f.pos);
+
+  let holdG = 0;
+  if (f.hold) {
+    holdG = holdStep(state);
+    if (holdG > 0) {
+      if (!driveOK) { f.hold = null; emit('hold-lost', { reason: 'no drive power' }); }
+      else { f.thrustG = holdG; out.mainG = holdG; }
+    }
+  }
+
+  const burn = fuelUsed(out.mainG, out.rcsG);
+  res.fuel.current = Math.max(0, res.fuel.current - burn);
+  state.stats.fuelBurned += burn;
+  if (res.fuel.current <= 0 && prevG > 0) emit('fuel-exhausted', {});
+  state.stats.peakG = Math.max(state.stats.peakG, f.thrustG);
+
+  // ---- Inertial events: the drive lit, cut, changed, or the ship began to flip
+  const gNow = f.thrustG;
+  const announced = policyBefore === 'secure' || !!state.autopilot;
+  const surprise = !announced;
+  if (prevG < 0.05 && gNow >= 0.05) fireInertia(state, Maneuver.BURN_START, { deltaG: gNow, surprise, gForce: gNow });
+  else if (prevG >= 0.05 && gNow < 0.05) fireInertia(state, Maneuver.BURN_STOP, { deltaG: prevG, surprise, gForce: gNow });
+  else if (Math.abs(gNow - prevG) > 0.5) fireInertia(state, Maneuver.THRUST_CHANGE, { deltaG: gNow - prevG, surprise, gForce: gNow });
+  if (Math.abs(out.turned) >= SLEW_RATE * 0.99 && Math.abs(prevTurn) < SLEW_RATE * 0.5) fireInertia(state, Maneuver.FLIP, { gForce: gNow });
+
+  // ---- People
+  const g = gNow + f.rcsG;
+  state.crewPolicy = crewPolicy(state);
+  for (const m of state.ship.crew) {
+    if (m.dead) continue;
+    const secured = !!m.seat;
+    m.gState = gStateFor(m, g, secured);
+    const eff = protectedG(m, g, secured, res);
+    const wasCritical = m.conditions.includes('critical');
+    for (const ev of physiologyTick(m, eff, g)) {
+      if (ev === 'died') emit('crew-died', { member: m });
+      else if (ev === 'critical' && !wasCritical) emit('crew-critical', { member: m });
+      else if (ev === 'brain-damage') emit('crew-brain-damage', { member: m });
+    }
+    if (m.juiced && g <= G_THRESHOLDS.HIGH) {
+      const minutes = endJuice(m, Math.max(prevG, state.autopilot?.peakG || 0));
+      if (minutes) emit('crew-hangover', { member: m, minutes });
+    }
+  }
+  crewTick(state, {
+    gForce: g,
+    policy: state.crewPolicy,
+    emit,
+    hooks: { repairLS: (deck, skill) => repairLS(state, deck, skill) },
+  });
+
+  // ---- Consumables (crew + passengers)
+  const mouths = state.ship.crew.filter(m => !m.dead).length + state.passengers.reduce((s, p) => s + p.count, 0);
+  res.water.current = Math.max(0, res.water.current - mouths * WATER_PER_MIN);
+  res.food.current = Math.max(0, res.food.current - mouths * FOOD_PER_MIN);
+  for (const m of state.ship.crew) needsTick(m, res.food.current > 0, res.water.current > 0);
+
+  // ---- Ship systems
+  lifeSupportTick(state, { powered: isPowered(state), gForce: g, emit });
+  reactorTick(state, emit);
+
+  // ---- Sensors & comms (blind in a blackout)
+  if (!lite) {
+    if (!state.reactor.blackout) sensorsTick(state);
+    commsTick(state, emit);
+  }
+
+  // ---- The wider world
+  missionsTick(state, emit);
+  contractsTick(state, emit);
+  trafficTick(state);
+
+  if (state.crewPolicy !== policyBefore) emit('crew-policy', { policy: state.crewPolicy });
+}
+
+function fireInertia(state, type, opts) {
+  if (isInertiaActive(state)) return;
+  const n = triggerManeuver(state, type, opts);
+  if (n > 0) emit('inertia-start', { type, count: n });
+}
+
+/**
+ * Advance `minutes` game-minutes with background upkeep sized to match.
+ * (Tests and headless runs; the browser loop budgets per frame instead.)
+ */
+export function advance(state, minutes = 1) {
+  for (let i = 0; i < minutes; i++) {
+    minuteTick(state);
+    const world = getWorld(state);
+    world.background(state.clock.minute, backgroundBudget(world.count, 1));
+  }
+}
+
+// ---- LOOP ----
+
+/**
+ * Drives the sim from requestAnimationFrame (browser) or manual stepping (tests).
+ * Game time freezes while an inertial event plays out in real time.
+ */
+export class GameLoop {
+  constructor(state, { onFrame = () => {}, onError = (e) => console.error(e) } = {}) {
+    this.state = state;
+    this.onFrame = onFrame;
+    this.onError = onError;
+    this.acc = 0;
+    this.running = false;
+    this._last = 0;
+    this._raf = 0;
+    this.stepsLastFrame = 0;
+    this.simMsLastFrame = 0;
+  }
+
+  start() {
+    if (this.running) return;
+    this.running = true;
+    this._last = performance.now();
+    const frame = (now) => {
+      if (!this.running) return;
+      this._raf = requestAnimationFrame(frame);
+      const dt = Math.min((now - this._last) / 1000, 0.25);
+      this._last = now;
+      this.frame(dt);
+    };
+    this._raf = requestAnimationFrame(frame);
+  }
+
+  stop() {
+    this.running = false;
+    cancelAnimationFrame(this._raf);
+  }
+
+  setSpeed(speed) {
+    this.state.speed = Math.max(0, Math.min(speed, maxSpeed(this.state)));
+    return this.state.speed;
+  }
+
+  /** Advance by dt real seconds: inertia (real time) or sim minutes (scaled). */
+  frame(dt) {
+    const s = this.state;
+    const t0 = performance.now();
+    let steps = 0;
+    try {
+      if (isInertiaActive(s)) {
+        const hits = updateInertia(s, dt);
+        for (const h of hits) emit('inertia-impact', h);
+        if (!isInertiaActive(s)) emit('inertia-end', {});
+      } else if (s.speed > 0) {
+        this.acc += dt * SPEED_MIN_PER_SEC[s.speed];
+        const cap = 3000;                  // never stall a frame: drop excess at extreme rates
+        while (this.acc >= 1 && steps < cap) {
+          this.acc -= 1;
+          minuteTick(s, { lite: s.speed >= 3 && this.acc >= 1 });
+          steps++;
+          // Warp limits and inertial events take effect immediately
+          const max = maxSpeed(s);
+          if (s.speed > max) { s.speed = max; emit('speed-limited', { speed: max }); this.acc = Math.min(this.acc, 1); }
+          if (isInertiaActive(s)) { this.acc = 0; break; }
+        }
+        if (steps >= cap) this.acc = 0;
+        if (steps > 0) {
+          const world = getWorld(s);
+          world.background(s.clock.minute, backgroundBudget(world.count, steps));
+        }
+      }
+    } catch (e) {
+      this.onError(e);
+    }
+    this.stepsLastFrame = steps;
+    this.simMsLastFrame = performance.now() - t0;
+    // Fraction of the next minute elapsed — for smooth interpolation in the renderer
+    this.alpha = s.speed > 0 ? Math.min(1, this.acc) : 1;
+    try { this.onFrame(s, this.alpha); } catch (e) { this.onError(e); }
+  }
+}
+
+export { maxSpeed };
