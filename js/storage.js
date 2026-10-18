@@ -1,136 +1,75 @@
 // ============================================================
-// LONGHAUL — IndexedDB Storage Layer
-// Persistent save game storage for the long haul
+// LONGHAUL — IndexedDB storage
+// Saves: { id, name, timestamp, version, meta, data (JSON string) }.
+// Legacy v0.7 records carry `state` (a structured clone) instead.
 // ============================================================
-
-import { VERSION } from './version.js';
 
 const DB_NAME = 'longhaul_db';
 const DB_VERSION = 1;
-const STORE_SAVES = 'saves';
-const STORE_SETTINGS = 'settings';
+const SAVES = 'saves';
+const SETTINGS = 'settings';
 
-let db = null;
+let dbPromise = null;
 
 function openDB() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(SAVES)) {
+        const s = db.createObjectStore(SAVES, { keyPath: 'id' });
+        s.createIndex('timestamp', 'timestamp', { unique: false });
+        s.createIndex('name', 'name', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(SETTINGS)) db.createObjectStore(SETTINGS, { keyPath: 'key' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => { dbPromise = null; reject(req.error); };
+  });
+  return dbPromise;
+}
+
+async function run(store, mode, fn) {
+  const db = await openDB();
   return new Promise((resolve, reject) => {
-    if (db) return resolve(db);
-
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onupgradeneeded = (e) => {
-      const database = e.target.result;
-
-      if (!database.objectStoreNames.contains(STORE_SAVES)) {
-        const saveStore = database.createObjectStore(STORE_SAVES, { keyPath: 'id' });
-        saveStore.createIndex('timestamp', 'timestamp', { unique: false });
-        saveStore.createIndex('name', 'name', { unique: false });
-      }
-
-      if (!database.objectStoreNames.contains(STORE_SETTINGS)) {
-        database.createObjectStore(STORE_SETTINGS, { keyPath: 'key' });
-      }
-    };
-
-    request.onsuccess = (e) => {
-      db = e.target.result;
-      resolve(db);
-    };
-
-    request.onerror = (e) => {
-      console.error('IndexedDB error:', e.target.error);
-      reject(e.target.error);
-    };
+    const tx = db.transaction(store, mode);
+    const req = fn(tx.objectStore(store));
+    tx.oncomplete = () => resolve(req?.result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
   });
 }
 
-function tx(storeName, mode = 'readonly') {
-  return db.transaction(storeName, mode).objectStore(storeName);
+export async function putSave({ id, name, version, meta, data }) {
+  const record = { id, name, timestamp: Date.now(), version, meta, data };
+  await run(SAVES, 'readwrite', s => s.put(record));
+  return record;
 }
 
-function promisify(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
+export const getSave = (id) => run(SAVES, 'readonly', s => s.get(id));
+export const deleteSave = (id) => run(SAVES, 'readwrite', s => s.delete(id));
 
-// ---- Save Games ----
-
-export async function saveGame(gameState, saveName = 'Quicksave') {
-  await openDB();
-  const isAutosave = saveName === 'Autosave';
-
-  // Clean up any stale autosave entries with old save_<timestamp> IDs
-  if (isAutosave) {
-    try {
-      const old = await promisify(tx(STORE_SAVES).index('name').getAll('Autosave'));
-      const stale = old.filter(e => e.id !== 'autosave');
-      if (stale.length > 0) {
-        const delStore = tx(STORE_SAVES, 'readwrite');
-        stale.forEach(e => delStore.delete(e.id));
-      }
-    } catch (_) { /* not critical */ }
-  }
-
-  const saveData = {
-    // Autosaves use a fixed ID so put() overwrites the previous one
-    id: isAutosave ? 'autosave' : `save_${Date.now()}`,
-    name: saveName,
-    timestamp: Date.now(),
-    version: VERSION,
-    state: structuredClone(gameState),
-  };
-  await promisify(tx(STORE_SAVES, 'readwrite').put(saveData));
-  return saveData.id;
-}
-
-export async function loadGame(saveId) {
-  await openDB();
-  const data = await promisify(tx(STORE_SAVES).get(saveId));
-  if (!data) throw new Error(`Save not found: ${saveId}`);
-  return data;
-}
-
+/** All saves, newest first, without their (large) payloads. */
 export async function listSaves() {
-  await openDB();
-  const store = tx(STORE_SAVES);
-  const all = await promisify(store.index('timestamp').getAll());
-  // Return sorted newest first
-  return all.sort((a, b) => b.timestamp - a.timestamp);
+  const all = await run(SAVES, 'readonly', s => s.getAll());
+  return (all || [])
+    .map(r => ({
+      id: r.id, name: r.name, timestamp: r.timestamp, version: r.version,
+      meta: r.meta || { ship: r.state?.ship?.name, legacy: true },
+    }))
+    .sort((a, b) => b.timestamp - a.timestamp);
 }
-
-export async function deleteSave(saveId) {
-  await openDB();
-  await promisify(tx(STORE_SAVES, 'readwrite').delete(saveId));
-}
-
-// ---- Settings ----
 
 export async function saveSetting(key, value) {
-  await openDB();
-  await promisify(tx(STORE_SETTINGS, 'readwrite').put({ key, value }));
+  await run(SETTINGS, 'readwrite', s => s.put({ key, value }));
 }
 
-export async function loadSetting(key, defaultValue = null) {
-  await openDB();
-  const result = await promisify(tx(STORE_SETTINGS).get(key));
-  return result ? result.value : defaultValue;
+export async function loadSettings() {
+  const all = await run(SETTINGS, 'readonly', s => s.getAll());
+  const out = {};
+  for (const { key, value } of all || []) out[key] = value;
+  return out;
 }
 
-export async function loadAllSettings() {
-  await openDB();
-  const all = await promisify(tx(STORE_SETTINGS).getAll());
-  const settings = {};
-  for (const item of all) {
-    settings[item.key] = item.value;
-  }
-  return settings;
-}
-
-// ---- Init ----
-
-export async function initStorage() {
-  await openDB();
-  console.log('[Storage] IndexedDB initialized');
-}
+export const initStorage = openDB;

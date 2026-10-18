@@ -1,0 +1,135 @@
+/* ============================================================
+   LONGHAUL — Components added in the v0.8 UI rebuild.
+   Same design language as main.css (tokens, pixel type, teal/amber).
+   ============================================================ */
+
+/* ---- Canvas displays ---- */
+.fit-canvas { position: absolute; inset: 0; display: block; image-rendering: pixelated; }
+.tac-screen { cursor: pointer; }
+.nav-screens { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+.nav-screens > .tac-screen-modal { flex: 1 1 auto; position: relative; }
+.nav-modal { width: min(96vw, 1180px); max-width: none; height: 92vh; }
+.tac-screen-solar { cursor: grab; }
+
+/* ---- HUD ---- */
+.hud-center { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.hud-nav-chip {
+  font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.08em;
+  padding: 1px 10px; border: 1px solid var(--hull-primary); color: var(--text-secondary);
+  white-space: nowrap; max-width: 46vw; overflow: hidden; text-overflow: ellipsis;
+}
+.hud-nav-chip.chip-ok { color: var(--ok); border-color: rgba(107, 203, 119, 0.35); }
+.hud-nav-chip.chip-nav { color: var(--accent); border-color: var(--accent-dim); box-shadow: 0 0 8px var(--accent-glow); }
+.hud-nav-chip.chip-warn { color: var(--warning); border-color: var(--warm-dim); animation: condPulse 1.4s ease-in-out infinite; }
+.hud-nav-chip.chip-dim { color: var(--text-dim); }
+.hud-text-btn {
+  width: auto; padding: 0 10px; font-family: var(--font-pixel); font-size: 0.42rem;
+  letter-spacing: 0.15em; color: var(--text-secondary);
+}
+.hud-text-btn:hover { color: var(--accent); }
+.hud-station-btn { color: var(--ok); border-color: rgba(107, 203, 119, 0.4); }
+.hud-fps { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-dim); }
+.info-val.val-hot { color: #FFFFFF; text-shadow: 0 0 8px rgba(160, 200, 255, 0.6); }
+.res-text-icon { font-size: 0.6rem; color: var(--accent); font-family: var(--font-mono); }
+
+/* ---- Viewport overlays ---- */
+.nav-prompt {
+  position: absolute; top: 14px; left: 14px; z-index: 20; max-width: 340px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 24px;
+  background: rgba(8, 13, 22, 0.95); background-image: var(--noise); background-size: cover, 200px 200px;
+  border: 2px solid var(--warm-dim);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(226, 163, 85, 0.1), inset 0 0 20px rgba(0, 0, 0, 0.3);
+  animation: fadeScale 0.25s ease;
+}
+.nav-prompt .mp-header { color: var(--warning); }
+.mp-actions { display: flex; gap: 10px; align-items: center; }
+.hold-indicator {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 20;
+  display: flex; align-items: center; gap: 10px; padding: 7px 14px; min-width: 320px;
+  background: rgba(8, 13, 22, 0.92); border: 1px solid var(--hull-accent);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+}
+.route-mini {
+  position: absolute; left: 12px; right: 12px; top: 10px; z-index: 19;
+  display: flex; flex-direction: column; background: rgba(8, 13, 22, 0.92);
+  border: 1px solid var(--hull-accent); box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+}
+.route-status-phase.phase-burn, .route-status-phase.phase-brake, .route-status-phase.phase-transfer-burn { color: #FFFFFF; }
+.route-status-phase.phase-flip, .route-status-phase.phase-orient, .route-status-phase.phase-prepare { color: var(--warning); }
+.route-status-phase.phase-approach { color: var(--ok); }
+
+/* Battle stations: red ambient light over the cross-section */
+.ship-container.combat-lit::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+  background: radial-gradient(ellipse at 50% 40%, rgba(226, 50, 50, 0.1) 0%, transparent 70%);
+  mix-blend-mode: screen; animation: combatAmbient 3s ease-in-out infinite;
+}
+.crew-symbol.selected { filter: drop-shadow(0 0 3px var(--accent)); }
+.crew-symbol { cursor: pointer; }
+
+/* Inertial event: bullet time */
+body.inertia-active #ship-viewport::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 15;
+  box-shadow: inset 0 0 120px rgba(226, 85, 85, 0.35);
+  animation: condPulse 0.6s ease-in-out infinite;
+}
+
+/* ---- Nav modal panels ---- */
+.map-selection {
+  position: absolute; left: 12px; bottom: 12px; z-index: 12; min-width: 280px;
+  background: rgba(4, 8, 14, 0.94); border: 1px solid var(--hull-accent); border-left: 2px solid var(--accent-dim);
+  padding: 10px 12px; animation: fadeScale 0.2s ease;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+.ms-header { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
+.ms-name { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--text-primary); letter-spacing: 0.05em; }
+.ms-kind { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary); }
+.ms-stats { display: flex; gap: 14px; font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-dim); margin-bottom: 8px; }
+.ms-stats b { color: var(--text-primary); font-weight: 400; }
+.panel-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.panel-actions .route-zoom-btn { margin-left: 0; }
+.route-standoff { display: flex; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
+.route-computing { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); padding: 20px 6px; animation: condPulse 1.2s ease-in-out infinite; }
+.route-card-desc { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); line-height: 1.4; }
+.route-panel { top: 0; bottom: 0; }
+.route-panel-actions .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.scanner-detail-panel { min-width: 240px; }
+
+/* ---- Selection panel ---- */
+.crew-activity { font-family: var(--font-mono); font-size: 0.7rem; color: var(--accent); margin: 2px 0 6px; }
+.radio-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; max-height: 180px; overflow-y: auto; }
+.radio-contact-info .dim { color: var(--text-dim); font-size: 0.62rem; }
+.dev-helm-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.dev-helm-row .crew-action-btn { flex: 1 1 auto; font-size: 0.32rem; }
+
+/* ---- Log ---- */
+.log-date { font-family: var(--font-pixel); font-size: 0.32rem; color: var(--text-dim); letter-spacing: 0.1em; padding: 6px 0 2px; }
+.log-comms .log-entry-icon, .log-comms .log-entry-msg { color: #8EC9DB; }
+
+/* ---- Dialogs ---- */
+.dialog-content { max-height: 70vh; overflow-y: auto; }
+.missions-section { font-family: var(--font-pixel); font-size: 0.36rem; letter-spacing: 0.18em; color: var(--text-dim); margin: 14px 0 6px; }
+.mission-actions { display: flex; gap: 6px; padding: 0 10px 8px 26px; flex-wrap: wrap; }
+.mission-row.mission-done { opacity: 0.55; }
+.btn-small { padding: 4px 10px; font-size: 0.7rem; }
+.station-tabs { display: flex; gap: 4px; margin: 10px 0 6px; }
+.station-mission-accept:disabled { opacity: 0.45; cursor: not-allowed; }
+.service-list { display: flex; flex-direction: column; gap: 4px; }
+.service-row { display: grid; grid-template-columns: 1.2fr 1.4fr 0.9fr auto; gap: 10px; align-items: center; padding: 6px 8px; border: 1px solid var(--hull-primary); background: rgba(16, 25, 42, 0.5); }
+.service-name { font-family: var(--font-display); font-weight: 600; font-size: 0.8rem; color: var(--text-primary); }
+.service-stock, .service-price { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary); }
+.service-credits { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-secondary); text-align: right; margin-top: 6px; }
+.service-credits b { color: var(--accent); font-weight: 400; }
+.event-feasibility { margin-top: 10px; font-family: var(--font-mono); font-size: 0.72rem; color: var(--ok); }
+.event-feasibility.infeasible { color: var(--danger); }
+
+/* ---- Menus / settings ---- */
+.form-hint { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-dim); margin-top: 6px; min-height: 1em; }
+.setting-hint { display: block; font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-dim); text-transform: none; letter-spacing: 0; margin-top: 2px; }
+.save-legacy { font-family: var(--font-mono); font-size: 0.6rem; color: var(--warning); border: 1px solid var(--warm-dim); padding: 0 4px; margin-left: 4px; }
+.save-item-delete.armed { border-color: var(--danger); box-shadow: var(--glow-danger); }
+
+/* ---- Accessibility / comfort ---- */
+body.reduce-motion .crt-overlay, body.reduce-motion .crt-overlay::after { animation: none !important; }
+body.reduce-motion .hud-nav-chip.chip-warn { animation: none; }
+button:focus-visible, .tac-tab:focus-visible, select:focus-visible, input:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }

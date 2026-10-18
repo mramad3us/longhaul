@@ -536,62 +536,9 @@ export function logoShip() {
 const TILE_SIZE = 32;
 const PX = 2; // each "pixel" is 2 real pixels (16x16 grid in 32x32 tile)
 
-export const TileType = {
-  EMPTY: 0,
-  HULL_WALL: 1,
-  INTERIOR_WALL: 2,
-  FLOOR: 3,
-  DOOR: 4,
-  LADDER: 5,
-  CONSOLE: 6,
-  BUNK: 7,
-  TABLE: 8,
-  ENGINE: 9,
-  REACTOR: 10,
-  STORAGE: 11,
-  LIFE_SUPPORT: 12,
-  AIRLOCK: 13,
-  MEDBAY: 14,
-  NAV_CONSOLE: 15,
-  CRASH_COUCH: 16,
-  TERMINAL: 17,
-  EVA_LOCKER: 18,
-  RADIO: 19,
-  TRANSPONDER: 20,
-};
-
-// Human-readable tile names (for tooltips and UI)
-export const TILE_NAMES = {
-  [TileType.HULL_WALL]: 'Hull Wall',
-  [TileType.INTERIOR_WALL]: 'Interior Wall',
-  [TileType.FLOOR]: 'Floor',
-  [TileType.DOOR]: 'Door',
-  [TileType.LADDER]: 'Ladder',
-  [TileType.CONSOLE]: 'Console',
-  [TileType.BUNK]: 'Bunk',
-  [TileType.TABLE]: 'Table',
-  [TileType.ENGINE]: 'Epstein Drive',
-  [TileType.REACTOR]: 'Fusion Reactor',
-  [TileType.STORAGE]: 'Storage Bay',
-  [TileType.LIFE_SUPPORT]: 'Life Support',
-  [TileType.AIRLOCK]: 'Airlock',
-  [TileType.MEDBAY]: 'Medical Bay',
-  [TileType.NAV_CONSOLE]: 'Navigation Console',
-  [TileType.CRASH_COUCH]: 'Crash Couch',
-  [TileType.TERMINAL]: 'Terminal',
-  [TileType.EVA_LOCKER]: 'EVA Suit Locker',
-  [TileType.RADIO]: 'Communications Array',
-  [TileType.TRANSPONDER]: 'Transponder',
-};
-
-// Tiles that are interactive (clickable for info/actions)
-export const INTERACTIVE_TILES = new Set([
-  TileType.CONSOLE, TileType.NAV_CONSOLE, TileType.ENGINE,
-  TileType.REACTOR, TileType.STORAGE, TileType.LIFE_SUPPORT,
-  TileType.AIRLOCK, TileType.MEDBAY, TileType.CRASH_COUCH,
-  TileType.TERMINAL, TileType.EVA_LOCKER,
-  TileType.RADIO, TileType.TRANSPONDER,
-]);
+// Tile data lives in the sim layer; re-exported here for the renderers.
+export { TileType, TILE_NAMES, INTERACTIVE_TILES } from './sim/tiles.js';
+import { TileType, TILE_NAMES, INTERACTIVE_TILES } from './sim/tiles.js';
 
 // Tile palettes
 const TP = {
@@ -1581,116 +1528,32 @@ export function renderCrewMember(x, y, memberIndex, name) {
   return g;
 }
 
-// Set crew visual state based on physics state + consciousness/dead
-// crewMembers: array of crew objects (for checking consciousness/dead)
-export function setCrewGravity(container, hasGravity, crewStates = null, crewMembers = null) {
-  container.querySelectorAll('.crew-symbol').forEach(crew => {
-    const crewId = crew.getAttribute('data-crew-id');
-    const standing = crew.querySelector('.crew-standing');
-    const floating = crew.querySelector('.crew-floating');
-    const prone = crew.querySelector('.crew-prone');
-    const unconsciousFloor = crew.querySelector('.crew-unconscious-floor');
-    const unconsciousFloat = crew.querySelector('.crew-unconscious-float');
-    const blinkStanding = crew.querySelector('.blink-standing');
-    const blinkFloating = crew.querySelector('.blink-floating');
-    const blink = crew.querySelector('.crew-blink');
+// ---- CREW SPRITE STATE ----
+// One sprite group visible at a time. Keys:
+//   standing, floating, prone, unconsciousFloor, unconsciousFloat, secured,
+//   medbay, suited, suitedFloat, suitedSecured, suitedProne, suitedProneFloat
+const SPRITE_CLASS = {
+  standing: 'crew-standing', floating: 'crew-floating', prone: 'crew-prone',
+  unconsciousFloor: 'crew-unconscious-floor', unconsciousFloat: 'crew-unconscious-float',
+  secured: 'crew-secured', medbay: 'crew-in-medbay', suited: 'crew-suited',
+  suitedFloat: 'crew-suited-float', suitedSecured: 'crew-suited-secured',
+  suitedProne: 'crew-suited-prone', suitedProneFloat: 'crew-suited-prone-float',
+};
+const BLINKS = new Set(['standing', 'floating', 'secured', 'medbay']);
 
-    // Find crew member data
-    const member = crewMembers && crewId !== null
-      ? crewMembers.find(m => String(m.id) === String(crewId))
-      : null;
-
-    const isDead = member && member.dead;
-    const isUnconscious = member && (member.consciousness <= 10 || member.dead);
-    const inCrashCouch = member && member._inCrashCouch;
-    const inMedbayBed = member && member._inMedbay;
-    const inSuit = member && member._inSuit;
-
-    // Determine physics state
-    let state;
-    if (crewStates && crewId !== null && crewStates[crewId]) {
-      state = crewStates[crewId];
-    } else {
-      state = hasGravity ? 'standing' : 'floating';
-    }
-
-    const inGravity = state !== 'floating';
-
-    // Determine which sprite to show
-    let showStanding = false, showFloating = false, showProne = false;
-    let showUnconsciousFloor = false, showUnconsciousFloat = false;
-    let showSecured = false, showInMedbay = false;
-    let showSuited = false, showSuitedFloat = false, showSuitedSecured = false;
-    let showSuitedProne = false, showSuitedProneFloat = false;
-
-    const isCrushed = member && member.conditions && member.conditions.includes('crushed');
-
-    if (isUnconscious || isDead) {
-      if (inSuit) {
-        // Suited + unconscious/dead
-        if (inGravity) {
-          showSuitedProne = true;
-        } else {
-          showSuitedProneFloat = true;
-        }
-      } else {
-        if (inGravity) {
-          showUnconsciousFloor = true;
-        } else {
-          showUnconsciousFloat = true;
-        }
-      }
-    } else if (inMedbayBed) {
-      showInMedbay = true;
-    } else if (inCrashCouch) {
-      if (inSuit) {
-        showSuitedSecured = true;
-      } else {
-        showSecured = true;
-      }
-    } else if (isCrushed || state === 'prone') {
-      if (inSuit) {
-        showSuitedProne = true;
-      } else {
-        showProne = true;
-      }
-    } else if (inSuit) {
-      if (state === 'floating') {
-        showSuitedFloat = true;
-      } else {
-        showSuited = true;
-      }
-    } else if (state === 'floating') {
-      showFloating = true;
-    } else {
-      showStanding = true;
-    }
-
-    const secured = crew.querySelector('.crew-secured');
-    const medbaySprite = crew.querySelector('.crew-in-medbay');
-    const suited = crew.querySelector('.crew-suited');
-    const suitedFloat = crew.querySelector('.crew-suited-float');
-    const suitedSecured = crew.querySelector('.crew-suited-secured');
-    const suitedProne = crew.querySelector('.crew-suited-prone');
-    const suitedProneFloat = crew.querySelector('.crew-suited-prone-float');
-
-    if (standing) standing.setAttribute('display', showStanding ? 'inline' : 'none');
-    if (floating) floating.setAttribute('display', showFloating ? 'inline' : 'none');
-    if (prone) prone.setAttribute('display', showProne ? 'inline' : 'none');
-    if (unconsciousFloor) unconsciousFloor.setAttribute('display', showUnconsciousFloor ? 'inline' : 'none');
-    if (unconsciousFloat) unconsciousFloat.setAttribute('display', showUnconsciousFloat ? 'inline' : 'none');
-    if (secured) secured.setAttribute('display', showSecured ? 'inline' : 'none');
-    if (medbaySprite) medbaySprite.setAttribute('display', showInMedbay ? 'inline' : 'none');
-    if (suited) suited.setAttribute('display', showSuited ? 'inline' : 'none');
-    if (suitedFloat) suitedFloat.setAttribute('display', showSuitedFloat ? 'inline' : 'none');
-    if (suitedSecured) suitedSecured.setAttribute('display', showSuitedSecured ? 'inline' : 'none');
-    if (suitedProne) suitedProne.setAttribute('display', showSuitedProne ? 'inline' : 'none');
-    if (suitedProneFloat) suitedProneFloat.setAttribute('display', showSuitedProneFloat ? 'inline' : 'none');
-    if (blinkStanding) blinkStanding.setAttribute('display', showStanding ? 'inline' : 'none');
-    if (blinkFloating) blinkFloating.setAttribute('display', showFloating ? 'inline' : 'none');
-    // Blink only when standing, floating, secured, or in medbay (not prone/unconscious/dead/suited)
-    if (blink) blink.setAttribute('display', (showStanding || showFloating || showSecured || showInMedbay) ? 'inline' : 'none');
-  });
+export function setCrewSprite(el, key) {
+  if (el.dataset.sprite === key) return;
+  el.dataset.sprite = key;
+  for (const [k, cls] of Object.entries(SPRITE_CLASS)) {
+    const g = el.querySelector(`.${cls}`);
+    if (g) g.setAttribute('display', k === key ? 'inline' : 'none');
+  }
+  const bs = el.querySelector('.blink-standing');
+  const bf = el.querySelector('.blink-floating');
+  if (bs) bs.setAttribute('display', key === 'standing' ? 'inline' : 'none');
+  if (bf) bf.setAttribute('display', key === 'floating' ? 'inline' : 'none');
+  const blink = el.querySelector('.crew-blink');
+  if (blink) blink.setAttribute('display', BLINKS.has(key) ? 'inline' : 'none');
 }
 
 

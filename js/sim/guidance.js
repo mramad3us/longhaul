@@ -21,7 +21,7 @@
 import { AU_M, G0, MIN_S } from '../core/constants.js';
 import { solarGravity } from './ephemeris.js';
 import { solveLambert } from './lambert.js';
-import { FLIP_MINUTES, RCS_MAX_G } from './flight.js';
+import { FLIP_MINUTES, RCS_MAX_G, SLEW_RATE, ALIGN_TOL } from './flight.js';
 
 export const BRAKE_MARGIN = 0.85;     // plan braking at 85% of available thrust
 export const ARRIVE_SPEED = 3;        // m/s relative — "stopped"
@@ -68,24 +68,30 @@ const RCS_PLAN_A = RCS_A * 0.7;                       // plan RCS braking with m
 const TERMINAL_V = Math.sqrt(2 * RCS_PLAN_A * TERMINAL_RANGE);   // ≈ 83 m/s entering the zone
 
 /**
- * Max closing speed at distance dEff that still allows stopping at the stop point:
- * a main-drive braking curve handing over to RCS at the terminal boundary. With
- * the nose toward the target, the ship must first flip (coasting FLIP_S at that
- * speed), so solve v² + 2·a·F·v = 2·a·(d − D_T) + v_T² for v.
+ * Seconds the drive stays cold while the nose swings from `facing` to the
+ * braking attitude (pointing away from the target along −u).
  */
-export function brakingSpeed(dEff, aMax, noseTowardTarget, cruise = Infinity, dtSec = MIN_S) {
+export function flipSeconds(facing, ux, uy) {
+  const c = Math.max(-1, Math.min(1, -(Math.cos(facing) * ux + Math.sin(facing) * uy)));
+  return Math.max(0, Math.acos(c) - ALIGN_TOL) / SLEW_RATE * MIN_S;
+}
+
+/**
+ * Max closing speed at distance dEff that still allows stopping at the stop point:
+ * a main-drive braking curve handing over to RCS at the terminal boundary. Before
+ * braking the ship must finish turning to the braking attitude (coasting flipSec
+ * at that speed), so solve v² + 2·a·F·v = 2·a·(d − D_T) + v_T² for v. Using the
+ * *remaining* rotation keeps the curve continuous through a flip.
+ */
+export function brakingSpeed(dEff, aMax, flipSec, cruise = Infinity, dtSec = MIN_S) {
   let v;
   if (dEff <= TERMINAL_RANGE) {
     v = Math.sqrt(2 * RCS_PLAN_A * dEff);
   } else {
     const aB = BRAKE_MARGIN * aMax;
     const base = 2 * aB * (dEff - TERMINAL_RANGE) + TERMINAL_V * TERMINAL_V;
-    if (noseTowardTarget) {
-      const k = aB * FLIP_S;
-      v = -k + Math.sqrt(k * k + base);
-    } else {
-      v = Math.sqrt(base);
-    }
+    const k = aB * flipSec;
+    v = -k + Math.sqrt(k * k + base);
   }
   v = Math.min(v, dEff / (2 * dtSec));    // deadbeat bound: never plan to cover > ½ the gap per step
   return Math.min(v, cruise);
@@ -99,10 +105,11 @@ export function closingLaw(rel, p, out = {}) {
   const dEff = Math.max(0, rel.d - p.standoff);
   const nose = Math.cos(p.facing) * rel.ux + Math.sin(p.facing) * rel.uy > 0;
   const cruise = p.cruise ?? Infinity;
+  const flipSec = rel.vClose > 0 ? flipSeconds(p.facing, rel.ux, rel.uy) : 0;
   // Aim at the curve where we'll be after this step, not where we are (else we lag it)
-  let vMax = brakingSpeed(dEff, p.aMax, nose, cruise, p.dtSec);
+  let vMax = brakingSpeed(dEff, p.aMax, flipSec, cruise, p.dtSec);
   const dNext = Math.max(0, dEff - 0.5 * (rel.vClose + vMax) * p.dtSec);
-  vMax = Math.min(vMax, brakingSpeed(dNext, p.aMax, nose, cruise, p.dtSec));
+  vMax = Math.min(vMax, brakingSpeed(dNext, p.aMax, flipSec, cruise, p.dtSec));
 
   // desired relative velocity: straight at the stop point at vMax
   const vdx = rel.ux * vMax, vdy = rel.uy * vMax;
@@ -151,7 +158,7 @@ export function minutesToFlip(rel, aMax, standoff, cruise = Infinity, facing = 0
   let v = rel.vClose;
   let d = Math.max(0, rel.d - standoff);
   for (let t = 0; t <= horizon; t++) {
-    const vMax = brakingSpeed(d, aMax, true, cruise);
+    const vMax = brakingSpeed(d, aMax, FLIP_S, cruise);
     if (v >= vMax * 0.98) return v >= cruise * 0.98 && cruise < Infinity ? Infinity : t;
     v = Math.min(v + aMax * MIN_S, cruise);
     d -= v * MIN_S;

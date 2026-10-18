@@ -66,7 +66,7 @@ export function integrate(pos, vel, tax, tay, dtSec) {
  *             maxG drive limit for this maneuver, optional `face` (rad) to point
  *             the nose at when no main-drive burn is wanted
  * @param dtMin step length in game-minutes
- * @returns {{ mainG:number, rcsG:number, turned:number }}
+ * @returns {{ mainG:number, rcsG:number, turned:number, rotation:number }}
  */
 export function flightStep(f, cmd, dtMin = 1) {
   const dt = dtMin * MIN_S;
@@ -79,10 +79,12 @@ export function flightStep(f, cmd, dtMin = 1) {
   let tax = 0, tay = 0;     // average non-gravitational accel actually produced
   let mainA = 0, rcsA = 0;
   let turned = 0;
+  let rotation = 0;         // total rotation the command asked for at the start of this step
   const maxTurn = SLEW_RATE * dtMin;
 
   const slewTo = (target) => {
     const diff = angleDiff(target, f.facing);
+    rotation = Math.abs(diff);
     const step = Math.max(-maxTurn, Math.min(maxTurn, diff));
     f.facing = angleDiff(f.facing + step, 0);
     turned = step;
@@ -123,7 +125,7 @@ export function flightStep(f, cmd, dtMin = 1) {
   f.thrustG = mainA / G0;
   f.rcsG = rcsA / G0;
   f.turning = turned;
-  return { mainG: f.thrustG, rcsG: f.rcsG, turned };
+  return { mainG: f.thrustG, rcsG: f.rcsG, turned, rotation };
 }
 
 /** Reaction mass used by one step's output. */

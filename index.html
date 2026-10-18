@@ -7,17 +7,23 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Crect width='16' height='16' fill='%2304080E'/%3E%3Crect x='6' y='2' width='4' height='9' fill='%234FD1C5'/%3E%3Crect x='7' y='11' width='2' height='3' fill='%23E2A355'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="css/fonts.css">
   <link rel="stylesheet" href="css/main.css">
+  <link rel="stylesheet" href="css/ui.css">
 </head>
 <body>
   <div id="app">
-    <!-- Landing Screen -->
+    <!-- Landing -->
     <div id="screen-landing" class="screen active">
       <div class="landing-bg"></div>
       <div class="landing-content">
         <div class="landing-logo" id="landing-logo"></div>
         <h1 class="landing-title">LONGHAUL</h1>
         <p class="landing-subtitle">Deep Space Operations</p>
-        <nav class="landing-menu" id="landing-menu">
+        <nav class="landing-menu">
+          <button class="menu-btn" data-action="continue" id="menu-continue" style="display:none">
+            <span class="menu-btn-icon" id="icon-continue"></span>
+            <span class="menu-btn-label">Continue</span>
+            <span class="menu-btn-arrow">&gt;</span>
+          </button>
           <button class="menu-btn" data-action="new-game">
             <span class="menu-btn-icon" id="icon-new-game"></span>
             <span class="menu-btn-label">New Game</span>
@@ -38,535 +44,236 @@
       </div>
     </div>
 
-    <!-- New Game Screen -->
+    <!-- New game -->
     <div id="screen-new-game" class="screen">
       <div class="landing-bg"></div>
       <div class="panel-screen">
         <h2 class="panel-title">New Mission</h2>
         <div class="form-group">
-          <label class="form-label">Ship Name</label>
+          <label class="form-label" for="input-ship-name">Ship Name</label>
           <input type="text" id="input-ship-name" class="form-input" placeholder="UNN Longhaul" maxlength="32">
         </div>
         <div class="form-group">
-          <label class="form-label">Captain Name</label>
+          <label class="form-label" for="input-captain-name">Captain Name</label>
           <input type="text" id="input-captain-name" class="form-input" placeholder="Captain" maxlength="32">
         </div>
         <div class="form-group">
           <label class="form-label">Starting Crew</label>
           <div class="crew-count-selector">
-            <button class="crew-btn" data-delta="-1" id="crew-minus">
-              <span id="icon-minus"></span>
-            </button>
+            <button class="crew-btn" id="crew-minus" aria-label="Fewer crew"><span id="icon-minus"></span></button>
             <span class="crew-count" id="crew-count">4</span>
-            <button class="crew-btn" data-delta="1" id="crew-plus">
-              <span id="icon-plus"></span>
-            </button>
+            <button class="crew-btn" id="crew-plus" aria-label="More crew"><span id="icon-plus"></span></button>
           </div>
+          <p class="form-hint" id="crew-hint"></p>
         </div>
         <div class="form-actions">
           <button class="btn btn-secondary" data-action="back">Back</button>
-          <button class="btn btn-primary" data-action="start-game">
-            <span class="btn-text">Launch</span>
-          </button>
+          <button class="btn btn-primary" data-action="start-game"><span class="btn-text">Launch</span></button>
         </div>
       </div>
     </div>
 
-    <!-- Load Game Screen -->
+    <!-- Load game -->
     <div id="screen-load-game" class="screen">
       <div class="landing-bg"></div>
       <div class="panel-screen">
         <h2 class="panel-title">Load Mission</h2>
-        <div class="save-list" id="save-list">
-          <p class="save-empty">No saved missions found.</p>
-        </div>
+        <div class="save-list" id="save-list"><p class="save-empty">No saved missions found.</p></div>
         <div class="form-actions">
           <button class="btn btn-secondary" data-action="back">Back</button>
         </div>
       </div>
     </div>
 
-    <!-- Settings Screen -->
+    <!-- Settings (menu) -->
     <div id="screen-settings" class="screen">
       <div class="landing-bg"></div>
       <div class="panel-screen">
         <h2 class="panel-title">Settings</h2>
-        <div class="settings-group">
-          <div class="setting-row">
-            <span class="setting-label">Master Volume</span>
-            <input type="range" class="setting-range" min="0" max="100" value="70" id="setting-volume">
-          </div>
-          <div class="setting-row">
-            <span class="setting-label">Show Tooltips</span>
-            <button class="setting-toggle active" id="setting-tooltips">ON</button>
-          </div>
-          <div class="setting-row">
-            <span class="setting-label">Autosave Interval</span>
-            <select class="setting-select" id="setting-autosave">
-              <option value="60">1 min</option>
-              <option value="300" selected>5 min</option>
-              <option value="600">10 min</option>
-              <option value="0">Off</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <span class="setting-label">Show FPS</span>
-            <button class="setting-toggle" id="setting-fps">OFF</button>
-          </div>
-          <div class="setting-row setting-row-dev">
-            <span class="setting-label">Dev Mode</span>
-            <button class="setting-toggle" id="setting-devmode">OFF</button>
-          </div>
-        </div>
+        <div class="settings-group" data-settings></div>
         <div class="form-actions">
           <button class="btn btn-secondary" data-action="back">Back</button>
         </div>
       </div>
     </div>
 
-    <!-- Game Screen -->
+    <!-- Game -->
     <div id="screen-game" class="screen">
-      <!-- CRT overlay -->
       <div class="crt-overlay"></div>
-      <!-- Critical alert border -->
       <div class="alert-border" id="alert-border"></div>
 
-      <!-- Top HUD Bar -->
       <header class="hud-bar">
         <div class="hud-left">
           <div class="hud-datetime">
-            <span class="hud-date" id="hud-date">2351.03.22</span>
+            <span class="hud-date" id="hud-date">----.--.--</span>
             <span class="hud-time-sep">|</span>
-            <span class="hud-time" id="hud-time">08:00</span>
+            <span class="hud-time" id="hud-time">--:--</span>
           </div>
           <div class="hud-divider"></div>
           <div class="hud-speed">
-            <button class="speed-btn" data-speed="0" id="speed-pause" title="Pause">
-              <span id="icon-pause"></span>
-            </button>
-            <button class="speed-btn active" data-speed="1" title="1 min/s">1x</button>
-            <button class="speed-btn" data-speed="2" title="1 hr/s">2x</button>
-            <button class="speed-btn" data-speed="3" title="1 day/s">3x</button>
+            <button class="speed-btn" data-speed="0" title="Pause (Space)"><span id="icon-pause"></span></button>
+            <button class="speed-btn" data-speed="1" title="1 min/s (1)">1x</button>
+            <button class="speed-btn" data-speed="2" title="1 hr/s (2)">2x</button>
+            <button class="speed-btn" data-speed="3" title="1 day/s (3)">3x</button>
           </div>
-          <span class="hud-fps" id="hud-fps" style="display:none">60 FPS</span>
-          <div class="hud-divider dev-only"></div>
-          <button class="thrust-btn dev-only" id="thrust-toggle" title="Toggle Torch Engine (T)">
-            <span class="thrust-btn-icon" id="icon-thrust"></span>
-            <span class="thrust-btn-label">THRUST</span>
-            <span class="thrust-btn-status" id="thrust-status">OFF</span>
-          </button>
-          <button class="flip-btn dev-only" id="flip-toggle" title="Flip Maneuver (F)">
-            <span class="flip-btn-label">FLIP</span>
-            <span class="flip-btn-heading" id="flip-heading">PRO</span>
-          </button>
+          <span class="hud-fps" id="hud-perf" style="display:none"></span>
           <div class="hud-divider"></div>
-          <button class="combat-btn" id="combat-toggle" title="Battlestations (C)">
+          <button class="combat-btn" id="combat-toggle" title="Battle stations (C)">
             <span class="combat-btn-label">COMBAT</span>
             <span class="combat-btn-status" id="combat-status">OFF</span>
           </button>
         </div>
         <div class="hud-center">
-          <span class="hud-ship-name" id="hud-ship-name">RSV Canterbury</span>
+          <span class="hud-ship-name" id="hud-ship-name">—</span>
+          <span class="hud-nav-chip" id="hud-nav-chip">—</span>
         </div>
         <div class="hud-right">
-          <button class="hud-icon-btn hud-missions-btn" data-action="open-missions" title="Mission Log (L)">
+          <button class="hud-icon-btn hud-text-btn" data-action="open-map" title="Navigation (M)">NAV</button>
+          <button class="hud-icon-btn hud-text-btn hud-station-btn" data-action="open-station" id="hud-station-btn" title="Station services (B)" style="display:none">STATION</button>
+          <div class="hud-divider"></div>
+          <button class="hud-icon-btn hud-missions-btn" data-action="open-missions" title="Mission log (L)">
             <span class="hud-missions-label">MISSIONS</span>
             <span class="hud-missions-count" id="hud-missions-count">0</span>
           </button>
-          <div class="hud-divider"></div>
-          <button class="hud-icon-btn hud-jobs-btn" data-action="open-jobs" title="Jobs Queue (J)">
+          <button class="hud-icon-btn hud-jobs-btn" data-action="open-jobs" title="Crew jobs (J)">
             <span class="hud-jobs-label">JOBS</span>
             <span class="hud-jobs-count" id="hud-jobs-count">0</span>
           </button>
-          <button class="hud-icon-btn" data-action="game-settings" title="Settings">
-            <span id="icon-hud-settings"></span>
-          </button>
-          <button class="hud-icon-btn" data-action="save-game" title="Save">
-            <span id="icon-hud-save"></span>
-          </button>
-          <button class="hud-icon-btn" data-action="exit-game" title="Exit to Menu">
-            <span id="icon-hud-exit"></span>
-          </button>
+          <button class="hud-icon-btn" data-action="game-settings" title="Settings"><span id="icon-hud-settings"></span></button>
+          <button class="hud-icon-btn" data-action="save-game" title="Save (Ctrl+S)"><span id="icon-hud-save"></span></button>
+          <button class="hud-icon-btn" data-action="exit-game" title="Exit to menu"><span id="icon-hud-exit"></span></button>
         </div>
       </header>
 
-      <!-- Ship View -->
       <main class="game-main">
         <aside class="resource-panel" id="resource-panel">
           <div class="tac-view" id="tac-view">
             <div class="tac-header">
               <span class="tac-label">TAC</span>
               <div class="tac-zoom-controls">
-                <button class="tac-zoom-btn active" data-tac-zoom="0" title="Close">1</button>
-                <button class="tac-zoom-btn" data-tac-zoom="1" title="Medium">2</button>
-                <button class="tac-zoom-btn" data-tac-zoom="2" title="Far">3</button>
+                <button class="tac-zoom-btn active" data-tac-zoom="0" title="1 km">1</button>
+                <button class="tac-zoom-btn" data-tac-zoom="1" title="5 km">2</button>
+                <button class="tac-zoom-btn" data-tac-zoom="2" title="25 km">3</button>
               </div>
               <span class="tac-range" id="tac-range">1 km</span>
             </div>
-            <div class="tac-screen" id="tac-screen">
-              <!-- Tactical SVG rendered by JS -->
-            </div>
+            <div class="tac-screen" id="tac-screen" title="Open navigation (M)"></div>
           </div>
           <div class="panel-header">Systems</div>
-          <!-- Resources populated by JS -->
+          <div id="resource-list"></div>
         </aside>
+
         <div class="ship-viewport" id="ship-viewport">
           <div class="viewport-grid"></div>
           <div class="viewport-particles" id="viewport-particles"></div>
           <div class="viewport-vignette"></div>
-          <div class="ship-container" id="ship-container">
-            <!-- Ship rendered by JS -->
-          </div>
+          <div class="ship-container" id="ship-container"></div>
+          <div class="nav-prompt" id="nav-prompt" style="display:none"></div>
+          <div class="hold-indicator" id="hold-indicator" style="display:none"></div>
+          <div class="route-mini" id="route-mini" style="display:none"></div>
         </div>
+
         <aside class="info-panel" id="info-panel">
           <div class="info-section">
             <h3 class="info-title">Ship Status</h3>
-            <div class="info-content" id="ship-status-info">
-              <p class="info-line"><span class="info-key">Torch</span> <span class="info-val" id="info-torch">OFF</span></p>
-              <p class="info-line"><span class="info-key">Thrust</span> <span class="info-val" id="info-thrust">0.0g</span></p>
-              <p class="info-line"><span class="info-key">Heading</span> <span class="info-val" id="info-heading">---</span></p>
-              <p class="info-line"><span class="info-key">Velocity</span> <span class="info-val" id="info-velocity">---</span></p>
-              <p class="info-line info-vel-ref" id="info-vel-ref-row" style="display:none"><span class="info-key">Rel. to</span> <span class="info-val info-val-ref" id="info-vel-ref">---</span></p>
-              <p class="info-line"><span class="info-key">Ship Mass</span> <span class="info-val" id="info-mass">--- t</span></p>
+            <div class="info-content">
+              <p class="info-line"><span class="info-key">Drive</span> <span class="info-val" id="info-drive">—</span></p>
+              <p class="info-line"><span class="info-key">Attitude</span> <span class="info-val" id="info-attitude">—</span></p>
+              <p class="info-line"><span class="info-key">Rel. velocity</span> <span class="info-val" id="info-velocity">—</span></p>
+              <p class="info-line info-vel-ref"><span class="info-key">Reference</span> <span class="info-val info-val-ref" id="info-vel-ref">—</span></p>
+              <p class="info-line"><span class="info-key">Orbit (Sun)</span> <span class="info-val" id="info-orbit">—</span></p>
+              <p class="info-line"><span class="info-key">Mass</span> <span class="info-val" id="info-mass">—</span></p>
+              <p class="info-line"><span class="info-key">Cargo</span> <span class="info-val" id="info-cargo">—</span></p>
             </div>
           </div>
           <div class="info-section">
-            <h3 class="info-title">Selected Crew</h3>
-            <div class="info-content" id="crew-info">
-              <p class="info-line info-dim">No crew selected</p>
-            </div>
+            <h3 class="info-title" id="selection-title">Selection</h3>
+            <div class="info-content" id="crew-info"><p class="info-line info-dim">Click a crew member or a console</p></div>
           </div>
           <div class="info-section dev-only">
-            <h3 class="info-title">Thrust Control</h3>
+            <h3 class="info-title">Manual Helm (dev)</h3>
             <div class="info-content">
               <div class="thrust-slider-group">
-                <input type="range" class="thrust-slider" id="thrust-slider" min="0" max="100" value="0" step="1">
+                <input type="range" class="thrust-slider" id="thrust-slider" min="0" max="100" value="0" step="1" aria-label="Manual throttle">
                 <div class="thrust-slider-labels">
                   <span>0G</span>
                   <span class="thrust-slider-value" id="thrust-slider-value">0.0G</span>
                   <span>10G</span>
                 </div>
                 <div class="thrust-g-zones">
-                  <span class="g-zone g-zone-safe" style="width:25%"></span>
-                  <span class="g-zone g-zone-high" style="width:15%"></span>
-                  <span class="g-zone g-zone-danger" style="width:60%"></span>
+                  <span class="g-zone g-zone-safe" style="width:15%"></span>
+                  <span class="g-zone g-zone-high" style="width:10%"></span>
+                  <span class="g-zone g-zone-danger" style="width:75%"></span>
                 </div>
               </div>
+              <div class="dev-helm-row">
+                <button class="crew-action-btn" id="dev-flip">FLIP (F)</button>
+                <button class="crew-action-btn" id="dev-cut">CUT DRIVE (T)</button>
+              </div>
+              <div class="dev-helm-row" id="dev-tools"></div>
             </div>
           </div>
           <div class="info-section info-section-log">
-            <h3 class="info-title log-header" id="log-header">
+            <h3 class="info-title log-header">
               <span>Ship's Log</span>
               <span class="log-count" id="log-count">0</span>
             </h3>
-            <div class="log-container" id="log-container">
-              <div class="log-entries" id="log-entries">
-                <!-- Log entries populated by JS -->
-              </div>
-            </div>
-            <button class="log-expand-btn" id="log-expand-btn">
-              <span class="log-expand-text" id="log-expand-text">SHOW FULL LOG</span>
-            </button>
+            <div class="log-container" id="log-container"><div class="log-entries" id="log-entries"></div></div>
+            <button class="log-expand-btn" id="log-expand-btn"><span id="log-expand-text">SHOW FULL LOG</span></button>
           </div>
         </aside>
       </main>
 
-      <!-- Toast Notifications -->
-      <div class="toast-container" id="toast-container"></div>
+      <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
-      <!-- Save Dialog Overlay -->
-      <div class="dialog-overlay" id="dialog-save" style="display:none">
-        <div class="dialog">
-          <h3 class="dialog-title">Save Mission</h3>
-          <div class="form-group">
-            <label class="form-label">Save Name</label>
-            <input type="text" id="input-save-name" class="form-input" placeholder="Quicksave" maxlength="32">
-          </div>
-          <div class="form-actions">
-            <button class="btn btn-secondary" data-action="cancel-save">Cancel</button>
-            <button class="btn btn-primary" data-action="confirm-save">Save</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- In-Game Settings Overlay -->
-      <div class="dialog-overlay" id="dialog-settings" style="display:none">
-        <div class="dialog dialog-wide">
-          <h3 class="dialog-title">Settings</h3>
-          <div class="settings-group">
-            <div class="setting-row">
-              <span class="setting-label">Master Volume</span>
-              <input type="range" class="setting-range" min="0" max="100" value="70" id="ingame-volume">
-            </div>
-            <div class="setting-row">
-              <span class="setting-label">Show Tooltips</span>
-              <button class="setting-toggle active" id="ingame-tooltips">ON</button>
-            </div>
-            <div class="setting-row">
-              <span class="setting-label">Autosave Interval</span>
-              <select class="setting-select" id="ingame-autosave">
-                <option value="60">1 min</option>
-                <option value="300" selected>5 min</option>
-                <option value="600">10 min</option>
-                <option value="0">Off</option>
-              </select>
-            </div>
-            <div class="setting-row">
-              <span class="setting-label">Show FPS</span>
-              <button class="setting-toggle" id="ingame-fps">OFF</button>
-            </div>
-            <div class="setting-row setting-row-dev">
-              <span class="setting-label">Dev Mode</span>
-              <button class="setting-toggle" id="ingame-devmode">OFF</button>
-            </div>
-          </div>
-          <div class="form-actions">
-            <button class="btn btn-primary" data-action="close-settings">Close</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Jobs Queue Overlay -->
-      <div class="dialog-overlay" id="dialog-jobs" style="display:none">
-        <div class="dialog dialog-jobs">
-          <h3 class="dialog-title">Jobs Queue</h3>
-          <div class="jobs-list" id="jobs-list">
-            <p class="jobs-empty">— No active jobs —</p>
-          </div>
-          <div class="jobs-summary" id="jobs-summary"></div>
-          <div class="form-actions">
-            <button class="btn btn-primary" data-action="close-jobs">Close</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Exit Confirm Overlay -->
-      <!-- Tactical Map Modal -->
-      <div class="tac-modal-overlay" id="tac-modal" style="display:none">
-        <div class="tac-modal">
+      <!-- Navigation modal: tactical / solar / scanner -->
+      <div class="tac-modal-overlay" id="nav-modal" style="display:none">
+        <div class="tac-modal nav-modal">
           <div class="tac-modal-header">
             <div class="tac-modal-tabs">
-              <button class="tac-tab active" data-tac-tab="tactical">TACTICAL</button>
-              <button class="tac-tab" data-tac-tab="solar">SOLAR</button>
-              <button class="tac-tab" data-tac-tab="scanner">SCANNER</button>
+              <button class="tac-tab" data-nav-tab="tactical">TACTICAL</button>
+              <button class="tac-tab" data-nav-tab="solar">SOLAR</button>
+              <button class="tac-tab" data-nav-tab="scanner">SCANNER</button>
             </div>
-            <div class="tac-zoom-controls" id="tac-zoom-controls-modal">
-              <button class="tac-zoom-btn-modal active" data-tac-zoom-modal="0" title="Close">1</button>
-              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="1" title="Medium">2</button>
-              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="2" title="Far">3</button>
+            <div class="tac-zoom-controls" data-tab-controls="tactical">
+              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="0">1 KM</button>
+              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="1">5 KM</button>
+              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="2">25 KM</button>
             </div>
-            <div class="tac-zoom-controls" id="scanner-range-controls" style="display:none">
-              <button class="scanner-range-btn active" data-scanner-range="0">SHORT</button>
+            <div class="tac-zoom-controls" data-tab-controls="solar">
+              <button class="solar-zoom-btn" data-solar-view="ship">SHIP</button>
+              <button class="solar-zoom-btn" data-solar-view="inner">INNER</button>
+              <button class="solar-zoom-btn" data-solar-view="belt">BELT</button>
+              <button class="solar-zoom-btn" data-solar-view="system">SYSTEM</button>
+              <button class="solar-zoom-btn" data-solar-view="target">TARGET</button>
+            </div>
+            <div class="tac-zoom-controls" data-tab-controls="scanner">
+              <button class="scanner-range-btn" data-scanner-range="0">SHORT</button>
               <button class="scanner-range-btn" data-scanner-range="1">MED</button>
               <button class="scanner-range-btn" data-scanner-range="2">LONG</button>
             </div>
-            <div class="tac-zoom-controls" id="solar-zoom-controls" style="display:none">
-              <button class="solar-zoom-btn active" data-solar-preset="0">SYS</button>
-              <button class="solar-zoom-btn" data-solar-preset="1">INN</button>
-              <button class="solar-zoom-btn" data-solar-preset="2">BELT</button>
-              <button class="solar-zoom-btn" data-solar-preset="3">JUP</button>
-              <button class="solar-zoom-btn" data-solar-preset="4">SAT</button>
-            </div>
-            <span class="tac-range" id="tac-range-modal">1 km</span>
-            <button class="tac-modal-close" id="tac-modal-close">&times;</button>
+            <button class="tac-modal-close" id="nav-modal-close" aria-label="Close">&times;</button>
           </div>
-          <div class="tac-screen tac-screen-modal" id="tac-screen-modal">
-            <!-- Tactical SVG rendered by JS -->
+          <div class="nav-screens">
+            <div class="tac-screen tac-screen-modal" data-nav-screen="tactical"></div>
+            <div class="tac-screen tac-screen-modal tac-screen-solar" data-nav-screen="solar"></div>
+            <div class="tac-screen tac-screen-modal tac-screen-scanner" data-nav-screen="scanner"></div>
+            <div class="scanner-detail-panel" id="scanner-detail" style="display:none"></div>
+            <div class="map-selection" id="map-selection" style="display:none"></div>
+            <div class="route-panel" id="route-panel" style="display:none"></div>
           </div>
-          <div class="tac-screen tac-screen-modal tac-screen-solar" id="solar-screen-modal" style="display:none">
-            <!-- Solar system SVG rendered by JS -->
-          </div>
-          <div class="scanner-screen-wrapper" style="position:relative;flex:1 1 auto;display:none" id="scanner-screen-wrapper">
-            <div class="tac-screen tac-screen-modal tac-screen-scanner" id="scanner-screen-modal" style="position:absolute;inset:0">
-              <!-- Scanner SVG rendered by JS -->
-            </div>
-            <div class="scanner-detail-panel" id="scanner-detail-panel" style="display:none">
-              <div class="scanner-detail-header" id="scanner-detail-header">CONTACT</div>
-              <div class="scanner-detail-row"><span class="scanner-detail-key">TRANSPONDER</span><span class="scanner-detail-val" id="scanner-detail-name">---</span></div>
-              <div class="scanner-detail-row"><span class="scanner-detail-key">SIGNATURE</span><span class="scanner-detail-val" id="scanner-detail-sig">---</span></div>
-              <div class="scanner-detail-row"><span class="scanner-detail-key">FACTION</span><span class="scanner-detail-val" id="scanner-detail-faction">---</span></div>
-              <div class="scanner-detail-row"><span class="scanner-detail-key">CLASS</span><span class="scanner-detail-val" id="scanner-detail-class">---</span></div>
-              <div class="scanner-detail-row"><span class="scanner-detail-key">DISTANCE</span><span class="scanner-detail-val" id="scanner-detail-dist">---</span></div>
-              <div class="scanner-detail-row"><span class="scanner-detail-key">REL SPEED</span><span class="scanner-detail-val" id="scanner-detail-relvel">---</span></div>
-              <div class="scanner-detail-row"><span class="scanner-detail-key">BEARING</span><span class="scanner-detail-val" id="scanner-detail-bearing">---</span></div>
-              <div class="scanner-detail-row"><span class="scanner-detail-key">ACCEL</span><span class="scanner-detail-val" id="scanner-detail-accel">---</span></div>
-              <div class="scanner-detail-row"><span class="scanner-detail-key">MASS</span><span class="scanner-detail-val" id="scanner-detail-mass">---</span></div>
-              <!-- Fine-tune approach slider (populated by JS when within scanner range) -->
-              <div class="approach-slider-container" id="approach-slider-container" style="display:none"></div>
-            </div>
-            <!-- Intercept type selector panel (populated + shown by JS when INTERCEPT clicked) -->
-            <div class="intercept-type-panel" id="intercept-type-panel" style="display:none"></div>
-          </div>
-          <div class="tac-modal-info">
-            <span id="tac-modal-velocity"></span>
-            <span class="tac-info-sep">·</span>
-            <span id="tac-modal-heading"></span>
-            <span class="tac-info-sep" id="tac-sep-thrust">·</span>
-            <span id="tac-modal-thrust"></span>
-            <span style="flex:1"></span>
-            <button class="route-zoom-btn" id="route-zoom-btn" style="display:none">ZOOM</button>
-            <button class="route-plot-btn" id="route-plot-btn" style="display:none">PLOT ROUTE</button>
-            <span id="scanner-contact-info" style="display:none">
-              <span id="scanner-contact-name"></span>
-              <span class="tac-info-sep">·</span>
-              <span id="scanner-contact-range"></span>
-              <span class="tac-info-sep">·</span>
-              <span id="scanner-contact-bearing"></span>
-            </span>
-            <button class="scanner-track-btn" id="scanner-track-btn" style="display:none">LOCK</button>
-            <button class="scanner-intercept-btn" id="scanner-intercept-btn" style="display:none">INTERCEPT</button>
-          </div>
-
-          <!-- Route Planning Panel -->
-          <div class="route-panel" id="route-panel" style="display:none">
-            <div class="route-panel-header">
-              <span class="route-panel-title">NAVIGATION PLOT</span>
-              <button class="route-panel-close" id="route-panel-close">&times;</button>
-            </div>
-            <div class="route-dest-info">
-              <span class="route-dest-label">DESTINATION</span>
-              <span class="route-dest-name" id="route-dest-name"></span>
-              <span class="route-dest-dist" id="route-dest-dist"></span>
-            </div>
-            <div class="route-options" id="route-options">
-              <!-- Route cards rendered by JS -->
-            </div>
-            <div class="route-panel-actions">
-              <button class="btn btn-secondary route-btn" id="route-cancel-btn">CANCEL</button>
-              <button class="btn btn-primary route-btn" id="route-confirm-btn" disabled>CONFIRM</button>
-            </div>
-          </div>
-
-          <!-- Formation Indicator -->
-          <div class="formation-indicator" id="formation-indicator" style="display:none">
-            <span class="formation-icon">&#x25C8;</span>
-            <span class="formation-label">FORMATION</span>
-            <span class="formation-target" id="formation-target"></span>
-            <button class="formation-hail-btn" id="formation-hail-btn">HAIL TO COMPLETE</button>
-          </div>
-
-          <!-- Active Route Status Bar (clickable to expand) -->
-          <div class="route-status-bar" id="route-status-bar" style="display:none">
-            <div class="route-status-summary" id="route-status-summary">
-              <span class="route-status-dest" id="route-status-dest"></span>
-              <span class="route-status-phase" id="route-status-phase"></span>
-              <div class="route-status-progress">
-                <div class="route-status-fill" id="route-status-fill"></div>
-              </div>
-              <span class="route-status-eta" id="route-status-eta"></span>
-              <button class="route-abort-btn" id="route-abort-btn">ABORT</button>
-            </div>
-            <div class="route-detail-panel" id="route-detail-panel" style="display:none">
-              <!-- Populated by JS -->
-            </div>
-          </div>
+          <div class="tac-modal-info" id="nav-info"></div>
+          <div class="route-status-bar" id="route-status" style="display:none"></div>
         </div>
       </div>
 
-      <!-- SOS Event Modal -->
-      <div class="dialog-overlay" id="dialog-event" style="display:none">
-        <div class="dialog dialog-event">
-          <div class="event-header">
-            <span class="event-sos-icon">&#x26A0;</span>
-            <span class="event-sos-label">DISTRESS SIGNAL</span>
-            <span class="event-urgency" id="event-urgency"></span>
-          </div>
-          <div class="event-body">
-            <div class="event-ship-info">
-              <span class="event-ship-name" id="event-ship-name"></span>
-              <span class="event-ship-class" id="event-ship-class"></span>
-              <span class="event-ship-faction" id="event-ship-faction"></span>
-              <span class="event-ship-dist" id="event-ship-dist"></span>
-            </div>
-            <div class="event-narrative" id="event-narrative"></div>
-            <div class="event-feasibility" id="event-feasibility" style="display:none"></div>
-          </div>
-          <div class="form-actions event-actions">
-            <button class="btn btn-secondary event-decline-btn" id="event-decline-btn" data-action="decline-event">Log and continue</button>
-            <button class="btn btn-primary event-accept-btn" id="event-accept-btn" data-action="accept-event">Plot rescue intercept</button>
-          </div>
-          <input type="hidden" id="event-mission-id" value="">
-        </div>
-      </div>
-
-      <!-- Mission Log Panel -->
-      <div class="dialog-overlay" id="dialog-missions" style="display:none">
-        <div class="dialog dialog-missions">
-          <h3 class="dialog-title">Mission Log</h3>
-          <div class="missions-list" id="missions-list">
-            <p class="missions-empty">-- No missions --</p>
-          </div>
-          <div class="form-actions">
-            <button class="btn btn-primary" data-action="close-missions">Close</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Hail Communications Dialog -->
-      <div class="dialog-overlay" id="dialog-hail" style="display:none">
-        <div class="dialog dialog-hail">
-          <div class="hail-header">
-            <span class="hail-channel">DIRECT CHANNEL</span>
-            <span class="hail-target" id="hail-target-name">---</span>
-            <span class="hail-faction" id="hail-target-faction"></span>
-          </div>
-          <div class="hail-body">
-            <div class="hail-narrative" id="hail-narrative">
-              <!-- Narrative text injected by JS -->
-            </div>
-            <div class="hail-signal-bar">
-              <span class="hail-signal-icon">◈</span>
-              <span class="hail-signal-label">SIGNAL ACTIVE</span>
-              <span class="hail-signal-strength" id="hail-signal-strength">■■■■■</span>
-            </div>
-          </div>
-          <div class="form-actions">
-            <button class="btn btn-secondary" data-action="close-hail">Close Channel</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Station Mission Board Dialog -->
-      <div class="dialog-overlay" id="dialog-station" style="display:none">
-        <div class="dialog dialog-station">
-          <div class="station-header">
-            <span class="station-name" id="station-name">---</span>
-            <span class="station-faction" id="station-faction"></span>
-            <span class="station-signal">◈ <span id="station-signal-str">■■■■■</span></span>
-          </div>
-          <div class="station-greeting" id="station-greeting"></div>
-          <div class="station-board">
-            <div class="station-board-header">
-              <span class="station-board-title">MISSION BOARD</span>
-              <span class="station-board-count" id="station-board-count">0 AVAILABLE</span>
-            </div>
-            <div class="station-board-list" id="station-board-list">
-              <!-- Mission cards rendered by JS -->
-            </div>
-          </div>
-          <div class="station-active" id="station-active-missions" style="display:none">
-            <div class="station-active-header">ACTIVE MISSIONS</div>
-            <div class="station-active-list" id="station-active-list"></div>
-          </div>
-          <div class="form-actions">
-            <button class="btn btn-secondary" data-action="close-station">CLOSE CHANNEL</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="dialog-overlay" id="dialog-exit" style="display:none">
-        <div class="dialog">
-          <h3 class="dialog-title">Exit to Menu</h3>
-          <p class="dialog-text">Unsaved progress will be lost. Continue?</p>
-          <div class="form-actions">
-            <button class="btn btn-secondary" data-action="cancel-exit">Cancel</button>
-            <button class="btn btn-primary" data-action="confirm-exit">Exit</button>
-          </div>
-        </div>
-      </div>
+      <!-- Dialogs (content rendered by JS) -->
+      <div class="dialog-overlay" id="dialog-generic" style="display:none"><div class="dialog" id="dialog-generic-body"></div></div>
+      <div class="dialog-overlay" id="dialog-event" style="display:none"><div class="dialog dialog-event" id="dialog-event-body"></div></div>
+      <div class="dialog-overlay" id="dialog-station" style="display:none"><div class="dialog dialog-station" id="dialog-station-body"></div></div>
     </div>
   </div>
 
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>

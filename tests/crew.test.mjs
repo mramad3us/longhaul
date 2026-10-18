@@ -9,6 +9,8 @@ import { setBreach } from '../js/sim/life-support.js';
 import { planRoutes } from '../js/sim/nav.js';
 import { engageRoute } from '../js/sim/autopilot.js';
 import { orderShutdown, orderStartup, ReactorState } from '../js/sim/reactor.js';
+import { forceDistress } from '../js/sim/missions.js';
+import { createPlan, STANDOFF } from '../js/sim/nav.js';
 
 function game(seed = 1, crewCount = 6) {
   seedRandom(seed);
@@ -108,6 +110,27 @@ export default [
       assert(!s.autopilot, 'did not arrive');
       assert(alive === s.ship.crew.length, 'crew died on an express run');
       assert(hung > 0, 'juice should leave a hangover');
+    },
+  },
+  {
+    name: 'autopilot never throws its own crew around (flips happen strapped in)',
+    fn: () => {
+      for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        const s = game(seed, 5);
+        let offer = null;
+        bus.on('sos-offered', p => { offer = p; });
+        let thrown = 0;
+        bus.on('inertia-start', p => { thrown += p.count; });
+        forceDistress(s, (t, p) => bus.emit(t, p));
+        offer.mission.status = 'accepted';
+        engageRoute(s, createPlan('closing', { kind: 'entity', id: offer.mission.entityId }, { accelG: offer.feasibility.g, standoff: STANDOFF.TACTICAL }));
+        for (let t = 0; t < 4000 && s.autopilot; t++) {
+          minuteTick(s);
+          while (isInertiaActive(s)) updateInertia(s, 0.05);
+        }
+        assert(!s.autopilot, `seed ${seed}: did not arrive`);
+        assert(thrown === 0, `seed ${seed}: ${thrown} crew thrown during an autopilot intercept`);
+      }
     },
   },
   {

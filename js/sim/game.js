@@ -32,6 +32,7 @@ export const SAVE_SCHEMA = 2;
 // Consumption per person per minute
 const WATER_PER_MIN = 0.002;   // L  (≈2.9 L/day)
 const FOOD_PER_MIN = 0.001;    // rations (≈1.4/day)
+const SECURE_LINGER = 10;      // minutes crew stay strapped in after the last maneuver
 
 const emit = (type, payload) => bus.emit(type, payload);
 
@@ -158,11 +159,15 @@ export function minuteTick(state, { lite = false } = {}) {
   if (prevG < 0.05 && gNow >= 0.05) fireInertia(state, Maneuver.BURN_START, { deltaG: gNow, surprise, gForce: gNow });
   else if (prevG >= 0.05 && gNow < 0.05) fireInertia(state, Maneuver.BURN_STOP, { deltaG: prevG, surprise, gForce: gNow });
   else if (Math.abs(gNow - prevG) > 0.5) fireInertia(state, Maneuver.THRUST_CHANGE, { deltaG: gNow - prevG, surprise, gForce: gNow });
-  if (Math.abs(out.turned) >= SLEW_RATE * 0.99 && Math.abs(prevTurn) < SLEW_RATE * 0.5) fireInertia(state, Maneuver.FLIP, { gForce: gNow });
+  // A flip proper: a big rotation (well past 90°) starting from rest
+  if (out.rotation > 2.4 && Math.abs(prevTurn) < SLEW_RATE * 0.5 && Math.abs(out.turned) > 0) fireInertia(state, Maneuver.FLIP, { gForce: gNow });
 
   // ---- People
   const g = gNow + f.rcsG;
-  state.crewPolicy = crewPolicy(state);
+  // Hysteresis: once called to couches, the crew stay strapped in until the
+  // ship has been quiet for a while (no unstrapping between two maneuvers).
+  if (crewPolicy(state) === 'secure') state.secureUntil = state.clock.minute + SECURE_LINGER;
+  state.crewPolicy = state.clock.minute < (state.secureUntil ?? -1) ? 'secure' : 'free';
   for (const m of state.ship.crew) {
     if (m.dead) continue;
     const secured = !!m.seat;
@@ -310,4 +315,3 @@ export class GameLoop {
   }
 }
 
-export { maxSpeed };

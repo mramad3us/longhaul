@@ -196,7 +196,8 @@ function retire(state, m, afterMin) {
 }
 
 function fail(state, m, reason, emit) {
-  m.status = 'failed';
+  const answered = m.status === 'accepted';
+  m.status = answered ? 'failed' : 'lost';     // unanswered calls just fall silent
   m.failReason = reason;
   const e = getWorld(state).get(m.entityId);
   if (e) {
@@ -207,7 +208,7 @@ function fail(state, m, reason, emit) {
   }
   retire(state, m, 2 * DAY_MIN);
   if (state.autopilot?.missionId === m.id) state.autopilot.missionId = null;
-  emit('sos-failed', { mission: m, reason });
+  emit(answered ? 'sos-failed' : 'sos-lost', { mission: m, reason });
 }
 
 export function missionsTick(state, emit = () => {}) {

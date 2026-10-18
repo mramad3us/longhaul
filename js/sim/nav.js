@@ -11,8 +11,10 @@
 import { AU_M, G0, MIN_S, GM_SUN, DAY_MIN } from '../core/constants.js';
 import { getBody, bodyPos, bodyVel } from './ephemeris.js';
 import { getWorld, predictEntity, stepFree } from './world.js';
-import { createFlight, flightStep, fuelUsed, FLIP_MINUTES } from './flight.js';
-import { relativeState, closingLaw, hasArrived, transferLaw, brakingSpeed, minutesToFlip } from './guidance.js';
+import { createFlight, flightStep, fuelUsed, RCS_MAX_G } from './flight.js';
+
+const RCS_LIMIT = RCS_MAX_G * G0;
+import { relativeState, closingLaw, hasArrived, transferLaw, brakingSpeed, flipSeconds, minutesToFlip } from './guidance.js';
 import { solveLambert } from './lambert.js';
 
 // Standoff distances (m)
@@ -149,8 +151,7 @@ export function guidanceStep(plan, flight, minute, tgtNow, arrivalTarget, dtSec 
   let flipIn = Infinity;
 
   if (plan.stage === 'transfer') {
-    const nose = Math.cos(flight.facing) * rel.ux + Math.sin(flight.facing) * rel.uy > 0;
-    const vMax = brakingSpeed(Math.max(0, rel.d - plan.standoff), aMax, nose);
+    const vMax = brakingSpeed(Math.max(0, rel.d - plan.standoff), aMax, flipSeconds(flight.facing, rel.ux, rel.uy));
     const timeLeft = (plan.arriveAt - minute);
     if (rel.vClose >= 0.9 * vMax || timeLeft < 60 || rel.d < 0.002 * AU_M || !arrivalTarget) {
       plan.stage = 'closing';
@@ -183,6 +184,12 @@ export function guidanceStep(plan, flight, minute, tgtNow, arrivalTarget, dtSec 
       flipIn = minutesToFlip(rel, aMax, plan.standoff, cruise, flight.facing);
     }
   }
+
+  // Never stall halfway through a rotation: if the command goes quiet while the
+  // nose is swinging, keep swinging to the last commanded attitude.
+  const mag = Math.hypot(cmd.ax, cmd.ay);
+  if (mag > RCS_LIMIT) plan.$want = Math.atan2(cmd.ay, cmd.ax);
+  else if (plan.$want != null && Math.abs(flight.turning) > 1e-3 && cmd.face == null) cmd.face = plan.$want;
 
   return {
     cmd,
@@ -336,4 +343,3 @@ function finishOption(state, plan, desc, fuelAvail) {
 
 /** Rough allowance for securing crew before the first burn. */
 export const PREP_MINUTES = 10;
-export { FLIP_MINUTES };

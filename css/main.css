@@ -596,12 +596,6 @@ body {
   letter-spacing: 0.05em;
 }
 
-.setting-range {
-  width: 120px;
-  accent-color: var(--accent);
-  height: 4px;
-}
-
 .setting-toggle {
   padding: 6px 16px;
   background: var(--bg-surface);
@@ -882,103 +876,9 @@ body.dev-mode .info-section.dev-only {
   color: var(--warm);
 }
 
-/* ---- THRUST BUTTON ---- */
-
-.thrust-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: var(--bg-raised);
-  border: 2px solid var(--text-dim);
-  border-radius: 0;
-  color: var(--text-dim);
-  font-family: var(--font-pixel);
-  font-size: 0.45rem;
-  cursor: pointer;
-  transition: all 0.15s;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.thrust-btn:hover {
-  border-color: var(--warm);
-  color: var(--warm);
-}
-
-.thrust-btn.active {
-  border-color: #FFFFFF;
-  color: #FFFFFF;
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 0 12px rgba(255, 255, 255, 0.2), 0 0 24px rgba(255, 200, 100, 0.1);
-  animation: thrustPulse 0.5s infinite;
-}
-
-.thrust-btn.active .thrust-btn-status {
-  color: #FFFFFF;
-  text-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
-}
-
-.thrust-btn-icon {
-  display: flex;
-  width: 16px;
-  height: 16px;
-}
-
-.thrust-btn-label {
-  margin-right: 2px;
-}
-
-.thrust-btn-status {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  color: var(--text-dim);
-}
-
 @keyframes thrustPulse {
   0%, 100% { opacity: 0.8; }
   50% { opacity: 1.0; }
-}
-
-/* Flip maneuver button */
-.flip-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  margin-left: 4px;
-  background: var(--bg-raised);
-  border: 2px solid var(--text-dim);
-  border-radius: 0;
-  color: var(--text-dim);
-  font-family: var(--font-pixel);
-  font-size: 0.45rem;
-  cursor: pointer;
-  transition: all 0.15s;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.flip-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.flip-btn.flipping {
-  border-color: var(--warm);
-  color: var(--warm);
-  animation: flipPulse 0.3s infinite;
-  pointer-events: none;
-}
-
-.flip-btn-heading {
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-  color: var(--accent);
-}
-
-.flip-btn.flipping .flip-btn-heading {
-  color: var(--warm);
 }
 
 /* ---- COMBAT STATIONS BUTTON ---- */
@@ -1022,16 +922,6 @@ body.dev-mode .info-section.dev-only {
   50% { border-color: #FF4444; box-shadow: 0 0 12px rgba(226, 85, 85, 0.4); }
 }
 
-/* Combat stations red ambient lighting on ship view */
-.ship-combat-lighting {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 5;
-  background: radial-gradient(ellipse at 50% 40%, rgba(226, 50, 50, 0.08) 0%, transparent 70%);
-  mix-blend-mode: screen;
-  animation: combatAmbient 3s ease-in-out infinite;
-}
 @keyframes combatAmbient {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 1; }
@@ -1102,7 +992,6 @@ body.dev-mode .info-section.dev-only {
   background: var(--accent-dim);
 }
 
-/* ---- RESOURCE PANEL (LEFT) ---- */
 /* ---- TACTICAL VIEW ---- */
 
 .tac-view {
@@ -1474,13 +1363,6 @@ body.dev-mode .info-section.dev-only {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-}
-
-.alert-ok {
-  color: var(--ok);
-  font-family: var(--font-pixel);
-  font-size: 0.5rem;
-  line-height: 1.8;
 }
 
 /* Crew info details */
@@ -1870,14 +1752,6 @@ body.dev-mode .info-section.dev-only {
   border-color: var(--text-secondary);
 }
 
-.crew-mission-status {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--accent);
-  padding: 4px 0;
-  animation: missionPulse 2s ease-in-out infinite;
-}
-
 @keyframes missionPulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -1894,17 +1768,6 @@ body.dev-mode .info-section.dev-only {
   border: 1px solid;
 }
 
-.crew-location-couch {
-  color: var(--danger);
-  border-color: var(--danger);
-  background: rgba(226, 85, 85, 0.08);
-}
-
-.crew-location-medbay {
-  color: var(--accent);
-  border-color: var(--accent-dim);
-  background: rgba(79, 209, 197, 0.08);
-}
 .crew-location-suit {
   color: #3A7BD5;
   border-color: #1E4A8A;
@@ -2156,37 +2019,6 @@ body.dev-mode .info-section.dev-only {
   background: var(--accent-glow);
 }
 
-/* ---- MANEUVER PROMPT ---- */
-.maneuver-prompt {
-  position: absolute;
-  top: calc(var(--hud-height) + 12px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 100;
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 14px 24px;
-  background: rgba(8, 13, 22, 0.95);
-  background-image: var(--noise);
-  background-size: cover, 200px 200px;
-  border: 2px solid var(--hull-accent);
-  box-shadow:
-    0 0 40px rgba(0, 0, 0, 0.6),
-    0 0 20px rgba(79, 209, 197, 0.08),
-    inset 0 0 20px rgba(0, 0, 0, 0.3);
-  animation: fadeScale 0.25s ease;
-}
-.maneuver-prompt::before {
-  content: '';
-  position: absolute;
-  top: -2px;
-  left: -2px;
-  right: -2px;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
-}
 .mp-header {
   font-family: var(--font-pixel);
   font-size: 0.5rem;
@@ -2263,69 +2095,11 @@ body.dev-mode .info-section.dev-only {
   opacity: 0.5;
 }
 
-/* ---- SECURE BLOCKING PROMPT ---- */
-.secure-blocking-prompt {
-  position: absolute;
-  top: calc(var(--hud-height) + 12px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 100;
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 14px 24px;
-  background: rgba(8, 13, 22, 0.95);
-  background-image: var(--noise);
-  background-size: cover, 200px 200px;
-  border: 2px solid var(--danger);
-  box-shadow:
-    0 0 40px rgba(0, 0, 0, 0.6),
-    0 0 20px rgba(239, 83, 80, 0.15),
-    inset 0 0 20px rgba(0, 0, 0, 0.3);
-  animation: fadeScale 0.25s ease;
-}
-.secure-blocking-prompt::before {
-  content: '';
-  position: absolute;
-  top: -2px; left: -2px; right: -2px;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--danger), transparent);
-  animation: condPulse 1.5s ease-in-out infinite;
-}
-.override-btn {
-  font-family: var(--font-pixel);
-  font-size: 0.45rem;
-  letter-spacing: 0.12em;
-  padding: 8px 20px;
-  background: rgba(239, 83, 80, 0.12);
-  border: 2px solid var(--danger);
-  color: var(--danger);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  text-shadow: 0 0 6px rgba(239, 83, 80, 0.3);
-  animation: condPulse 2s ease-in-out infinite;
-}
-.override-btn:hover {
-  background: rgba(239, 83, 80, 0.25);
-  box-shadow: 0 0 16px rgba(239, 83, 80, 0.3);
-  transform: translateY(-1px);
-}
-
-/* ---- CINEMATIC TIME INDICATOR ---- */
-.speed-btn.cinematic-dim {
-  opacity: 0.3;
-  pointer-events: none;
-}
-
 /* ---- CREW IMPACT FLASH ---- */
 @keyframes impactFlash {
   0% { filter: brightness(1); }
   25% { filter: brightness(3) saturate(0) sepia(1) hue-rotate(-10deg); }
   100% { filter: brightness(1); }
-}
-.crew-impact-flash {
-  animation: impactFlash 0.3s ease-out;
 }
 
 /* ---- TOAST NOTIFICATIONS ---- */
@@ -2646,11 +2420,6 @@ body.dev-mode .info-section.dev-only {
   font-size: 7px;
   fill: var(--text-dim);
   text-anchor: end;
-}
-
-.deck-separator {
-  stroke: var(--hull-accent);
-  stroke-width: 2;
 }
 
 .crew-symbol {
@@ -3195,24 +2964,7 @@ body.dev-mode .info-section.dev-only {
 .station-board {
   padding: 8px 12px;
 }
-.station-board-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 4px 8px;
-}
-.station-board-title {
-  font-family: var(--font-pixel);
-  font-size: 0.35rem;
-  letter-spacing: 0.12em;
-  color: var(--accent);
-}
-.station-board-count {
-  font-family: var(--font-pixel);
-  font-size: 0.28rem;
-  letter-spacing: 0.06em;
-  color: var(--text-dim);
-}
+
 .station-board-list {
   display: flex;
   flex-direction: column;
@@ -3284,24 +3036,7 @@ body.dev-mode .info-section.dev-only {
   background: var(--accent-glow);
   box-shadow: var(--glow-accent);
 }
-/* Active missions section */
-.station-active {
-  padding: 8px 12px;
-  border-top: 1px solid var(--hull-primary);
-}
-.station-active-header {
-  font-family: var(--font-pixel);
-  font-size: 0.3rem;
-  letter-spacing: 0.1em;
-  color: var(--text-dim);
-  margin-bottom: 6px;
-}
-.station-active-list {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  line-height: 1.6;
-}
+
 .station-mission-empty {
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -3521,8 +3256,6 @@ body.dev-mode .info-section.dev-only {
   box-shadow: 0 0 6px var(--accent-glow);
 }
 
-/* ---- ROUTE PLANNING ---- */
-
 /* ---- ZOOM TO BODY BUTTON ---- */
 .route-zoom-btn {
   font-family: var(--font-display);
@@ -3715,51 +3448,6 @@ body.dev-mode .info-section.dev-only {
   font-weight: 400;
 }
 
-/* Phase bar — horizontal colored segments */
-.route-phase-bar {
-  display: flex;
-  height: 10px;
-  overflow: hidden;
-  background: var(--bg-void);
-  border: 1px solid var(--hull-primary);
-  margin-bottom: 6px;
-}
-.route-phase-seg {
-  height: 100%;
-  min-width: 3px;
-  transition: opacity 0.2s;
-}
-.route-card:hover .route-phase-seg {
-  opacity: 0.85;
-}
-.route-phase-seg.orient { background: #5A8A9A; }
-.route-phase-seg.secure { background: #8B8B4A; }
-.route-phase-seg.burn { background: #D16A4B; }
-.route-phase-seg.coast { background: #2A5A7A; }
-.route-phase-seg.flip { background: #E8D56B; }
-.route-phase-seg.match { background: #4FD1C5; }
-
-.route-phase-legend {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 2px;
-}
-.route-phase-label {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.route-phase-dot {
-  width: 6px;
-  height: 6px;
-  display: inline-block;
-  border-radius: 1px;
-}
-
 .route-card-feasibility {
   font-family: var(--font-mono);
   font-size: 0.7rem;
@@ -3866,92 +3554,9 @@ body.dev-mode .info-section.dev-only {
   box-shadow: var(--glow-danger);
 }
 
-/* ---- ROUTE DETAIL PANEL (expanded) ---- */
-.route-detail-panel {
-  padding: 12px 14px 14px;
-  border-top: 1px solid var(--hull-accent);
-  display: none;
-  flex-direction: column;
-  gap: 10px;
-  background: linear-gradient(180deg, rgba(8, 13, 22, 0.6), rgba(4, 8, 14, 0.8));
-  animation: routeDetailSlide 0.2s ease;
-  max-height: 220px;
-  overflow-y: auto;
-}
 @keyframes routeDetailSlide {
   from { opacity: 0; max-height: 0; }
   to { opacity: 1; max-height: 300px; }
-}
-.route-detail-panel[style*="display: flex"] {
-  display: flex;
-}
-
-.rd-row {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.rd-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 70px;
-}
-.rd-stat-label {
-  font-family: var(--font-pixel);
-  font-size: 0.35rem;
-  color: var(--text-dim);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-.rd-stat-val {
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--text-primary);
-}
-.rd-stat-val.rd-warn { color: var(--warning); }
-.rd-stat-val.rd-ok { color: var(--ok); }
-.rd-stat-val.rd-accent { color: var(--accent); }
-
-/* Phase timeline in detail panel */
-.rd-phases {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.rd-phase {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-}
-.rd-phase-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.rd-phase-dot.done { opacity: 0.4; }
-.rd-phase-dot.current { box-shadow: 0 0 6px currentColor; }
-.rd-phase-name {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--text-secondary);
-  width: 55px;
-  text-transform: uppercase;
-}
-.rd-phase-name.current { color: var(--accent); font-weight: bold; }
-.rd-phase-name.done { color: var(--text-dim); }
-.rd-phase-dur {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  color: var(--text-dim);
-}
-.rd-phase-desc {
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-  color: var(--text-dim);
-  flex: 1;
 }
 
 /* ---- REACTOR OFFLINE — EMERGENCY POWER RED TINT ---- */
@@ -4171,288 +3776,6 @@ body.ship-blackout .tac-view {
 @keyframes interceptActive {
   0%, 100% { border-color: var(--accent-dim); }
   50% { border-color: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
-}
-
-/* ---- INTERCEPT TYPE PANEL ---- */
-.intercept-type-panel {
-  position: absolute;
-  bottom: 8px;
-  right: 8px;
-  width: 320px;
-  background: rgba(4, 8, 14, 0.97);
-  background-image: var(--noise);
-  background-size: cover, 200px 200px;
-  border: 1px solid var(--hull-accent);
-  border-left: 2px solid var(--danger);
-  z-index: 12;
-  animation: fadeScale 0.2s ease;
-  box-shadow: 0 4px 30px rgba(0,0,0,0.6), -2px 0 12px rgba(226,85,85,0.06);
-}
-
-.itp-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--hull-accent);
-  background: rgba(10, 20, 32, 0.5);
-}
-
-.itp-title {
-  font-family: var(--font-pixel);
-  font-size: 0.35rem;
-  letter-spacing: 0.12em;
-  color: var(--danger);
-  text-shadow: 0 0 6px rgba(226,85,85,0.2);
-}
-
-.itp-close {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 1.1rem;
-  cursor: pointer;
-  padding: 0 4px;
-  transition: color 0.15s;
-  line-height: 1;
-}
-.itp-close:hover { color: var(--danger); }
-
-.itp-distance {
-  font-family: var(--font-pixel);
-  font-size: 0.28rem;
-  color: var(--text-dim);
-  letter-spacing: 0.08em;
-  padding: 6px 10px 4px;
-  text-transform: uppercase;
-}
-
-.itp-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 6px 8px;
-}
-
-.itp-card {
-  border: 1px solid var(--hull-primary);
-  background: rgba(16, 25, 42, 0.6);
-  padding: 8px 10px;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-  position: relative;
-  overflow: hidden;
-}
-.itp-card::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 2px;
-  background: var(--danger);
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-.itp-card:hover {
-  border-color: var(--hull-accent);
-  background: rgba(22, 32, 48, 0.8);
-}
-.itp-card:hover::before { opacity: 0.4; }
-.itp-card.selected {
-  border-color: var(--danger);
-  background: rgba(226, 85, 85, 0.07);
-  box-shadow: 0 0 0 1px rgba(226,85,85,0.1);
-}
-.itp-card.selected::before { opacity: 1; }
-.itp-card.itp-card-inrange {
-  opacity: 0.45;
-  cursor: default;
-  pointer-events: none;
-}
-.itp-card.itp-card-combat {
-  border-color: rgba(226, 85, 85, 0.3);
-}
-.itp-card.itp-card-combat::before { background: var(--danger); }
-.itp-card.itp-card-combat .itp-card-label { color: var(--danger); }
-.itp-card.itp-card-combat .itp-card-desc { color: var(--danger); opacity: 0.7; }
-
-.itp-card-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 3px;
-}
-
-.itp-card-label {
-  font-family: var(--font-pixel);
-  font-size: 0.32rem;
-  letter-spacing: 0.1em;
-  color: var(--text-primary);
-}
-.itp-card.selected .itp-card-label { color: var(--danger); }
-
-.itp-card-range {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  color: var(--accent);
-  letter-spacing: 0.04em;
-}
-
-.itp-card-desc {
-  font-family: var(--font-pixel);
-  font-size: 0.25rem;
-  color: var(--text-dim);
-  letter-spacing: 0.05em;
-  line-height: 1.6;
-}
-
-.itp-card-inrange-tag {
-  font-family: var(--font-pixel);
-  font-size: 0.24rem;
-  color: var(--accent);
-  letter-spacing: 0.06em;
-  margin-top: 3px;
-}
-
-.itp-actions {
-  display: flex;
-  gap: 6px;
-  padding: 8px;
-  border-top: 1px solid var(--hull-primary);
-}
-.itp-actions .btn {
-  flex: 1;
-  padding: 7px 0;
-  font-size: 0.32rem;
-}
-
-/* ---- APPROACH SLIDER ---- */
-.approach-slider-container {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--hull-primary);
-}
-
-.approach-slider-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.approach-slider-label {
-  font-family: var(--font-pixel);
-  font-size: 0.3rem;
-  letter-spacing: 0.08em;
-  color: var(--text-dim);
-}
-
-.approach-slider-current {
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--accent);
-}
-
-.approach-slider-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-
-.approach-range-label {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  min-width: 44px;
-}
-.approach-range-label.right { text-align: right; }
-
-.approach-range-input {
-  flex: 1;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  background: var(--hull-accent);
-  outline: none;
-  border-radius: 0;
-  cursor: pointer;
-  position: relative;
-  margin: 0 4px;
-}
-.approach-range-input::-webkit-slider-runnable-track {
-  height: 4px;
-  background: linear-gradient(to right, var(--accent) calc(var(--fill-pct, 100%) * 1%), var(--hull-accent) calc(var(--fill-pct, 100%) * 1%));
-  border-radius: 0;
-}
-.approach-range-input::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  background: var(--accent);
-  border: 2px solid var(--bg-deep);
-  border-radius: 50%;
-  cursor: pointer;
-  box-shadow: 0 0 10px rgba(79, 209, 197, 0.5);
-  transition: box-shadow 0.15s, transform 0.1s;
-  margin-top: -6px;
-}
-.approach-range-input::-webkit-slider-thumb:hover {
-  box-shadow: 0 0 16px rgba(79, 209, 197, 0.8);
-  transform: scale(1.15);
-}
-.approach-range-input::-moz-range-track {
-  height: 4px;
-  background: var(--hull-accent);
-}
-.approach-range-input::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  background: var(--accent);
-  border: 2px solid var(--bg-deep);
-  border-radius: 50%;
-  box-shadow: 0 0 10px rgba(79, 209, 197, 0.5);
-  cursor: pointer;
-}
-
-.approach-target-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 6px 0 8px;
-}
-
-.approach-target-label {
-  font-family: var(--font-pixel);
-  font-size: 0.3rem;
-  color: var(--text-dim);
-  letter-spacing: 0.06em;
-}
-
-.approach-target-val {
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  color: var(--accent);
-  letter-spacing: 0.04em;
-}
-
-.approach-burn-btn {
-  width: 100%;
-  background: none;
-  border: 1px solid var(--danger);
-  color: var(--danger);
-  font-family: var(--font-pixel);
-  font-size: 0.3rem;
-  padding: 7px 0;
-  cursor: pointer;
-  letter-spacing: 0.12em;
-  transition: all 0.15s;
-  text-shadow: 0 0 6px rgba(226,85,85,0.15);
-}
-.approach-burn-btn:hover {
-  background: rgba(226, 85, 85, 0.1);
-  box-shadow: var(--glow-danger);
-  text-shadow: 0 0 10px rgba(226,85,85,0.35);
 }
 
 /* ---- SOS EVENT MODAL ---- */
@@ -4678,17 +4001,7 @@ body.ship-blackout .tac-view {
 .mission-row-header:hover {
   background: rgba(79, 209, 197, 0.03);
 }
-.mission-row-expanded .mission-row-header {
-  background: rgba(79, 209, 197, 0.04);
-  border-bottom: 1px solid var(--hull-primary);
-}
-.mission-expand-icon {
-  font-size: 0.6rem;
-  color: var(--text-dim);
-  flex-shrink: 0;
-  width: 12px;
-  text-align: center;
-}
+
 .mission-status-dot {
   width: 6px;
   height: 6px;
@@ -4758,60 +4071,7 @@ body.ship-blackout .tac-view {
   text-shadow: 0 0 4px var(--warm-glow);
   letter-spacing: 0.04em;
 }
-.mission-timer.timer-critical {
-  color: var(--danger);
-  text-shadow: 0 0 6px var(--danger-glow);
-  animation: sosPulse 1s step-start infinite;
-}
-.mission-timer.timer-done {
-  color: var(--text-dim);
-  text-shadow: none;
-  opacity: 0.5;
-  font-size: 0.65rem;
-}
 
-/* Mission detail (expanded) */
-.mission-detail {
-  padding: 12px 14px 14px;
-  background: linear-gradient(180deg, rgba(4, 8, 14, 0.4), rgba(4, 8, 14, 0.7));
-  animation: fadeIn 0.15s ease;
-}
-.mission-detail-narrative {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  line-height: 1.7;
-  color: var(--text-secondary);
-  font-style: italic;
-  padding: 10px 12px;
-  background: rgba(4, 8, 14, 0.5);
-  border-left: 2px solid rgba(226, 85, 85, 0.25);
-  margin-bottom: 12px;
-}
-.mission-detail-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.mission-detail-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 2px 0;
-}
-.mission-detail-key {
-  font-family: var(--font-pixel);
-  font-size: 0.25rem;
-  letter-spacing: 0.1em;
-  color: var(--text-dim);
-  padding-top: 3px;
-}
-.mission-detail-val {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--text-secondary);
-  text-align: right;
-  text-transform: uppercase;
-}
 .mission-rewards {
   display: flex;
   gap: 8px;
@@ -4863,16 +4123,6 @@ body.ship-blackout .tac-view {
   animation: sosPulse 1.2s step-start infinite;
 }
 
-/* ---- FORMATION INDICATOR ---- */
-.formation-indicator {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 14px;
-  background: linear-gradient(180deg, rgba(79, 209, 197, 0.04), rgba(79, 209, 197, 0.07));
-  border-top: 1px solid var(--hull-accent);
-  flex-shrink: 0;
-}
 .formation-icon {
   color: var(--accent);
   font-size: 0.75rem;
