@@ -1415,7 +1415,7 @@ export function renderTacView(ship, container, thrustActive, zoomLevel = 0, flip
 
         // Label below
         if (ne.name) {
-          parts.push(`<text x="${ex}" y="${ey + shipH / 2 + 10}" fill="${color}" font-size="7" font-family="monospace" text-anchor="middle" opacity="0.8">${ne.name}</text>`);
+          parts.push(`<text x="${ex}" y="${ey + 24}" fill="${color}" font-size="7" font-family="monospace" text-anchor="middle" opacity="0.8">${ne.name}</text>`);
         }
 
       } else if (zoom.shipMode === 'icon') {

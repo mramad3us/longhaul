@@ -1143,7 +1143,7 @@ function renderSolarTab(forceRender) {
   const activeRt = getActiveRoute();
   const selBody = getSelectedBody();
   if (activeRt && activeRt.active) {
-    const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
+    const days = gameState.stats?.daysElapsed || 0;
     const destBody = findBody(activeRt.destinationName, gameState);
     if (destBody) {
       const dp = getBodyWorldPos(destBody, days);
@@ -1157,7 +1157,7 @@ function renderSolarTab(forceRender) {
     }
   } else if (selBody && !routePanelOpen) {
     // Show dashed line to selected body
-    const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
+    const days = gameState.stats?.daysElapsed || 0;
     const body = findBody(selBody.name, gameState);
     if (body) {
       const dp = getBodyWorldPos(body, days);
@@ -1214,7 +1214,7 @@ function renderSolarTab(forceRender) {
   if (selBody) {
     const body = findBody(selBody.name, gameState);
     if (body && headEl) {
-      const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
+      const days = gameState.stats?.daysElapsed || 0;
       const dp = getBodyWorldPos(body, days);
       const sp = gameState.shipPosition;
       const d = Math.sqrt((dp.x - sp.x) ** 2 + (dp.y - sp.y) ** 2);
@@ -1621,7 +1621,7 @@ function openRoutePanel() {
 
   document.getElementById('route-dest-name').textContent = selBody.name.toUpperCase();
 
-  const days = (gameState.stats?.daysElapsed || 0) + (gameState.time?.hour || 0) / 24;
+  const days = gameState.stats?.daysElapsed || 0;
   const dp = getBodyWorldPos(body, days);
   const sp = gameState.shipPosition;
   const dist = Math.sqrt((dp.x - sp.x) ** 2 + (dp.y - sp.y) ** 2);
@@ -4144,6 +4144,16 @@ function openHailModal(entityId) {
     return;
   }
 
+  // Field contracts (investigate / salvage / medevac): hailing the target at the
+  // objective completes the objective — then return to the issuing station.
+  const fieldMission = getActiveStationMissions().find(m =>
+    m.targetEntityId === entityId && m.phase === MissionPhase.AT_OBJECTIVE);
+  if (fieldMission) {
+    fieldMission.phase = MissionPhase.OBJECTIVE_COMPLETE;
+    showToast('Objective complete — return to station', 'ok');
+    addLogEntry(`${fieldMission.title}: objective complete — return to issuing station`, 'nav');
+  }
+
   // Check if this is a rescue target and we're in formation
   const intercept = getInterceptState();
   const mission = getMissionForEntity(entityId);
@@ -4497,8 +4507,10 @@ function openStationDialog(station) {
     activeList.innerHTML = activeMissions.map(m => {
       const phaseLabel = PHASE_LABELS[m.phase] || m.phase;
       // Check if this mission can be turned in at this station
-      const canTurnIn = m.stationId === station.id &&
-        (m.phase === 'objective_complete' || m.phase === 'returning' || m.phase === 'at_objective');
+      // Deliveries are turned in at the destination; field work back at the issuing station
+      const canTurnIn = m.destination
+        ? (m.destination === station.id && m.phase === 'at_objective')
+        : (m.stationId === station.id && (m.phase === 'objective_complete' || m.phase === 'returning'));
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0">
         <span>· ${escapeHtml(m.title)} — ${phaseLabel}</span>
         ${canTurnIn ? `<button class="station-mission-accept" data-turnin-mission="${m.id}">TURN IN</button>` : ''}
@@ -4722,6 +4734,9 @@ async function init() {
   // Set version in landing screen
   const versionEl = document.querySelector('.landing-version');
   if (versionEl) versionEl.textContent = `v${VERSION}`;
+
+  // Debug handle for dev tooling / automated tests (read-only access to live state)
+  window.__longhaul = { get state() { return gameState; }, get loop() { return gameLoop; } };
 
   console.log(`[LONGHAUL] v${VERSION} initialized`);
 }

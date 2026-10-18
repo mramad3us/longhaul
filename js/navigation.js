@@ -59,7 +59,8 @@ export function getBodyWorldPos(body, days) {
 }
 
 function gameTimeToDays(time, stats) {
-  return (stats?.daysElapsed || 0) + (time?.hour || 0) / 24 + (time?.minute || 0) / 1440;
+  // stats.daysElapsed advances 1/1440 per game-minute — it is the single time base
+  return stats?.daysElapsed || 0;
 }
 
 function distAU(a, b) {
@@ -660,9 +661,7 @@ function finishRoute(gameState) {
       targetVel = { vx: entity.velocity.vx, vy: entity.velocity.vy };
     }
   } else if (destName) {
-    const days = (gameState.stats?.daysElapsed || 0) +
-                 (gameState.time?.hour || 0) / 24 +
-                 (gameState.time?.minute || 0) / 1440;
+    const days = gameState.stats?.daysElapsed || 0;
     const vel = computeOrbitalVelocity(destName, days);
     targetVel = { vx: vel.vx, vy: vel.vy };
   }

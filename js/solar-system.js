@@ -767,7 +767,8 @@ export function getMapState() {
 
 function gameTimeToDays(time, stats) {
   // Days elapsed since game start
-  return (stats?.daysElapsed || 0) + (time?.hour || 0) / 24 + (time?.minute || 0) / 1440;
+  // stats.daysElapsed advances 1/1440 per game-minute — it is the single time base
+  return stats?.daysElapsed || 0;
 }
 
 function escapeXml(s) {

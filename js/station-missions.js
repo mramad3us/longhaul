@@ -693,10 +693,8 @@ export function completeStationMission(missionId, gameState) {
   const canComplete =
     // Delivery missions: at destination
     (mission.destination && mission.phase === MissionPhase.AT_OBJECTIVE) ||
-    // Field missions (investigate, salvage, medevac): objective complete + returning
-    (mission.phase === MissionPhase.OBJECTIVE_COMPLETE || mission.phase === MissionPhase.RETURNING) ||
-    // Survey: objective complete
-    (mission.phase === MissionPhase.OBJECTIVE_COMPLETE);
+    // Field missions (investigate, salvage, medevac, survey): objective complete + returning
+    (!mission.destination && (mission.phase === MissionPhase.OBJECTIVE_COMPLETE || mission.phase === MissionPhase.RETURNING));
 
   if (!canComplete) {
     return { success: false, narrative: 'Mission objective not yet complete.' };

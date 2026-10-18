@@ -74,23 +74,11 @@ export function createGameState(shipName, captainName, crewCount) {
       distanceTraveled: 0,
       daysElapsed: 0,
     },
-    // Ship position in AU (x, y) — start near Ceres in the asteroid belt
-    shipPosition: {
-      x: 2.77,
-      y: 0.0,
-    },
+    // Ship position in AU (x, y) — set below once entities exist
+    shipPosition: { x: 2.77, y: 0.0 },
     // Combat stations: all crew to couches, high-G burns unlocked
     combatStations: false,
   };
-
-  // Initialize ship orbital velocity at starting position
-  // v = sqrt(GM/r) for circular orbit, tangent direction at (x,0) = (0, v)
-  const AU_M = 149_597_870_700;
-  const GM_SUN = 1.327124e20;
-  const r_m = state.shipPosition.x * AU_M;
-  const orbitalSpeed = Math.sqrt(GM_SUN / r_m);
-  state.physics.velocity = { vx: 0, vy: orbitalSpeed };
-  state.physics.speed = orbitalSpeed;
 
   // Initialize life support system (adds atmosphere to decks, tanks to resources)
   initLifeSupport(state);
@@ -100,6 +88,15 @@ export function createGameState(shipName, captainName, crewCount) {
   for (const entity of state.entities) {
     initializeEntityOrbit(entity, 0);
   }
+
+  // Start parked 3 km off Ceres Station, co-moving with it
+  const AU_M = 149_597_870_700;
+  const home = state.entities.find(e => e.id === 'ceres-station');
+  if (home) {
+    state.shipPosition = { x: home.position.x + 3000 / AU_M, y: home.position.y };
+    state.physics.velocity = { vx: home.velocity.vx, vy: home.velocity.vy };
+  }
+  state.physics.speed = Math.hypot(state.physics.velocity.vx, state.physics.velocity.vy);
 
   // Initialize comms, scanner, missions, and inertia
   initComms(state);
@@ -181,23 +178,34 @@ export class GameLoop {
   _tick() {
     if (!this.running) return;
 
+    // Schedule the next frame first so an exception can never kill the loop
+    this._raf = requestAnimationFrame(() => this._tick());
+
     const now = performance.now();
-    const delta = (now - this.lastTime) / 1000; // seconds
+    // Clamp delta: a backgrounded tab must not dump hours of game time into one frame
+    const delta = Math.min((now - this.lastTime) / 1000, 0.25);
     this.lastTime = now;
 
-    if (!this.state.paused && this.state.speed > 0) {
-      const gameMinutes = delta * SPEED_MULTIPLIERS[this.state.speed];
-      this.accumulator += gameMinutes;
+    try {
+      if (!this.state.paused && this.state.speed > 0) {
+        const gameMinutes = delta * SPEED_MULTIPLIERS[this.state.speed];
+        this.accumulator += gameMinutes;
 
-      // Process in whole-minute increments
-      while (this.accumulator >= 1) {
-        this.accumulator -= 1;
-        this._processMinute();
+        // Process in whole-minute increments
+        while (this.accumulator >= 1) {
+          this.accumulator -= 1;
+          this._processMinute();
+        }
       }
+    } catch (e) {
+      console.error('[GameLoop] simulation error', e);
     }
 
-    this.onTick(this.state);
-    this._raf = requestAnimationFrame(() => this._tick());
+    try {
+      this.onTick(this.state);
+    } catch (e) {
+      console.error('[GameLoop] render error', e);
+    }
   }
 
   _processMinute() {
