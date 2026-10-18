@@ -4203,8 +4203,9 @@ function openHailModal(entityId) {
 
 function initStartGame() {
   document.querySelector('[data-action="start-game"]').addEventListener('click', () => {
-    const shipName = document.getElementById('input-ship-name').value.trim() || 'RSV Canterbury';
-    const captainName = document.getElementById('input-captain-name').value.trim() || 'J. Holden';
+    const randomCaptains = ['A. Vasquez', 'K. Okafor', 'R. Singh', 'M. Tanaka', 'D. Kowalski', 'S. Mbeki', 'L. Chen', 'J. Adeyemi', 'P. Novak', 'F. Al-Rashid'];
+    const shipName = document.getElementById('input-ship-name').value.trim() || 'UNN Longhaul';
+    const captainName = document.getElementById('input-captain-name').value.trim() || randomCaptains[Math.floor(Math.random() * randomCaptains.length)];
     resetRoute(); // Clear any active route from previous game
     gameState = createGameState(shipName, captainName, crewCount);
     startGame();
