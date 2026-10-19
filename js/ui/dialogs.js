@@ -12,8 +12,10 @@ import { formatDuration } from '../core/clock.js';
 import { getWorld } from '../sim/world.js';
 import { hailDialogue, signalBars } from '../sim/comms.js';
 import { activeMissions, acceptMission, declineMission, completeRescue, missionForEntity } from '../sim/missions.js';
-import { contractsAt, acceptContract, completeContract, deliverable, dockedStation, hailContractTarget, abandonContract, serviceQuote, buy, buyOverhaul, PRICES, CONTRACT_LABEL } from '../sim/contracts.js';
+import { contractsAt, acceptContract, completeContract, deliverable, dockedStation, hailContractTarget, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, PRICES, CONTRACT_LABEL } from '../sim/contracts.js';
 import { bus } from '../core/events.js';
+import { jobLabel, describeActivity } from './shipboard.js';
+import { canTransmit } from '../sim/comms.js';
 
 let hooks = {};
 let onClose = null;
@@ -135,12 +137,12 @@ export function openMissions() {
 export function openJobs() {
   const s = ui.state;
   const name = (id) => s.ship.crew.find(c => c.id === id)?.name || '—';
-  const label = (j) => j.type === 'rescue' ? `Rescue → ${name(j.data.patient)}` : j.type === 'repair-ls' ? `Repair life support (${s.ship.decks[j.data.deck].name})` : `Reactor: ${j.data.work}`;
+  const label = (j) => jobLabel(s, j);
   const P = ['CRIT', 'HIGH', 'NORM'];
   const rows = s.jobs.list.map(j => `<div class="job-row"><span class="job-priority job-priority-${['critical', 'high', 'normal'][j.priority]}">${P[j.priority]}</span>
     <span class="job-type">${esc(label(j))}</span><span class="job-status job-status-${j.status === 'open' ? 'pending' : 'assigned'}">${j.status}</span>
     <span class="job-assignee ${j.assignee == null ? 'job-assignee-none' : ''}">${esc(j.assignee == null ? '—' : name(j.assignee))}</span></div>`).join('');
-  const crew = s.ship.crew.map(m => `<div class="job-row"><span class="job-type">${esc(m.name)}</span><span class="job-status">${esc(m.dead ? 'deceased' : m.activity)}</span></div>`).join('');
+  const crew = s.ship.crew.map(m => `<div class="job-row"><span class="job-type">${esc(m.name)}</span><span class="job-status">${esc(m.dead ? 'deceased' : describeActivity(m))}</span></div>`).join('');
   openDialog({
     title: 'Crew Jobs', cls: 'dialog-jobs',
     html: `<div class="jobs-list">${rows ? `<div class="jobs-header"><span class="jobs-col-priority">PRI</span><span class="jobs-col-type">Job</span><span class="jobs-col-status">Status</span><span class="jobs-col-assignee">Assignee</span></div>${rows}` : '<p class="jobs-empty">— No open jobs —</p>'}</div>
@@ -154,6 +156,9 @@ export function hail(entityId) {
   const s = ui.state;
   const e = getWorld(s).get(entityId);
   if (!e) return;
+  // Close in (docked, formation) a suit radio or a signal lamp will do; beyond that it takes the array
+  const dM = Math.hypot(e.pos.x - s.flight.pos.x, e.pos.y - s.flight.pos.y) * AU_M;
+  if (!canTransmit(s) && dM > 50_000) { toast('Comms array down — no transmitter', 'danger'); return; }
   if (e.type === 'station') { openStation(e); return; }
   const bars = signalBars(Math.hypot(e.pos.x - s.flight.pos.x, e.pos.y - s.flight.pos.y));
   let text = hailDialogue(e);
@@ -283,14 +288,14 @@ function renderStation() {
   } else {
     if (!docked) content = '<div class="station-mission-empty">Dock within 50 km to trade.</div>';
     else {
-      const rows = [['fuel', 'Reaction mass', 'kg'], ['water', 'Water', 'L'], ['food', 'Rations', ''], ['o2Tank', 'Oxygen', 'kg'], ['n2Tank', 'Nitrogen', 'kg'], ['medSupplies', 'Medical supplies', 'unit']].map(([k, name, unit]) => {
+      const rows = [['fuel', 'Reaction mass', 'kg'], ['water', 'Water', 'L'], ['food', 'Rations', ''], ['o2Tank', 'Oxygen', 'kg'], ['n2Tank', 'Nitrogen', 'kg'], ['medSupplies', 'Medical supplies', 'unit'], ['parts', 'Spare parts', 'unit']].map(([k, name, unit]) => {
         const q = serviceQuote(s, k);
         return `<div class="service-row"><span class="service-name">${name}</span><span class="service-stock">${fmtNum(s.resources[k].current)} / ${fmtNum(s.resources[k].max)} ${unit === 'unit' ? 'units' : unit}</span>
           <span class="service-price">${PRICES[k]} MCR/${unit || 'unit'}</span>
           <button class="station-mission-accept" data-act="buy" data-key="${k}" ${q.qty < 0.5 ? 'disabled' : ''}>FILL · ${fmtNum(q.cost)} MCR</button></div>`;
       }).join('');
       content = `<div class="service-list">${rows}
-        <div class="service-row"><span class="service-name">Dockside overhaul</span><span class="service-stock">Life support, suits, containment</span><span class="service-price">${PRICES.overhaul} MCR</span>
+        <div class="service-row"><span class="service-name">Dockside overhaul</span><span class="service-stock">Every system to spec, suits, containment</span><span class="service-price">${fmtNum(overhaulQuote(s))} MCR</span>
         <button class="station-mission-accept" data-act="overhaul">OVERHAUL</button></div>
         <div class="service-credits">Credits: <b>${fmtNum(s.resources.credits.current)} MCR</b></div></div>`;
     }

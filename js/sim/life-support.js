@@ -3,11 +3,14 @@
 // Per-deck atmosphere (pressure, O₂, N₂, CO₂), scrubbing and
 // injection from tanks, breaches, venting, gas exchange through the
 // ladder shaft, EVA suits, and the atmosphere's effect on crew.
+// The plant itself (wear, faults, repair) is a ship system — see
+// systems.js; its condition sets how hard it can scrub and inject.
 // ============================================================
 
-import { random } from '../core/rng.js';
 import { isInterior } from './tiles.js';
-import { shipGeometry } from './ship-layout.js';
+import { addJob, closeJob, JobType, JOB_PRIORITY } from './jobs.js';
+import { systemPerf } from './systems.js';
+import { shipGeometry, isSecureSeat } from './ship-layout.js';
 import { addCondition, removeCondition, refreshDerivedConditions } from './crew.js';
 
 export const EARTH_PRESSURE = 101.3;   // kPa
@@ -15,18 +18,18 @@ export const TARGET_O2 = 20.9;         // %
 export const TARGET_N2 = 78.1;
 export const TARGET_CO2 = 0.04;
 
-const TILE_VOLUME = 22.5;              // m³ per interior tile
+const TILE_VOLUME = 6.5;               // m³ per interior tile (0.9 m × 0.9 m section × ~8 m of hull depth)
 const O2_PER_MIN = 0.000583;           // kg per person
 const CO2_PER_MIN = 0.000694;
 const SCRUB_RATE = 0.008;              // CO₂ % removed per minute
-const PATCH_EFFICIENCY = 0.5;
 const INJECT_RATE = 0.05;              // % per minute
 const TANK_KG_PER_PCT_M3 = 0.0012;
 const BREACH_RATE = 0.20;
 const VENT_RATE = 0.10;
 const EXCHANGE = 0.08;
-const FAILURE_BASE = 0.000004;          // per minute per unit (~1 per 6 months, more under stress)
+const PRESSURE_DOOR_KPA = 15;          // shaft hatches stay shut across a bigger difference
 export const SUIT_O2_HOURS = 48;
+export const COUCH_AIR_MIN = 120;      // emergency hood in every crash couch and station seat
 
 export const ATMO = {
   HYPOXIA_MILD: 16, HYPOXIA_SEVERE: 10, HYPOXIA_LETHAL: 6,
@@ -44,14 +47,9 @@ export function createLifeSupport(ship) {
       volume: interior * TILE_VOLUME, breached: false, vented: false,
     };
   });
-  const equipment = {};
-  for (const f of geo.fixtures.lifeSupport || []) {
-    equipment[f.deck] = { status: 'operational', enabled: true, patchMinutes: 0, fixture: f.id };
-  }
   const lockers = {};
   for (const f of geo.fixtures.locker || []) lockers[f.id] = { hasSuit: true };
   return {
-    equipment,
     lockers,
     connections: geo.shafts.map(s => [s.upper, s.lower]),
   };
@@ -67,20 +65,8 @@ export function atmoStatus(atmo) {
   return 'nominal';
 }
 
-export function equipmentLabel(eq) {
-  if (!eq) return 'None';
-  if (!eq.enabled) return 'DISABLED (manual override)';
-  switch (eq.status) {
-    case 'operational': return 'Operational';
-    case 'patched': return `Patched (${Math.round(eq.patchMinutes / 60)}h left)`;
-    case 'degraded': return 'Degraded — needs repair';
-    case 'failed': return 'FAILED — needs repair';
-    default: return eq.status;
-  }
-}
-
 /**
- * One game-minute. ctx: { powered (bool), gForce, emit }
+ * One game-minute. ctx: { emit }
  */
 export function lifeSupportTick(state, ctx) {
   const ship = state.ship;
@@ -95,14 +81,8 @@ export function lifeSupportTick(state, ctx) {
     breathers[geo.deckOfRow(m.pos.sy)]++;
   }
 
-  // Best working unit services the whole ship (ducting)
-  let eff = 0;
-  for (const eq of Object.values(ls.equipment)) {
-    if (!eq.enabled) continue;
-    if (eq.status === 'operational') eff = Math.max(eff, 1);
-    else if (eq.status === 'patched' || eq.status === 'degraded') eff = Math.max(eff, PATCH_EFFICIENCY);
-  }
-  if (!ctx.powered) eff = 0;
+  // One plant services the whole ship through the ducting
+  const eff = systemPerf(state, 'lifeSupport');
 
   ship.decks.forEach((deck, di) => {
     const a = deck.atmosphere;
@@ -115,6 +95,17 @@ export function lifeSupportTick(state, ctx) {
       a.pressure *= (1 - VENT_RATE);
       if (a.pressure < 0.5) a.pressure = 0;
     }
+    const sealed = !a.breached && !a.vented;
+    const haveGas = res.o2Tank.current > 0 && res.n2Tank.current > 0;
+    // Repressurize from the tanks — from hard vacuum too, once the hole is sealed
+    if (eff > 0 && sealed && haveGas && a.pressure < EARTH_PRESSURE - 0.5) {
+      if (a.pressure < 1) { a.o2Pct = TARGET_O2; a.n2Pct = TARGET_N2; a.co2Pct = TARGET_CO2; }
+      const add = Math.min(0.5 * eff, EARTH_PRESSURE - a.pressure);
+      a.pressure += add;
+      const kg = add / EARTH_PRESSURE * 1.225 * a.volume;
+      res.o2Tank.current = Math.max(0, res.o2Tank.current - kg * 0.21);
+      res.n2Tank.current = Math.max(0, res.n2Tank.current - kg * 0.79);
+    }
     if (a.pressure < 1) return;
 
     if (breathers[di] > 0 && a.volume > 0) {
@@ -123,9 +114,8 @@ export function lifeSupportTick(state, ctx) {
       a.co2Pct = Math.min(100, a.co2Pct + CO2_PER_MIN * breathers[di] / airKg * 100);
     }
 
-    if (eff > 0 && !a.breached && !a.vented) {
+    if (eff > 0 && sealed) {
       if (a.co2Pct > TARGET_CO2) a.co2Pct = Math.max(TARGET_CO2, a.co2Pct - SCRUB_RATE * eff);
-      const haveGas = res.o2Tank.current > 0 && res.n2Tank.current > 0;
       if (a.o2Pct < TARGET_O2 && haveGas) {
         const add = Math.min(INJECT_RATE * eff, TARGET_O2 - a.o2Pct);
         a.o2Pct += add;
@@ -136,40 +126,15 @@ export function lifeSupportTick(state, ctx) {
         a.n2Pct += add;
         res.n2Tank.current = Math.max(0, res.n2Tank.current - add * a.volume * TANK_KG_PER_PCT_M3);
       }
-      if (a.pressure < EARTH_PRESSURE - 0.5 && haveGas) {
-        const add = Math.min(0.5 * eff, EARTH_PRESSURE - a.pressure);
-        a.pressure += add;
-        const kg = add / EARTH_PRESSURE * 1.225 * a.volume;
-        res.o2Tank.current = Math.max(0, res.o2Tank.current - kg * 0.21);
-        res.n2Tank.current = Math.max(0, res.n2Tank.current - kg * 0.79);
-      }
     }
   });
 
-  // Equipment wear: patches expire; rare failures, likelier under hard G
-  for (const [deckStr, eq] of Object.entries(ls.equipment)) {
-    if (eq.status === 'patched' && --eq.patchMinutes <= 0) {
-      eq.status = 'failed';
-      ctx.emit?.('ls-patch-expired', { deck: +deckStr });
-    }
-    if (eq.status === 'operational' && eq.enabled) {
-      const stress = 1 + Math.max(0, ctx.gForce - 1.5) * 4;
-      if (random() < FAILURE_BASE * stress) {
-        eq.status = random() < 0.7 ? 'degraded' : 'failed';
-        ctx.emit?.('ls-failure', { deck: +deckStr, status: eq.status });
-      }
-    }
-  }
-
-  // Gas exchange through the ladder shaft
+  // Gas exchange through the ladder shaft. Pressure doors seal a deck off
+  // when it's holed or venting, and stay shut until the pressures match
+  // again — a breach costs one deck's air, not the ship's.
   for (const [i, j] of ls.connections) {
     const A = ship.decks[i].atmosphere, B = ship.decks[j].atmosphere;
-    if (A.breached || A.vented || B.breached || B.vented) {
-      // A hole on one side pulls air from the other
-      if ((A.breached || A.vented) && A.pressure < B.pressure) B.pressure -= (B.pressure - A.pressure) * EXCHANGE * 0.5;
-      if ((B.breached || B.vented) && B.pressure < A.pressure) A.pressure -= (A.pressure - B.pressure) * EXCHANGE * 0.5;
-      continue;
-    }
+    if (A.breached || A.vented || B.breached || B.vented || Math.abs(A.pressure - B.pressure) > PRESSURE_DOOR_KPA) continue;
     for (const k of ['pressure', 'o2Pct', 'n2Pct', 'co2Pct']) {
       const d = (A[k] - B[k]) * EXCHANGE;
       A[k] -= d; B[k] += d;
@@ -187,13 +152,21 @@ export function lifeSupportTick(state, ctx) {
         ctx.emit?.('suit-depleted', { member: m });
       } else {
         removeCondition(m, 'hypoxic'); removeCondition(m, 'hypercapnia'); removeCondition(m, 'decompression');
-        // Stow the suit once the air on deck is good again
+        // Stow the suit once the air on deck is good again (unless heading into bad air on a job)
         const a = ship.decks[geo.deckOfRow(m.pos.sy)].atmosphere;
-        if (atmoStatus(a) === 'nominal') stowSuit(state, m);
+        if (atmoStatus(a) === 'nominal' && !m.suit.keep) stowSuit(state, m);
         continue;
       }
     }
     const a = ship.decks[geo.deckOfRow(m.pos.sy)].atmosphere;
+    m.couchAir ??= COUCH_AIR_MIN;
+    if (atmoStatus(a) === 'nominal') m.couchAir = Math.min(COUCH_AIR_MIN, m.couchAir + 0.5);
+    else if (isSecureSeat(m.seat) && m.couchAir > 0) {
+      // Strapped in: the couch's emergency hood drops and buys some time
+      m.couchAir -= 1;
+      removeCondition(m, 'hypoxic'); removeCondition(m, 'hypercapnia'); removeCondition(m, 'decompression');
+      continue;
+    }
     breathe(m, a);
     refreshDerivedConditions(m);
   }
@@ -245,35 +218,32 @@ export function stowSuit(state, m) {
   m.suit = { wearing: false, o2: 0, lockerId: null };
 }
 
-// ---- REPAIR & CONTROLS ----
+// ---- JOBS ----
 
-/** Engineer repair attempt. Degraded → full repair; failed → temporary patch. */
-export function repairLS(state, deck, skill) {
-  const eq = state.lifeSupport.equipment[deck];
-  if (!eq) return { success: false, message: 'No life support on this deck' };
-  if (eq.status === 'operational') return { success: true, type: 'none', message: 'Already operational' };
-  if (eq.status === 'degraded') {
-    if (random() > 0.6 + skill * 0.008) return { success: false, message: 'Repair attempt failed — retrying' };
-    eq.status = 'operational';
-    return { success: true, type: 'full', message: 'Life support fully repaired' };
-  }
-  if (random() > 0.4 + skill * 0.006) return { success: false, message: 'Patch attempt failed — retrying' };
-  eq.status = 'patched';
-  eq.patchMinutes = 120 + Math.floor(random() * 360);
-  return { success: true, type: 'patch', message: `Patched — about ${Math.round(eq.patchMinutes / 60)}h of service` };
+/** Every holed deck needs an engineer in a suit with a patch kit. */
+export function breachJobs(state) {
+  state.ship.decks.forEach((d, deck) => {
+    const job = state.jobs.list.find(j => j.type === JobType.SEAL && j.data.deck === deck);
+    if (d.atmosphere?.breached && !job) addJob(state, JobType.SEAL, JOB_PRIORITY.CRITICAL, { deck });
+    else if (!d.atmosphere?.breached && job) closeJob(state, job);
+  });
 }
 
-/** Station dock overhaul: everything back to factory spec. */
-export function overhaulLS(state) {
-  for (const eq of Object.values(state.lifeSupport.equipment)) { eq.status = 'operational'; eq.patchMinutes = 0; }
+/** Finish patching a breach. */
+export function completeSeal(state, deck) {
+  const a = state.ship.decks[deck].atmosphere;
+  a.breached = false;
+  const parts = state.resources.parts;
+  const used = Math.min(parts.current, 0.5);
+  parts.current -= used;
+  return { success: true, message: `Hull breach on ${state.ship.decks[deck].name} sealed${used ? '' : ' with emergency sealant'} — repressurizing` };
+}
+
+// ---- CONTROLS ----
+
+/** Dockside: every suit locker restocked. */
+export function restockSuits(state) {
   for (const l of Object.values(state.lifeSupport.lockers)) l.hasSuit = true;
-}
-
-export function toggleLS(state, deck) {
-  const eq = state.lifeSupport.equipment[deck];
-  if (!eq) return null;
-  eq.enabled = !eq.enabled;
-  return eq.enabled;
 }
 
 export function setVented(state, deck, vented) {

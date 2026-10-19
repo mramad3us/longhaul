@@ -6,7 +6,9 @@
 // ============================================================
 
 import { SVG_NS, TileType, renderTile, renderCrewMember, INTERACTIVE_TILES, setCrewSprite } from '../svg-icons.js';
-import { shipGeometry, DECK_GAP, seatKind } from '../sim/ship-layout.js';
+import { shipGeometry, DECK_GAP, seatKind, FIXTURE_KIND } from '../sim/ship-layout.js';
+import { SYSTEM_BY_FIXTURE } from '../sim/systems.js';
+import { systemClass } from './shipboard.js';
 import { atmoStatus } from '../sim/life-support.js';
 import { isConscious } from '../sim/crew.js';
 import { ui } from './context.js';
@@ -21,6 +23,7 @@ let plumeEl = null;
 let rcsEl = null;
 let rcsMode = null;
 let atmoDots = [];
+let sysLeds = [];       // { el, id } status light on each machine
 let hullBox = null;
 let handlers = {};
 
@@ -77,6 +80,7 @@ export function buildShipView(container, state, on) {
   container.innerHTML = '';
   crewEls = new Map();
   atmoDots = [];
+  sysLeds = [];
   rcsEl = null; rcsMode = null;
   const ship = state.ship;
   const geo = shipGeometry(ship);
@@ -133,6 +137,12 @@ export function buildShipView(container, state, on) {
       if (INTERACTIVE_TILES.has(t)) {
         tile.dataset.deck = di; tile.dataset.x = rx; tile.dataset.y = ry;
         tile.addEventListener('click', (e) => { e.stopPropagation(); handlers.tile?.(t, di, rx, ry); });
+      }
+      const sys = SYSTEM_BY_FIXTURE[FIXTURE_KIND[t]];
+      if (sys) {
+        // Machine status light (and a red frame when it has failed)
+        tile.insertAdjacentHTML('beforeend', `<rect class="sys-frame" x="1" y="1" width="${TILE - 2}" height="${TILE - 2}" fill="none" stroke-width="2"/><rect x="${TILE - 9}" y="1" width="8" height="8" fill="#05090F"/><rect class="sys-led" x="${TILE - 8}" y="2" width="6" height="6"/>`);
+        sysLeds.push({ el: tile, id: sys });
       }
       g.appendChild(tile);
     }));
@@ -330,6 +340,12 @@ export function updateShipView(state, alpha) {
       if (dot.getAttribute('fill') !== c) dot.setAttribute('fill', c);
     }
   });
+
+  // Machine status lights
+  for (const l of sysLeds) {
+    const cls = systemClass(state.systems.units[l.id]);
+    if (l.el.dataset.sys !== cls) { l.el.dataset.sys = cls; l.el.classList.remove('sys-ok', 'sys-due', 'sys-warn', 'sys-fail', 'sys-off'); l.el.classList.add(cls); }
+  }
 
   // Tile selection highlight
   root.querySelectorAll('.tile-selected').forEach(t => {

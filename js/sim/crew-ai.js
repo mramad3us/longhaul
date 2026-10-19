@@ -1,89 +1,120 @@
 // ============================================================
 // LONGHAUL — Crew behaviour (per game-minute)
 //
-// Each crew member runs one task at a time. Tasks are chosen by
-// priority every minute:
-//   1. ship policy 'secure' (burns, flips, combat) → crash couch
-//   2. bad air on their deck → don an EVA suit
-//   3. assigned job (rescue, repair, reactor work)
-//   4. own injuries → walk to the autodoc
-//   5. otherwise stand watch / patrol their home deck
-// Movement follows real paths through the ladder shaft. Positions are
-// continuous ship coordinates; the renderer interpolates between
-// minutes using $px/$py.
+// Everyone runs one task at a time. Every minute each person checks
+// whether something more important has come up; a task is only
+// replaced by one of higher priority (lower level):
+//
+//   0 being carried          5 own injuries → autodoc
+//   1 secure for maneuvers   6 exhaustion / hunger that can't wait
+//   2 bad air → EVA suit     7 routine jobs (maintenance, machine shop)
+//   3 critical jobs          8 the roster: stand watch / sleep
+//   4 urgent jobs            9 off watch: meals, the head, recreation
+//                           10 idle
+//
+// Critical jobs (rescues, a dead flight computer, failing life support)
+// wake sleepers and pull people off watch; urgent ones are taken by
+// anyone awake; routine work belongs to whoever has the engineering or
+// machine-shop watch. Movement follows real paths through the ladder
+// shaft; the renderer interpolates between minutes using $px/$py.
 // ============================================================
 
-import { random, randInt, pick } from '../core/rng.js';
-import { shipGeometry, findPath, nearestNode, deckNodes, isSecureSeat } from './ship-layout.js';
+import { randInt, pick } from '../core/rng.js';
+import { shipGeometry, findPath, nearestNode, deckNodes, isSecureSeat, seatKind } from './ship-layout.js';
+import { TileType } from './tiles.js';
 import { isConscious, isAble, needsMedical, mobility, stabilize, medbayTick, hasCondition } from './crew.js';
+import { JobType, JOB_PRIORITY, JOB_SKILL, addJob, closeJob } from './jobs.js';
+import { efficiency, pressingNeed, practice, URGENT, MEAL_BREAK, RATION_PER_MEAL } from './needs.js';
+import { STATIONS, scheduleBlock, minutesLeftInBlock } from './duty.js';
+import { completeSeal } from './life-support.js';
+import {
+  SYSTEMS, systemPerf, flightComputerState, workMinutes, completeRepair, completeMaintenance,
+  completeFabrication, autodocRate, repairMode,
+} from './systems.js';
 
 export const WALK_TILES_PER_MIN = 0.8;
 const RUN = 2.5;                    // emergencies: sprinting to a downed crewmate
-const CRAWL = 0.15;                 // minimum speed dragging yourself to a couch under G
+const CRAWL = 0.15;                 // minimum speed dragging yourself to a seat under G
 const MEDBAY_SUPPLY_PER_MIN = 1 / 240;
+const MEAL_MINUTES = 20;
+const WASH_MINUTES = 12;
+const SHOWER_WATER = 12;            // liters through the head per wash
+const WAIT_LIMIT = 30;              // give up queueing for the head after this long
 
-// ---- JOBS ----
-
-export const JobType = {
-  RESCUE: 'rescue',
-  REPAIR_LS: 'repair-ls',
-  REACTOR: 'reactor',
-};
-export const JOB_PRIORITY = { CRITICAL: 0, HIGH: 1, NORMAL: 2 };
-const JOB_SKILL = { [JobType.RESCUE]: ['medical', 20], [JobType.REPAIR_LS]: ['engineering', 15], [JobType.REACTOR]: ['engineering', 15] };
-
-export function createJobs() {
-  return { list: [], nextId: 1 };
-}
-
-export function addJob(state, type, priority, data) {
-  const job = { id: state.jobs.nextId++, type, priority, data, status: 'open', assignee: null, created: state.clock.minute };
-  state.jobs.list.push(job);
-  state.jobs.list.sort((a, b) => a.priority - b.priority || a.id - b.id);
-  return job;
-}
-
-export function findJob(state, pred) {
-  return state.jobs.list.find(pred) || null;
-}
-
-export function closeJob(state, job) {
-  const i = state.jobs.list.indexOf(job);
-  if (i >= 0) state.jobs.list.splice(i, 1);
-  for (const m of state.ship.crew) if (m.task?.jobId === job.id) m.task = null;
-}
-
-// ---- SEATS ----
-
-function occupancy(state) {
-  const occ = new Map();
-  for (const m of state.ship.crew) if (m.seat) occ.set(m.seat, m.id);
-  return occ;
-}
+// ---- SEATS & FIXTURES ----
 
 const fixtureById = (geo, id) => geo.fixtureById.get(id) || null;
 
 /** Secured = strapped into a couch or station seat, or lying in the autodoc. */
 export const isSecured = (m) => isSecureSeat(m.seat);
 
-export function crewSecureStatus(state) {
-  const able = state.ship.crew.filter(isConscious);
-  const pilot = activePilot(state);
-  return {
-    total: able.length,
-    secured: able.filter(isSecured).length,
-    pilot,
-    pilotReady: !!pilot && isSecured(pilot) && !pilot.seat.startsWith('medbay'),   // every couch has helm repeaters
-    unsecured: able.filter(m => !isSecured(m)),
-    helpless: state.ship.crew.filter(m => !m.dead && !isConscious(m) && !isSecured(m)),
-  };
+/** Is this seat occupied — or claimed by someone walking to it — by anyone but `me`? */
+function taken(state, id, me = null) {
+  for (const o of state.ship.crew) {
+    if (o === me) continue;
+    if (o.seat === id || (!o.dead && o.task?.seat === id)) return true;
+  }
+  return false;
 }
 
-/** Who flies: the Pilot, else the best conscious pilot. */
+/** Where to stand to use a fixture (never on the fixture itself, e.g. the autodoc bed). */
+function standNode(geo, f) {
+  if (f.$stand !== undefined) return f.$stand;
+  let node = f.access;
+  if (node != null && geo.nodes[node].sx === f.sx && geo.nodes[node].sy === f.sy) {
+    node = null;
+    for (const [dx, dy] of [[0, -1], [-1, 0], [1, 0], [0, 1]]) {
+      const n = geo.index.get(geo.key(f.deck, f.x + dx, f.y + dy));
+      if (n !== undefined && geo.nodes[n].tile === TileType.FLOOR) { node = n; break; }
+    }
+  }
+  f.$stand = node;
+  return node;
+}
+
+function nearestFixture(state, m, kind, free = false, prefer = null) {
+  const geo = shipGeometry(state.ship);
+  const myDeck = geo.deckOfRow(m.pos.sy);
+  let best = null, bestD = Infinity;
+  for (const f of geo.fixtures[kind] || []) {
+    if (free && taken(state, f.id, m)) continue;
+    if (prefer && !prefer(f)) continue;
+    const d = Math.abs(f.sx - m.pos.sx) + Math.abs(f.sy - m.pos.sy) + (f.deck === myDeck ? 0 : 3);
+    if (d < bestD) { bestD = d; best = f; }
+  }
+  return best;
+}
+
+// ---- WHO FLIES ----
+
+/** Whoever is sitting at the helm (conscious). */
+export function helmsman(state) {
+  return state.ship.crew.find(m => isConscious(m) && seatKind(m.seat) === 'helm') || null;
+}
+
+/** The ship's pilot: the Pilot, else the best conscious pilot. */
 export function activePilot(state) {
   const able = state.ship.crew.filter(isConscious);
   return able.find(m => m.role === 'Pilot') ||
     able.slice().sort((a, b) => b.skills.piloting - a.skills.piloting)[0] || null;
+}
+
+export function crewSecureStatus(state) {
+  const able = state.ship.crew.filter(isConscious);
+  const helm = helmsman(state);
+  const pilot = helm || activePilot(state);
+  // With a working flight computer every couch has helm repeaters; with
+  // a dead one somebody has to be at the real controls.
+  const fcOK = flightComputerState(state) !== 'failed';
+  const pilotReady = !!helm || (fcOK && !!pilot && isSecured(pilot) && !pilot.seat.startsWith('medbay'));
+  return {
+    total: able.length,
+    secured: able.filter(isSecured).length,
+    pilot,
+    pilotReady,
+    unsecured: able.filter(m => !isSecured(m)),
+    helpless: state.ship.crew.filter(m => !m.dead && !isConscious(m) && !isSecured(m)),
+  };
 }
 
 // ---- MOVEMENT ----
@@ -96,10 +127,23 @@ function setDestination(state, m, sx, sy) {
   // first hop: snap onto the graph from wherever we are (after a slide, etc.)
   const start = geo.nodes[from];
   if (start && (Math.abs(start.sx - m.pos.sx) > 0.01 || Math.abs(start.sy - m.pos.sy) > 0.01)) path.unshift({ sx: start.sx, sy: start.sy });
-  // final hop onto a non-walkable fixture (couch) if requested
+  // final hop onto a non-walkable fixture (couch, bunk) if requested
   const end = path.length ? path[path.length - 1] : { sx: m.pos.sx, sy: m.pos.sy };
   if (Math.abs(end.sx - sx) > 0.01 || Math.abs(end.sy - sy) > 0.01) path.push({ sx, sy });
   m.path = path;
+}
+
+function goToNode(state, m, node) {
+  const n = shipGeometry(state.ship).nodes[node];
+  setDestination(state, m, n.sx, n.sy);
+}
+
+/** Walk to a seat's access tile, then step onto the seat. */
+function goToSeat(state, m, f) {
+  if (f.access == null) { setDestination(state, m, f.sx, f.sy); return; }
+  goToNode(state, m, f.access);
+  const last = m.path.length ? m.path[m.path.length - 1] : m.pos;
+  if (last.sx !== f.sx || last.sy !== f.sy) m.path.push({ sx: f.sx, sy: f.sy });
 }
 
 /** Walk along the path; returns true when the path is complete. */
@@ -127,44 +171,235 @@ function leaveSeat(state, m) {
   const geo = shipGeometry(state.ship);
   const f = fixtureById(geo, m.seat);
   m.seat = null;
-  if (f && f.access != null && f.kind !== 'medbay') {
-    const n = geo.nodes[f.access];
-    m.pos.sx = n.sx; m.pos.sy = n.sy;
+  if (f) {
+    const n = standNode(geo, f);
+    if (n != null) { m.pos.sx = geo.nodes[n].sx; m.pos.sy = geo.nodes[n].sy; }
   }
 }
 
-function deckOf(state, m) {
-  return shipGeometry(state.ship).deckOfRow(m.pos.sy);
+function sit(m, f) {
+  m.seat = f.id;
+  m.pos.sx = f.sx; m.pos.sy = f.sy;
+  m.path = [];
 }
 
-// ---- TASK CHOICE ----
+const deckOf = (state, m) => shipGeometry(state.ship).deckOfRow(m.pos.sy);
 
-function nearestFreeFixture(state, m, kind, occ, prefer = null) {
+// ---- TASK PRIORITY ----
+
+const JOB_LEVEL = { [JOB_PRIORITY.CRITICAL]: 3, [JOB_PRIORITY.HIGH]: 4, [JOB_PRIORITY.NORMAL]: 7 };
+
+function taskLevel(t) {
+  if (!t) return 99;
+  switch (t.type) {
+    case 'carried': return 0;
+    case 'secure': return 1;
+    case 'suit': return 2;
+    case 'rescue': case 'helm': return 3;
+    case 'reactor': case 'work': return JOB_LEVEL[t.priority] ?? 4;
+    case 'heal': return 5;
+    case 'sleep': return t.exhausted ? 6 : 8;
+    case 'eat': return t.urgent ? 6 : 9;
+    case 'watch': return 8;
+    case 'wash': case 'leisure': return 9;
+    default: return 10;
+  }
+}
+
+/** Drop the current task cleanly: reopen its job, set down anyone being carried. */
+export function abandonTask(state, m) {
+  if (m.task?.jobId) {
+    const j = state.jobs.list.find(x => x.id === m.task.jobId);
+    if (j) { j.status = 'open'; j.assignee = null; }
+  }
+  if (m.task?.type === 'rescue' && m.task.phase === 'carry') dropPatient(state, m);
+  if (m.seat && !(m.task?.type === 'heal' && m.seat.startsWith('medbay'))) leaveSeat(state, m);
+  m.suit.keep = false;
+  m.task = null;
+  m.path = [];
+}
+
+// ---- JOBS ----
+
+function generateJobs(state) {
+  const crew = state.ship.crew;
+  for (const p of crew) {
+    if (p.dead) {
+      const j = state.jobs.list.find(x => x.type === JobType.RESCUE && x.data.patient === p.id);
+      if (j) closeJob(state, j);
+      continue;
+    }
+    const helpless = !isConscious(p) || hasCondition(p, 'critical');
+    const inCare = p.seat?.startsWith('medbay:') || p.task?.type === 'carried' || p.task?.type === 'heal';
+    const has = state.jobs.list.find(j => j.type === JobType.RESCUE && j.data.patient === p.id);
+    if (helpless && !inCare && !has) addJob(state, JobType.RESCUE, JOB_PRIORITY.CRITICAL, { patient: p.id });
+    if (has && (!helpless || inCare) && has.status === 'open') closeJob(state, has);
+  }
+
+  // The flight computer is down and the ship has somewhere to be: someone
+  // has to fly by hand. The job ends when the computer is back, when
+  // somebody else already has the stick, or when the helm watch arrives
+  // to relieve the hand-flier.
+  const needHand = flightComputerState(state) === 'failed' && !!state.autopilot;
+  const flier = helmsman(state);
+  const helmJob = state.jobs.list.find(j => j.type === JobType.HELM);
+  if (!needHand) {
+    if (helmJob) closeJob(state, helmJob);
+  } else if (!helmJob) {
+    const j = addJob(state, JobType.HELM, JOB_PRIORITY.CRITICAL, {});
+    // Whoever is already at the controls stays there until relieved
+    if (flier) {
+      j.status = 'assigned'; j.assignee = flier.id;
+      flier.task = { type: 'helm', jobId: j.id, phase: 'on', seat: flier.seat };
+    }
+  } else {
+    const holder = crew.find(m => m.task?.jobId === helmJob.id);
+    const relief = crew.find(m => m.task?.type === 'watch' && m.task.station === 'helm' && m.task.standby && isConscious(m));
+    if (flier && flier !== holder) closeJob(state, helmJob);
+    else if (relief && holder && holder === flier) {
+      // Change of watch at the helm: the stick is handed over in the same minute
+      const f = fixtureById(shipGeometry(state.ship), holder.seat);
+      holder.task = null;
+      leaveSeat(state, holder);
+      sit(relief, f);
+      relief.task = { type: 'helm', jobId: helmJob.id, phase: 'on', seat: f.id };
+      helmJob.assignee = relief.id;
+    }
+  }
+}
+
+function jobSkill(job) {
+  return JOB_SKILL[job.type] || [null, 0];
+}
+
+/** Could this person take this job now, given their watch and state? */
+function eligible(state, m, job, env) {
+  const block = env.blocks.get(m.id);
+  const [skill, min] = jobSkill(job);
+  if (skill && (m.skills[skill] || 0) < min) return false;
+  if (!isAble(m)) return false;
+  if (job.type === JobType.RESCUE && job.data.patient === m.id) return false;
+  if (job.data.engineer != null && job.data.engineer !== m.id) return false;
+  if (job.type === JobType.SEAL && !m.suit.wearing && !lockerWithSuit(state, m)) return false;
+  if (job.type !== JobType.SEAL && job.type !== JobType.RESCUE) {
+    const f = jobFixture(state, m, job);
+    if (f && !reachable(state, m, f.deck)) return false;
+  }
+  if (job.priority === JOB_PRIORITY.CRITICAL) return true;
+  if (m.task?.type === 'sleep' && !m.task.exhausted) return false;
+  if (m.task?.type === 'helm') return false;
+  if (job.priority === JOB_PRIORITY.HIGH) return true;
+  // Routine work: the engineering and machine-shop watches — or, when
+  // nobody holds those watches right now, an off-watch volunteer who is
+  // rested and fed
+  if (block === 'duty') return m.duty.station === 'engineering' || m.duty.station === 'workshop';
+  if (block === 'free') {
+    return env.routineCover < min && !pressingNeed(m) && m.needs.rest > 40 && state.clock.minute - job.created > 60;
+  }
+  return false;
+}
+
+function score(state, m, job) {
+  if (job.type === JobType.RESCUE) {
+    const p = state.ship.crew.find(c => c.id === job.data.patient);
+    return -(Math.abs(m.pos.sx - p.pos.sx) + Math.abs(m.pos.sy - p.pos.sy));
+  }
+  const [skill] = jobSkill(job);
+  const f = jobFixture(state, m, job);
+  const dist = f ? Math.abs(f.sx - m.pos.sx) + Math.abs(f.sy - m.pos.sy) : 0;
+  return (skill ? m.skills[skill] : 0) - dist * (job.type === JobType.HELM ? 1.5 : 0.5);
+}
+
+/** The best job this person should switch to now (or null). `myLevel` overrides their current task's priority. */
+function pickJobFor(state, m, env, myLevel = taskLevel(m.task)) {
+  for (const job of state.jobs.list) {
+    if (job.status !== 'open') continue;
+    if (JOB_LEVEL[job.priority] >= myLevel) break;          // the board is sorted by priority
+    if (!eligible(state, m, job, env)) continue;
+    // Defer to a better candidate who is free to take it
+    const mine = score(state, m, job);
+    const better = state.ship.crew.some(o => o !== m && JOB_LEVEL[job.priority] < taskLevel(o.task) &&
+      eligible(state, o, job, env) && score(state, o, job) > mine + 0.5);
+    if (better) continue;
+    return job;
+  }
+  return null;
+}
+
+/** Where a job's work is done. */
+function jobFixture(state, m, job) {
+  if (job.type === JobType.REPAIR || job.type === JobType.MAINTAIN) return nearestFixture(state, m, SYSTEMS[job.data.system].fixture);
+  if (job.type === JobType.FABRICATE) return nearestFixture(state, m, 'workbench');
+  if (job.type === JobType.REACTOR) return nearestFixture(state, m, 'reactor');
+  if (job.type === JobType.HELM) return nearestFixture(state, m, 'helm');
+  if (job.type === JobType.SEAL) return breachSpot(state, job.data.deck);
+  return null;
+}
+
+/** Where to work on a hull breach: the open floor nearest the deck's outer hull. */
+function breachSpot(state, deck) {
   const geo = shipGeometry(state.ship);
-  const list = geo.fixtures[kind] || [];
-  let best = null, bestD = Infinity;
-  const myDeck = geo.deckOfRow(m.pos.sy);
-  for (const f of list) {
-    if (occ.has(f.id) && occ.get(f.id) !== m.id) continue;
-    if (prefer && !prefer(f)) continue;
-    const d = Math.abs(f.sx - m.pos.sx) + Math.abs(f.sy - m.pos.sy) + (f.deck === myDeck ? 0 : 3);
-    if (d < bestD) { bestD = d; best = f; }
-  }
-  return best;
+  const nodes = deckNodes(geo, deck).map(i => geo.nodes[i]);
+  const edge = (n) => Math.min(n.x, geo.cols - 1 - n.x);
+  const n = nodes.sort((a, b) => edge(a) - edge(b) || a.y - b.y)[0];
+  return n ? { sx: n.sx, sy: n.sy, deck, access: geo.index.get(geo.key(n.deck, n.x, n.y)) } : null;
 }
 
-function assignSecure(state, m, occ) {
-  if (m.task?.type === 'secure') return true;
-  const isPilot = activePilot(state) === m;
-  let couch = isPilot ? nearestFreeFixture(state, m, 'helm', occ) : null;
-  couch ||= nearestFreeFixture(state, m, 'couch', occ);
-  if (!couch) return false;
-  leaveSeat(state, m);
-  m.task = { type: 'secure', seat: couch.id };
-  occ.set(couch.id, m.id);   // reserve
-  setDestination(state, m, couch.sx, couch.sy);
+function startJob(state, m, job) {
+  const geo = shipGeometry(state.ship);
+  abandonTask(state, m);
+  job.status = 'assigned';
+  job.assignee = m.id;
+  if (job.type === JobType.RESCUE) {
+    const p = state.ship.crew.find(c => c.id === job.data.patient);
+    m.task = { type: 'rescue', jobId: job.id, patient: p.id, phase: 'goto', timer: 0 };
+    setDestination(state, m, Math.round(p.pos.sx), Math.round(p.pos.sy));
+    return;
+  }
+  const f = jobFixture(state, m, job);
+  if (!f) { job.status = 'open'; job.assignee = null; return; }
+  if (job.type === JobType.HELM) {
+    m.task = { type: 'helm', jobId: job.id, phase: 'goto', seat: f.id };
+    goToSeat(state, m, f);
+  } else if (job.type === JobType.SEAL && !m.suit.wearing) {
+    // Into vacuum: suit up first, then go
+    const locker = lockerWithSuit(state, m);
+    m.task = { type: 'suit', locker: locker.id, phase: 'goto', timer: 0, thenJob: job.id, priority: job.priority, jobId: job.id };
+    goToNode(state, m, locker.access);
+  } else if (job.type === JobType.REACTOR) {
+    m.task = { type: 'reactor', jobId: job.id, priority: job.priority, phase: 'goto' };
+    goToNode(state, m, standNode(geo, f));
+  } else {
+    m.task = { type: 'work', jobId: job.id, kind: job.type, system: job.data.system ?? null, deck: job.data.deck ?? null, priority: job.priority, phase: 'goto', progress: 0, need: 0 };
+    if (job.type === JobType.SEAL) m.suit.keep = true;
+    goToNode(state, m, f.access ?? standNode(geo, f));
+  }
+}
+
+// ---- SECURING FOR MANEUVERS ----
+
+/** Already where they should be while the ship maneuvers? */
+function holdsUnderG(m) {
+  const t = m.task;
+  if (t?.type === 'secure' || t?.type === 'helm') return true;
+  if (t?.type === 'watch' && STATIONS[t.station]?.seat && !t.standby) return true;
+  return false;
+}
+
+function assignSecure(state, m) {
+  const pilot = activePilot(state) === m;
+  let seat = null;
+  const ok = (f) => reachable(state, m, f.deck);
+  if (pilot) seat = nearestFixture(state, m, 'helm', true, ok);
+  seat ||= nearestFixture(state, m, 'couch', true, ok);
+  if (!seat) return false;
+  abandonTask(state, m);
+  m.task = { type: 'secure', seat: seat.id };
+  goToSeat(state, m, seat);
   return true;
 }
+
+// ---- BAD AIR ----
 
 function deckAirIsBad(state, deck) {
   const atmo = state.ship.decks[deck]?.atmosphere;
@@ -172,191 +407,580 @@ function deckAirIsBad(state, deck) {
   return atmo.breached || atmo.vented || atmo.pressure < 63 || atmo.o2Pct < 16 || atmo.co2Pct > 3;
 }
 
+/** Can they get to this deck without walking through bad air unsuited? */
+function reachable(state, m, deck) {
+  if (m.suit.wearing) return true;
+  const here = deckOf(state, m);
+  const lo = Math.min(here, deck), hi = Math.max(here, deck);
+  for (let d = lo; d <= hi; d++) if (d !== here && deckAirIsBad(state, d)) return false;
+  return true;
+}
+
 function lockerWithSuit(state, m) {
   const geo = shipGeometry(state.ship);
   const deck = geo.deckOfRow(m.pos.sy);
-  const lockers = (geo.fixtures.locker || []).filter(f => state.lifeSupport.lockers[f.id]?.hasSuit);
   let best = null, bestD = Infinity;
-  for (const f of lockers) {
+  for (const f of geo.fixtures.locker || []) {
+    if (!state.lifeSupport.lockers[f.id]?.hasSuit) continue;
     const d = Math.abs(f.sx - m.pos.sx) + Math.abs(f.sy - m.pos.sy) + (f.deck === deck ? 0 : 6);
     if (d < bestD) { bestD = d; best = f; }
   }
   return best;
 }
 
-function pickJobFor(state, m) {
-  for (const job of state.jobs.list) {
-    if (job.status !== 'open') continue;
-    const [skill, min] = JOB_SKILL[job.type] || [null, 0];
-    if (skill && (m.skills[skill] || 0) < min) continue;
-    if (job.type === JobType.RESCUE && job.data.patient === m.id) continue;
-    if (job.data.engineer != null && job.data.engineer !== m.id) continue;
-    // Defer to a better idle candidate: for rescues the closest qualified
-    // responder (seconds matter), otherwise the most skilled.
-    const idle = (o) => o !== m && isAble(o) && !o.task?.jobId && !isSecured(o) &&
-      (!skill || (o.skills[skill] || 0) >= min) && job.data.engineer == null &&
-      !(job.type === JobType.RESCUE && job.data.patient === o.id);
-    let better;
-    if (job.type === JobType.RESCUE) {
-      const p = state.ship.crew.find(c => c.id === job.data.patient);
-      const dist = (o) => Math.abs(o.pos.sx - p.pos.sx) + Math.abs(o.pos.sy - p.pos.sy);
-      better = state.ship.crew.some(o => idle(o) && dist(o) < dist(m) - 0.5);
-    } else {
-      better = state.ship.crew.some(o => idle(o) && skill && (o.skills[skill] || 0) > (m.skills[skill] || 0));
-    }
-    if (better) continue;
-    return job;
-  }
-  return null;
-}
+// ---- ROUTINE: WATCH, SLEEP, MEALS, HEAD, RECREATION ----
 
-function startJob(state, m, job) {
+function startWatch(state, m) {
+  const st = STATIONS[m.duty.station];
+  if (!st) return false;
   const geo = shipGeometry(state.ship);
-  job.status = 'assigned';
-  job.assignee = m.id;
-  leaveSeat(state, m);
-  if (job.type === JobType.RESCUE) {
-    const p = state.ship.crew.find(c => c.id === job.data.patient);
-    m.task = { type: 'rescue', jobId: job.id, patient: p.id, phase: 'goto', timer: 0 };
-    setDestination(state, m, Math.round(p.pos.sx), Math.round(p.pos.sy));
-  } else if (job.type === JobType.REPAIR_LS) {
-    const f = (geo.fixtures.lifeSupport || []).find(x => x.deck === job.data.deck);
-    const n = geo.nodes[f.access];
-    m.task = { type: 'repair', jobId: job.id, deck: job.data.deck, phase: 'goto', timer: 0, duration: Math.max(8, 25 - Math.floor(m.skills.engineering / 6)) };
-    setDestination(state, m, n.sx, n.sy);
-  } else if (job.type === JobType.REACTOR) {
-    const f = geo.fixtures.reactor[0];
-    const n = geo.nodes[f.access];
-    m.task = { type: 'reactor', jobId: job.id, phase: 'goto' };
-    setDestination(state, m, n.sx, n.sy);
+  const f = nearestFixture(state, m, st.fixture);
+  if (!f || !reachable(state, m, f.deck)) return false;
+  abandonTask(state, m);
+  if (st.seat) {
+    m.task = { type: 'watch', station: m.duty.station, phase: 'goto', seat: f.id };
+    goToSeat(state, m, f);
+  } else {
+    m.task = { type: 'watch', station: m.duty.station, phase: 'goto', fixture: f.id };
+    goToNode(state, m, standNode(geo, f));
   }
+  return true;
 }
 
-// ---- JOB GENERATION ----
+function startSleep(state, m, exhausted = false) {
+  const ok = (f) => reachable(state, m, f.deck);
+  const bed = nearestFixture(state, m, 'bunk', true, ok) || nearestFixture(state, m, 'couch', true, ok);
+  abandonTask(state, m);
+  m.task = { type: 'sleep', phase: 'goto', exhausted, seat: bed?.id || null };
+  if (bed) goToSeat(state, m, bed);
+  return true;
+}
 
-function generateJobs(state) {
-  const crew = state.ship.crew;
-  for (const p of crew) {
-    if (p.dead) continue;
-    const helpless = !isConscious(p) || hasCondition(p, 'critical');
-    const inCare = p.seat?.startsWith('medbay:') || p.task?.type === 'carried' || p.task?.type === 'heal';
-    const has = state.jobs.list.find(j => j.type === JobType.RESCUE && j.data.patient === p.id);
-    if (helpless && !inCare && !has) addJob(state, JobType.RESCUE, JOB_PRIORITY.CRITICAL, { patient: p.id });
-    if (has && (!helpless || inCare) && has.status === 'open') closeJob(state, has);
-  }
-  for (const p of crew) {
-    // a dead patient ends any rescue
-    if (p.dead) {
-      const j = state.jobs.list.find(x => x.type === JobType.RESCUE && x.data.patient === p.id);
-      if (j) closeJob(state, j);
-    }
-  }
-  const blackout = state.reactor?.blackout;
-  for (const [deckStr, eq] of Object.entries(state.lifeSupport.equipment)) {
-    const deck = +deckStr;
-    const broken = eq.enabled && (eq.status === 'failed' || eq.status === 'degraded');
-    const has = state.jobs.list.find(j => j.type === JobType.REPAIR_LS && j.data.deck === deck);
-    if (broken && !has && !blackout) addJob(state, JobType.REPAIR_LS, eq.status === 'failed' ? JOB_PRIORITY.CRITICAL : JOB_PRIORITY.HIGH, { deck });
-    if (!broken && has) closeJob(state, has);
-  }
+function startEat(state, m, urgent = false) {
+  const geo = shipGeometry(state.ship);
+  const galley = nearestFixture(state, m, 'galley');
+  if (!galley || !reachable(state, m, galley.deck)) return false;
+  abandonTask(state, m);
+  m.task = { type: 'eat', phase: 'galley', urgent, timer: 0 };
+  goToNode(state, m, standNode(geo, galley));
+  return true;
+}
+
+function startWash(state, m) {
+  const geo = shipGeometry(state.ship);
+  const head = nearestFixture(state, m, 'head');
+  if (!head || !reachable(state, m, head.deck)) return false;
+  abandonTask(state, m);
+  m.task = { type: 'wash', phase: 'goto', head: head.id, timer: 0, waited: 0 };
+  goToNode(state, m, standNode(geo, head));
+  return true;
+}
+
+function startLeisure(state, m) {
+  const geo = shipGeometry(state.ship);
+  const ok = (f) => reachable(state, m, f.deck);
+  const rec = nearestFixture(state, m, 'rec', true, ok);
+  // The rig if it's free and they're not already sociable; otherwise the mess table
+  const table = nearestFixture(state, m, 'table', false, ok);
+  const useRec = rec && (m.id + Math.floor(state.clock.minute / 97)) % 2 === 0;
+  abandonTask(state, m);
+  if (useRec) {
+    m.task = { type: 'leisure', where: 'rec', phase: 'goto', seat: rec.id, timer: randInt(35, 55) };
+    goToSeat(state, m, rec);
+  } else if (table) {
+    m.task = { type: 'leisure', where: 'table', phase: 'goto', fixture: table.id, timer: randInt(30, 50) };
+    goToNode(state, m, standNode(geo, table));
+  } else return false;
+  return true;
+}
+
+function startPatrol(state, m) {
+  const geo = shipGeometry(state.ship);
+  const nodes = deckNodes(geo, reachable(state, m, m.homeDeck) ? m.homeDeck : deckOf(state, m));
+  const n = geo.nodes[pick(nodes)];
+  if (!n) return;
+  m.task = { type: 'patrol' };
+  setDestination(state, m, n.sx, n.sy);
+}
+
+function startHeal(state, m) {
+  const bed = (shipGeometry(state.ship).fixtures.medbay || [])[0];
+  if (!bed) return false;
+  abandonTask(state, m);
+  m.task = { type: 'heal', phase: 'goto' };
+  setDestination(state, m, bed.sx, bed.sy);
+  return true;
 }
 
 // ---- MAIN TICK ----
 
 /**
  * One game-minute of crew behaviour.
- * @param ctx { gForce, policy: 'secure'|'free', hooks: { repairLS(deck, skill), onEvent(type, payload) } }
+ * ctx: { gForce, policy: 'secure'|'free', emit, hooks: { useWater(liters) } }
  */
 export function crewTick(state, ctx) {
   const crew = state.ship.crew;
   const geo = shipGeometry(state.ship);
-  const occ = occupancy(state);
   const g = ctx.gForce;
   const emit = ctx.emit || (() => {});
+  const secure = ctx.policy === 'secure';
+  const blocks = new Map(crew.map(m => [m.id, scheduleBlock(state, m)]));
+  // Best engineering skill on a routine-work watch right now (off-watch
+  // volunteers only step in when nobody covers routine work)
+  let routineCover = -1;
+  for (const o of crew) {
+    if (isConscious(o) && (o.duty.station === 'engineering' || o.duty.station === 'workshop') && blocks.get(o.id) === 'duty') routineCover = Math.max(routineCover, o.skills.engineering);
+  }
 
   for (const m of crew) { m.$px = m.pos.sx; m.$py = m.pos.sy; }
 
   generateJobs(state);
 
   for (const m of crew) {
-    if (m.dead) { if (m.task?.type !== 'carried') { m.path = []; } continue; }
+    if (m.dead) { if (m.task?.type !== 'carried') m.path = []; continue; }
 
     // ---- Incapacitated: drop what you were doing (couch/bed keep holding you)
     if (!isConscious(m)) {
       if (m.task && m.task.type !== 'carried' && m.task.type !== 'heal') abandonTask(state, m);
       m.path = [];
       if (m.task?.type === 'heal' && !m.seat) {
-        // waiting beside the autodoc: orderlies (the autodoc arm) take the next patient in
+        // waiting beside the autodoc: the autodoc arm takes the next patient in
         const bed = geo.fixtures.medbay?.[0];
-        if (bed && !occ.has(bed.id)) { m.seat = bed.id; occ.set(bed.id, m.id); m.pos.sx = bed.sx; m.pos.sy = bed.sy; }
+        if (bed && !taken(state, bed.id, m)) sit(m, bed);
       }
       if (m.task?.type === 'heal' && m.seat) healStep(state, m, ctx);
       m.activity = m.seat ? (m.seat.startsWith('medbay') ? 'healing' : 'secured') : 'down';
       continue;
     }
+    decide(state, m, { secure, blocks, routineCover, g });
+    stepTask(state, m, ctx, g, emit, blocks.get(m.id));
+  }
 
-    const secure = ctx.policy === 'secure';
+  state.$watch = watchState(state);
+}
 
-    // ---- Priority 1: secure for maneuvers
-    if (secure && !(isSecured(m) && !m.seat.startsWith('medbay')) && !(m.task?.type === 'heal' && m.seat) &&
-        !(m.task?.type === 'rescue' && m.task.phase === 'carry')) {
-      if (m.task && m.task.type !== 'secure') abandonTask(state, m);
-      assignSecure(state, m, occ);
+function decide(state, m, env) {
+  const { secure, blocks } = env;
+  const block = blocks.get(m.id);
+  const res = state.resources;
+  const lvl = () => taskLevel(m.task);
+
+  // A seat with no task behind it (job closed under them) is vacated
+  if (m.seat && !m.task) leaveSeat(state, m);
+
+  // ---- Bad air comes first, even mid-maneuver (crawling to the locker under G if need be)
+  if (!m.suit.wearing && m.task?.type !== 'suit' && m.task?.type !== 'carried' && !(m.task?.type === 'rescue' && m.task.phase === 'carry') &&
+      !(m.task?.type === 'heal' && m.seat) && !(isSecured(m) && (m.couchAir ?? 0) > 30 && secure) && deckAirIsBad(state, deckOf(state, m))) {
+    const locker = lockerWithSuit(state, m);
+    if (locker) {
+      abandonTask(state, m);
+      m.task = { type: 'suit', locker: locker.id, phase: 'goto', timer: 0 };
+      goToNode(state, m, locker.access);
+      return;
     }
-    if (!secure && m.task?.type === 'secure') {
-      leaveSeat(state, m);
-      m.task = null;
-      m.pause = randInt(1, 4);
-    }
+  }
 
-    // ---- Priority 2: bad air → suit up
-    if (!m.task && !m.suit.wearing && deckAirIsBad(state, deckOf(state, m))) {
-      const locker = lockerWithSuit(state, m);
-      if (locker) {
-        leaveSeat(state, m);
-        m.task = { type: 'suit', locker: locker.id, phase: 'goto', timer: 0 };
-        const n = geo.nodes[locker.access];
-        setDestination(state, m, n.sx, n.sy);
-      }
+  // ---- 1. Secure for maneuvers
+  if (secure) {
+    // A dead flight computer mid-maneuver: the best available pilot takes the helm
+    const helmJob = state.jobs.list.find(j => j.type === JobType.HELM && j.status === 'open');
+    if (helmJob && m.task?.type !== 'helm' && bestPilotFor(state, helmJob, env) === m) { startJob(state, m, helmJob); return; }
+    // Watch over while strapped in at a station: stay in the seat, off duty (and asleep, if it's time)
+    if (m.task?.type === 'watch' && block !== 'duty' && m.seat && isSecured(m)) { m.task = { type: 'secure', seat: m.seat }; return; }
+    if (holdsUnderG(m) || (m.task?.type === 'heal' && m.seat) || (m.task?.type === 'rescue' && m.task.phase === 'carry')) return;
+    // Below 1.5G people can still move: rescues and damage control go on until the ship pulls hard
+    if (env.g <= 1.5 && isAble(m)) {
+      if (lvl() <= 3 && m.task?.type !== 'secure') return;            // already on a critical job
+      const job = pickJobFor(state, m, env, JOB_LEVEL[JOB_PRIORITY.CRITICAL] + 1);
+      if (job && job.type !== JobType.HELM) { startJob(state, m, job); return; }
     }
+    if (m.task?.type === 'secure') return;
+    assignSecure(state, m);
+    return;
+  }
+  if (m.task?.type === 'secure') { leaveSeat(state, m); m.task = null; m.pause = randInt(1, 4); }
 
-    // ---- Priority 3: jobs (only when free to move; they preempt idle patrols)
-    if ((!m.task || m.task.type === 'patrol') && !secure && isAble(m)) {
-      const job = pickJobFor(state, m);
-      if (job) startJob(state, m, job);
+  // ---- 3/4/7. Jobs from the board
+  if (lvl() > 3) {
+    const job = pickJobFor(state, m, env);
+    if (job) startJob(state, m, job);
+  }
+
+  // ---- 5. Own injuries
+  if (lvl() > 5 && needsMedical(m) && !hasCondition(m, 'critical')) startHeal(state, m);
+
+  // ---- 6. Needs that can't wait
+  if (lvl() > 6 && m.needs.rest < URGENT.rest) startSleep(state, m, true);
+  if (lvl() > 6 && m.needs.food < URGENT.food && res.food.current >= RATION_PER_MEAL) startEat(state, m, true);
+
+  // ---- 8/9. The roster
+  if (lvl() < 8) return;
+  const t = m.task;
+  if (block === 'duty') {
+    // A meal break mid-watch (the station stands empty for half an hour)
+    if (t?.type === 'watch' && m.needs.food < MEAL_BREAK && res.food.current >= RATION_PER_MEAL) { startEat(state, m); return; }
+    if (!(t?.type === 'watch' && t.station === m.duty.station)) {
+      if (t?.type === 'eat' || t?.type === 'wash') return;       // finish the meal / shower, then report
+      if (!startWatch(state, m) && (!t || t.type === 'sleep')) startPatrol(state, m);
     }
-
-    // ---- Priority 4: get patched up
-    if (!m.task && !secure && needsMedical(m) && !hasCondition(m, 'critical')) {
-      startHeal(state, m, occ);
+    return;
+  }
+  if (block === 'sleep') {
+    if (t?.type !== 'sleep') {
+      if (t?.type === 'eat' || t?.type === 'wash') return;
+      startSleep(state, m);
     }
-
-    // ---- Priority 5: watch / patrol
-    if (!m.task && !secure && !m.seat) {
-      if (m.pause > 0) { m.pause--; }
-      else {
-        const nodes = deckNodes(geo, m.homeDeck);
-        const n = geo.nodes[pick(nodes)];
-        if (n) {
-          m.task = { type: 'patrol' };
-          setDestination(state, m, n.sx, n.sy);
-        }
-      }
-    }
-
-    stepTask(state, m, ctx, occ, g, emit);
+    return;
+  }
+  // Off watch
+  if (t?.type === 'watch' || (t?.type === 'sleep' && !t.exhausted)) abandonTask(state, m);
+  if (m.task && m.task.type !== 'patrol') return;
+  const need = pressingNeed(m);
+  // Supper before turning in, so nobody wakes up starving
+  const supper = blocks.get(m.id) === 'free' && minutesLeftInBlock(state, m) < 120 && m.needs.food < 70;
+  if ((need === 'food' || supper) && res.food.current >= RATION_PER_MEAL) { startEat(state, m); return; }
+  if (need === 'hygiene' && startWash(state, m)) return;
+  if (need === 'fun') { if (startLeisure(state, m)) return; }
+  if (!m.task) {
+    if (m.pause > 0) { m.pause--; return; }
+    startPatrol(state, m);
   }
 }
 
-function startHeal(state, m, occ) {
-  const geo = shipGeometry(state.ship);
-  const bed = (geo.fixtures.medbay || [])[0];
-  if (!bed) return false;
-  leaveSeat(state, m);
-  m.task = { type: 'heal', phase: 'goto' };
-  // walk next to the bed; take it when free
-  setDestination(state, m, bed.sx, bed.sy);
-  return true;
+function bestPilotFor(state, job, env) {
+  let best = null, bestScore = -Infinity;
+  for (const o of state.ship.crew) {
+    if (!isAble(o) || !eligible(state, o, job, env)) continue;
+    const sc = score(state, o, job);
+    if (sc > bestScore) { bestScore = sc; best = o; }
+  }
+  return best;
+}
+
+// ---- TASK EXECUTION ----
+
+function speedOf(m, g) {
+  return WALK_TILES_PER_MIN * mobility(m, g);
+}
+
+function stepTask(state, m, ctx, g, emit, block) {
+  const t = m.task;
+  const speed = speedOf(m, g);
+  const G = shipGeometry(state.ship);
+
+  if (!t) { m.activity = m.seat ? 'secured' : 'idle'; return; }
+
+  switch (t.type) {
+    case 'patrol': {
+      m.activity = 'idle';
+      if (walk(m, speed)) { m.task = null; m.pause = randInt(3, 12); }
+      break;
+    }
+    case 'secure': {
+      if (m.seat === t.seat) { m.activity = block === 'sleep' ? 'sleeping-couch' : 'secured'; break; }
+      m.activity = 'securing';
+      if (walk(m, Math.max(speed, CRAWL))) {
+        const holder = state.ship.crew.find(c => c.id !== m.id && c.seat === t.seat);
+        if (holder) { m.task = null; assignSecure(state, m); }
+        else { sit(m, fixtureById(G, t.seat)); m.activity = 'secured'; }
+      }
+      break;
+    }
+    case 'suit': {
+      m.activity = 'suiting';
+      if (t.phase === 'goto') {
+        if (walk(m, Math.max(speed, CRAWL))) t.phase = 'don';
+      } else if (++t.timer >= 3) {
+        const locker = state.lifeSupport.lockers[t.locker];
+        if (locker?.hasSuit) {
+          locker.hasSuit = false;
+          m.suit = { wearing: true, o2: 48, lockerId: t.locker };
+          emit('crew-suited', { member: m });
+        }
+        const next = t.thenJob != null && state.jobs.list.find(j => j.id === t.thenJob);
+        m.task = null;
+        if (next && m.suit.wearing) { next.status = 'open'; startJob(state, m, next); }
+      }
+      break;
+    }
+    case 'heal': {
+      const bed = G.fixtures.medbay?.[0];
+      if (m.seat) { m.activity = 'healing'; healStep(state, m, ctx); break; }
+      m.activity = 'to-medbay';
+      if (walk(m, speed) || !m.path.length) {
+        const holder = state.ship.crew.find(c => c.id !== m.id && c.seat === bed.id);
+        if (!holder) { sit(m, bed); m.activity = 'healing'; }
+        else m.activity = 'waiting';      // queue beside the autodoc
+      }
+      break;
+    }
+    case 'rescue': stepRescue(state, m, t, speed, emit); break;
+    case 'work': stepWork(state, m, t, speed, emit); break;
+    case 'reactor': {
+      const job = state.jobs.list.find(j => j.id === t.jobId);
+      if (!job) { m.task = null; break; }
+      if (t.phase === 'goto') {
+        m.activity = 'to-reactor';
+        if (walk(m, speed)) t.phase = 'work';
+      } else {
+        m.activity = 'reactor-work';
+        practice(m, 'engineering');
+      }
+      break;
+    }
+    case 'helm': {
+      const job = state.jobs.list.find(j => j.id === t.jobId);
+      if (!job) { abandonTask(state, m); break; }
+      if (m.seat === t.seat) {
+        m.activity = 'flying';
+        if (state.autopilot?.phase === 'active') practice(m, 'piloting', 2);
+        break;
+      }
+      m.activity = 'to-helm';
+      if (walk(m, Math.max(speed, CRAWL) * RUN)) {
+        const holder = state.ship.crew.find(c => c.id !== m.id && c.seat === t.seat);
+        if (holder) { /* someone already flying: wait beside them */ m.activity = 'waiting'; }
+        else sit(m, fixtureById(G, t.seat));
+      }
+      break;
+    }
+    case 'watch': stepWatch(state, m, t, speed); break;
+    case 'sleep': {
+      if (t.phase === 'asleep') {
+        m.activity = seatKind(m.seat) === 'bunk' ? 'sleeping' : 'sleeping-couch';
+        const awake = t.exhausted ? m.needs.rest >= 60 : block !== 'sleep' && (m.needs.rest >= 50 || block === 'duty');
+        if (awake) { abandonTask(state, m); m.pause = 1; }
+        break;
+      }
+      m.activity = 'to-bed';
+      if (walk(m, Math.max(speed, CRAWL))) {
+        const f = t.seat && fixtureById(G, t.seat);
+        const holder = f && state.ship.crew.find(c => c.id !== m.id && c.seat === f.id);
+        if (f && !holder) sit(m, f);
+        t.phase = 'asleep';
+      }
+      break;
+    }
+    case 'eat': stepEat(state, m, t, speed, emit); break;
+    case 'wash': {
+      const head = fixtureById(G, t.head);
+      if (t.phase === 'goto') {
+        m.activity = 'to-head';
+        if (walk(m, speed)) t.phase = 'queue';
+      } else if (t.phase === 'queue') {
+        const holder = state.ship.crew.find(c => c.id !== m.id && c.seat === head.id);
+        if (holder) {
+          m.activity = 'waiting';
+          if (++t.waited > WAIT_LIMIT) { m.task = null; m.pause = randInt(20, 40); }
+        } else { sit(m, head); t.phase = 'use'; t.timer = WASH_MINUTES; t.seat = head.id; }
+      } else {
+        m.activity = 'washing';
+        if (--t.timer <= 0) {
+          ctx.hooks?.useWater?.(SHOWER_WATER);
+          m.needs.hygiene = 100;
+          leaveSeat(state, m);
+          m.task = null;
+          m.pause = 1;
+        }
+      }
+      break;
+    }
+    case 'leisure': {
+      if (t.phase === 'goto') {
+        m.activity = t.where === 'rec' ? 'to-rec' : 'to-mess';
+        if (walk(m, speed)) {
+          if (t.where === 'rec') {
+            const f = fixtureById(G, t.seat);
+            if (state.ship.crew.some(c => c.id !== m.id && c.seat === f.id)) { m.task = null; break; }
+            sit(m, f);
+          } else {
+            m.pos.sx += ((m.id % 3) - 1) * 0.3;    // room around the table
+          }
+          t.phase = 'on';
+        }
+        break;
+      }
+      m.activity = t.where === 'rec' ? 'exercising' : 'socializing';
+      const company = t.where === 'table' ? companyAtTables(state, m) : 0;
+      m.needs.fun = Math.min(100, m.needs.fun + (t.where === 'rec' ? 1.5 : 0.6 + 0.3 * company));
+      if (--t.timer <= 0 || m.needs.fun >= 98) { if (m.seat) leaveSeat(state, m); m.task = null; m.pause = randInt(2, 8); }
+      break;
+    }
+    case 'carried':
+      m.activity = 'carried';
+      break;
+    default:
+      m.task = null;
+  }
+}
+
+function companyAtTables(state, m) {
+  const deck = deckOf(state, m);
+  return state.ship.crew.filter(o => o !== m && !o.dead && deckOf(state, o) === deck &&
+    ((o.task?.type === 'leisure' && o.task.where === 'table') || (o.task?.type === 'eat' && o.task.phase === 'eating'))).length;
+}
+
+function stepWatch(state, m, t, speed) {
+  const G = shipGeometry(state.ship);
+  if (t.phase === 'on') {
+    m.activity = `watch-${t.station}`;
+    practice(m, STATIONS[t.station].skill, 0.3);
+    return;
+  }
+  m.activity = 'to-station';
+  if (!walk(m, Math.max(speed, t.seat ? CRAWL : 0))) return;
+  if (t.seat) {
+    const holder = state.ship.crew.find(c => c.id !== m.id && c.seat === t.seat);
+    if (holder) {
+      // Station taken (someone flying by hand, or another watch): stand by
+      const f = fixtureById(G, t.seat);
+      const n = standNode(G, f);
+      if (n != null) { m.pos.sx = G.nodes[n].sx; m.pos.sy = G.nodes[n].sy; }
+      m.activity = 'standing-by';
+      t.standby = true;
+      return;
+    }
+    sit(m, fixtureById(G, t.seat));
+    t.standby = false;
+  }
+  t.phase = 'on';
+}
+
+function mealService(state) {
+  const perf = systemPerf(state, 'galley');
+  if (perf === 0) return { prep: 2, fun: -5, mood: -3, kind: 'cold rations' };
+  const cookId = state.$watch?.galley;
+  if (cookId != null) {
+    const cook = state.ship.crew.find(c => c.id === cookId);
+    const bonus = cook?.role === 'Cook' ? 8 : 0;
+    return { prep: perf >= 1 ? 3 : 8, fun: (perf >= 1 ? 18 : 8) + bonus, mood: perf >= 1 ? 1.5 + bonus / 8 : 0.5, kind: 'hot meal' };
+  }
+  return { prep: perf >= 1 ? 10 : 18, fun: perf >= 1 ? 6 : 0, mood: perf >= 1 ? 0 : -1, kind: 'self-serve' };
+}
+
+function stepEat(state, m, t, speed, emit) {
+  const G = shipGeometry(state.ship);
+  const res = state.resources;
+  switch (t.phase) {
+    case 'galley':
+      m.activity = 'to-galley';
+      if (walk(m, speed)) {
+        if (res.food.current < RATION_PER_MEAL) {
+          emit('crew-no-food', { member: m });
+          m.task = null; m.pause = 60;
+          return;
+        }
+        t.service = mealService(state);
+        t.timer = t.service.prep;
+        t.phase = 'prep';
+      }
+      return;
+    case 'prep':
+      m.activity = t.service.kind === 'cold rations' ? 'cold-rations' : 'cooking';
+      if (--t.timer <= 0) {
+        const table = nearestFixture(state, m, 'table');
+        t.phase = 'table';
+        if (table) goToNode(state, m, standNode(G, table));
+      }
+      return;
+    case 'table':
+      m.activity = 'to-mess';
+      if (walk(m, speed)) {
+        m.pos.sx += ((m.id % 3) - 1) * 0.3;
+        t.phase = 'eating'; t.timer = MEAL_MINUTES;
+        res.food.current = Math.max(0, res.food.current - RATION_PER_MEAL);
+      }
+      return;
+    case 'eating':
+      m.activity = 'eating';
+      m.needs.food = Math.min(100, m.needs.food + 100 / MEAL_MINUTES);
+      m.needs.fun = Math.min(100, m.needs.fun + 0.15 * companyAtTables(state, m));
+      if (--t.timer <= 0) {
+        m.needs.food = 100;
+        m.needs.fun = Math.max(0, Math.min(100, m.needs.fun + t.service.fun));
+        m.moraleMod = (m.moraleMod || 0) + t.service.mood;     // good food lifts a ship; cold rations grind it down
+        m.task = null; m.pause = randInt(1, 5);
+      }
+  }
+}
+
+function stepWork(state, m, t, speed, emit) {
+  const job = state.jobs.list.find(j => j.id === t.jobId);
+  if (!job) { m.task = null; return; }
+  const label = t.kind === JobType.MAINTAIN ? 'maintaining' : t.kind === JobType.FABRICATE ? 'fabricating' : t.kind === JobType.SEAL ? 'sealing' : 'repairing';
+  if (t.phase === 'goto') {
+    m.activity = `to-${label}`;
+    if (walk(m, speed)) {
+      t.phase = 'work';
+      t.progress = 0;
+      t.need = t.kind === JobType.SEAL ? Math.round(40 * Math.max(0.6, 1.6 - m.skills.engineering / 100))
+        : workMinutes(state, t.kind, t.system, m.skills.engineering, 1);
+      t.mode = t.kind === JobType.REPAIR ? repairMode(state, t.system) : t.kind;
+    }
+    return;
+  }
+  m.activity = t.kind === JobType.REPAIR && t.mode === 'jury' ? 'jury-rigging' : label;
+  t.progress += efficiency(m);
+  practice(m, 'engineering');
+  if (t.progress < t.need) return;
+
+  let result;
+  if (t.kind === JobType.REPAIR) result = completeRepair(state, t.system, m.skills.engineering);
+  else if (t.kind === JobType.MAINTAIN) result = completeMaintenance(state, t.system);
+  else if (t.kind === JobType.SEAL) { result = completeSeal(state, t.deck); m.suit.keep = false; }
+  else result = completeFabrication(state);
+  emit('crew-work-done', { member: m, kind: t.kind, system: t.system, result });
+  if (result.success) closeJob(state, job);
+  else { job.status = 'open'; job.assignee = null; }
+  m.task = null;
+  m.pause = 2;
+}
+
+function stepRescue(state, m, t, speed, emit) {
+  const G = shipGeometry(state.ship);
+  const p = state.ship.crew.find(c => c.id === t.patient);
+  const job = state.jobs.list.find(j => j.id === t.jobId);
+  if (!p || p.dead || !job) { if (t.phase === 'carry') dropPatient(state, m); m.task = null; return; }
+  if (t.phase === 'goto') {
+    m.activity = 'rescuing';
+    if (walk(m, speed * RUN)) {
+      if (Math.hypot(p.pos.sx - m.pos.sx, p.pos.sy - m.pos.sy) > 1.2) {
+        setDestination(state, m, Math.round(p.pos.sx), Math.round(p.pos.sy)); // patient moved
+      } else {
+        t.phase = 'stabilize';
+        t.timer = Math.max(2, 8 - Math.floor(m.skills.medical / 20));
+      }
+    }
+  } else if (t.phase === 'stabilize') {
+    m.activity = 'first-aid';
+    if (p.deathTimer >= 0) p.deathTimer = Math.max(p.deathTimer, 2);   // CPR holds the spiral
+    if (--t.timer <= 0) {
+      if (stabilize(p)) emit('crew-stabilized', { member: p, medic: m });
+      if (p.seat) p.seat = null;
+      p.task = { type: 'carried', by: m.id };
+      p.path = [];
+      const bed = G.fixtures.medbay?.[0];
+      t.phase = 'carry';
+      setDestination(state, m, bed.sx, bed.sy);
+    }
+  } else if (t.phase === 'carry') {
+    m.activity = 'carrying';
+    const done = walk(m, speed * 0.5);
+    p.pos.sx = m.pos.sx; p.pos.sy = m.pos.sy;
+    if (done) {
+      const bed = G.fixtures.medbay[0];
+      const holder = state.ship.crew.find(c => c.id !== p.id && c.seat === bed.id);
+      if (!holder) sit(p, bed);
+      p.task = { type: 'heal', phase: p.seat ? 'bed' : 'waiting' };
+      closeJob(state, job);
+      m.task = null;
+      // step off the bed
+      const n = standNode(G, bed);
+      if (n != null) { m.pos.sx = G.nodes[n].sx; m.pos.sy = G.nodes[n].sy; }
+      m.pause = 1;
+      emit('crew-delivered', { member: p, medic: m });
+    }
+  }
 }
 
 function dropPatient(state, carrier) {
@@ -371,158 +995,25 @@ function healStep(state, m, ctx) {
   const res = state.resources.medSupplies;
   const supplied = res.current > 0;
   if (supplied) res.current = Math.max(0, res.current - MEDBAY_SUPPLY_PER_MIN);
-  const healed = medbayTick(m, supplied);
+  const medic = state.$watch?.medbay != null ? 1.5 : 1;
+  const healed = medbayTick(m, supplied, autodocRate(state) * medic);
   if (healed && isConscious(m)) {
     leaveSeat(state, m);
-    const geo = shipGeometry(state.ship);
-    const bed = geo.fixtures.medbay[0];
-    const n = geo.nodes.find(x => x.deck === bed.deck && Math.abs(x.sx - bed.sx) + Math.abs(x.sy - bed.sy) === 1);
-    if (n) { m.pos.sx = n.sx; m.pos.sy = n.sy; }
     m.task = null;
     m.pause = 2;
     ctx.emit?.('crew-healed', { member: m });
   }
 }
 
-function stepTask(state, m, ctx, occ, g, emit) {
-  const t = m.task;
-  const speed = WALK_TILES_PER_MIN * mobility(m, g);
-  const geo = shipGeometry(state.ship);
-
-  if (!t) { m.activity = m.seat ? 'secured' : 'idle'; return; }
-
-  switch (t.type) {
-    case 'patrol': {
-      m.activity = 'patrol';
-      if (walk(m, speed)) { m.task = null; m.pause = randInt(3, 12); }
-      break;
-    }
-    case 'secure': {
-      if (m.seat === t.seat) { m.activity = 'secured'; break; }
-      m.activity = 'securing';
-      const s = Math.max(speed, CRAWL);
-      if (walk(m, s)) {
-        // claim the couch (someone may have beaten us to it)
-        if (occ.has(t.seat) && occ.get(t.seat) !== m.id && state.ship.crew.find(c => c.id === occ.get(t.seat))?.seat === t.seat) {
-          m.task = null; assignSecure(state, m, occ);
-        } else {
-          m.seat = t.seat;
-          occ.set(t.seat, m.id);
-          m.activity = 'secured';
-        }
-      }
-      break;
-    }
-    case 'suit': {
-      m.activity = 'suiting';
-      if (t.phase === 'goto') {
-        if (walk(m, speed)) t.phase = 'don';
-      } else if (++t.timer >= 3) {
-        const locker = state.lifeSupport.lockers[t.locker];
-        if (locker?.hasSuit) {
-          locker.hasSuit = false;
-          m.suit = { wearing: true, o2: 48, lockerId: t.locker };
-          emit('crew-suited', { member: m });
-        }
-        m.task = null;
-      }
-      break;
-    }
-    case 'heal': {
-      const bed = geo.fixtures.medbay?.[0];
-      if (m.seat) { m.activity = 'healing'; healStep(state, m, ctx); break; }
-      m.activity = 'to-medbay';
-      if (walk(m, speed) || !m.path.length) {
-        const holder = occ.get(bed.id);
-        if (holder == null || holder === m.id) {
-          m.seat = bed.id; occ.set(bed.id, m.id);
-          m.pos.sx = bed.sx; m.pos.sy = bed.sy;
-          m.activity = 'healing';
-        } else {
-          m.activity = 'waiting';      // queue beside the autodoc
-        }
-      }
-      break;
-    }
-    case 'rescue': {
-      const p = state.ship.crew.find(c => c.id === t.patient);
-      const job = state.jobs.list.find(j => j.id === t.jobId);
-      if (!p || p.dead || !job) { if (t.phase === 'carry') dropPatient(state, m); m.task = null; break; }
-      if (t.phase === 'goto') {
-        m.activity = 'rescuing';
-        if (walk(m, speed * RUN)) {
-          if (Math.hypot(p.pos.sx - m.pos.sx, p.pos.sy - m.pos.sy) > 1.2) {
-            setDestination(state, m, Math.round(p.pos.sx), Math.round(p.pos.sy)); // patient moved
-          } else {
-            t.phase = 'stabilize';
-            t.timer = Math.max(2, 8 - Math.floor(m.skills.medical / 20));
-          }
-        }
-      } else if (t.phase === 'stabilize') {
-        m.activity = 'first-aid';
-        if (p.deathTimer >= 0) p.deathTimer = Math.max(p.deathTimer, 2);   // CPR holds the spiral
-        if (--t.timer <= 0) {
-          if (stabilize(p)) emit('crew-stabilized', { member: p, medic: m });
-          if (p.seat?.startsWith('couch')) p.seat = null;
-          p.task = { type: 'carried', by: m.id };
-          p.path = [];
-          const bed = geo.fixtures.medbay?.[0];
-          t.phase = 'carry';
-          setDestination(state, m, bed.sx, bed.sy);
-        }
-      } else if (t.phase === 'carry') {
-        m.activity = 'carrying';
-        const done = walk(m, speed * 0.5);
-        p.pos.sx = m.pos.sx; p.pos.sy = m.pos.sy;
-        if (done) {
-          const bed = geo.fixtures.medbay[0];
-          const holder = occ.get(bed.id);
-          if (holder == null) {
-            p.seat = bed.id; occ.set(bed.id, p.id);
-            p.pos.sx = bed.sx; p.pos.sy = bed.sy;
-          }
-          p.task = { type: 'heal', phase: p.seat ? 'bed' : 'waiting' };
-          closeJob(state, job);
-          m.task = null;
-          m.pause = 1;
-          emit('crew-delivered', { member: p, medic: m });
-        }
-      }
-      break;
-    }
-    case 'repair': {
-      m.activity = 'repairing';
-      if (t.phase === 'goto') {
-        if (walk(m, speed)) t.phase = 'work';
-      } else if (++t.timer >= t.duration) {
-        const job = state.jobs.list.find(j => j.id === t.jobId);
-        const result = ctx.hooks?.repairLS?.(t.deck, m.skills.engineering);
-        emit('crew-repair', { member: m, deck: t.deck, result });
-        if (job) {
-          if (result?.success) closeJob(state, job);
-          else { job.status = 'open'; job.assignee = null; }
-        }
-        m.task = null;
-      }
-      break;
-    }
-    case 'reactor': {
-      const job = state.jobs.list.find(j => j.id === t.jobId);
-      if (!job) { m.task = null; break; }
-      if (t.phase === 'goto') {
-        m.activity = 'to-reactor';
-        if (walk(m, speed)) t.phase = 'work';
-      } else {
-        m.activity = 'reactor-work';
-      }
-      break;
-    }
-    case 'carried':
-      m.activity = 'carried';
-      break;
-    default:
-      m.task = null;
+/** Who is actually manning each station this minute (station → crew id). */
+function watchState(state) {
+  const w = { helm: null, ops: null, engineering: null, workshop: null, medbay: null, galley: null };
+  for (const m of state.ship.crew) {
+    if (!isConscious(m)) continue;
+    if (seatKind(m.seat) === 'helm') w.helm = m.id;
+    if (m.task?.type === 'watch' && m.task.phase === 'on') w[m.task.station] ??= m.id;
   }
+  return w;
 }
 
 /** True when the assigned engineer is physically working at the reactor. */
@@ -530,41 +1021,48 @@ export function engineerAtReactor(state, jobId) {
   return state.ship.crew.some(m => m.task?.type === 'reactor' && m.task.jobId === jobId && m.task.phase === 'work' && isConscious(m));
 }
 
-/** Drop the current task cleanly: reopen its job, set down anyone being carried. */
-export function abandonTask(state, m) {
-  if (m.task?.jobId) {
-    const j = state.jobs.list.find(x => x.id === m.task.jobId);
-    if (j) { j.status = 'open'; j.assignee = null; }
-  }
-  if (m.task?.type === 'rescue' && m.task.phase === 'carry') dropPatient(state, m);
-  m.task = null;
-  m.path = [];
-}
+// ---- PLAYER ORDERS ----
 
-/** Player order: send this member to the autodoc. */
+/** Send this member to the autodoc. */
 export function orderHeal(state, m) {
   if (!isConscious(m)) return false;
   if (m.task?.type === 'heal') return true;
-  abandonTask(state, m);
-  return startHeal(state, m, occupancy(state));
+  return startHeal(state, m);
 }
 
-/** Player order: cancel current task (leaves couch/bed). */
+/** Cancel current task (leaves couch/bed). */
 export function orderStandDown(state, m) {
   abandonTask(state, m);
   leaveSeat(state, m);
   m.pause = 3;
 }
 
-/** Place crew at their home decks at game start. */
+/** Place crew for the start of a game: on watch, in their bunks, or about the ship. */
 export function placeCrew(state) {
-  const geo = shipGeometry(state.ship);
+  const G = shipGeometry(state.ship);
+  const occ = new Map();
   for (const m of state.ship.crew) {
-    const nodes = deckNodes(geo, m.homeDeck);
-    const n = geo.nodes[nodes[(m.id * 3) % nodes.length]];
+    const block = scheduleBlock(state, m);
+    m.needs.rest = block === 'sleep' ? 45 : block === 'duty' ? 85 : 60;
+    const nodes = deckNodes(G, m.homeDeck);
+    const n = G.nodes[nodes[(m.id * 3) % nodes.length]];
     m.pos = { sx: n.sx, sy: n.sy };
-    m.$px = n.sx; m.$py = n.sy;
-    m.pause = randInt(1, 6) + Math.floor(random() * 3);
+    m.pause = randInt(1, 6);
+    if (block === 'sleep') {
+      const bunk = (G.fixtures.bunk || []).find(f => !occ.has(f.id));
+      if (bunk) { occ.set(bunk.id, m.id); sit(m, bunk); m.task = { type: 'sleep', phase: 'asleep', exhausted: false, seat: bunk.id }; }
+    } else if (block === 'duty' && STATIONS[m.duty.station]) {
+      const st = STATIONS[m.duty.station];
+      const f = (G.fixtures[st.fixture] || []).find(x => !occ.has(x.id));
+      if (f) {
+        occ.set(f.id, m.id);
+        if (st.seat) { sit(m, f); m.task = { type: 'watch', station: m.duty.station, phase: 'on', seat: f.id }; }
+        else {
+          const s = standNode(G, f);
+          if (s != null) { m.pos = { sx: G.nodes[s].sx, sy: G.nodes[s].sy }; m.task = { type: 'watch', station: m.duty.station, phase: 'on', fixture: f.id }; }
+        }
+      }
+    }
+    m.$px = m.pos.sx; m.$py = m.pos.sy;
   }
 }
-

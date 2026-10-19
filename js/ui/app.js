@@ -14,6 +14,7 @@ import { resetTacCache } from './tac.js';
 import { initSelection, selectCrew, selectTile, clearSelection, renderSelection, showDeckMenu } from './selection.js';
 import { initDialogs, openDialog, closeDialog, closeTopDialog, openMissions, openJobs, openStation, hail } from './dialogs.js';
 import { initPresenter, resourceAlert } from './presenter.js';
+import { openSystems, openRoster } from './shipboard.js';
 import { initSettings, renderSettings } from './settings.js';
 import { saveCurrent, loadSave, latestSave, renderSaveList, scheduleAutosave, stopAutosave } from './persistence.js';
 import { startParticles, stopParticles, updateParticleMotion } from './particles.js';
@@ -26,6 +27,7 @@ import { maxSpeed, releaseHold } from '../sim/autopilot.js';
 import { randomCaptainName, ROLES } from '../sim/crew.js';
 import { dockedStation } from '../sim/contracts.js';
 import { forceDistress } from '../sim/missions.js';
+import { damageSystem, meteoroidStrike, SYSTEM_IDS } from '../sim/systems.js';
 import { spawnTrafficShip } from '../sim/traffic.js';
 import {
   iconNewGame, iconLoadGame, iconSettings, iconPause, iconHudSettings, iconHudSave, iconHudExit,
@@ -87,7 +89,7 @@ export async function boot() {
   refreshContinue();
 
   // In-game UI
-  initHud(requestSpeed, toggleCombat);
+  initHud(requestSpeed, toggleCombat, openSystems);
   initLog();
   setResourceAlertHandler(resourceAlert);
   initNav({ hail, openStation: () => openStation() });
@@ -96,6 +98,7 @@ export async function boot() {
   initPresenter();
   initKeyboard({
     speed: requestSpeed, togglePause, nav: (tab) => toggleNav(tab), missions: openMissions, jobs: openJobs,
+    systems: openSystems, roster: openRoster,
     station: () => dockedStation(ui.state) ? openStation() : toast('Not docked', 'warn'),
     combat: toggleCombat, escape: onEscape, save: () => quickSave(), devFlip, devCut,
   });
@@ -103,7 +106,7 @@ export async function boot() {
     const a = b.dataset.action;
     const fn = {
       'open-map': () => openNav('solar'), 'open-station': () => openStation(), 'open-missions': openMissions,
-      'open-jobs': openJobs, 'game-settings': openSettingsDialog, 'save-game': openSaveDialog, 'exit-game': openExitDialog,
+      'open-jobs': openJobs, 'open-systems': openSystems, 'open-roster': openRoster, 'game-settings': openSettingsDialog, 'save-game': openSaveDialog, 'exit-game': openExitDialog,
     }[a];
     if (fn) b.addEventListener('click', fn);
   });
@@ -342,6 +345,10 @@ function initDevHelm() {
   const tools = [
     ['DISTRESS CALL', () => forceDistress(ui.state, (t, p) => bus.emit(t, p))],
     ['+10K MCR', () => { ui.state.resources.credits.current += 10_000; }],
+    ['KILL FLT CMP', () => damageSystem(ui.state, 'flightComputer', { severity: 'major', cause: 'dev' }, (t, p) => bus.emit(t, p))],
+    ['METEOROID', () => meteoroidStrike(ui.state, (t, p) => bus.emit(t, p))],
+    ['WEAR ALL', () => { for (const id of SYSTEM_IDS) ui.state.systems.units[id].integrity = Math.max(0, ui.state.systems.units[id].integrity - 40); }],
+    ['+10 SPARES', () => { const p = ui.state.resources.parts; p.current = Math.min(p.max, p.current + 10); }],
     ['REFUEL', () => { ui.state.resources.fuel.current = ui.state.resources.fuel.max; }],
     ['+1K TRAFFIC', () => { for (let i = 0; i < 1000; i++) spawnTrafficShip(ui.state); toast(`${ui.state.entities.length} entities`); }],
     ['+50K TRAFFIC', () => { for (let i = 0; i < 50_000; i++) spawnTrafficShip(ui.state); toast(`${ui.state.entities.length} entities`); }],

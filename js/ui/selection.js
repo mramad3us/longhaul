@@ -12,8 +12,13 @@ import { G0, MIN_S } from '../core/constants.js';
 import { TileType, TILE_NAMES, TILE_DESCRIPTIONS } from '../sim/tiles.js';
 import { overallHealth, isConscious, CONDITION_LABELS } from '../sim/crew.js';
 import { orderHeal, orderStandDown } from '../sim/crew-ai.js';
-import { shipGeometry } from '../sim/ship-layout.js';
-import { atmoStatus, equipmentLabel, toggleLS, setVented, setBreach, suitsOnDeck } from '../sim/life-support.js';
+import { shipGeometry, FIXTURE_KIND, seatKind } from '../sim/ship-layout.js';
+import { atmoStatus, setVented, setBreach, suitsOnDeck } from '../sim/life-support.js';
+import { SYSTEM_BY_FIXTURE, systemPerf, waterRecovery, sensorRangeFactor, flightComputerState } from '../sim/systems.js';
+import { STATIONS, SHIFTS, scheduleBlock, minutesLeftInBlock } from '../sim/duty.js';
+import { NEEDS, NEED_LABEL, efficiency } from '../sim/needs.js';
+import { formatDuration } from '../core/clock.js';
+import { describeActivity, systemCardHTML, handleSystemAction } from './shipboard.js';
 import { reactorStatusText, ReactorState, orderShutdown, cancelShutdown, orderStartup, orderPatch, emergencyShutoff, cancelEmergencyShutoff, immediateShutoff, triggerContainmentFailure, MIN_ENGINEERING, STARTUP_MIN_FUEL } from '../sim/reactor.js';
 import { toggleTransponder, toggleSOS, signalBars } from '../sim/comms.js';
 import { getWorld } from '../sim/world.js';
@@ -67,14 +72,6 @@ export function renderSelection(force = false) {
 
 // ---- CREW ----
 
-const ACTIVITY = {
-  idle: 'Standing watch', patrol: 'On patrol', securing: 'Heading to a crash couch', secured: 'Strapped in',
-  suiting: 'Donning EVA suit', 'to-medbay': 'Walking to the autodoc', waiting: 'Waiting for the autodoc', healing: 'In the autodoc',
-  rescuing: 'Running to a downed crewmate', 'first-aid': 'Administering first aid', carrying: 'Carrying a casualty to the autodoc',
-  repairing: 'Repairing life support', 'to-reactor': 'Heading to the reactor', 'reactor-work': 'Working the reactor',
-  carried: 'Being carried', down: 'Down', dead: 'Deceased',
-};
-
 function crewHTML(s, m) {
   const b = m.body, h = m.heart;
   const hc = (v) => v >= 70 ? 'var(--ok)' : v >= 40 ? 'var(--warning)' : 'var(--danger)';
@@ -91,7 +88,7 @@ function crewHTML(s, m) {
     return `<span class="crew-condition crew-condition-${sev}">${CONDITION_LABELS[c] || c.toUpperCase()}</span>`;
   }).join('') : '<span class="crew-condition crew-condition-ok">NOMINAL</span>';
   const skills = ['piloting', 'security', 'engineering', 'medical'].map(k =>
-    `<div class="crew-skill"><span class="crew-skill-label">${k.slice(0, 3).toUpperCase()}</span><div class="crew-skill-bar"><div class="crew-skill-fill" style="width:${m.skills[k]}%"></div></div><span class="crew-skill-val">${m.skills[k]}</span></div>`).join('');
+    `<div class="crew-skill"><span class="crew-skill-label">${k.slice(0, 3).toUpperCase()}</span><div class="crew-skill-bar"><div class="crew-skill-fill" style="width:${Math.round(m.skills[k])}%"></div></div><span class="crew-skill-val">${Math.floor(m.skills[k])}</span></div>`).join('');
   const geo = shipGeometry(s.ship);
   const deck = s.ship.decks[geo.deckOfRow(m.pos.sy)];
   const part = (cls, name, v, icon) => `<div class="crew-body-part ${cls} ${bc(v)}" title="${name}: ${Math.round(v)}%">${icon ? '<span class="crew-body-icon">&#9673;</span>' : `<span class="crew-body-val">${Math.round(v)}</span>`}</div>`;
@@ -103,9 +100,16 @@ function crewHTML(s, m) {
     if (isConscious(m) && (m.task || m.seat) && m.task?.type !== 'carried') btns.push('<button class="crew-action-btn crew-action-cancel" data-act="stand-down">STAND DOWN</button>');
     if (btns.length) actions = `<div class="crew-actions">${btns.join('')}</div>`;
   }
+  const block = scheduleBlock(s, m);
+  const st = STATIONS[m.duty.station];
+  const dutyLine = m.dead ? '' : `<div class="crew-duty"><span class="crew-duty-station">${esc(st ? st.label : 'No station')} · ${SHIFTS[m.duty.shift].label}</span>
+    <span class="duty-now duty-${block}">${block === 'duty' ? 'ON WATCH' : block === 'sleep' ? 'SLEEP' : 'OFF WATCH'} · ${formatDuration(minutesLeftInBlock(s, m))}</span></div>`;
+  const needs = m.dead ? '' : `<div class="crew-section-label">NEEDS <span class="crew-eff">EFFICIENCY ${Math.round(efficiency(m) * 100)}%</span></div>` +
+    NEEDS.map(k => `<div class="crew-stat"><span class="crew-stat-label">${NEED_LABEL[k]}</span><div class="crew-stat-bar"><div class="crew-stat-fill need-fill${m.needs[k] < 20 ? ' need-low' : m.needs[k] < 45 ? ' need-mid' : ''}" style="width:${Math.round(m.needs[k])}%"></div></div></div>`).join('');
   return `<div class="crew-detail-name">${esc(m.name)}</div>
     <div class="crew-detail-role">${esc(m.role)} · ${esc(deck?.name || '')}</div>
-    <div class="crew-activity">${esc(ACTIVITY[m.activity] || m.activity)}</div>
+    <div class="crew-activity">${esc(describeActivity(m))}</div>
+    ${dutyLine}
     <div class="crew-section-label">CONDITION</div>
     <div class="crew-conditions">${condHtml}</div>
     <div class="crew-section-label">VITALS</div>
@@ -126,6 +130,7 @@ function crewHTML(s, m) {
     </div>
     <div class="crew-stat"><span class="crew-stat-label">Overall</span><div class="crew-stat-bar"><div class="crew-stat-fill health" style="width:${overall}%;background:${hc(overall)}"></div></div></div>
     <div class="crew-stat"><span class="crew-stat-label">Morale</span><div class="crew-stat-bar"><div class="crew-stat-fill morale" style="width:${Math.round(m.morale)}%"></div></div></div>
+    ${needs}
     <div class="crew-section-label">SKILLS</div>
     ${skills}
     ${m.suit.wearing ? `<div class="crew-location-tag crew-location-suit">EVA suit · ${m.suit.o2.toFixed(1)}h O₂</div>` : ''}
@@ -141,6 +146,8 @@ function tileHTML(s, sel) {
   const st = atmoStatus(atmo);
   const geo = shipGeometry(s.ship);
   const fid = (kind) => `${kind}:${di}:${sel.x}:${sel.y}`;
+  const on = (station) => { const id = s.$watch?.[station]; return id != null ? s.ship.crew.find(c => c.id === id) : null; };
+  const sysId = SYSTEM_BY_FIXTURE[FIXTURE_KIND[tile]];
   const lines = [];
   const actions = [];
   const btn = (act, label, cls = 'crew-action-recover', extra = '') => `<button class="crew-action-btn ${cls}" data-act="${act}" ${extra}>${label}</button>`;
@@ -161,13 +168,47 @@ function tileHTML(s, sel) {
       if (ui.settings.devMode && r.status === ReactorState.ONLINE) actions.push(btn('r-fail', 'DEV: CONTAINMENT FAILURE', 'crew-action-cancel'));
       break;
     }
-    case TileType.LIFE_SUPPORT: {
-      const eq = s.lifeSupport.equipment[di];
-      lines.push(equipmentLabel(eq));
-      const job = s.jobs.list.find(j => j.type === 'repair-ls' && j.data.deck === di);
-      if (job) lines.push(job.assignee != null ? `Repair: ${s.ship.crew.find(c => c.id === job.assignee)?.name} working` : 'Repair queued — waiting for an engineer');
+    case TileType.LIFE_SUPPORT:
       lines.push(`O₂ tank ${fmtNum(s.resources.o2Tank.current)} kg · N₂ tank ${fmtNum(s.resources.n2Tank.current)} kg`);
-      if (eq) actions.push(btn('ls-toggle', eq.enabled ? 'DISABLE LIFE SUPPORT' : 'ENABLE LIFE SUPPORT', eq.enabled ? 'crew-action-cancel' : 'crew-action-recover'));
+      break;
+    case TileType.WATER_RECYCLER:
+      lines.push(`Recovering ${Math.round(waterRecovery(s) * 100)}% · tanks ${fmtNum(s.resources.water.current)} L`);
+      break;
+    case TileType.GALLEY: {
+      const cook = on('galley');
+      lines.push(systemPerf(s, 'galley') === 0 ? 'Down — cold rations only' : cook ? `${cook.name} cooking — hot meals` : 'No cook on duty — self-serve');
+      lines.push(`Rations ${fmtNum(s.resources.food.current)}`);
+      break;
+    }
+    case TileType.WORKBENCH: {
+      const who = on('workshop');
+      lines.push(`Spares ${s.resources.parts.current.toFixed(1)} · scrap ${s.resources.scrap.current.toFixed(1)}`);
+      lines.push(who ? `${who.name} on duty` : 'Nobody on the machine-shop watch');
+      const fab = s.ship.crew.find(m => m.task?.kind === 'fabricate' && m.task.phase === 'work');
+      if (fab) lines.push(`${fab.name} refurbishing a part — ${Math.min(99, Math.round(fab.task.progress / fab.task.need * 100))}%`);
+      break;
+    }
+    case TileType.OPS_CONSOLE: {
+      const who = on('ops');
+      lines.push(who ? `${who.name} on watch — faster tracking, debris watch` : 'Unmanned');
+      lines.push(`Sensor reach ${Math.round(sensorRangeFactor(s) * (who ? 125 : 100))}%`);
+      break;
+    }
+    case TileType.ENG_CONSOLE: {
+      const who = on('engineering');
+      lines.push(who ? `${who.name} on watch — faults caught early` : 'Unmanned — faults bite harder');
+      break;
+    }
+    case TileType.BUNK:
+    case TileType.HEAD:
+    case TileType.REC: {
+      const p = s.ship.crew.find(m => m.seat === fid(FIXTURE_KIND[tile]));
+      lines.push(p ? `${p.name} — ${describeActivity(p).toLowerCase()}` : 'Free');
+      break;
+    }
+    case TileType.TABLE: {
+      const here = s.ship.crew.filter(m => !m.dead && (m.activity === 'eating' || m.activity === 'socializing') && geo.deckOfRow(m.pos.sy) === di);
+      lines.push(here.length ? here.map(m => `${m.name} ${m.activity === 'eating' ? 'eating' : 'chatting'}`).join(' · ') : 'Nobody at the table');
       break;
     }
     case TileType.RADIO: {
@@ -215,10 +256,14 @@ function tileHTML(s, sel) {
       lines.push(l?.hasSuit ? 'EVA suit stowed (48h O₂)' : 'Empty — suit in use');
       break;
     }
-    case TileType.NAV_CONSOLE:
-      lines.push(s.autopilot ? `Autopilot engaged` : 'Standing by');
+    case TileType.NAV_CONSOLE: {
+      const pilot = s.ship.crew.find(m => !m.dead && seatKind(m.seat) === 'helm');
+      const fc = flightComputerState(s);
+      lines.push(pilot ? `${pilot.name} at the helm${s.autopilot?.helm === 'manual' ? ' — FLYING BY HAND' : ''}` : 'Helm unmanned');
+      lines.push(fc === 'failed' ? 'Flight computer DOWN — manual flight only' : s.autopilot ? 'Autopilot engaged' : 'Standing by');
       actions.push(btn('open-nav', 'OPEN NAVIGATION'));
       break;
+    }
     case TileType.STORAGE: {
       const load = s.cargo.reduce((a, c) => a + c.mass, 0);
       lines.push(`Hold ${fmtMass(load)} / ${fmtMass(s.cargoCapacity)}`);
@@ -241,6 +286,7 @@ function tileHTML(s, sel) {
     <div class="tile-detail-deck">${esc(deck.name.toUpperCase())}</div>
     <p class="tile-detail-desc">${esc(TILE_DESCRIPTIONS[tile] || '')}</p>
     ${lines.length ? `<div class="tile-detail-status"><span class="tile-status-label">STATUS</span>${lines.map(l => `<span class="tile-status-value">${esc(l)}</span>`).join('')}</div>` : ''}
+    ${sysId ? systemCardHTML(s, sysId, { compact: true }) : ''}
     <div class="tile-detail-atmosphere"><span class="tile-status-label">COMPARTMENT — ${st.toUpperCase()}</span>
       <div class="atmo-readout ${atmoCls}"><span>${atmo.pressure.toFixed(1)} kPa</span><span>O₂ ${atmo.o2Pct.toFixed(1)}%</span><span>N₂ ${atmo.n2Pct.toFixed(1)}%</span><span>CO₂ ${atmo.co2Pct.toFixed(2)}%</span></div>
       <div class="atmo-meta">EVA suits on deck: ${suitsOnDeck(s, di)}</div></div>
@@ -252,7 +298,6 @@ function onClick(e) {
   const s = ui.state;
   if (!b || !s) return;
   const act = b.dataset.act;
-  const sel = ui.selection.tile;
   const m = ui.selection.crew != null ? s.ship.crew.find(c => c.id === ui.selection.crew) : null;
   const report = (r) => { toast(r.message, r.success ? 'ok' : 'danger'); if (r.success) logEntry(r.message, 'system'); };
   switch (act) {
@@ -266,12 +311,7 @@ function onClick(e) {
     case 'r-startup': report(orderStartup(s)); break;
     case 'r-patch': report(orderPatch(s)); break;
     case 'r-fail': if (triggerContainmentFailure(s)) { toast('CONTAINMENT FAILURE', 'danger'); logEntry('Reactor containment failure! 90 minutes to supercritical', 'danger'); } break;
-    case 'ls-toggle': {
-      const on = toggleLS(s, sel.deck);
-      toast(`Life support ${on ? 'enabled' : 'DISABLED'}`, on ? 'ok' : 'danger');
-      logEntry(`Life support ${on ? 'enabled' : 'manually disabled'} (${s.ship.decks[sel.deck].name})`, on ? 'system' : 'danger');
-      break;
-    }
+    case 'sys-service': case 'sys-repair': case 'sys-toggle': handleSystemAction(act, b.dataset.sys); break;
     case 'sos': { const on = toggleSOS(s); toast(on ? 'SOS BROADCASTING' : 'SOS cancelled', on ? 'danger' : 'ok'); logEntry(on ? 'Distress beacon activated' : 'Distress beacon cancelled', on ? 'danger' : 'system'); break; }
     case 'transponder': { const on = toggleTransponder(s); toast(on ? 'Transponder active' : 'Transponder silenced', on ? 'ok' : 'warn'); logEntry(on ? 'Transponder broadcasting' : 'Transponder silenced — running dark', on ? 'system' : 'warn'); break; }
     case 'hail': hooks.hail(b.dataset.id); break;

@@ -13,6 +13,8 @@ import { fmtNum } from './dom.js';
 import { openDistress } from './dialogs.js';
 import { RANGE } from '../core/constants.js';
 
+let noFoodAt = null;
+
 const HANDLERS = {
   'route-engaged': ({ target, unsecured, override }) => {
     if (override && unsecured.length) {
@@ -53,14 +55,44 @@ const HANDLERS = {
   'crew-delivered': ({ member, medic }) => logEntry(`${medic.name} carried ${member.name} to the autodoc`, 'crew'),
   'crew-healed': ({ member }) => logEntry(`${member.name} discharged from the autodoc`, 'ok'),
   'crew-suited': ({ member }) => logEntry(`${member.name} donned an EVA suit`, 'crew'),
-  'crew-repair': ({ member, result }) => {
-    if (result?.success) { logEntry(`${member.name}: ${result.message}`, 'ok'); toast(result.message, 'ok'); }
-    else logEntry(`${member.name}: ${result?.message || 'repair failed'}`, 'warn');
+  'crew-work-done': ({ member, kind, result }) => {
+    if (kind === 'maintain') logEntry(`${member.name}: ${result.message}`, 'system');
+    else if (kind === 'fabricate') logEntry(`${member.name}: ${result.message}`, 'system');
+    else if (!result.success) logEntry(`${member.name}: ${result.message}`, 'warn');
+    else if (result.mode === 'jury') { logEntry(`${member.name}: ${result.message}`, 'warn'); toast(result.message, 'warn'); }
+    else { logEntry(`${member.name}: ${result.message}`, 'ok'); toast(result.message, 'ok'); }
+  },
+  'crew-no-food': () => {
+    const now = ui.state.clock.minute;
+    if (now - (noFoodAt ?? -Infinity) < 360) return;
+    noFoodAt = now;
+    logEntry('The galley is empty — no rations left aboard', 'danger'); toast('NO FOOD ABOARD', 'danger');
   },
   'suit-depleted': ({ member }) => { logEntry(`${member.name}'s suit O₂ exhausted`, 'danger'); toast(`${member.name} — SUIT O₂ OUT`, 'danger'); },
 
-  'ls-failure': ({ deck, status }) => { const n = ui.state.ship.decks[deck].name; logEntry(`Life support ${status} (${n})`, 'danger'); toast(`LIFE SUPPORT ${status.toUpperCase()}`, 'danger'); },
-  'ls-patch-expired': ({ deck }) => { logEntry(`Life support patch failed (${ui.state.ship.decks[deck].name})`, 'danger'); toast('LS PATCH FAILED', 'danger'); },
+  'system-fault': ({ id, name, fault, status, cause }) => {
+    const failed = status === 'failed';
+    const why = cause === 'meteoroid' ? ' (meteoroid damage)' : cause === 'power loss' ? ' (after power loss)' : '';
+    logEntry(`${name}: ${fault.text}${why} — ${failed ? 'FAILED' : 'degraded'}`, failed ? 'danger' : 'warn');
+    if (id === 'flightComputer' && failed) toast('FLIGHT COMPUTER DOWN — a pilot must fly from the helm', 'danger');
+    else toast(`${name.toUpperCase()} ${failed ? 'FAILED' : 'DEGRADED'}`, failed ? 'danger' : 'warn');
+  },
+  'system-patch-failed': ({ name }) => { logEntry(`${name}: the jury-rig gave out — failed again`, 'danger'); toast(`${name.toUpperCase()} — PATCH FAILED`, 'danger'); },
+  'meteoroid-strike': ({ deckName, breach, systemName }) => {
+    const what = [breach ? `HULL BREACH on ${deckName}` : `hit near ${deckName}`, systemName ? `${systemName} damaged` : ''].filter(Boolean).join(', ');
+    logEntry(`Micrometeoroid strike — ${what}`, 'danger');
+    toast(breach ? `METEOROID — HULL BREACH (${deckName})` : 'METEOROID STRIKE', 'danger');
+  },
+  'damage-control': ({ on }) => on
+    ? (logEntry('Damage control: hull breach — burn eased to 1G until it is sealed', 'danger'), toast('DAMAGE CONTROL — BURN EASED', 'danger'))
+    : logEntry('Breach sealed — damage control stood down', 'ok'),
+  'meteoroid-dodged': () => logEntry('Ops: debris on a collision course — nudged clear', 'nav'),
+  'helm-status': ({ status, was, by }) => {
+    if (status === 'unmanned') { logEntry('HELM UNMANNED — flight computer down, the ship is coasting', 'danger'); toast('HELM UNMANNED — COASTING', 'danger'); }
+    else if (status === 'manual') logEntry(`${by} has the helm — flying by hand`, 'nav');
+    else if (status === 'degraded') logEntry('Flight computer degraded — guidance wandering', 'warn');
+    else if (was === 'manual' || was === 'degraded' || was === 'unmanned') { logEntry('Flight computer back online — autopilot has the helm', 'ok'); toast('Autopilot restored', 'ok'); }
+  },
 
   'reactor-countdown': () => { logEntry('Reactor procedure complete — offline in 60 minutes', 'warn'); toast('Reactor shutdown — 1h', 'warn'); },
   'reactor-offline': () => { logEntry('Fusion reactor offline. Emergency batteries.', 'danger'); toast('REACTOR OFFLINE', 'danger'); },

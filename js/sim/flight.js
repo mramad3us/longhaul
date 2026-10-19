@@ -22,6 +22,7 @@ export const RCS_MAX_G = 0.02;                   // RCS translation authority
 export const ALIGN_TOL = 8 * Math.PI / 180;      // drive fires only within 8° of the commanded vector
 export const FUEL_PER_G_MIN = 0.05;              // kg of reaction mass per G per minute (main drive)
 export const RCS_FUEL_PER_G_MIN = 0.6;           // RCS is ~12× less efficient
+export const DRIVE_MAX_G = 10;                   // the drive's absolute limit (overdriven)
 
 export function createFlight(pos, vel, facing = 0) {
   return {
@@ -31,7 +32,7 @@ export function createFlight(pos, vel, facing = 0) {
     thrustG: 0,                      // main drive output last minute (G)
     rcsG: 0,                         // RCS output last minute (G)
     turning: 0,                      // rad turned last minute (signed)
-    maxG: 10,                        // drive limit
+    maxG: DRIVE_MAX_G,               // drive limit right now (machinery permitting)
     hold: null,                      // station-keeping: { kind:'entity'|'body', id, ox, oy (m) }
     manual: null,                    // dev helm: { throttleG }
   };
@@ -80,7 +81,8 @@ export function flightStep(f, cmd, dtMin = 1) {
   let mainA = 0, rcsA = 0;
   let turned = 0;
   let rotation = 0;         // total rotation the command asked for at the start of this step
-  const maxTurn = SLEW_RATE * dtMin;
+  const slew = f.$slew ?? SLEW_RATE;            // RCS condition sets how fast the nose swings
+  const maxTurn = slew * dtMin;
 
   const slewTo = (target) => {
     const diff = angleDiff(target, f.facing);
@@ -103,7 +105,7 @@ export function flightStep(f, cmd, dtMin = 1) {
     if (Math.abs(err) <= ALIGN_TOL) {
       // The drive is cold only while the nose is outside tolerance; small
       // tracking corrections happen with the drive lit.
-      const coldMin = Math.max(0, startErr - ALIGN_TOL) / SLEW_RATE;
+      const coldMin = Math.max(0, startErr - ALIGN_TOL) / slew;
       const frac = Math.max(0, 1 - coldMin / dtMin);
       const a = Math.min(mag * Math.cos(err), maxA) * frac;
       const cx = Math.cos(f.facing), cy = Math.sin(f.facing);

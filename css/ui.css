@@ -133,3 +133,131 @@ body.inertia-active #ship-viewport::after {
 body.reduce-motion .crt-overlay, body.reduce-motion .crt-overlay::after { animation: none !important; }
 body.reduce-motion .hud-nav-chip.chip-warn { animation: none; }
 button:focus-visible, .tac-tab:focus-visible, select:focus-visible, input:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+/* ============================================================
+   Shipboard: systems, roster, needs (v0.9)
+   ============================================================ */
+
+/* ---- Machine status lights on the cross-section ---- */
+.sys-led { fill: #2E6B45; }
+.sys-frame { stroke: transparent; }
+.sys-ok .sys-led { fill: #3FAE6A; opacity: 0.7; }
+.sys-due .sys-led { fill: var(--warning); }
+.sys-warn .sys-led { fill: var(--warm-bright); animation: ledBlink 1.1s steps(2, jump-none) infinite; }
+.sys-fail .sys-led { fill: #FF3B3B; animation: ledBlink 0.45s steps(2, jump-none) infinite; }
+.sys-fail .sys-frame { stroke: rgba(226, 85, 85, 0.55); animation: ledBlink 0.9s steps(2, jump-none) infinite; }
+.sys-off .sys-led { fill: #3A4E62; }
+@keyframes ledBlink { 0% { opacity: 1; } 100% { opacity: 0.15; } }
+body.reduce-motion .sys-led, body.reduce-motion .sys-frame { animation: none !important; }
+
+/* ---- Left panel: systems strip ---- */
+.systems-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin: 2px 0 10px; }
+.sys-pip {
+  display: flex; flex-direction: column; gap: 2px; padding: 3px 5px; cursor: pointer; text-align: left;
+  background: rgba(16, 25, 42, 0.6); border: 1px solid var(--hull-primary); border-left: 2px solid #3FAE6A;
+}
+.sys-pip:hover { border-color: var(--hull-accent); }
+.sys-pip-name { font-family: var(--font-pixel); font-size: 0.3rem; letter-spacing: 0.1em; color: var(--text-secondary); }
+.sys-pip-bar { display: block; height: 2px; background: var(--hull-primary); }
+.sys-pip-bar > span { display: block; height: 100%; background: #3FAE6A; }
+.sys-pip.sys-due { border-left-color: var(--warning); }
+.sys-pip.sys-due .sys-pip-bar > span { background: var(--warning); }
+.sys-pip.sys-warn { border-left-color: var(--warm-bright); }
+.sys-pip.sys-warn .sys-pip-name { color: var(--warm-bright); }
+.sys-pip.sys-warn .sys-pip-bar > span { background: var(--warm-bright); }
+.sys-pip.sys-fail { border-left-color: var(--danger); background: rgba(80, 20, 20, 0.35); }
+.sys-pip.sys-fail .sys-pip-name { color: var(--danger); animation: condPulse 0.9s ease-in-out infinite; }
+.sys-pip.sys-fail .sys-pip-bar > span { background: var(--danger); }
+.sys-pip.sys-off { border-left-color: var(--text-dim); opacity: 0.6; }
+.resource-bar-fill.bar-parts { background: repeating-linear-gradient(90deg, #9AAABB 0px, #9AAABB 3px, #56677A 3px, #56677A 4px); }
+
+/* ---- HUD ---- */
+.hud-systems-btn { position: relative; display: flex; align-items: center; gap: 5px; }
+.hud-systems-count { font-family: var(--font-mono); font-size: 0.7rem; color: var(--warning); }
+.hud-systems-count.has-critical { color: var(--danger); animation: condPulse 0.9s ease-in-out infinite; }
+.hud-nav-chip.chip-danger { color: var(--danger); border-color: rgba(226, 85, 85, 0.5); animation: condPulse 0.8s ease-in-out infinite; }
+.route-status-phase.phase-unmanned { color: var(--danger); animation: condPulse 0.8s ease-in-out infinite; }
+.route-machinery { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; margin: 0 0 6px; border: 1px solid var(--warm-dim); background: rgba(60, 40, 10, 0.25); font-family: var(--font-mono); font-size: 0.68rem; color: var(--warning); }
+
+/* ---- System cards ---- */
+.sys-card { border: 1px solid var(--hull-primary); border-left: 3px solid #3FAE6A; background: rgba(16, 25, 42, 0.55); padding: 7px 9px; display: flex; flex-direction: column; gap: 4px; }
+.sys-card.sys-compact { margin-top: 8px; }
+.sys-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.sys-name { font-family: var(--font-display); font-weight: 600; font-size: 0.82rem; color: var(--text-primary); }
+.sys-status { font-family: var(--font-pixel); font-size: 0.32rem; letter-spacing: 0.12em; color: #3FAE6A; }
+.sys-integrity { display: flex; align-items: center; gap: 6px; }
+.sys-bar { flex: 1; height: 4px; background: var(--hull-primary); }
+.sys-bar-fill { height: 100%; background: #3FAE6A; transition: width 0.4s ease; }
+.sys-int { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-secondary); min-width: 2.6em; text-align: right; }
+.sys-fault { font-family: var(--font-mono); font-size: 0.7rem; color: var(--warm-bright); }
+.sys-effect { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-secondary); }
+.sys-work { font-family: var(--font-mono); font-size: 0.66rem; color: var(--accent); }
+.sys-actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 2px; }
+.sys-actions .crew-action-btn { flex: 0 0 auto; }
+.sys-card.sys-due { border-left-color: var(--warning); }
+.sys-card.sys-due .sys-status { color: var(--warning); }
+.sys-card.sys-due .sys-bar-fill { background: var(--warning); }
+.sys-card.sys-warn { border-left-color: var(--warm-bright); }
+.sys-card.sys-warn .sys-status, .sys-card.sys-warn .sys-bar-fill { color: var(--warm-bright); background-color: var(--warm-bright); }
+.sys-card.sys-warn .sys-status { background: none; }
+.sys-card.sys-fail { border-left-color: var(--danger); background: rgba(70, 18, 18, 0.35); }
+.sys-card.sys-fail .sys-status { color: var(--danger); }
+.sys-card.sys-fail .sys-bar-fill { background: var(--danger); }
+.sys-card.sys-fail .sys-fault { color: #FF8080; }
+.sys-card.sys-off { border-left-color: var(--text-dim); opacity: 0.7; }
+.sys-card.sys-off .sys-status { color: var(--text-dim); }
+
+/* ---- Engineering board ---- */
+.dialog-systems { width: min(94vw, 980px); max-width: none; }
+.sys-summary { display: flex; flex-wrap: wrap; gap: 6px 18px; font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-secondary); padding: 8px 10px; border: 1px solid var(--hull-primary); margin-bottom: 10px; }
+.sys-summary b { color: var(--text-primary); font-weight: 400; }
+.sys-summary b.sys-none { color: var(--warning); }
+.sys-summary b.sys-faults { color: var(--danger); }
+.sys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
+.sys-legend { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); line-height: 1.5; margin-top: 10px; }
+
+/* ---- Duty roster ---- */
+.dialog-roster { width: min(96vw, 1100px); max-width: none; }
+.roster-head, .roster-row { display: grid; grid-template-columns: 1.1fr 1.2fr 1.3fr 1.5fr 1.4fr; gap: 10px; align-items: center; }
+.roster-head { font-family: var(--font-pixel); font-size: 0.3rem; letter-spacing: 0.12em; color: var(--text-dim); padding: 0 8px 6px; }
+.roster { display: flex; flex-direction: column; gap: 4px; }
+.roster-row { padding: 6px 8px; border: 1px solid var(--hull-primary); background: rgba(16, 25, 42, 0.5); }
+.roster-row.roster-dead { opacity: 0.4; }
+.roster-who { display: flex; flex-direction: column; }
+.roster-name { font-family: var(--font-display); font-weight: 600; font-size: 0.85rem; color: var(--text-primary); }
+.roster-role { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-secondary); }
+.roster-station { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--hull-accent); font-family: var(--font-mono); font-size: 0.72rem; padding: 3px 4px; }
+.roster-shifts { display: flex; gap: 3px; }
+.duty-shift { font-family: var(--font-mono); font-size: 0.66rem; padding: 3px 6px; background: transparent; color: var(--text-dim); border: 1px solid var(--hull-primary); cursor: pointer; }
+.duty-shift:hover { color: var(--text-secondary); border-color: var(--hull-accent); }
+.duty-shift.active { color: var(--accent); border-color: var(--accent-dim); box-shadow: 0 0 6px var(--accent-glow); }
+.roster-now { display: flex; flex-direction: column; gap: 2px; }
+.roster-activity { font-family: var(--font-mono); font-size: 0.64rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.duty-now { font-family: var(--font-pixel); font-size: 0.3rem; letter-spacing: 0.1em; }
+.duty-now.duty-duty { color: var(--accent); }
+.duty-now.duty-free { color: var(--ok); }
+.duty-now.duty-sleep { color: #8E9EEA; }
+.duty-now.duty-dead { color: var(--danger); }
+.roster-needs { display: flex; align-items: flex-end; gap: 4px; height: 22px; }
+.need-mini { display: flex; align-items: flex-end; width: 9px; height: 20px; background: var(--hull-primary); }
+.need-mini > span { display: block; width: 100%; background: var(--ok); }
+.need-mini.need-mid > span { background: var(--warning); }
+.need-mini.need-low > span { background: var(--danger); }
+.roster-morale, .roster-eff { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary); margin-left: 6px; }
+.cover { display: flex; flex-direction: column; gap: 2px; }
+.cover-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px; }
+.cover-station { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary); }
+.cover-cell { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-primary); padding: 2px 6px; border: 1px solid var(--hull-primary); }
+.cover-header .cover-cell { color: var(--text-dim); border-color: transparent; }
+.cover-cell.cover-empty { color: var(--text-dim); }
+.cover-cell.cover-gap { color: var(--warning); border-color: var(--warm-dim); }
+.roster-legend { margin-top: 10px; font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); line-height: 1.5; }
+.roster-legend b { color: var(--text-secondary); font-weight: 400; }
+
+/* ---- Crew panel ---- */
+.crew-duty { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; margin: 0 0 6px; }
+.crew-duty-station { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-secondary); }
+.crew-eff { float: right; color: var(--text-secondary); }
+.crew-stat-fill.need-fill { background: var(--ok); }
+.crew-stat-fill.need-fill.need-mid { background: var(--warning); }
+.crew-stat-fill.need-fill.need-low { background: var(--danger); }

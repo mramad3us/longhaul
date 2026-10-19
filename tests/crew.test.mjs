@@ -4,7 +4,7 @@ import { seedRandom } from '../js/core/rng.js';
 import { bus } from '../js/core/events.js';
 import { createGame, advance, minuteTick } from '../js/sim/game.js';
 import { triggerManeuver, updateInertia, isInertiaActive, Maneuver } from '../js/sim/inertia.js';
-import { shipGeometry } from '../js/sim/ship-layout.js';
+import { shipGeometry, isRestraint } from '../js/sim/ship-layout.js';
 import { setBreach } from '../js/sim/life-support.js';
 import { planRoutes } from '../js/sim/nav.js';
 import { engageRoute } from '../js/sim/autopilot.js';
@@ -53,8 +53,9 @@ export default [
       const strapped = s.ship.crew[1];
       strapped.seat = geo.fixtures.couch[0].id;
       const before = s.ship.crew.map(m => m.body.torso);
+      const loose = s.ship.crew.filter(m => !isRestraint(m.seat)).length;   // sleepers in bunks are strapped in too
       const n = triggerManeuver(s, Maneuver.BURN_START, { deltaG: 3, surprise: true, gForce: 3 });
-      assert(n === s.ship.crew.length - 1, `expected ${s.ship.crew.length - 1} bodies in motion, got ${n}`);
+      assert(loose > 0 && n === loose, `expected ${loose} bodies in motion, got ${n}`);
       let hits = [];
       for (let i = 0; i < 1000 && isInertiaActive(s); i++) hits = hits.concat(updateInertia(s, 1 / 60));
       assert(!isInertiaActive(s), 'slide never resolved');

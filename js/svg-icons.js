@@ -442,6 +442,20 @@ export function iconPower() {
 }
 
 
+export function iconParts() {
+  return svg(18, 18, '0 0 12 12', sprite([
+    '....mm......',
+    '..m.mm.m....',
+    '...mmmm.....',
+    '.mmm..mmm...',
+    '.mm....mm...',
+    '.mmm..mmm...',
+    '...mmmm.....',
+    '..m.mm.m....',
+    '....mm......',
+  ], { m: C.metalLt }, 1));
+}
+
 // ==== LANDING SCREEN LOGO (pixel art ship) ====
 
 export function logoShip() {

@@ -6,6 +6,7 @@
 import { AU_M, RANGE } from '../core/constants.js';
 import { hashString } from '../core/rng.js';
 import { getWorld } from './world.js';
+import { radioRangeFactor } from './systems.js';
 
 export function createComms() {
   return {
@@ -44,10 +45,13 @@ export function commsTick(state, emit = () => {}) {
   const pos = state.flight.pos;
   const now = state.clock.minute;
 
+  // The array's condition sets how far we can talk and listen
+  const reach = radioRangeFactor(state);
+
   // Radio roster: refreshed every few minutes, nearest first, capped for the UI
   if (now % 5 === 0 || !c.radio.length) {
     _q.length = 0;
-    world.query(pos, RANGE.RADIO, _q);
+    if (reach > 0) world.query(pos, RANGE.RADIO * reach, _q);
     // Stations and beacons always listed; then the nearest ships (bounded partial selection)
     const top = [];
     const others = [];
@@ -65,7 +69,7 @@ export function commsTick(state, emit = () => {}) {
   if (blackout && c.autoSosOnBlackout && !c.sos) { c.sos = true; c.sosAuto = true; emit('sos-auto', {}); }
   if (!blackout && c.sosAuto) { c.sos = false; c.sosAuto = false; }
 
-  const r2 = RANGE.SOS * RANGE.SOS;
+  const r2 = (RANGE.SOS * reach) ** 2;
   for (const e of world.beacons) {
     if ((e.pos.x - pos.x) ** 2 + (e.pos.y - pos.y) ** 2 > r2) continue;
     if (now - (c.heard[e.id] ?? -Infinity) < 120) continue;
@@ -92,6 +96,9 @@ export function toggleSOS(state) {
 export function signalBars(distAU) {
   return Math.max(1, Math.min(5, Math.round((1 - distAU / RANGE.RADIO) * 5)));
 }
+
+/** Can we transmit at all? (array working, ship powered) */
+export const canTransmit = (state) => radioRangeFactor(state) > 0;
 
 /** Can someone at observerPos see us? (for future NPC reactions) */
 export function playerDetectable(state, observerPos, rangeAU) {

@@ -16,6 +16,7 @@ import { getWorld } from '../sim/world.js';
 import { planRoutes, simulatePlan, targetStateAt, targetName, defaultStandoff, STANDOFF, PREP_MINUTES } from '../sim/nav.js';
 import { engageRoute, abortRoute, overrideSecure } from '../sim/autopilot.js';
 import { crewSecureStatus, isSecured } from '../sim/crew-ai.js';
+import { driveLimitG, systemPerf, flightComputerState } from '../sim/systems.js';
 import { isConscious } from '../sim/crew.js';
 import { SENSOR_RANGES, REVEAL, setSensorRange, selectContact, toggleLock, contactById } from '../sim/sensors.js';
 import { missionForEntity } from '../sim/missions.js';
@@ -330,11 +331,24 @@ function renderRoutePanel() {
       <span class="route-dest-dist">${rel ? `${fmtMeters(rel.dist)} · rel ${fmtSpeed(rel.speed)}` : ''}</span>
       <div class="route-standoff">${choice}</div>
     </div>
+    ${machineryNote(s)}
     <div class="route-options">${cards}</div>
     <div class="route-panel-actions">
       <button class="btn btn-secondary route-btn" data-act="cancel">CANCEL</button>
       <button class="btn btn-primary route-btn" data-act="confirm" ${routeUI.selected < 0 ? 'disabled' : ''}>ENGAGE</button>
     </div>`);
+}
+
+/** What the machinery allows, shown above the plot (drive limits, manual flight). */
+function machineryNote(s) {
+  const notes = [];
+  const limit = driveLimitG(s);
+  if (limit < 3) notes.push(limit <= 0 ? 'Main drive unavailable' : `Drive limited to ${fmtG(limit)} — ${systemPerf(s, 'coolant') < 1 ? 'reactor cooling' : 'drive'} damaged`);
+  else if (limit < 10) notes.push(`Drive limited to ${fmtG(limit)} (${systemPerf(s, 'drive') < 1 ? 'drive' : 'reactor cooling'} degraded)`);
+  const fc = flightComputerState(s);
+  if (fc === 'failed') notes.push('Flight computer down — the route will be flown by hand from the helm (more fuel, no fast-forward)');
+  else if (fc === 'degraded') notes.push('Flight computer degraded — expect wandering burns');
+  return notes.length ? `<div class="route-machinery">${notes.map(n => `<span>⚠ ${esc(n)}</span>`).join('')}</div>` : '';
 }
 
 function confirmRoute() {
@@ -426,11 +440,11 @@ function renderRouteStatus(state, eta, box, full) {
   const total = tp ? Math.hypot(ap.startPos.x - tp.x, ap.startPos.y - tp.y) * AU_M : 0;
   const frac = dist != null && total > 0 ? Math.max(0, Math.min(1, 1 - dist / total)) : 0;
   const etaTxt = eta?.minutes != null ? formatDuration(eta.minutes) : '—';
-  const phase = PHASE_LABEL[ap.display] || ap.display.toUpperCase();
+  const phase = ap.helm === 'unmanned' ? 'HELM UNMANNED — COASTING' : (PHASE_LABEL[ap.display] || ap.display.toUpperCase()) + (ap.helm === 'manual' ? ` · HAND-FLOWN (${ap.helmBy})` : ap.helm === 'degraded' ? ' · GUIDANCE DEGRADED' : '');
   const flip = ap.flipIn !== Infinity && ap.flipIn < 120 && (ap.display === 'burn' || ap.display === 'coast') ? ` · flip in ${formatDuration(ap.flipIn)}` : '';
   const html = `<div class="route-status-summary">
       <span class="route-status-dest">→ ${esc(name)}</span>
-      <span class="route-status-phase phase-${ap.display}">${phase}${flip}</span>
+      <span class="route-status-phase phase-${ap.helm === 'unmanned' ? 'unmanned' : ap.display}">${esc(phase)}${flip}</span>
       <div class="route-status-progress"><div class="route-status-fill" style="width:${(frac * 100).toFixed(1)}%"></div></div>
       <span class="route-status-eta">${dist != null ? fmtMeters(dist) + ' · ' : ''}${fmtSpeed(ap.relSpeed)} · ETA ${etaTxt}</span>
       ${full ? '' : '<button class="route-zoom-btn" data-act="open-nav">MAP</button>'}
@@ -452,12 +466,13 @@ function renderPrompt(state) {
     return `<span class="mp-dot ${ok ? 'mp-dot-ok' : 'mp-dot-wait'} ${p ? 'mp-dot-pilot' : ''}" title="${esc(m.name)} — ${ok ? 'secured' : m.activity}">${p ? 'P' : '·'}</span>`;
   }).join('');
   const unsecured = st.total - st.secured;
-  const status = !st.pilot ? '<span class="mp-status mp-caution">NO PILOT — computer flight</span>'
-    : !st.pilotReady ? `<span class="mp-status mp-waiting">${esc(st.pilot.name.toUpperCase())} EN ROUTE TO HELM</span>`
+  const fcDown = flightComputerState(state) === 'failed';
+  const status = !st.pilot ? `<span class="mp-status mp-caution">${fcDown ? 'NO PILOT — AND NO FLIGHT COMPUTER' : 'NO PILOT — computer flight'}</span>`
+    : !st.pilotReady ? `<span class="mp-status mp-waiting">${fcDown ? 'FLIGHT COMPUTER DOWN — ' : ''}${esc(st.pilot.name.toUpperCase())} EN ROUTE TO HELM</span>`
     : unsecured > 0 ? `<span class="mp-status mp-caution">${unsecured} CREW UNSECURED</span>`
     : '<span class="mp-status mp-ready">ALL HANDS SECURED</span>';
   const helpless = st.helpless.length ? `<span class="mp-status mp-caution">${st.helpless.length} INCAPACITATED — WILL RIDE UNSECURED</span>` : '';
-  const canEngage = st.pilotReady || !st.pilot;
+  const canEngage = st.pilotReady || (!st.pilot && !fcDown);
   setHTML(box, `<div class="mp-header">SECURE FOR BURN → ${esc(targetName(state, ap.plan.target))}</div>
     <div class="mp-crew-row">${dots}</div>${status}${helpless}
     <div class="mp-actions">

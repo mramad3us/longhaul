@@ -7,6 +7,14 @@
 
 import { SAVE_SCHEMA, createGame } from './game.js';
 import { resetWorld } from './world.js';
+import { createDefaultLayout, computeShipMass } from './ship-layout.js';
+import { createLifeSupport } from './life-support.js';
+import { createSystems } from './systems.js';
+import { createJobs } from './jobs.js';
+import { createNeeds } from './needs.js';
+import { defaultDuty } from './duty.js';
+import { placeCrew } from './crew-ai.js';
+import { ROLE_HOME_DECK } from './crew.js';
 import { DAY_MIN } from '../core/constants.js';
 import { VERSION } from '../version.js';
 
@@ -41,8 +49,44 @@ export function deserialize(input) {
     resetWorld(data);
     return { state: data, migrated: false, notes: [] };
   }
+  if (data && data.schema === 2) return migrateV08(data);
   if (data && !data.schema && data.ship && data.resources) return migrateV07(data);
   throw new Error(`Unsupported save format (schema ${data?.schema ?? 'unknown'})`);
+}
+
+/**
+ * v0.8 saves: same world and voyage, but the ship is refitted to the
+ * current layout (new decks and machinery), and the crew get needs and
+ * a duty roster. Whatever people were doing is reset.
+ */
+function migrateV08(data) {
+  const ship = data.ship;
+  ship.decks = createDefaultLayout();
+  data.lifeSupport = createLifeSupport(ship);
+  data.systems = createSystems();
+  data.jobs = createJobs();
+  data.resources.parts ??= { current: 12, max: 40, unit: 'parts' };
+  data.resources.scrap ??= { current: 0, max: 30, unit: 'units' };
+  const r = data.reactor;
+  if (r.job != null) {
+    r.job = null; r.work = null; r.progress = 0;
+    if (r.status === 'shutting-down') r.status = 'online';
+    if (r.status === 'starting-up') r.status = 'offline';
+  }
+  for (const m of ship.crew) {
+    m.needs ??= createNeeds();
+    m.duty ??= defaultDuty(m.role);
+    m.moraleMod ??= 0;
+    m.homeDeck = ROLE_HOME_DECK[m.role] ?? 0;
+    m.seat = null; m.task = null; m.path = [];
+    m.suit = { wearing: false, o2: 0, lockerId: null };
+  }
+  data.shipMass = computeShipMass(ship);
+  data.schema = SAVE_SCHEMA;
+  resetWorld(data);
+  placeCrew(data);
+  for (const m of ship.crew) if (m.dead) { m.task = null; m.seat = null; m.activity = 'dead'; }
+  return { state: data, migrated: true, notes: ['Save from v0.8 — ship refitted: new decks and machinery, crew duty roster. Crew tasks were reset.'] };
 }
 
 /**

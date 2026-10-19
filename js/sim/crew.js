@@ -4,6 +4,8 @@
 // ============================================================
 
 import { random, randInt, pick } from '../core/rng.js';
+import { createNeeds } from './needs.js';
+import { defaultDuty } from './duty.js';
 
 export const G_THRESHOLDS = {
   MICRO_G: 0.01,     // below: floating
@@ -65,8 +67,11 @@ export function createCrew(count, homeFixtures = null) {
       juiced: false,
       juiceHangover: 0,
       suit: { wearing: false, o2: 0, lockerId: null },
-      hunger: 0,          // minutes since last meal ration was available
-      thirst: 0,
+      hunger: 0,          // minutes spent with nothing in the stomach
+      thirst: 0,          // minutes without water aboard
+      needs: createNeeds(),
+      duty: defaultDuty(role),
+      moraleMod: 0,       // lingering events (a crewmate's death, a good run ashore)
       // interior state (crew-ai)
       homeDeck: ROLE_HOME_DECK[role] ?? 0,
       pos: { sx: 3 + (i % 3), sy: 0 },
@@ -305,26 +310,6 @@ export function kill(m) {
   m.activity = 'dead';
 }
 
-// ---- NEEDS: food & water (per game-minute) ----
-
-export function needsTick(m, hasFood, hasWater) {
-  if (m.dead) return;
-  m.hunger = hasFood ? 0 : m.hunger + 1;
-  m.thirst = hasWater ? 0 : m.thirst + 1;
-  if (m.thirst > 1440) {                     // > 1 day without water
-    addCondition(m, 'dehydrated');
-    m.consciousness = clamp(m.consciousness - 0.05, 10, 100);
-    m.body.head = clamp(m.body.head - 0.02);
-    m.morale = clamp(m.morale - 0.05);
-    if (m.thirst > 4320) m.heart.health = clamp(m.heart.health - 0.1);
-  } else removeCondition(m, 'dehydrated');
-  if (m.hunger > 4320) {                     // > 3 days without food
-    addCondition(m, 'starving');
-    m.morale = clamp(m.morale - 0.03);
-    m.body.torso = clamp(m.body.torso - 0.01);
-  } else removeCondition(m, 'starving');
-}
-
 // ---- MEDICINE ----
 
 /** First aid / autodoc stabilization: halts the death spiral. */
@@ -339,11 +324,12 @@ export function stabilize(m) {
 
 /**
  * One minute in the autodoc. `supplied` = med supplies available (full rate);
- * otherwise treatment runs at 30%. Returns true when fully healed.
+ * otherwise treatment runs at 30%. `rate` scales treatment (autodoc
+ * condition, a medic in attendance). Returns true when fully healed.
  */
-export function medbayTick(m, supplied) {
+export function medbayTick(m, supplied, rate = 1) {
   if (m.dead) return false;
-  const k = supplied ? 1 : 0.3;
+  const k = (supplied ? 1 : 0.3) * rate;
   stabilize(m);
   removeCondition(m, 'internal-bleeding');
   const b = m.body, h = m.heart;

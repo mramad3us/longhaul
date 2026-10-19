@@ -8,6 +8,7 @@
 
 import { RANGE } from '../core/constants.js';
 import { getWorld } from './world.js';
+import { sensorRangeFactor } from './systems.js';
 
 export const SENSOR_RANGES = [
   { name: 'SHORT', au: RANGE.SHORT, label: '~150k km', description: 'All sensors — thermal, EM, lidar' },
@@ -34,7 +35,10 @@ export function sensorsTick(state) {
   const s = state.sensors;
   const world = getWorld(state);
   const pos = state.flight.pos;
-  const rangeAU = SENSOR_RANGES[s.range].au;
+  // Sensor condition and an ops watchstander set how far and how fast we see
+  const ops = state.$watch?.ops != null;
+  const rangeAU = SENSOR_RANGES[s.range].au * sensorRangeFactor(state) * (ops ? 1.25 : 1);
+  const rate = ops ? 2 : 1;
   _q.length = 0;
   world.query(pos, rangeAU, _q);
 
@@ -45,7 +49,7 @@ export function sensorsTick(state) {
     const dist = Math.hypot(dx, dy);
     if (!detectable(e, dist)) continue;
     seen.add(e.id);
-    s.scan[e.id] = (s.scan[e.id] || 0) + (s.locked === e.id ? 3 : 1);
+    s.scan[e.id] = (s.scan[e.id] || 0) + (s.locked === e.id ? 3 : 1) * rate;
     contacts.push(describe(e, dist, Math.atan2(dy, dx), s.scan[e.id]));
   }
   for (const id of Object.keys(s.scan)) {

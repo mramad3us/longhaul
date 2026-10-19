@@ -160,7 +160,8 @@ export function autopilotAfterStep(state, out) {
   if (out.mainG > 0.05 && ap.ignitedAt == null) ap.ignitedAt = state.clock.minute;
   if (out.mainG <= 0.05) ap.ignitedAt = null;
   ap.peakG = Math.max(ap.peakG, out.mainG);
-  if (Math.abs(out.turned) > 0.2) ap.display = ap.flipIn === 0 || ap.display === 'brake' ? 'flip' : 'orient';
+  // A real reorientation (not the small corrections of a burn, or a pilot's hand)
+  if (out.rotation > 0.6 && Math.abs(out.turned) > 0.05) ap.display = ap.flipIn === 0 || ap.display === 'brake' ? 'flip' : 'orient';
 }
 
 // ---- POLICIES ----
@@ -174,7 +175,7 @@ export function crewPolicy(state) {
   const ap = state.autopilot;
   if (!ap) return 'free';
   if (ap.phase === 'prepare') return 'secure';
-  if (ap.plan.accelG > 1.5 && (ap.display === 'burn' || ap.display === 'brake' || ap.display === 'transfer-burn')) return 'secure';
+  if (Math.min(ap.plan.accelG, state.$driveCap ?? f.maxG) > 1.5 && (ap.display === 'burn' || ap.display === 'brake' || ap.display === 'transfer-burn')) return 'secure';
   if (ap.display === 'flip' || ap.display === 'orient') return 'secure';
   if (ap.flipIn <= 30) return 'secure';                               // re-secure ahead of the flip
   if (ap.ignitedAt != null && state.clock.minute - ap.ignitedAt < 10) return 'secure';  // settle into the burn
@@ -197,13 +198,16 @@ export function maxSpeed(state) {
   if (f.manual && f.manual.throttleG > 0) return 1;
   if (!ap) return 3;
   if (ap.phase === 'prepare') return 1;
+  // A human flying, or nobody flying: no skipping ahead
+  if (ap.helm === 'unmanned') return 1;
+  const cap = ap.helm === 'manual' || ap.helm === 'degraded' ? 2 : 3;
   if (ap.display === 'flip' || ap.display === 'orient') return 1;
   if (ap.flipIn <= 15) return 1;
   if (ap.ignitedAt != null && state.clock.minute - ap.ignitedAt < 5) return 1;
   const eta = ap.vClose > 1 && ap.d != null ? (ap.d - ap.plan.standoff) / ap.vClose / 60 : Infinity;
   if (ap.display === 'approach' || eta < 45) return 1;
   if (f.thrustG > 0.05) return 2;
-  if (ap.flipIn > 6 * 60 && eta > 12 * 60) return 3;
+  if (ap.flipIn > 6 * 60 && eta > 12 * 60) return cap;
   return 2;
 }
 

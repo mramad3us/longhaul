@@ -131,6 +131,8 @@
           <button class="hud-icon-btn hud-text-btn" data-action="open-map" title="Navigation (M)">NAV</button>
           <button class="hud-icon-btn hud-text-btn hud-station-btn" data-action="open-station" id="hud-station-btn" title="Station services (B)" style="display:none">STATION</button>
           <div class="hud-divider"></div>
+          <button class="hud-icon-btn hud-text-btn hud-systems-btn" data-action="open-systems" title="Ship systems (E)">SYSTEMS<span class="hud-systems-count" id="hud-systems-count"></span></button>
+          <button class="hud-icon-btn hud-text-btn" data-action="open-roster" title="Duty roster (D)">ROSTER</button>
           <button class="hud-icon-btn hud-missions-btn" data-action="open-missions" title="Mission log (L)">
             <span class="hud-missions-label">MISSIONS</span>
             <span class="hud-missions-count" id="hud-missions-count">0</span>
@@ -159,7 +161,9 @@
             </div>
             <div class="tac-screen" id="tac-screen" title="Open navigation (M)"></div>
           </div>
-          <div class="panel-header">Systems</div>
+          <div class="panel-header">Ship Systems</div>
+          <div class="systems-strip" id="systems-strip"></div>
+          <div class="panel-header">Stores</div>
           <div id="resource-list"></div>
         </aside>
 

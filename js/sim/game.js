@@ -14,13 +14,19 @@ import { VERSION } from '../version.js';
 import { getWorld, backgroundBudget } from './world.js';
 import { createDefaultEntities } from './entities.js';
 import { createDefaultLayout, computeShipMass, isSecureSeat } from './ship-layout.js';
-import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, needsTick, G_THRESHOLDS } from './crew.js';
-import { crewTick, createJobs, placeCrew } from './crew-ai.js';
-import { createFlight, flightStep, fuelUsed, angleDiff, SLEW_RATE, RATED_G } from './flight.js';
+import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, G_THRESHOLDS } from './crew.js';
+import { crewTick, placeCrew, helmsman } from './crew-ai.js';
+import { createJobs } from './jobs.js';
+import { needsTick, efficiency } from './needs.js';
+import { createFlight, flightStep, fuelUsed, angleDiff, SLEW_RATE, RATED_G, RCS_MAX_G, DRIVE_MAX_G } from './flight.js';
 import { autopilotTick, autopilotAfterStep, holdStep, holdStation, crewPolicy, maxSpeed } from './autopilot.js';
-import { createLifeSupport, lifeSupportTick, repairLS } from './life-support.js';
-import { createReactor, reactorTick, isReactorOnline, isPowered, triggerContainmentFailure } from './reactor.js';
-import { random } from '../core/rng.js';
+import { createLifeSupport, lifeSupportTick, breachJobs } from './life-support.js';
+import { createReactor, reactorTick, isReactorOnline, triggerContainmentFailure } from './reactor.js';
+import {
+  createSystems, systemsTick, systemsJobs, driveLimitG, driveFuelFactor, slewFactor, rcsAvailable,
+  flightComputerState, waterRecovery,
+} from './systems.js';
+import { random, gaussian } from '../core/rng.js';
 import { createComms, commsTick } from './comms.js';
 import { createSensors, sensorsTick } from './sensors.js';
 import { createMissions, missionsTick } from './missions.js';
@@ -28,11 +34,13 @@ import { createContracts, contractsTick } from './contracts.js';
 import { createTraffic, seedTraffic, trafficTick } from './traffic.js';
 import { triggerManeuver, isInertiaActive, updateInertia, Maneuver } from './inertia.js';
 
-export const SAVE_SCHEMA = 2;
+export const SAVE_SCHEMA = 3;
 
-// Consumption per person per minute
-const WATER_PER_MIN = 0.002;   // L  (≈2.9 L/day)
-const FOOD_PER_MIN = 0.001;    // rations (≈1.4/day)
+// Consumption per person per minute. Crew eat meals (crew-ai); passengers
+// are fed from stores continuously. Water figures are gross — the
+// reclamation plant recovers most of it.
+const WATER_PER_MIN = 0.004;   // L  (≈5.8 L/day drinking & galley; showers on top)
+const FOOD_PER_MIN = 0.001;    // rations (≈1.4/day, passengers)
 const SECURE_LINGER = 10;      // minutes crew stay strapped in after the last maneuver
 
 const emit = (type, payload) => bus.emit(type, payload);
@@ -59,6 +67,8 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
       food: { current: 1800, max: 2000, unit: 'rations' },
       power: { current: 88, max: 100, unit: '%' },
       medSupplies: { current: 50, max: 50, unit: 'units' },
+      parts: { current: 12, max: 40, unit: 'parts' },
+      scrap: { current: 0, max: 30, unit: 'units' },
     },
     cargo: [],
     cargoCapacity: 15_000,
@@ -66,6 +76,7 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
     berths: 12,
     lifeSupport: null,
     reactor: createReactor(),
+    systems: createSystems(),
     comms: createComms(),
     sensors: createSensors(),
     jobs: createJobs(),
@@ -91,6 +102,26 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
   return state;
 }
 
+/** Water through the ship's plumbing: what reclamation can't recover is lost. */
+function useWater(state, liters) {
+  const w = state.resources.water;
+  w.current = Math.max(0, w.current - liters * (1 - waterRecovery(state)));
+}
+
+/**
+ * A human hand on the stick: the command, as flown. Pointing error is a
+ * slow drift (correlated minute to minute) whose size depends on the
+ * pilot's skill and state — a tired, hungover pilot wanders.
+ */
+const DRIFT = 0.9;
+function handFlown(cmd, pilot, ap) {
+  const sigma = pilot ? (0.015 + 0.08 * (1 - pilot.skills.piloting / 100)) / Math.max(0.3, efficiency(pilot)) : 0.025;
+  ap.$err = DRIFT * (ap.$err || 0) + Math.sqrt(1 - DRIFT * DRIFT) * sigma * gaussian();
+  const k = 1 + gaussian() * sigma * 0.3;
+  const c = Math.cos(ap.$err), sn = Math.sin(ap.$err);
+  return { ...cmd, ax: (cmd.ax * c - cmd.ay * sn) * k, ay: (cmd.ax * sn + cmd.ay * c) * k };
+}
+
 // ---- PER-MINUTE TICK ----
 
 /**
@@ -105,8 +136,36 @@ export function minuteTick(state, { lite = false } = {}) {
   const prevTurn = f.turning;
   const policyBefore = state.crewPolicy;
 
+  // ---- Machinery limits for this minute
+  f.maxG = Math.min(DRIVE_MAX_G, driveLimitG(state));
+  // Damage control: with the hull holed, the burn eases to 1G so the crew can move
+  const breach = state.ship.decks.some(d => d.atmosphere?.breached);
+  if (breach) f.maxG = Math.min(f.maxG, 1);
+  if (breach !== !!state.damageControl) { state.damageControl = breach; emit('damage-control', { on: breach }); }
+  state.$driveCap = f.maxG;
+  // Standing order: never push past 1.5G with anyone still on their feet (unless the captain overrides)
+  if (state.autopilot?.phase === 'active' && !state.autopilot.override && f.maxG > 1.5 && f.thrustG <= 1.5 + 1e-6 &&
+      state.ship.crew.some(m => !m.dead && !isSecureSeat(m.seat))) f.maxG = 1.5;
+  f.$slew = SLEW_RATE * slewFactor(state);
+
   // ---- Flight
   let cmd = autopilotTick(state, emit);
+  const ap = state.autopilot;
+  if (ap) ap.helm = null;
+  if (cmd && ap?.phase === 'active') {
+    // Without a working flight computer, someone at the helm flies the plan by hand
+    const fc = flightComputerState(state);
+    if (fc === 'failed') {
+      const flier = helmsman(state);
+      if (!flier) { cmd = null; ap.helm = 'unmanned'; }
+      else { cmd = handFlown(cmd, flier, ap); ap.helm = 'manual'; ap.helmBy = flier.name; }
+    } else if (fc === 'degraded') {
+      cmd = handFlown(cmd, null, ap);
+      ap.helm = 'degraded';
+    }
+    if (ap.helm !== (ap.helmWas ?? null)) emit('helm-status', { status: ap.helm, was: ap.helmWas ?? null, by: ap.helmBy });
+    ap.helmWas = ap.helm;
+  }
   if (!cmd && f.manual && f.manual.throttleG > 0) {
     cmd = { ax: Math.cos(f.facing) * f.manual.throttleG * G0, ay: Math.sin(f.facing) * f.manual.throttleG * G0, maxG: f.manual.throttleG };
   }
@@ -114,7 +173,7 @@ export function minuteTick(state, { lite = false } = {}) {
     if (Math.abs(angleDiff(f.facing, f.manual.flipTo)) < 1e-3) f.manual.flipTo = null;
     else cmd = { ax: 0, ay: 0, face: f.manual.flipTo };
   }
-  const driveOK = isReactorOnline(state) && res.fuel.current > 0;
+  const driveOK = isReactorOnline(state) && res.fuel.current > 0 && f.maxG > 0;
   let out = { mainG: 0, rcsG: 0, turned: 0 };
   if (f.hold && !(state.autopilot?.phase === 'active')) {
     f.thrustG = 0; f.rcsG = 0; f.turning = 0;
@@ -122,7 +181,7 @@ export function minuteTick(state, { lite = false } = {}) {
     if (cmd && !driveOK) {
       // No drive: RCS only while fuel lasts, and no main-drive burns
       const a = Math.hypot(cmd.ax, cmd.ay);
-      const lim = res.fuel.current > 0 ? 0.02 * G0 : 0;
+      const lim = res.fuel.current > 0 && rcsAvailable(state) ? RCS_MAX_G * G0 : 0;
       cmd = a > lim ? { ax: cmd.ax * lim / a, ay: cmd.ay * lim / a, face: cmd.face } : cmd;
     }
     const before = { x: f.pos.x, y: f.pos.y };
@@ -152,7 +211,7 @@ export function minuteTick(state, { lite = false } = {}) {
     emit('drive-overstress', { g: out.mainG });
   }
 
-  const burn = fuelUsed(out.mainG, out.rcsG);
+  const burn = fuelUsed(out.mainG, out.rcsG) * driveFuelFactor(state);
   res.fuel.current = Math.max(0, res.fuel.current - burn);
   state.stats.fuelBurned += burn;
   if (res.fuel.current <= 0 && prevG > 0) emit('fuel-exhausted', {});
@@ -174,14 +233,25 @@ export function minuteTick(state, { lite = false } = {}) {
   // ship has been quiet for a while (no unstrapping between two maneuvers).
   if (crewPolicy(state) === 'secure') state.secureUntil = state.clock.minute + SECURE_LINGER;
   state.crewPolicy = state.clock.minute < (state.secureUntil ?? -1) ? 'secure' : 'free';
+  const living = state.ship.crew.filter(m => !m.dead).length;
+
+  // ---- Machinery: wear, faults, and the work they make
+  systemsTick(state, {
+    g, rcsG: f.rcsG, turned: out.turned || 0, autopilot: ap?.phase === 'active', breathers: living,
+    engWatch: state.$watch?.engineering != null, opsWatch: state.$watch?.ops != null, emit,
+  });
+  systemsJobs(state);
+  breachJobs(state);
+
   for (const m of state.ship.crew) {
     if (m.dead) continue;
     const secured = isSecureSeat(m.seat);
     m.gState = gStateFor(m, g, secured);
     const eff = protectedG(m, g, secured, res);
+    m.$effG = eff;                       // what the body feels (couch + juice)
     const wasCritical = m.conditions.includes('critical');
     for (const ev of physiologyTick(m, eff, g)) {
-      if (ev === 'died') emit('crew-died', { member: m });
+      if (ev === 'died') { mourn(state, m); emit('crew-died', { member: m }); }
       else if (ev === 'critical' && !wasCritical) emit('crew-critical', { member: m });
       else if (ev === 'brain-damage') emit('crew-brain-damage', { member: m });
       else if (ev === 'stroke') emit('crew-stroke', { member: m });
@@ -195,17 +265,23 @@ export function minuteTick(state, { lite = false } = {}) {
     gForce: g,
     policy: state.crewPolicy,
     emit,
-    hooks: { repairLS: (deck, skill) => repairLS(state, deck, skill) },
+    hooks: { useWater: (liters) => useWater(state, liters) },
   });
 
-  // ---- Consumables (crew + passengers)
-  const mouths = state.ship.crew.filter(m => !m.dead).length + state.passengers.reduce((s, p) => s + p.count, 0);
-  res.water.current = Math.max(0, res.water.current - mouths * WATER_PER_MIN);
-  res.food.current = Math.max(0, res.food.current - mouths * FOOD_PER_MIN);
-  for (const m of state.ship.crew) needsTick(m, res.food.current > 0, res.water.current > 0);
+  // ---- Needs & consumables (crew eat meals; passengers are fed from stores)
+  const pax = state.passengers.reduce((s, p) => s + p.count, 0);
+  useWater(state, (living + pax) * WATER_PER_MIN);
+  res.food.current = Math.max(0, res.food.current - pax * FOOD_PER_MIN);
+  const water = res.water.current > 0;
+  for (const m of state.ship.crew) {
+    if (m.dead) continue;
+    const asleep = m.activity === 'sleeping' ? 'bunk' : m.activity === 'sleeping-couch' ? 'couch' : null;
+    const strapped = isSecureSeat(m.seat) && !m.seat.startsWith('medbay') && (state.crewPolicy === 'secure' || m.task?.type === 'helm');
+    needsTick(m, { asleep, secured: strapped, onDuty: m.task?.type === 'watch' || m.task?.type === 'helm' || m.task?.type === 'work', gForce: m.$effG ?? g, res, water });
+  }
 
-  // ---- Ship systems
-  lifeSupportTick(state, { powered: isPowered(state), gForce: g, emit });
+  // ---- Plant
+  lifeSupportTick(state, { emit });
   reactorTick(state, emit);
 
   // ---- Sensors & comms (blind in a blackout)
@@ -220,6 +296,11 @@ export function minuteTick(state, { lite = false } = {}) {
   trafficTick(state);
 
   if (state.crewPolicy !== policyBefore) emit('crew-policy', { policy: state.crewPolicy });
+}
+
+/** A death aboard weighs on everyone for days. */
+function mourn(state, dead) {
+  for (const m of state.ship.crew) if (m !== dead && !m.dead) m.moraleMod = (m.moraleMod || 0) - 25;
 }
 
 function fireInertia(state, type, opts) {

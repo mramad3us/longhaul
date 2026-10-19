@@ -16,7 +16,8 @@ import { AU_M, AU_KM, RANGE, DAY_MIN } from '../core/constants.js';
 import { random, randInt, randRange, pick, weightedPick } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { createEntity, rollShipIdentity } from './entities.js';
-import { overhaulLS } from './life-support.js';
+import { restockSuits } from './life-support.js';
+import { overhaulSystems, SYSTEM_IDS, unit } from './systems.js';
 
 export const ContractType = {
   CARGO: 'CARGO', PASSENGERS: 'PASSENGERS', FUEL: 'FUEL',
@@ -38,7 +39,7 @@ const SURVEY_TARGETS = ['mineral deposits', 'debris density', 'anomalous reading
 const PASSENGER_KINDS = ['workers', 'miners', 'engineers', 'families', 'refugees', 'technicians', 'scientists', 'traders'];
 const SECTORS = ['7-G', '12-K', '3-B', '9-F', '15-D', '22-A', '6-H', '18-C', '4-E', '11-J', '8-M', '14-L', '1-N', '20-P', '5-R'];
 
-export const PRICES = { fuel: 2, water: 0.5, food: 3, o2Tank: 4, n2Tank: 1, medSupplies: 40, overhaul: 600 };
+export const PRICES = { fuel: 2, water: 0.5, food: 3, o2Tank: 4, n2Tank: 1, medSupplies: 40, parts: 120 };
 
 export function createContracts() {
   return { active: [], history: [], nextId: 1 };
@@ -381,11 +382,25 @@ export function buy(state, key, qty = Infinity) {
   return { ok: true, amount, cost, text: `Bought ${Math.round(amount).toLocaleString()} ${key} for ${cost.toLocaleString()} MCR` };
 }
 
+/** Dockyard price to bring every system back to factory condition. */
+export function overhaulQuote(state) {
+  let cost = 250;
+  for (const id of SYSTEM_IDS) {
+    const u = unit(state, id);
+    cost += (100 - u.integrity) * 8;
+    if (u.fault) cost += u.fault.severity === 'major' ? 450 : 150;
+  }
+  if (state.reactor.breach && state.reactor.status === 'offline') cost += 800;
+  return Math.round(cost / 10) * 10;
+}
+
 export function buyOverhaul(state) {
   if (!dockedStation(state)) return { ok: false, text: 'Not docked.' };
-  if (state.resources.credits.current < PRICES.overhaul) return { ok: false, text: 'Not enough credits.' };
-  state.resources.credits.current -= PRICES.overhaul;
-  overhaulLS(state);
+  const cost = overhaulQuote(state);
+  if (state.resources.credits.current < cost) return { ok: false, text: 'Not enough credits.' };
+  state.resources.credits.current -= cost;
+  overhaulSystems(state);
+  restockSuits(state);
   if (state.reactor.breach && state.reactor.status === 'offline') state.reactor.breach = false;
-  return { ok: true, text: `Dockside overhaul complete — life support restored, suits restocked (${PRICES.overhaul} MCR)` };
+  return { ok: true, text: `Dockside overhaul complete — every system back to spec, suits restocked (${cost.toLocaleString()} MCR)` };
 }

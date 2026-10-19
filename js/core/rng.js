@@ -23,6 +23,12 @@ export const randInt = (min, max) => Math.floor(min + _next() * (max - min + 1))
 export const pick = (arr) => arr[Math.floor(_next() * arr.length)];
 export const chance = (p) => _next() < p;
 
+/** Standard normal deviate (Box–Muller). */
+export function gaussian() {
+  const u = 1 - _next(), v = _next();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
 export function weightedPick(items, weightOf = (i) => i.weight) {
   let total = 0;
   for (const it of items) total += weightOf(it);

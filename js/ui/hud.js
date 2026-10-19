@@ -3,26 +3,29 @@
 // ============================================================
 
 import { ui } from './context.js';
-import { $, $$, setText, show, toggleClass, fmtSpeed, fmtMeters, fmtNum, fmtG, fmtMass } from './dom.js';
+import { $, $$, setText, setHTML, show, toggleClass, fmtSpeed, fmtMeters, fmtNum, fmtG, fmtMass } from './dom.js';
 import { formatDate, formatTime, formatDuration } from '../core/clock.js';
 import { AU_M } from '../core/constants.js';
 import { maxSpeed } from '../sim/autopilot.js';
 import { targetStateAt, targetName } from '../sim/nav.js';
 import { dockedStation } from '../sim/contracts.js';
 import { activeMissions } from '../sim/missions.js';
-import { iconFuel, iconOxygen, iconN2, iconWater, iconFood, iconPower, iconMedical, iconCrew } from '../svg-icons.js';
+import { iconFuel, iconOxygen, iconN2, iconWater, iconFood, iconPower, iconMedical, iconCrew, iconParts } from '../svg-icons.js';
+import { SYSTEM_IDS, Status, waterRecovery } from '../sim/systems.js';
+import { systemsStripHTML } from './shipboard.js';
 
 let el = {};
 
-export function initHud(onSpeed, onCombat) {
+export function initHud(onSpeed, onCombat, onSystems) {
   el = {
     date: $('#hud-date'), time: $('#hud-time'), ship: $('#hud-ship-name'), chip: $('#hud-nav-chip'),
     perf: $('#hud-perf'), combat: $('#combat-toggle'), combatStatus: $('#combat-status'),
     station: $('#hud-station-btn'), missions: $('#hud-missions-count'), jobs: $('#hud-jobs-count'),
     drive: $('#info-drive'), attitude: $('#info-attitude'), vel: $('#info-velocity'), ref: $('#info-vel-ref'),
     orbit: $('#info-orbit'), mass: $('#info-mass'), cargo: $('#info-cargo'), alert: $('#alert-border'),
-    speedBtns: $$('.speed-btn'),
+    speedBtns: $$('.speed-btn'), strip: $('#systems-strip'), sysCount: $('#hud-systems-count'),
   };
+  el.strip.addEventListener('click', (e) => { if (e.target.closest('[data-act="open-systems"]')) onSystems(); });
   el.speedBtns.forEach(b => b.addEventListener('click', () => onSpeed(+b.dataset.speed)));
   el.combat.addEventListener('click', onCombat);
   initResources();
@@ -57,8 +60,10 @@ export function navStatus(state) {
   if (ap) {
     const name = targetName(state, ap.plan.target);
     if (ap.phase === 'prepare') return { chip: `PREPARING → ${name}`, cls: 'chip-warn' };
+    if (ap.helm === 'unmanned') return { chip: `HELM UNMANNED — COASTING → ${name}`, cls: 'chip-danger' };
     const label = { burn: 'BURN', brake: 'BRAKE', coast: 'COAST', approach: 'APPROACH', flip: 'FLIP', orient: 'ORIENT', 'transfer-burn': 'BURN' }[ap.display] || ap.display.toUpperCase();
-    return { chip: `${label} → ${name}`, cls: ap.display === 'flip' ? 'chip-warn' : 'chip-nav' };
+    const hand = ap.helm === 'manual' ? ` · HAND-FLOWN (${ap.helmBy})` : '';
+    return { chip: `${label} → ${name}${hand}`, cls: ap.display === 'flip' || ap.helm === 'manual' ? 'chip-warn' : 'chip-nav' };
   }
   const st = dockedStation(state);
   if (st) return { chip: `DOCKED · ${st.name}`, cls: 'chip-ok' };
@@ -103,6 +108,7 @@ export function updateHud(state) {
   setText(el.jobs, jobs);
   toggleClass(el.jobs, 'has-jobs', jobs > 0);
   toggleClass(el.jobs, 'has-critical', state.jobs.list.some(j => j.priority === 0));
+  updateSystemsStrip(state);
 
   // Ship status
   const f = state.flight;
@@ -138,22 +144,41 @@ export function updatePerf(fps) {
   setText(el.perf, `${fps} FPS · sim ${ui.loop.simMsLastFrame.toFixed(1)}ms · ${ui.loop.stepsLastFrame} min/f · ${fmtNum(n)} ent`);
 }
 
+// ---- SYSTEMS ----
+
+let stripAt = 0;
+function updateSystemsStrip(state) {
+  const units = state.systems.units;
+  const faults = SYSTEM_IDS.filter(id => units[id].status !== Status.NOMINAL).length;
+  setText(el.sysCount, faults ? faults : '');
+  toggleClass(el.sysCount, 'has-faults', faults > 0);
+  toggleClass(el.sysCount, 'has-critical', SYSTEM_IDS.some(id => units[id].status === Status.FAILED));
+  const now = performance.now();
+  if (now - stripAt < 500) return;
+  stripAt = now;
+  setHTML(el.strip, systemsStripHTML(state));
+}
+
 // ---- RESOURCES ----
 
 const RES = [
   { key: 'fuel', name: 'Fuel', icon: iconFuel, bar: 'bar-fuel', fmt: (r) => `${fmtNum(r.current)} / ${fmtNum(r.max)} kg` },
   { key: 'o2Tank', name: 'O₂', icon: iconOxygen, bar: 'bar-oxygen', fmt: (r, s) => `${fmtNum(r.current)} kg · ${hours(s.lifeSupport.oxygenHours)}` },
   { key: 'n2Tank', name: 'N₂', icon: iconN2, bar: 'bar-n2', fmt: (r) => `${fmtNum(r.current)} / ${fmtNum(r.max)} kg` },
-  { key: 'water', name: 'Water', icon: iconWater, bar: 'bar-water', fmt: (r, s) => `${fmtNum(r.current)} L · ${days(r.current, s, 0.002)}` },
+  { key: 'water', name: 'Water', icon: iconWater, bar: 'bar-water', fmt: (r, s) => `${fmtNum(r.current)} L · ${days(r.current, s, WATER_GROSS * (1 - waterRecovery(s)))}` },
   { key: 'food', name: 'Food', icon: iconFood, bar: 'bar-food', fmt: (r, s) => `${fmtNum(r.current)} · ${days(r.current, s, 0.001)}` },
   { key: 'power', name: 'Power', icon: iconPower, bar: 'bar-power', fmt: (r) => `${Math.round(r.current)}%` },
   { key: 'medSupplies', name: 'Medical', icon: iconMedical, bar: 'bar-medical', fmt: (r) => `${r.current.toFixed(1)} / ${r.max}` },
+  { key: 'parts', name: 'Spare parts', icon: iconParts, bar: 'bar-parts', fmt: (r, s) => `${r.current.toFixed(1)} · scrap ${s.resources.scrap.current.toFixed(1)}`,
+    level: (r) => r.current < 2 ? 'critical' : r.current < 5 ? 'warning' : 'ok' },
 ];
+// Gross water per person per minute (drinking, galley, a shower a day) — reclamation recovers most of it
+const WATER_GROSS = 0.004 + 12 / 1440;
 
 function hours(h) { return !isFinite(h) ? '—' : h > 72 ? `${Math.round(h / 24)}d` : `${Math.round(h)}h`; }
 function days(amount, s, perMin) {
   const mouths = s.ship.crew.filter(m => !m.dead).length + s.passengers.reduce((a, p) => a + p.count, 0);
-  if (!mouths) return '—';
+  if (!mouths || perMin <= 0) return '—';
   return formatDuration(amount / (mouths * perMin));
 }
 
@@ -193,7 +218,7 @@ function updateResources(state) {
     setText(e.val, cfg.fmt(r, state));
     const w = `${pct.toFixed(1)}%`;
     if (e.bar.style.width !== w) e.bar.style.width = w;
-    const level = pct < 15 ? 'critical' : pct < 30 ? 'warning' : 'ok';
+    const level = cfg.level ? cfg.level(r) : pct < 15 ? 'critical' : pct < 30 ? 'warning' : 'ok';
     toggleClass(e.item, 'critical', level === 'critical');
     toggleClass(e.item, 'warning', level === 'warning');
     if (level === 'critical') critical = true;

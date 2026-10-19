@@ -5,7 +5,9 @@
 // progress only accrues while they are there working.
 // ============================================================
 
-import { addJob, closeJob, findJob, engineerAtReactor, JobType, JOB_PRIORITY } from './crew-ai.js';
+import { addJob, closeJob, findJob, JobType, JOB_PRIORITY } from './jobs.js';
+import { engineerAtReactor } from './crew-ai.js';
+import { powerRegenFactor } from './systems.js';
 import { isConscious } from './crew.js';
 
 export const ReactorState = {
@@ -65,7 +67,8 @@ export function reactorTick(state, emit = () => {}) {
   const fuel = state.resources.fuel;
   const working = r.job != null && engineerAtReactor(state, r.job);
 
-  if (isReactorOnline(state)) power.current = Math.min(power.max, power.current + REGEN_PER_MIN);
+  // A throttled reactor (cooling trouble) makes less surplus power
+  if (isReactorOnline(state)) power.current = Math.min(power.max, power.current + REGEN_PER_MIN * powerRegenFactor(state));
   else power.current = Math.max(0, power.current - DRAIN_PER_MIN);
 
   // A procedure stalls if nobody qualified is left to do it
