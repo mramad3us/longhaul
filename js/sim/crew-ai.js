@@ -14,7 +14,7 @@
 // ============================================================
 
 import { random, randInt, pick } from '../core/rng.js';
-import { shipGeometry, findPath, nearestNode, deckNodes } from './ship-layout.js';
+import { shipGeometry, findPath, nearestNode, deckNodes, isSecureSeat } from './ship-layout.js';
 import { isConscious, isAble, needsMedical, mobility, stabilize, medbayTick, hasCondition } from './crew.js';
 
 export const WALK_TILES_PER_MIN = 0.8;
@@ -61,13 +61,10 @@ function occupancy(state) {
   return occ;
 }
 
-function fixtureById(geo, id) {
-  for (const list of Object.values(geo.fixtures)) for (const f of list) if (f.id === id) return f;
-  return null;
-}
+const fixtureById = (geo, id) => geo.fixtureById.get(id) || null;
 
-/** Secured = strapped into a couch or lying in the autodoc. */
-export const isSecured = (m) => !!m.seat;
+/** Secured = strapped into a couch or station seat, or lying in the autodoc. */
+export const isSecured = (m) => isSecureSeat(m.seat);
 
 export function crewSecureStatus(state) {
   const able = state.ship.crew.filter(isConscious);
@@ -76,7 +73,7 @@ export function crewSecureStatus(state) {
     total: able.length,
     secured: able.filter(isSecured).length,
     pilot,
-    pilotReady: !!pilot && !!pilot.seat?.startsWith('couch:'),   // every couch has helm controls
+    pilotReady: !!pilot && isSecured(pilot) && !pilot.seat.startsWith('medbay'),   // every couch has helm repeaters
     unsecured: able.filter(m => !isSecured(m)),
     helpless: state.ship.crew.filter(m => !m.dead && !isConscious(m) && !isSecured(m)),
   };
@@ -159,7 +156,7 @@ function nearestFreeFixture(state, m, kind, occ, prefer = null) {
 function assignSecure(state, m, occ) {
   if (m.task?.type === 'secure') return true;
   const isPilot = activePilot(state) === m;
-  let couch = isPilot ? nearestFreeFixture(state, m, 'couch', occ, f => f.deck === 0) : null;
+  let couch = isPilot ? nearestFreeFixture(state, m, 'helm', occ) : null;
   couch ||= nearestFreeFixture(state, m, 'couch', occ);
   if (!couch) return false;
   leaveSeat(state, m);
@@ -301,7 +298,7 @@ export function crewTick(state, ctx) {
     const secure = ctx.policy === 'secure';
 
     // ---- Priority 1: secure for maneuvers
-    if (secure && !m.seat?.startsWith('couch') && !(m.task?.type === 'heal' && m.seat) &&
+    if (secure && !(isSecured(m) && !m.seat.startsWith('medbay')) && !(m.task?.type === 'heal' && m.seat) &&
         !(m.task?.type === 'rescue' && m.task.phase === 'carry')) {
       if (m.task && m.task.type !== 'secure') abandonTask(state, m);
       assignSecure(state, m, occ);

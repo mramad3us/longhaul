@@ -15,7 +15,7 @@ import { getBody } from '../sim/ephemeris.js';
 import { getWorld } from '../sim/world.js';
 import { planRoutes, simulatePlan, targetStateAt, targetName, defaultStandoff, STANDOFF, PREP_MINUTES } from '../sim/nav.js';
 import { engageRoute, abortRoute, overrideSecure } from '../sim/autopilot.js';
-import { crewSecureStatus } from '../sim/crew-ai.js';
+import { crewSecureStatus, isSecured } from '../sim/crew-ai.js';
 import { isConscious } from '../sim/crew.js';
 import { SENSOR_RANGES, REVEAL, setSensorRange, selectContact, toggleLock, contactById } from '../sim/sensors.js';
 import { missionForEntity } from '../sim/missions.js';
@@ -447,7 +447,7 @@ function renderPrompt(state) {
   if (!on) return;
   const st = crewSecureStatus(state);
   const dots = state.ship.crew.filter(isConscious).map(m => {
-    const ok = !!m.seat;
+    const ok = isSecured(m);
     const p = st.pilot === m;
     return `<span class="mp-dot ${ok ? 'mp-dot-ok' : 'mp-dot-wait'} ${p ? 'mp-dot-pilot' : ''}" title="${esc(m.name)} — ${ok ? 'secured' : m.activity}">${p ? 'P' : '·'}</span>`;
   }).join('');

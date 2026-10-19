@@ -10,7 +10,7 @@
 import { G0 } from '../core/constants.js';
 import { random } from '../core/rng.js';
 import { BLOCKING } from './tiles.js';
-import { shipGeometry } from './ship-layout.js';
+import { shipGeometry, isRestraint } from './ship-layout.js';
 import { isConscious, applyImpact } from './crew.js';
 import { abandonTask } from './crew-ai.js';
 
@@ -51,7 +51,7 @@ export function triggerManeuver(state, type, opts) {
   const isBurn = type !== Maneuver.FLIP;
   const bodies = [];
   for (const m of state.ship.crew) {
-    if (m.seat || m.task?.type === 'carried') continue;
+    if (isRestraint(m.seat) || m.task?.type === 'carried') continue;
     if (!m.dead && isConscious(m) && isBurn) {
       if (!opts.surprise && dG <= BRACE_G) continue;   // braced for an announced burn
       if (opts.surprise && dG <= SURPRISE_G) continue;

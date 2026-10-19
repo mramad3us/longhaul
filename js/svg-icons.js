@@ -898,6 +898,133 @@ const TILE_PATTERNS = {
     'bbbbbbbbbbbbbbbb',
     'bbbbbbbbbbbbbbbb',
   ],
+  [TileType.GALLEY]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbiiiiiiiiiiiibb',
+    'bbimmmmmmmmmmibb',
+    'bbimDDDmmmUUmibb',
+    'bbimDaDmmmuUmibb',
+    'bbimDDDmmmuumibb',
+    'bbimmmmmmmmmmibb',
+    'bbiooooooooooibb',
+    'bbiddddddddddibb',
+    'bbidMMdMMdMMdibb',
+    'bbiddddddddddibb',
+    'bbidMMdMMdMMdibb',
+    'bbiddddddddddibb',
+    'bbiiiiiiiiiiiibb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  [TileType.HEAD]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbiiiiiiiiiiiibb',
+    'bbiUUUUUUiddddib',
+    'bbiUmmmUUiddddib',
+    'bbiUUmUUUiddddib',
+    'bbiUuUuUUiddddib',
+    'bbiUUuUuUiooooib',
+    'bbiUuUuUUioMMoib',
+    'bbiUUuUuUiooooib',
+    'bbiUuUuUUiddddib',
+    'bbiUUUUUUidoodib',
+    'bbiUUUUUUiddddib',
+    'bbiUUUmmUiddddib',
+    'bbiiiiiiiiiiiiib',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  [TileType.WATER_RECYCLER]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbbmmmmbbmmmmbbb',
+    'bbmUuuUmmUuuUmbb',
+    'bbmuuuumbmuuuumb',
+    'bbmuLuumbmuLuumb',
+    'bbmuuuummmuuuumb',
+    'bbmuuuumbmuuuumb',
+    'bbmUuuUmbmUuuUmb',
+    'bbbmmmmbbbmmmmbb',
+    'bbbbmbbbbbbmbbbb',
+    'bbbbmmmmmmmmbbbb',
+    'bbbbbbbmmbbbbbbb',
+    'bbbbbbmtLmbbbbbb',
+    'bbbbbbmmmmbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  [TileType.WORKBENCH]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbiiiiiiiiiiiibb',
+    'bbibMbMbbDbbbibb',
+    'bbibMbMbDaDbbibb',
+    'bbibMbbbbDbMMibb',
+    'bbibbbbbbbbbbibb',
+    'bbiiiiiiiiiiiibb',
+    'bbmmmmmmmmmmmmbb',
+    'bbmhhmmmmmmhhmbb',
+    'bbmhAhbbbbbhhmbb',
+    'bbmhhhbbbbbhhmbb',
+    'bbmmmmbbbbbmmmbb',
+    'bbmbbmbbbbbmbmbb',
+    'bbmbbmbbbbbmbmbb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  [TileType.OPS_CONSOLE]: [
+    'bbbbbbbbbbbbbbbb',
+    'bnnnnnnnnnnnnnnb',
+    'bnNBBBBBBBBBBNnb',
+    'bnNBBBnnnBBBBNnb',
+    'bnNBBnBBBnBBBNnb',
+    'bnNBnBBNBBnBBNnb',
+    'bnNBBnBBBnBwBNnb',
+    'bnNBBBnnnBBBBNnb',
+    'bnNNNNNNNNNNNNnb',
+    'bnnnnnnnnnnnnnnb',
+    'bbbbbmmmmmmbbbbb',
+    'bbbbmmiiiimmbbbb',
+    'bbbmmiibbiimmbbb',
+    'bbmmbbbbbbbbmmbb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  [TileType.ENG_CONSOLE]: [
+    'bbbbbbbbbbbbbbbb',
+    'baaaaaaaaaaaaaab',
+    'baDBBBBBBBBBBDab',
+    'baDBaBBBBBBBBDab',
+    'baDBaBaBBBBBBDab',
+    'baDBaBaBaBBrBDab',
+    'baDBaBaBaBaBBDab',
+    'baDBBBBBBBBBBDab',
+    'baDDDDDDDDDDDDab',
+    'baaaaaaaaaaaaaab',
+    'bbbbbmmmmmmbbbbb',
+    'bbbbmmiiiimmbbbb',
+    'bbbmmiibbiimmbbb',
+    'bbmmbbbbbbbbmmbb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  [TileType.REC]: [
+    'bbbbbbbbbbbbbbbb',
+    'bbiiiiiiiiibbbbb',
+    'bbiPPPPPPPibbbbb',
+    'bbiPpPPPpPibbbbb',
+    'bbiPPpppPPibbbbb',
+    'bbiiiiiiiiibbbbb',
+    'bbbbbmbbbbbbbbbb',
+    'bbbbbmbbbbbmmbbb',
+    'bbbbbmbbbbmbbmbb',
+    'bbbbbmbbbbmbbmbb',
+    'bbmmmmmmmmmmmmbb',
+    'bbmddddddddddmbb',
+    'bbmdhdhdhdhddmbb',
+    'bbmmmmmmmmmmmmbb',
+    'bbbmbbbbbbbbmbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+
 };
 
 
@@ -935,14 +1062,14 @@ export function renderTile(type, x, y, ctx) {
   }
 
   // Add animations for specific tiles
-  if (type === TileType.CONSOLE || type === TileType.NAV_CONSOLE) {
+  if (type === TileType.CONSOLE || type === TileType.NAV_CONSOLE || type === TileType.OPS_CONSOLE || type === TileType.ENG_CONSOLE) {
     // Screen flicker
     const flicker = document.createElementNS(SVG_NS, 'rect');
     flicker.setAttribute('x', 4 * PX);
     flicker.setAttribute('y', 3 * PX);
     flicker.setAttribute('width', 8 * PX);
     flicker.setAttribute('height', 1 * PX);
-    flicker.setAttribute('fill', type === TileType.NAV_CONSOLE ? C.tealLt : C.teal);
+    flicker.setAttribute('fill', type === TileType.NAV_CONSOLE ? C.tealLt : type === TileType.OPS_CONSOLE ? C.green : type === TileType.ENG_CONSOLE ? C.amberLt : C.teal);
     flicker.setAttribute('opacity', '0');
     flicker.innerHTML = `<animate attributeName="opacity" values="0;0.4;0;0;0;0;0;0;0;0.3;0" dur="4s" repeatCount="indefinite"/>
       <animate attributeName="y" values="${3*PX};${4*PX};${5*PX};${6*PX};${7*PX};${3*PX}" dur="3s" repeatCount="indefinite"/>`;
@@ -999,6 +1126,17 @@ export function renderTile(type, x, y, ctx) {
     warn.setAttribute('opacity', '0');
     warn.innerHTML = `<animate attributeName="opacity" values="0;0.6;0;0;0;0" dur="2s" repeatCount="indefinite"/>`;
     g.appendChild(warn);
+  }
+
+  if (type === TileType.WATER_RECYCLER) {
+    // Bubbles rising in the reclamation tanks
+    for (const [x, dur] of [[4, '2.6s'], [11, '3.4s']]) {
+      const b = document.createElementNS(SVG_NS, 'rect');
+      b.setAttribute('x', x * PX); b.setAttribute('width', PX); b.setAttribute('height', PX);
+      b.setAttribute('fill', C.tealLt); b.setAttribute('opacity', '0.6');
+      b.innerHTML = `<animate attributeName="y" values="${7 * PX};${3 * PX}" dur="${dur}" repeatCount="indefinite"/>`;
+      g.appendChild(b);
+    }
   }
 
   if (type === TileType.LIFE_SUPPORT) {
@@ -1073,6 +1211,7 @@ function buildCrewSprite(def) {
     u: def.uniform, U: def.uniformDk, B: def.boots,
     e: def.eye, p: def.pupil, b: C.hullDk,
     E: '#3A7BD5', F: '#1E4A8A', v: '#7EC8E3', // EVA suit blue, dark blue, visor cyan
+    o: '#8A9AAA', c: '#2A3A4A',                  // pillow, console chair
   };
 
   return {
@@ -1170,6 +1309,44 @@ function buildCrewSprite(def) {
       '..tTTuuuuTTTt...',
       '..tTTBBBBTTTt...',
       '..ttttttttttt...',
+      '................',
+    ],
+    // Asleep in a bunk: lying on the side under a blanket
+    sleeping: [
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '..ooo...........',
+      '.oohhhUUUUUUUU..',
+      '.ohsseUuuuuuuUU.',
+      '.oohssUuuuuuuuU.',
+      '..ooo.UUUUUUUU..',
+      '................',
+      '................',
+      '................',
+      '................',
+    ],
+    // Seated at a console, facing the screen
+    seated: [
+      '................',
+      '................',
+      '................',
+      '................',
+      '......hhhh......',
+      '.....hhhhhh.....',
+      '.....hhhhhh.....',
+      '......ssss......',
+      '....cuuuuuuc....',
+      '...cuuuUUuuuc...',
+      '...cuuuUUuuuc...',
+      '...ccccccccccc..',
+      '....cuu..uuc....',
+      '....c.BB.BB.c...',
+      '....c.......c...',
       '................',
     ],
     // EVA suited: crew in blue EVA suit with helmet visor (standing)
@@ -1366,6 +1543,21 @@ export function renderCrewMember(x, y, memberIndex, name) {
   medbayGroup.innerHTML = sprite(crewSprite.inMedbay, crewSprite.palette, PX);
   g.appendChild(medbayGroup);
 
+  // Asleep in a bunk, with a slow "z"
+  const sleepGroup = document.createElementNS(SVG_NS, 'g');
+  sleepGroup.setAttribute('class', 'crew-sleeping');
+  sleepGroup.setAttribute('display', 'none');
+  sleepGroup.innerHTML = sprite(crewSprite.sleeping, crewSprite.palette, PX) +
+    `<text x="${10 * PX}" y="${6 * PX}" font-family='"Press Start 2P", monospace' font-size="6" fill="#7EC8E3" opacity="0">z<animate attributeName="opacity" values="0;0.8;0" dur="${3 + (memberIndex % 3) * 0.4}s" repeatCount="indefinite"/><animate attributeName="y" values="${7 * PX};${3 * PX}" dur="${3 + (memberIndex % 3) * 0.4}s" repeatCount="indefinite"/></text>`;
+  g.appendChild(sleepGroup);
+
+  // Seated at a console
+  const seatedGroup = document.createElementNS(SVG_NS, 'g');
+  seatedGroup.setAttribute('class', 'crew-seated');
+  seatedGroup.setAttribute('display', 'none');
+  seatedGroup.innerHTML = sprite(crewSprite.seated, crewSprite.palette, PX);
+  g.appendChild(seatedGroup);
+
   // EVA suited sprite — standing (shown when crew is wearing a suit under gravity)
   const suitedGroup = document.createElementNS(SVG_NS, 'g');
   suitedGroup.setAttribute('class', 'crew-suited');
@@ -1531,15 +1723,16 @@ export function renderCrewMember(x, y, memberIndex, name) {
 // ---- CREW SPRITE STATE ----
 // One sprite group visible at a time. Keys:
 //   standing, floating, prone, unconsciousFloor, unconsciousFloat, secured,
-//   medbay, suited, suitedFloat, suitedSecured, suitedProne, suitedProneFloat
+//   medbay, sleeping, seated, suited, suitedFloat, suitedSecured, suitedProne, suitedProneFloat
 const SPRITE_CLASS = {
+  sleeping: 'crew-sleeping', seated: 'crew-seated',
   standing: 'crew-standing', floating: 'crew-floating', prone: 'crew-prone',
   unconsciousFloor: 'crew-unconscious-floor', unconsciousFloat: 'crew-unconscious-float',
   secured: 'crew-secured', medbay: 'crew-in-medbay', suited: 'crew-suited',
   suitedFloat: 'crew-suited-float', suitedSecured: 'crew-suited-secured',
   suitedProne: 'crew-suited-prone', suitedProneFloat: 'crew-suited-prone-float',
 };
-const BLINKS = new Set(['standing', 'floating', 'secured', 'medbay']);
+const BLINKS = new Set(['standing', 'floating', 'secured', 'medbay']);   // eyes visible
 
 export function setCrewSprite(el, key) {
   if (el.dataset.sprite === key) return;

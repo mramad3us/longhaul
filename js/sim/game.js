@@ -13,7 +13,7 @@ import { bus } from '../core/events.js';
 import { VERSION } from '../version.js';
 import { getWorld, backgroundBudget } from './world.js';
 import { createDefaultEntities } from './entities.js';
-import { createDefaultLayout, computeShipMass } from './ship-layout.js';
+import { createDefaultLayout, computeShipMass, isSecureSeat } from './ship-layout.js';
 import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, needsTick, G_THRESHOLDS } from './crew.js';
 import { crewTick, createJobs, placeCrew } from './crew-ai.js';
 import { createFlight, flightStep, fuelUsed, angleDiff, SLEW_RATE, RATED_G } from './flight.js';
@@ -176,7 +176,7 @@ export function minuteTick(state, { lite = false } = {}) {
   state.crewPolicy = state.clock.minute < (state.secureUntil ?? -1) ? 'secure' : 'free';
   for (const m of state.ship.crew) {
     if (m.dead) continue;
-    const secured = !!m.seat;
+    const secured = isSecureSeat(m.seat);
     m.gState = gStateFor(m, g, secured);
     const eff = protectedG(m, g, secured, res);
     const wasCritical = m.conditions.includes('critical');

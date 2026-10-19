@@ -6,7 +6,7 @@
 // ============================================================
 
 import { SVG_NS, TileType, renderTile, renderCrewMember, INTERACTIVE_TILES, setCrewSprite } from '../svg-icons.js';
-import { shipGeometry, DECK_GAP } from '../sim/ship-layout.js';
+import { shipGeometry, DECK_GAP, seatKind } from '../sim/ship-layout.js';
 import { atmoStatus } from '../sim/life-support.js';
 import { isConscious } from '../sim/crew.js';
 import { ui } from './context.js';
@@ -185,6 +185,27 @@ export function buildShipView(container, state, on) {
   container.appendChild(svg);
   const outline = svg.querySelector('.hull-outline');
   hullBox = outline ? outline.getBBox() : null;
+  fitToViewport(container, W, H);
+}
+
+// ---- FIT ----
+// The cross-section scales to the viewport (never above 1:1, so the pixel
+// art stays crisp on screens big enough to show the whole ship).
+
+let fitObserver = null;
+function fitToViewport(container, W, H) {
+  fitObserver?.disconnect();
+  const viewport = container.parentElement;
+  if (!viewport || typeof ResizeObserver === 'undefined') return;
+  const apply = () => {
+    const k = Math.min(1, (viewport.clientWidth - 24) / W, (viewport.clientHeight - 16) / H);
+    const scale = Math.max(0.45, k);
+    root.style.width = `${Math.round(W * scale)}px`;
+    root.style.height = `${Math.round(H * scale)}px`;
+  };
+  fitObserver = new ResizeObserver(apply);
+  fitObserver.observe(viewport);
+  apply();
 }
 
 function exteriorSVG(ship, geo, hull) {
@@ -258,8 +279,11 @@ function nozzleSVG(cols, hullBottom) {
 export function spriteKey(m, g) {
   const floating = g < 0.01;
   const suit = m.suit?.wearing;
-  if (m.seat?.startsWith('medbay')) return 'medbay';
-  if (m.seat?.startsWith('couch')) return suit ? 'suitedSecured' : 'secured';
+  const seat = seatKind(m.seat);
+  if (seat === 'medbay') return 'medbay';
+  if (seat === 'couch') return suit ? 'suitedSecured' : 'secured';
+  if (seat === 'bunk') return 'sleeping';
+  if (seat === 'helm' || seat === 'ops' || seat === 'engStation') return suit ? 'suitedSecured' : 'seated';
   if (m.dead || !isConscious(m) || m.task?.type === 'carried') {
     if (suit) return floating ? 'suitedProneFloat' : 'suitedProne';
     return floating ? 'unconsciousFloat' : 'unconsciousFloor';

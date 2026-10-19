@@ -43,10 +43,18 @@ export default [
       const s = newGame();
       const geo = shipGeometry(s.ship);
       const bridge = nearestNode(geo, 3, 1);
-      const reactor = nearestNode(geo, 3, geo.deckStart[5]);
+      const reactor = nearestNode(geo, 3, geo.deckStart[s.ship.decks.length - 1]);
       const p = findPath(geo, bridge, reactor);
       assert(p && p.length > 10, 'no path bridge → reactor');
-      assert(geo.shafts.length === 5, `expected 5 shaft links, got ${geo.shafts.length}`);
+      assert(geo.shafts.length === s.ship.decks.length - 1, `expected ${s.ship.decks.length - 1} shaft links, got ${geo.shafts.length}`);
+      // every fixture someone has to stand at is reachable
+      for (const [kind, list] of Object.entries(geo.fixtures)) {
+        if (kind === 'storage') continue;
+        for (const f of list) {
+          assert(f.access != null, `${f.id} has no access tile`);
+          assert(findPath(geo, bridge, f.access), `${f.id} unreachable`);
+        }
+      }
     },
   },
   {

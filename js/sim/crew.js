@@ -28,7 +28,7 @@ const ROLE_SKILL = {
   Gunner: 'security', Mechanic: 'engineering', Scientist: 'medical', Cook: 'medical',
 };
 // Where each role spends its watch
-export const ROLE_HOME_DECK = { Captain: 0, Pilot: 0, Engineer: 4, Medic: 1, Gunner: 3, Mechanic: 4, Scientist: 2, Cook: 2 };
+export const ROLE_HOME_DECK = { Captain: 0, Pilot: 0, Engineer: 5, Medic: 2, Gunner: 4, Mechanic: 3, Scientist: 0, Cook: 2 };
 
 const SURNAMES = ['Chen', 'Nakamura', 'Okafor', 'Petrov', 'Morales', 'Kim', 'Al-Rashid', 'Johansson',
   'Mbeki', 'Kowalski', 'Tanaka', 'Adeyemi', 'Novak', 'Vasquez', 'Singh', 'Dawes', 'Ashford', 'Mao'];

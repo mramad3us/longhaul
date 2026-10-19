@@ -12,8 +12,13 @@ export const DECK_GAP = 1;
 
 const T = TileType;
 const E = T.EMPTY, HW = T.HULL_WALL, F = T.FLOOR, L = T.LADDER, CC = T.CRASH_COUCH;
+const EV = T.EVA_LOCKER, BK = T.BUNK, TB = T.TABLE, ST = T.STORAGE;
 
-/** Default corvette-class hauler: six decks stacked on the torch, central ladder shaft. */
+/**
+ * Default corvette-class hauler: seven decks stacked on the torch, one
+ * ladder shaft down the spine. Bow first: command, living, working,
+ * cargo, then the machinery.
+ */
 export function createDefaultLayout() {
   return [
     {
@@ -21,45 +26,54 @@ export function createDefaultLayout() {
       glow: { color: 'rgba(91, 192, 235, 0.06)', accent: '#5BC0EB' },
       tiles: [
         [E, HW, HW, HW, HW, HW, HW, HW, E],
-        [HW, T.RADIO, CC, F, F, F, CC, T.TRANSPONDER, HW],
-        [HW, T.EVA_LOCKER, F, F, T.NAV_CONSOLE, F, F, T.EVA_LOCKER, HW],
-        [HW, F, F, F, L, F, F, F, HW],
+        [HW, T.RADIO, T.OPS_CONSOLE, F, T.NAV_CONSOLE, F, CC, T.TRANSPONDER, HW],
+        [HW, F, F, F, F, F, F, F, HW],
+        [HW, EV, CC, F, L, F, CC, EV, HW],
       ],
     },
     {
       name: 'Quarters', id: 'quarters',
       glow: { color: 'rgba(192, 132, 252, 0.04)', accent: '#C084FC' },
       tiles: [
-        [HW, T.TERMINAL, CC, F, L, F, CC, T.TERMINAL, HW],
-        [HW, T.EVA_LOCKER, F, F, F, F, F, T.EVA_LOCKER, HW],
-        [HW, F, F, F, L, F, T.MEDBAY, F, HW],
+        [HW, BK, BK, F, L, F, BK, BK, HW],
+        [HW, F, F, F, F, F, F, F, HW],
+        [HW, T.HEAD, CC, F, L, F, CC, EV, HW],
       ],
     },
     {
       name: 'Mess', id: 'mess',
       glow: { color: 'rgba(107, 203, 119, 0.04)', accent: '#6BCB77' },
       tiles: [
-        [HW, T.EVA_LOCKER, F, F, L, F, F, T.EVA_LOCKER, HW],
-        [HW, T.TERMINAL, CC, F, F, F, CC, T.TERMINAL, HW],
-        [HW, F, F, F, L, F, T.LIFE_SUPPORT, F, HW],
+        [HW, T.GALLEY, F, TB, L, TB, F, T.REC, HW],
+        [HW, F, F, F, F, F, F, F, HW],
+        [HW, EV, CC, F, L, F, CC, T.MEDBAY, HW],
+      ],
+    },
+    {
+      name: 'Utility', id: 'utility',
+      glow: { color: 'rgba(91, 192, 235, 0.03)', accent: '#7EC8E3' },
+      tiles: [
+        [HW, T.LIFE_SUPPORT, F, F, L, F, F, T.WATER_RECYCLER, HW],
+        [HW, F, F, F, F, F, F, F, HW],
+        [HW, T.WORKBENCH, CC, F, L, F, CC, EV, HW],
       ],
     },
     {
       name: 'Cargo', id: 'cargo',
       glow: { color: 'rgba(79, 209, 197, 0.03)', accent: '#4FD1C5' },
       tiles: [
-        [HW, T.TERMINAL, CC, F, L, F, CC, T.TERMINAL, HW],
-        [HW, T.STORAGE, T.STORAGE, F, F, F, T.STORAGE, T.STORAGE, HW],
-        [HW, T.AIRLOCK, T.EVA_LOCKER, F, L, F, T.EVA_LOCKER, T.STORAGE, HW],
+        [HW, ST, ST, F, L, F, ST, ST, HW],
+        [HW, F, F, F, F, F, F, ST, HW],
+        [HW, T.AIRLOCK, EV, F, L, F, EV, ST, HW],
       ],
     },
     {
       name: 'Engine', id: 'engineering',
       glow: { color: 'rgba(226, 163, 85, 0.06)', accent: '#E2A355' },
       tiles: [
-        [HW, T.TERMINAL, CC, F, L, F, CC, T.TERMINAL, HW],
-        [HW, T.EVA_LOCKER, F, F, F, F, F, T.EVA_LOCKER, HW],
-        [HW, F, T.ENGINE, F, L, F, T.ENGINE, F, HW],
+        [HW, T.ENG_CONSOLE, F, CC, L, CC, F, EV, HW],
+        [HW, F, F, F, F, F, F, F, HW],
+        [HW, EV, T.ENGINE, F, L, F, T.ENGINE, F, HW],
       ],
     },
     {
@@ -67,12 +81,30 @@ export function createDefaultLayout() {
       glow: { color: 'rgba(226, 85, 85, 0.06)', accent: '#E25555' },
       tiles: [
         [E, HW, HW, F, L, F, HW, HW, E],
-        [E, HW, T.EVA_LOCKER, F, T.REACTOR, F, T.EVA_LOCKER, HW, E],
+        [E, HW, EV, F, T.REACTOR, F, EV, HW, E],
         [E, E, HW, HW, HW, HW, HW, E, E],
       ],
     },
   ];
 }
+
+/** Deck index by layout id (decks can be reordered without breaking callers). */
+export function deckIndex(ship, id) {
+  return ship.decks.findIndex(d => d.id === id);
+}
+
+// ---- SEATS ----
+// Fixtures a crew member occupies (moves onto). Secure seats protect
+// against sustained G (couch gel, juice); restraints only against being
+// thrown around (a sleeper in a bunk is strapped in, but not juiced).
+
+export const SEAT_KINDS = new Set(['couch', 'helm', 'ops', 'engStation', 'medbay', 'bunk', 'head', 'rec']);
+const SECURE_SEATS = new Set(['couch', 'helm', 'ops', 'engStation', 'medbay']);
+const RESTRAINTS = new Set([...SECURE_SEATS, 'bunk']);
+
+export const seatKind = (seatId) => seatId ? seatId.slice(0, seatId.indexOf(':')) : null;
+export const isSecureSeat = (seatId) => SECURE_SEATS.has(seatKind(seatId));
+export const isRestraint = (seatId) => RESTRAINTS.has(seatKind(seatId));
 
 export function computeShipMass(ship, crewMassKg = 75) {
   let total = 0;
@@ -136,25 +168,26 @@ function buildGeometry(decks) {
   // Fixtures (furniture crew interact with), each with an access node
   const fixtures = {};
   const add = (kind, f) => (fixtures[kind] ||= []).push(f);
-  const KIND = {
-    [T.CRASH_COUCH]: 'couch', [T.MEDBAY]: 'medbay', [T.EVA_LOCKER]: 'locker',
-    [T.LIFE_SUPPORT]: 'lifeSupport', [T.REACTOR]: 'reactor', [T.TERMINAL]: 'terminal',
-    [T.RADIO]: 'radio', [T.TRANSPONDER]: 'transponder', [T.NAV_CONSOLE]: 'nav',
-    [T.AIRLOCK]: 'airlock', [T.ENGINE]: 'engine', [T.STORAGE]: 'storage',
-  };
   decks.forEach((deck, di) => deck.tiles.forEach((row, ry) => row.forEach((t, rx) => {
-    const kind = KIND[t];
+    const kind = FIXTURE_KIND[t];
     if (!kind) return;
     const self = index.get(key(di, rx, ry));
-    let access = self;
+    // Access: where a crew member stands to use it — open floor preferred
+    // over the ladder shaft or a doorway
+    let access = self, fallback;
     if (access === undefined) {
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const n = index.get(key(di, rx + dx, ry + dy));
-        if (n !== undefined) { access = n; break; }
+        if (n === undefined) continue;
+        if (nodes[n].tile === T.FLOOR) { access = n; break; }
+        fallback ??= n;
       }
+      access ??= fallback;
     }
     add(kind, { kind, deck: di, x: rx, y: ry, sx: rx, sy: deckStart[di] + ry, access: access ?? null, id: `${kind}:${di}:${rx}:${ry}` });
   })));
+  const fixtureById = new Map();
+  for (const list of Object.values(fixtures)) for (const f of list) fixtureById.set(f.id, f);
 
   // Ship coords → deck lookup
   const deckOfRow = (sy) => {
@@ -162,8 +195,19 @@ function buildGeometry(decks) {
     return 0;
   };
 
-  return { deckStart, totalRows, cols, nodes, index, adj, shafts, fixtures, deckOfRow, key };
+  return { deckStart, totalRows, cols, nodes, index, adj, shafts, fixtures, fixtureById, deckOfRow, key, trees: new Map() };
 }
+
+/** Tile type → fixture kind (the furniture crew walk to and use). */
+export const FIXTURE_KIND = {
+  [T.CRASH_COUCH]: 'couch', [T.MEDBAY]: 'medbay', [T.EVA_LOCKER]: 'locker',
+  [T.LIFE_SUPPORT]: 'lifeSupport', [T.REACTOR]: 'reactor', [T.TERMINAL]: 'terminal',
+  [T.RADIO]: 'radio', [T.TRANSPONDER]: 'transponder', [T.NAV_CONSOLE]: 'helm',
+  [T.AIRLOCK]: 'airlock', [T.ENGINE]: 'engine', [T.STORAGE]: 'storage',
+  [T.BUNK]: 'bunk', [T.TABLE]: 'table', [T.GALLEY]: 'galley', [T.HEAD]: 'head',
+  [T.WATER_RECYCLER]: 'recycler', [T.WORKBENCH]: 'workbench', [T.OPS_CONSOLE]: 'ops',
+  [T.ENG_CONSOLE]: 'engStation', [T.REC]: 'rec',
+};
 
 /** Node index nearest to a ship-coord point (same deck preferred). */
 export function nearestNode(geo, sx, sy) {
@@ -178,28 +222,41 @@ export function nearestNode(geo, sx, sy) {
 }
 
 /**
- * Shortest walk between graph nodes (Dijkstra; graphs are ~150 nodes).
- * Returns ship-coord waypoints from (excluding) start to (including) goal, or null.
+ * Shortest-path tree from one node (Dijkstra). Trees are cached per
+ * source on the geometry, so a crew of eight walking all day costs one
+ * Dijkstra per distinct starting tile — then path lookups are O(length).
  */
-export function findPath(geo, from, to) {
-  if (from < 0 || to < 0) return null;
-  if (from === to) return [];
+function treeFrom(geo, from) {
+  let prev = geo.trees.get(from);
+  if (prev) return prev;
   const n = geo.nodes.length;
   const dist = new Float64Array(n).fill(Infinity);
-  const prev = new Int32Array(n).fill(-1);
+  prev = new Int32Array(n).fill(-1);
   const done = new Uint8Array(n);
   dist[from] = 0;
   for (;;) {
     let u = -1, best = Infinity;
     for (let i = 0; i < n; i++) if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
-    if (u < 0 || u === to) break;
+    if (u < 0) break;
     done[u] = 1;
     for (const { to: v, cost } of geo.adj[u]) {
       const nd = dist[u] + cost;
       if (nd < dist[v]) { dist[v] = nd; prev[v] = u; }
     }
   }
-  if (dist[to] === Infinity) return null;
+  geo.trees.set(from, prev);
+  return prev;
+}
+
+/**
+ * Shortest walk between graph nodes.
+ * Returns ship-coord waypoints from (excluding) start to (including) goal, or null.
+ */
+export function findPath(geo, from, to) {
+  if (from < 0 || to < 0) return null;
+  if (from === to) return [];
+  const prev = treeFrom(geo, from);
+  if (prev[to] < 0) return null;
   const chain = [];
   for (let v = to; v !== from; v = prev[v]) chain.push(v);
   chain.reverse();
@@ -215,6 +272,16 @@ export function findPath(geo, from, to) {
     last = node;
   }
   return pts;
+}
+
+/** Walking distance between two nodes (tiles), Infinity if unreachable. */
+export function walkDistance(geo, from, to) {
+  if (from === to) return 0;
+  const prev = treeFrom(geo, from);
+  if (prev[to] < 0) return Infinity;
+  let d = 0;
+  for (let v = to; v !== from; v = prev[v]) d += geo.nodes[v].deck !== geo.nodes[prev[v]].deck ? 1 + DECK_GAP : 1;
+  return d;
 }
 
 /** Walkable nodes on a deck (for patrols). */

@@ -24,6 +24,13 @@ export const TileType = {
   EVA_LOCKER: 18,
   RADIO: 19,
   TRANSPONDER: 20,
+  GALLEY: 21,
+  HEAD: 22,
+  WATER_RECYCLER: 23,
+  WORKBENCH: 24,
+  OPS_CONSOLE: 25,
+  ENG_CONSOLE: 26,
+  REC: 27,
 };
 
 export const TILE_NAMES = {
@@ -47,11 +54,27 @@ export const TILE_NAMES = {
   [TileType.EVA_LOCKER]: 'EVA Suit Locker',
   [TileType.RADIO]: 'Communications Array',
   [TileType.TRANSPONDER]: 'Transponder',
+  [TileType.GALLEY]: 'Galley',
+  [TileType.HEAD]: 'Head',
+  [TileType.WATER_RECYCLER]: 'Water Reclamation',
+  [TileType.WORKBENCH]: 'Machine Shop',
+  [TileType.OPS_CONSOLE]: 'Ops Station',
+  [TileType.ENG_CONSOLE]: 'Engineering Station',
+  [TileType.REC]: 'Exercise Rig',
 };
 
 export const TILE_DESCRIPTIONS = {
   [TileType.CONSOLE]: 'General-purpose ship terminal. Comms, sensors, and system monitoring.',
-  [TileType.NAV_CONSOLE]: 'Navigation and flight control. Plots courses and manages burn sequences.',
+  [TileType.NAV_CONSOLE]: 'The helm: flight computer and manual flight controls, built into an acceleration couch. If the flight computer fails, someone has to fly from here.',
+  [TileType.OPS_CONSOLE]: 'Sensors and communications station. A watchstander here tracks contacts faster and spots debris in time to dodge it.',
+  [TileType.ENG_CONSOLE]: 'Engineering watch station: drive, reactor and plant telemetry. An engineer on watch catches faults before they bite.',
+  [TileType.BUNK]: 'Rack with sleep restraints. Crew sleep here off watch — on a small ship, bunks are shared between watches.',
+  [TileType.TABLE]: 'Mess table. Meals and company.',
+  [TileType.GALLEY]: 'Food preparation. With a cook on duty the crew eats hot meals; without, it\'s self-serve or cold rations.',
+  [TileType.HEAD]: 'Shower and toilet. Water goes to the reclamation plant.',
+  [TileType.WATER_RECYCLER]: 'Water reclamation: recovers ~95% of the ship\'s water. Without it the tanks run down fast.',
+  [TileType.WORKBENCH]: 'Machine shop. Engineers refurbish scrapped components into spare parts.',
+  [TileType.REC]: 'Exercise rig and entertainment screen. Keeps bodies and minds in shape on long hauls.',
   [TileType.ENGINE]: 'Epstein fusion drive. Provides thrust for interplanetary travel.',
   [TileType.REACTOR]: 'Fusion reactor core. Powers every system including the drive. Containment failure is catastrophic.',
   [TileType.STORAGE]: 'Cargo and supply storage.',
@@ -72,6 +95,8 @@ export const INTERACTIVE_TILES = new Set([
   TileType.AIRLOCK, TileType.MEDBAY, TileType.CRASH_COUCH,
   TileType.TERMINAL, TileType.EVA_LOCKER,
   TileType.RADIO, TileType.TRANSPONDER,
+  TileType.BUNK, TileType.TABLE, TileType.GALLEY, TileType.HEAD, TileType.WATER_RECYCLER,
+  TileType.WORKBENCH, TileType.OPS_CONSOLE, TileType.ENG_CONSOLE, TileType.REC,
 ]);
 
 /** Crew can stand on / walk through these. */
@@ -106,4 +131,11 @@ export const TILE_MASS = {
   [TileType.EVA_LOCKER]: 60,
   [TileType.RADIO]: 90,
   [TileType.TRANSPONDER]: 45,
+  [TileType.GALLEY]: 160,
+  [TileType.HEAD]: 120,
+  [TileType.WATER_RECYCLER]: 420,
+  [TileType.WORKBENCH]: 380,
+  [TileType.OPS_CONSOLE]: 140,
+  [TileType.ENG_CONSOLE]: 140,
+  [TileType.REC]: 110,
 };
