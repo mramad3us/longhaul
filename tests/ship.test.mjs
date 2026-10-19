@@ -19,6 +19,7 @@ function game(seed = 1, crewCount = 6) {
   bus.clear();
   const s = createGame({ crewCount });
   s.missions.cooldown = 1e9;            // no distress calls interrupting the routine
+  s.politics.quietUntil = Infinity;     // nor patrols and pirates
   return s;
 }
 

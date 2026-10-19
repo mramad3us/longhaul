@@ -17,7 +17,9 @@ import { createPlan, STANDOFF } from '../js/sim/nav.js';
 function game(seed = 1, crewCount = 6) {
   seedRandom(seed);
   bus.clear();
-  return createGame({ crewCount });
+  const s = createGame({ crewCount });
+  s.politics.quietUntil = Infinity;     // no patrols or pirates turning up mid-test
+  return s;
 }
 
 export default [

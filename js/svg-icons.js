@@ -1038,7 +1038,60 @@ const TILE_PATTERNS = {
     'bbbmbbbbbbbbmbbb',
     'bbbbbbbbbbbbbbbb',
   ],
-
+  [TileType.PDC_MOUNT]: [
+    'HHHHHHHHHHHHHHhh',
+    'Hhdddddddddddhhh',
+    'Hhdddmmmmmmddhhd',
+    'HhddmMMMMMMmddhd',
+    'HhdmMiiiiiiMmdhd',
+    'HhdmMiaaaaiMmdhd',
+    'HhdmMiaAAaiMmdhd',
+    'HhdmMiaAAaiMmdhd',
+    'HhdmMiaaaaiMmdhd',
+    'HhdmMiiiiiiMmdhd',
+    'HhddmMMMMMMmddhd',
+    'Hhdddmmmmmmddhhd',
+    'Hhdddddddddddhhd',
+    'HhhhhhhhhhhhhhHH',
+    'hHHHHHHHHHHHHHHh',
+    'hhhhhhhhhhhhhhhh',
+  ],
+  [TileType.TORPEDO_LAUNCHER]: [
+    'bbbbbbbbbbbbbbbb',
+    'bmmmmmmmmmmmmmmb',
+    'bmMMMMMMMMMMMMmb',
+    'bmiiiiiiiiiiirmb',
+    'bmMMMMMMMMMMMMmb',
+    'bmiiiiiiiiiiirmb',
+    'bmMMMMMMMMMMMMmb',
+    'bmiiiiiiiiiiirmb',
+    'bmMMMMMMMMMMMMmb',
+    'bmmmmmmmmmmmmmmb',
+    'bbbbbbbbbbbbbbbb',
+    'bbmmbbbbbbbbmmbb',
+    'bbmabbbbbbbbambb',
+    'bbmmbbbbbbbbmmbb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
+  [TileType.WEAPONS_CONSOLE]: [
+    'bbbbbbbbbbbbbbbb',
+    'brrrrrrrrrrrrrrb',
+    'brkBBBBBBBBBBkrb',
+    'brkBBBBrBBBBBkrb',
+    'brkBBBrrrBBBBkrb',
+    'brkBrrBrBrrBBkrb',
+    'brkBBBrrrBBBBkrb',
+    'brkBBBBrBBBBBkrb',
+    'brkkkkkkkkkkkkrb',
+    'brrrrrrrrrrrrrrb',
+    'bbbbbmmmmmmbbbbb',
+    'bbbbmmiiiimmbbbb',
+    'bbbmmiibbiimmbbb',
+    'bbmmbbbbbbbbmmbb',
+    'bbbbbbbbbbbbbbbb',
+    'bbbbbbbbbbbbbbbb',
+  ],
 };
 
 
@@ -1076,14 +1129,14 @@ export function renderTile(type, x, y, ctx) {
   }
 
   // Add animations for specific tiles
-  if (type === TileType.CONSOLE || type === TileType.NAV_CONSOLE || type === TileType.OPS_CONSOLE || type === TileType.ENG_CONSOLE) {
+  if (type === TileType.CONSOLE || type === TileType.NAV_CONSOLE || type === TileType.OPS_CONSOLE || type === TileType.ENG_CONSOLE || type === TileType.WEAPONS_CONSOLE) {
     // Screen flicker
     const flicker = document.createElementNS(SVG_NS, 'rect');
     flicker.setAttribute('x', 4 * PX);
     flicker.setAttribute('y', 3 * PX);
     flicker.setAttribute('width', 8 * PX);
     flicker.setAttribute('height', 1 * PX);
-    flicker.setAttribute('fill', type === TileType.NAV_CONSOLE ? C.tealLt : type === TileType.OPS_CONSOLE ? C.green : type === TileType.ENG_CONSOLE ? C.amberLt : C.teal);
+    flicker.setAttribute('fill', type === TileType.NAV_CONSOLE ? C.tealLt : type === TileType.OPS_CONSOLE ? C.green : type === TileType.ENG_CONSOLE ? C.amberLt : type === TileType.WEAPONS_CONSOLE ? C.redLt : C.teal);
     flicker.setAttribute('opacity', '0');
     flicker.innerHTML = `<animate attributeName="opacity" values="0;0.4;0;0;0;0;0;0;0;0.3;0" dur="4s" repeatCount="indefinite"/>
       <animate attributeName="y" values="${3*PX};${4*PX};${5*PX};${6*PX};${7*PX};${3*PX}" dur="3s" repeatCount="indefinite"/>`;

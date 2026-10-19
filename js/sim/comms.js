@@ -3,10 +3,11 @@
 // Radio contacts, transponder, distress beacons, hail dialogue.
 // ============================================================
 
-import { AU_M, RANGE } from '../core/constants.js';
+import { RANGE } from '../core/constants.js';
 import { hashString } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { radioRangeFactor } from './systems.js';
+import { CLASSES } from './ship-classes.js';
 
 export function createComms() {
   return {
@@ -17,6 +18,8 @@ export function createComms() {
     radio: [],               // nearest entity ids in radio range (≤ 60, refreshed every 5 min)
     radioTotal: 0,
     heard: {},               // entity id → minute a distress call was last logged
+    requests: [],            // open demands on us: inspections, pirate ultimatums, warnings, surrenders (agents.js)
+    nextRequest: 1,
   };
 }
 
@@ -100,16 +103,6 @@ export function signalBars(distAU) {
 /** Can we transmit at all? (array working, ship powered) */
 export const canTransmit = (state) => radioRangeFactor(state) > 0;
 
-/** Can someone at observerPos see us? (for future NPC reactions) */
-export function playerDetectable(state, observerPos, rangeAU) {
-  const p = state.flight.pos;
-  const d = Math.hypot(p.x - observerPos.x, p.y - observerPos.y);
-  if (d > rangeAU) return false;
-  if (state.comms.transponder || state.comms.sos) return true;
-  if (state.flight.thrustG > 0.01) return true;     // drive plume
-  return d * AU_M < 150_000_000;                    // hull/heat signature at short range
-}
-
 // ---- HAIL DIALOGUE ----
 
 const HAIL = {
@@ -118,49 +111,67 @@ const HAIL = {
     'A long pause. Then a clipped voice, suspicious: "State your registry and purpose, inyalowda." The OPA dock controller waits.',
     'The channel opens with a burst of Belter patois, then switches to accented English. "Hoy, kopeng. What brings you to our rock?"',
   ],
-  'station:UNN': [
-    'The response is immediate and professional. A UN naval communications officer reads back your transponder ident and requests your approach vector.',
+  'station:UN': [
+    'The response is immediate and professional. A UN traffic controller reads back your transponder ident and requests your approach vector.',
     'After an authentication handshake, a crisp voice: "Copy your hail. State your business and stand by for traffic routing."',
   ],
-  'station:MCRN': [
-    'A Martian naval operator responds with clipped efficiency, checks your transponder against their database, then asks your purpose. Everything by the book.',
+  'station:MCR': [
+    'A Martian operator responds with clipped efficiency, checks your transponder against their database, then asks your purpose. Everything by the book.',
     'The channel clicks open. "MCRN traffic control. We have your ident. Transmit docking credentials or state the nature of your approach."',
-  ],
-  'station:Belter': [
-    'Someone picks up after a while — sounds like they were in the middle of something. Tools clanking. "Yeah, what do you need? We got ice, we got parts. Maybe."',
-    'A tired voice answers over half a dozen conversations bleeding through the same channel. "Go ahead, we hear you."',
   ],
   'station:independent': [
     'The operator responds after a delay, neutral and businesslike. "Receiving your hail. How can we assist?"',
     'A slightly bored voice: "Go ahead with your traffic."',
   ],
-  'ship:MCRN': [
+  'navy:MCR': [
     'The Martian warship answers with cold precision. An officer asks — in a tone more command than question — why you are hailing a Congressional Republic Navy vessel.',
     'Tight-beam, encrypted. A weapons officer: "We read your transponder. Keep your distance and state your intent." You can almost hear the targeting computers spin up.',
   ],
-  'ship:UNN': [
+  'navy:UN': [
     'A UN Navy comms officer answers with practiced formality, confirms your position and registry, then asks your purpose in a way that suggests they already know.',
     '"UN Naval vessel acknowledging your hail. What is the nature of your communication?"',
+  ],
+  'navy:OPA': [
+    'A gruff voice over a noisy channel — the gunship\'s bridge sounds crowded. "OPA vessel. Keep your hands off your weapons board and we\'ll get along fine, kopeng."',
+  ],
+  police: [
+    'A patrol officer answers with practiced boredom, reads your registry back to you and asks where you are headed.',
+    '"Patrol vessel receiving. Keep your transponder on and your nose clean, and we have no business with you."',
+  ],
+  pirate: [
+    'A laugh, then a voice with no name: "You lost, friend? Or are you shopping?"',
+    'Static, then a flat voice: "Keep talking. We\'re measuring you for a cargo net."',
+  ],
+  surrendered: [
+    'A shaky voice: "We\'re not resisting. Drive\'s cold, tubes are open. Whatever you want."',
   ],
   'ship:OPA': [
     'Background noise — someone arguing, cut off. A wary voice: "Yeah, we hear you. What do you want, ke?"',
     'A rough Belter voice: "Hoy. You hailing us? Better be worth the juice on this antenna."',
-  ],
-  'ship:Belter': [
     'After a long silence, a voice heavy with the bone-deep weariness of too many hours in the black. "Go ahead. We\'re listening."',
-    'A cautious voice through static. "We read you. Not much to trade, but we can talk."',
-    'Someone clears their throat. "Didn\'t expect company out here. What\'s on your mind?"',
   ],
   'ship:independent': [
     'A neutral voice: "Receiving you. Go ahead with your traffic."',
     'Someone answers, distracted — sounds like they were running diagnostics. "Yeah, we\'re here. What do you need?"',
+    'A cautious voice through static. "We read you. Not much to trade, but we can talk."',
   ],
 };
 
+/** Which set of lines a ship answers with: its service first, then its flag. */
+function hailKey(e) {
+  if (e.type === 'station') return `station:${e.faction}`;
+  if (e.combat?.status === 'surrendered') return 'surrendered';
+  const cat = CLASSES[e.cls]?.category;
+  if (e.faction === 'pirate' || cat === 'irregular') return 'pirate';
+  if (cat === 'military') return `navy:${e.faction}`;
+  if (cat === 'authority') return 'police';
+  return `ship:${e.faction}`;
+}
+
 export function hailDialogue(entity) {
   if (!entity) return 'No response on this channel.';
+  if (entity.tags?.wreck) return 'Nothing on any band. The hulk tumbles slowly, venting the last of its air.';
   if (!entity.transponder && !entity.sos) return 'The channel stays dead. If anyone is aboard, they are not answering.';
-  const lines = HAIL[`${entity.type}:${entity.faction}`] || HAIL[`${entity.type}:independent`] || [];
-  if (!lines.length) return 'The channel opens, but no one responds. Static fills the silence.';
+  const lines = HAIL[hailKey(entity)] || HAIL[`${entity.type}:independent`] || HAIL['ship:independent'];
   return lines[hashString(entity.id) % lines.length];
 }

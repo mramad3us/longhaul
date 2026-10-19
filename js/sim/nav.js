@@ -10,7 +10,7 @@
 
 import { AU_M, G0, MIN_S, GM_SUN, DAY_MIN } from '../core/constants.js';
 import { getBody, bodyPos, bodyVel } from './ephemeris.js';
-import { getWorld, predictEntity, stepFree } from './world.js';
+import { getWorld, predictEntity, stepFree, propagateFree } from './world.js';
 import { createFlight, flightStep, fuelUsed, RCS_MAX_G } from './flight.js';
 
 const RCS_LIMIT = RCS_MAX_G * G0;
@@ -28,13 +28,16 @@ export const STANDOFF = {
 
 // ---- TARGETS ----
 // target spec: { kind:'body', id:'Mars' } | { kind:'entity', id:'ceres-station' }
+//              | { kind:'player' } (NPC guidance flying to our ship)
 
 export function targetName(state, target) {
   if (target.kind === 'body') return target.id;
+  if (target.kind === 'player') return state.ship.name;
   return getWorld(state).get(target.id)?.name || 'Unknown';
 }
 
 export function targetExists(state, target) {
+  if (target.kind === 'player') return !state.lost;
   return target.kind === 'body' ? !!getBody(target.id) : !!getWorld(state).get(target.id);
 }
 
@@ -63,6 +66,14 @@ export function targetStateAt(state, target, minute, live = false) {
     const v1 = bodyVel(b, (minute + 1) / DAY_MIN), v0 = out.vel;
     out.atx = (v1.vx - v0.vx) / MIN_S; out.aty = (v1.vy - v0.vy) / MIN_S;
     return out;
+  }
+  if (target.kind === 'player') {
+    // NPCs flying to us: our state now, or coasted forward under our current thrust
+    const f = state.flight;
+    const a = f.thrustG * G0;
+    const pos = { x: f.pos.x, y: f.pos.y }, vel = { vx: f.vel.vx, vy: f.vel.vy };
+    if (minute > state.clock.minute) propagateFree(pos, vel, state.clock.minute, minute, f.thrustG, f.facing, f.thrustG > 0 ? 1 : 10);
+    return { pos, vel, ax: a * Math.cos(f.facing), ay: a * Math.sin(f.facing) };
   }
   const world = getWorld(state);
   const e = world.get(target.id);

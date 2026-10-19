@@ -3,13 +3,17 @@
 // Random emergencies near the ship: fuel-dry drifters, dead drives,
 // runaway torches, scrammed reactors. Accept → intercept → hold
 // formation → hail to complete the rescue.
+// UNDER ATTACK calls come from the encounter director (conflict.js):
+// a ship with pirates on it. Drive them off or kill them, then hail.
 // ============================================================
 
 import { AU_M, RANGE, DAY_MIN } from '../core/constants.js';
 import { random, randRange, randInt, pick, weightedPick, chance } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { circularSpeed } from './ephemeris.js';
-import { createEntity, rollShipIdentity } from './entities.js';
+import { createEntity } from './entities.js';
+import { rollIdentity } from './ship-classes.js';
+import { controlAt } from './factions.js';
 import { createPlan, simulatePlan, STANDOFF } from './nav.js';
 
 export const SosType = {
@@ -17,9 +21,17 @@ export const SosType = {
   ENGINE_FAILURE: 'ENGINE_FAILURE',
   RUNAWAY: 'RUNAWAY',
   REACTOR_SCRAM: 'REACTOR_SCRAM',
+  UNDER_ATTACK: 'UNDER_ATTACK',
 };
 
 const DEF = {
+  UNDER_ATTACK: { weight: 0, timer: 2 * DAY_MIN, rewards: { credits: 3500, parts: 4, pdcRounds: 4000 },
+    accept: 'Move to engage', decline: 'Stay clear',
+    story: [
+      'MAYDAY — the {name}, a {cls}: "We have a raider on us, they\'re launching! Any ship, any ship — we have no guns!"',
+      'Panic on the open channel. The {cls} {name} is being run down by pirates: "They want the cargo and they don\'t care if we\'re alive. Please — anyone."',
+    ],
+    rescue: 'The {name}\'s captain comes on, hoarse: "We thought we were dead." They send over what they can spare from the hold and swear to buy you a drink on any station in the Belt.' },
   FUEL_DRY: { weight: 4, timer: 2160, rewards: { credits: 900, water: 200, food: 100 },
     accept: 'Plot rescue intercept', decline: 'Log position and continue',
     story: [
@@ -63,6 +75,9 @@ const CHATTER = {
   REACTOR_SCRAM: { normal: ['{name} beacon — reactor scram, total blackout. On suit O₂.', 'This is {name}, we are dark. Total power loss.'],
     urgent: ['{name}... suit O₂ at fifty percent. Temperature dropping.', 'Getting cold in here. {name} to any ship.'],
     critical: ['{name}... suit O₂ critical... can barely move...', '... {name} ... cold ... please ...'] },
+  UNDER_ATTACK: { normal: ['{name}: they\'re still on us — burning everything we have!', 'This is {name}, raider closing, we have no point defense!'],
+    urgent: ['{name}: they hit the drive section — we\'re losing thrust!', 'Anyone — {name} — they\'re lining up another salvo!'],
+    critical: ['{name}... hull breached... we can\'t hold them off...', '... {name} ... they\'re matching course ... boarding ...'] },
 };
 
 const SPAWN_CHANCE = 0.0007;     // per minute when eligible (~4%/h)
@@ -102,10 +117,10 @@ export function assessIntercept(state, entity, timerMin) {
 
 function spawn(state, emit) {
   const world = getWorld(state);
-  const type = weightedPick(Object.keys(DEF), k => DEF[k].weight);
+  const type = weightedPick(Object.keys(DEF).filter(k => DEF[k].weight > 0), k => DEF[k].weight);
   const d = DEF[type];
-  const id = rollShipIdentity();
   const sp = state.flight.pos;
+  const id = rollIdentity({ category: 'civilian', near: controlAt(sp.x, sp.y, state.clock.minute).faction });
   const ang = random() * Math.PI * 2;
   const dist = randRange(0.004, 0.025);              // 600k – 3.7M km
   const pos = { x: sp.x + Math.cos(ang) * dist, y: sp.y + Math.sin(ang) * dist };
@@ -118,7 +133,7 @@ function spawn(state, emit) {
   const runaway = type === SosType.RUNAWAY;
   const g = runaway ? Math.round(randRange(2, 5) * 10) / 10 : 0;
   const entity = world.add(createEntity({
-    id: world.newId('sos'), name: id.name, type: 'ship', faction: id.faction, shipClass: id.shipClass, mass: id.mass,
+    id: world.newId('sos'), name: id.name, type: 'ship', faction: id.faction, cls: id.cls, tl: id.tl, shipClass: id.shipClass, mass: id.mass,
     pos, vel, thrust: g, heading: random() * Math.PI * 2, sos: true, transponder: true, t: state.clock.minute,
     tags: { sos: true },
   }));
@@ -149,10 +164,41 @@ function spawn(state, emit) {
   emit('sos-offered', { mission: m, entity, distanceAU: dist, feasibility });
 }
 
+/**
+ * A ship near us is being attacked (the encounter director set it up):
+ * offer the call. Our point defense covers it once we accept.
+ */
+export function offerUnderAttack(state, victim, attackers, emit = () => {}) {
+  const d = DEF.UNDER_ATTACK;
+  const m = {
+    id: `sos-${state.missions.nextId++}`, kind: 'sos', type: SosType.UNDER_ATTACK,
+    title: `SOS — ${victim.name} under attack`,
+    description: fill(pick(d.story), { name: victim.name, cls: victim.shipClass }),
+    entityId: victim.id, attackers: [...attackers], status: 'offered',
+    timer: d.timer, timerMax: d.timer, rewards: { ...d.rewards }, crewAboard: randInt(4, 20),
+    offeredAt: state.clock.minute, acceptText: d.accept, declineText: d.decline,
+  };
+  victim.tags.missionId = m.id;
+  state.missions.list.push(m);
+  const dist = Math.hypot(victim.pos.x - state.flight.pos.x, victim.pos.y - state.flight.pos.y);
+  emit('sos-offered', { mission: m, entity: victim, distanceAU: dist, feasibility: assessIntercept(state, victim, d.timer) });
+  return m;
+}
+
+/** Are this mission's attackers dead, gone, beaten or no longer interested? */
+function attackersGone(state, m) {
+  const world = getWorld(state);
+  return (m.attackers || []).every(id => {
+    const a = world.get(id);
+    return !a || !a.agent || a.combat?.status === 'wreck' || a.combat?.status === 'surrendered' || a.agent.mode === 'leave' || !a.agent.hostile.includes(m.entityId);
+  });
+}
+
 export function acceptMission(state, id) {
   const m = missionById(state, id);
   if (!m || m.status !== 'offered') return false;
   m.status = 'accepted';
+  if (m.type === SosType.UNDER_ATTACK && !state.combat.protect.includes(m.entityId)) state.combat.protect.push(m.entityId);
   return true;
 }
 
@@ -172,14 +218,16 @@ export function completeRescue(state, id) {
   if (!e) return { success: false, text: 'Contact lost.' };
   const h = state.flight.hold;
   const d = Math.hypot(e.pos.x - state.flight.pos.x, e.pos.y - state.flight.pos.y) * AU_M;
+  if (m.type === SosType.UNDER_ATTACK && !attackersGone(state, m)) return { success: false, text: 'They are still under fire — deal with the raiders first.' };
   if (!(h && h.id === e.id) || d > 10_000) return { success: false, text: 'Hold formation within 10 km to transfer crew and equipment.' };
   m.status = 'completed';
   m.completedAt = state.clock.minute;
   grant(state, m.rewards);
   getWorld(state).setSos(e, false);
-  e.thrust = 0;
+  if (!e.driven) e.thrust = 0;
+  if (e.agent) e.agent.mode = 'drift';
   retire(state, m, 2 * DAY_MIN);
-  return { success: true, text: DEF[m.type].rescue, rewards: m.rewards };
+  return { success: true, text: fill(DEF[m.type].rescue, { name: e.name }), rewards: m.rewards };
 }
 
 function grant(state, rewards) {
@@ -200,10 +248,10 @@ function fail(state, m, reason, emit) {
   m.status = answered ? 'failed' : 'lost';     // unanswered calls just fall silent
   m.failReason = reason;
   const e = getWorld(state).get(m.entityId);
-  if (e) {
+  if (e && !e.tags.wreck) {
     getWorld(state).setSos(e, false);
     e.transponder = false;       // dark hulk now
-    e.thrust = 0;
+    if (!e.driven) e.thrust = 0;
     e.name = `${e.name} (derelict)`;
   }
   retire(state, m, 2 * DAY_MIN);
@@ -220,7 +268,8 @@ export function missionsTick(state, emit = () => {}) {
     if (m.status !== 'offered' && m.status !== 'accepted') continue;
     m.timer--;
     const e = world.get(m.entityId);
-    if (!e) { fail(state, m, 'Contact lost', emit); continue; }
+    if (!e) { fail(state, m, m.type === SosType.UNDER_ATTACK ? 'Destroyed — nothing left but debris' : 'Contact lost', emit); continue; }
+    if (e.tags.wreck) { fail(state, m, 'The raiders gutted the ship', emit); continue; }
     if (m.timer <= 0) { fail(state, m, 'Too late — no survivors', emit); continue; }
     if (m.status === 'accepted') {
       const d = Math.hypot(e.pos.x - state.flight.pos.x, e.pos.y - state.flight.pos.y);

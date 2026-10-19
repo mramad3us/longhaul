@@ -10,7 +10,9 @@
 import { AU_M } from '../core/constants.js';
 import { hashString } from '../core/rng.js';
 import { getWorld } from '../sim/world.js';
-import { FACTION_COLORS } from '../sim/entities.js';
+import { factionColor } from '../sim/factions.js';
+import { CLASSES, SHAPES } from '../sim/ship-classes.js';
+import { fxList } from './fx.js';
 import { FitCanvas } from './dom.js';
 import { buildHullPath } from './ship-view.js';
 
@@ -128,8 +130,9 @@ export class TacView {
     for (const { e, x, y } of list) {
       const { sx, sy } = toScreen(x, y);
       if (sx < -40 || sx > W + 40 || sy < -40 || sy > H + 40) continue;
-      const color = e.sos ? '#E25555' : (FACTION_COLORS[e.faction] || '#7A8EA2');
       const heading = (e.heading || 0) + rot;   // screen-frame heading
+      if (e.type === 'ordnance') { drawOrdnance(ctx, e, sx, sy, heading, t); continue; }
+      const color = e.sos ? '#E25555' : e.tags?.wreck ? '#5A5A5A' : factionColor(e.faction);
       const seed = hashString(e.id);
       if (this.zoom === 0) drawSilhouette(ctx, e, sx, sy, heading, color, seed, t, big);
       else if (this.zoom === 1) drawIcon(ctx, e, sx, sy, heading, color, t);
@@ -157,6 +160,51 @@ export class TacView {
         ctx.setLineDash([3, 3]);
         ctx.beginPath(); ctx.arc(sx, sy, 16, 0, Math.PI * 2); ctx.stroke();
         ctx.setLineDash([]);
+      }
+    }
+
+    // Combat effects: gunfire, intercepts, hits, detonations
+    const relOf = (id) => {
+      if (id === 'player') return { x: 0, y: 0 };
+      const hit = list.find(n => n.e.id === id);
+      return hit ? { x: hit.x, y: hit.y } : null;
+    };
+    for (const fx of fxList()) {
+      if (fx.age >= 1) continue;
+      const fade = 1 - fx.age;
+      if (fx.kind === 'pdc' || fx.kind === 'strafe') {
+        const from = relOf(fx.kind === 'pdc' ? fx.id : fx.from);
+        if (!from) continue;
+        const a = toScreen(from.x, from.y);
+        const to = fx.kind === 'strafe' ? relOf(fx.target) : null;
+        ctx.strokeStyle = `rgba(255,214,140,${0.8 * fade})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const ang = to ? Math.atan2(-(toScreen(to.x, to.y).sy - a.sy), toScreen(to.x, to.y).sx - a.sx) + (Math.random() - 0.5) * 0.15 : Math.random() * Math.PI * 2;
+          const len = to ? Math.hypot(toScreen(to.x, to.y).sx - a.sx, toScreen(to.x, to.y).sy - a.sy) : 25 + Math.random() * 40;
+          const r0 = len * Math.random() * 0.6;
+          ctx.moveTo(a.sx + Math.cos(ang) * r0, a.sy - Math.sin(ang) * r0);
+          ctx.lineTo(a.sx + Math.cos(ang) * (r0 + Math.min(14, len * 0.2)), a.sy - Math.sin(ang) * (r0 + Math.min(14, len * 0.2)));
+        }
+        ctx.stroke();
+        continue;
+      }
+      if (fx.x == null) continue;
+      const rx = (fx.x - f.pos.x) * AU_M, ry = (fx.y - f.pos.y) * AU_M;
+      const p = toScreen(rx, ry);
+      if (p.sx < -200 || p.sx > W + 200 || p.sy < -200 || p.sy > H + 200) continue;
+      if (fx.kind === 'detonation') {
+        const r = Math.max(6, (fx.scaleM || 500) * 2 * px) * (0.4 + fx.age);
+        const g = ctx.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, r);
+        g.addColorStop(0, `rgba(255,255,255,${fade})`);
+        g.addColorStop(0.3, `rgba(255,220,160,${0.7 * fade})`);
+        g.addColorStop(1, 'rgba(255,120,40,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.fillStyle = fx.kind === 'intercept' ? `rgba(255,214,140,${fade})` : `rgba(255,90,60,${fade})`;
+        ctx.beginPath(); ctx.arc(p.sx, p.sy, 2 + 8 * fx.age, 0, Math.PI * 2); ctx.fill();
       }
     }
 
@@ -297,28 +345,17 @@ function drawSilhouette(ctx, e, x, y, heading, color, seed, t, big) {
   }
   // Ships point along their heading (screen frame: 0 = right, so rotate to nose-up art)
   ctx.rotate(-heading + Math.PI / 2);
-  const h = (14 + rand(0) * 6) * scale, w = (4 + rand(1) * 3) * scale;
-  const bow = -h / 2, stern = h / 2, hw = w / 2;
-  const cls = (e.shipClass || '').toLowerCase();
+  // On-screen length grows with the log of the real hull length (30 m skiff … 1.4 km hauler)
+  const c = CLASSES[e.cls];
+  const lenM = c?.lengthM || 60;
+  const h = (10 + 9 * Math.log10(lenM / 20)) * (big ? 1.6 : 1) * (0.95 + rand(0) * 0.1);
+  const shape = SHAPES[c?.shape] || SHAPES.freighter;
   ctx.globalAlpha = 0.85;
-  ctx.beginPath();
-  if (/hauler|barge|tanker|freighter/.test(cls)) {
-    const box = hw * (1.1 + rand(2) * 0.3), neck = hw * (0.5 + rand(3) * 0.2), ny = bow + h * 0.25;
-    ctx.moveTo(0, bow); ctx.lineTo(neck, ny); ctx.lineTo(box, ny + h * 0.15); ctx.lineTo(box, stern);
-    ctx.lineTo(-box, stern); ctx.lineTo(-box, ny + h * 0.15); ctx.lineTo(-neck, ny); ctx.closePath();
-  } else if (/liner|donnager|truman|naval/.test(cls)) {
-    ctx.moveTo(0, bow); ctx.lineTo(hw * 0.6, bow + h * 0.15); ctx.lineTo(hw, bow + h * 0.35); ctx.lineTo(hw, stern);
-    ctx.lineTo(-hw, stern); ctx.lineTo(-hw, bow + h * 0.35); ctx.lineTo(-hw * 0.6, bow + h * 0.15); ctx.closePath();
-    ctx.moveTo(hw, stern - h * 0.3); ctx.lineTo(hw * 1.5, stern); ctx.moveTo(-hw, stern - h * 0.3); ctx.lineTo(-hw * 1.5, stern);
-  } else if (/skiff|courier|shuttle/.test(cls)) {
-    const sh = 0.35 + rand(2) * 0.15;
-    ctx.moveTo(0, bow); ctx.lineTo(hw, bow + h * sh); ctx.lineTo(hw * 0.8, stern); ctx.lineTo(-hw * 0.8, stern); ctx.lineTo(-hw, bow + h * sh); ctx.closePath();
-  } else {
-    const bt = 0.25 + rand(2) * 0.1;
-    ctx.moveTo(0, bow); ctx.lineTo(hw, bow + h * bt); ctx.lineTo(hw, stern * 0.85); ctx.lineTo(hw * 0.6, stern);
-    ctx.lineTo(-hw * 0.6, stern); ctx.lineTo(-hw, stern * 0.85); ctx.lineTo(-hw, bow + h * bt); ctx.closePath();
-  }
+  traceShape(ctx, shape, h);
   ctx.stroke();
+  drawShapeFeatures(ctx, shape, h);
+  const stern = h / 2;
+  const hw = Math.max(1.5, shape.segs[shape.segs.length - 1][1] * h);
   if (e.thrust > 0) {
     ctx.globalAlpha = 0.6 + 0.3 * Math.sin(t * 30);
     ctx.fillStyle = '#FFFFFF';
@@ -327,6 +364,69 @@ function drawSilhouette(ctx, e, x, y, heading, color, seed, t, big) {
     ctx.fillRect(-hw * 0.3, stern + 2 + h * 0.2, hw * 0.6, h * 1.5);
   }
   ctx.restore();
+}
+
+/**
+ * Outline of a class silhouette (ship-classes.js SHAPES), nose up, length h px:
+ * the bow segment tapers to a point, the rest are blocks of their own width.
+ */
+function traceShape(ctx, shape, h) {
+  const pts = [];
+  let y = -h / 2;
+  shape.segs.forEach(([lf, wf], i) => {
+    const w = Math.max(0.8, wf * h);
+    const y1 = y + lf * h;
+    if (i === 0) { pts.push([0, y], [w, y1]); }
+    else { pts.push([w, y], [w, y1]); }
+    y = y1;
+  });
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (const [x, yy] of pts) ctx.lineTo(x, yy);
+  for (let i = pts.length - 1; i >= 1; i--) ctx.lineTo(-pts[i][0], pts[i][1]);
+  ctx.closePath();
+}
+
+function drawShapeFeatures(ctx, shape, h) {
+  const segY = (i) => -h / 2 + shape.segs.slice(0, i).reduce((s, x) => s + x[0], 0) * h;
+  if (shape.ring) {
+    const ry = -h / 2 + shape.ring * h;
+    ctx.beginPath(); ctx.ellipse(0, ry, h * 0.22, h * 0.06, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+  if (shape.tanks) {
+    const i = 1, y0 = segY(i), len = shape.segs[i][0] * h;
+    for (let k = 0; k < shape.tanks; k++) {
+      ctx.beginPath(); ctx.arc(0, y0 + len * (k + 0.5) / shape.tanks, Math.max(1.5, len / shape.tanks * 0.42), 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  if (shape.cargo != null) {
+    const i = shape.cargo, y0 = segY(i), len = shape.segs[i][0] * h, w = shape.segs[i][1] * h;
+    ctx.globalAlpha *= 0.35;
+    ctx.fillRect(-w, y0, w * 2, len);
+    ctx.globalAlpha /= 0.35;
+  }
+  if (shape.fins) {
+    const last = shape.segs[shape.segs.length - 1], w = last[1] * h, y = h / 2;
+    ctx.beginPath(); ctx.moveTo(w, y - h * 0.18); ctx.lineTo(w * 1.6, y); ctx.moveTo(-w, y - h * 0.18); ctx.lineTo(-w * 1.6, y); ctx.stroke();
+  }
+}
+
+/** A torpedo (bright point, plume when its drive is lit) or a railgun slug (a streak). */
+function drawOrdnance(ctx, e, x, y, heading, t) {
+  const ours = e.ord?.owner === 'player';
+  const inbound = e.ord?.target === 'player';
+  const color = inbound ? '#FF5555' : ours ? '#4FD1C5' : '#E2A355';
+  if (e.ord?.kind === 'slug') {
+    ctx.strokeStyle = color;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - Math.cos(-heading) * 8, y - Math.sin(-heading) * 8); ctx.stroke();
+    return;
+  }
+  if (e.thrust > 0) {
+    ctx.strokeStyle = `rgba(200,220,255,${0.5 + 0.3 * Math.sin(t * 40)})`;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - Math.cos(-heading) * 14, y - Math.sin(-heading) * 14); ctx.stroke();
+  }
+  ctx.fillStyle = color;
+  ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
 }
 
 function drawIcon(ctx, e, x, y, heading, color, t) {

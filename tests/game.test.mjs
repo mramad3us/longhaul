@@ -18,7 +18,9 @@ import { shipGeometry, findPath, nearestNode } from '../js/sim/ship-layout.js';
 function newGame(seed = 7) {
   seedRandom(seed);
   bus.clear();
-  return createGame({ shipName: 'Test', captainName: 'Cap', crewCount: 6 });
+  const s = createGame({ shipName: 'Test', captainName: 'Cap', crewCount: 6 });
+  s.politics.quietUntil = Infinity;     // these tests fly and trade; encounters have their own suite
+  return s;
 }
 
 function run(state, minutes, stop = null) {

@@ -29,7 +29,7 @@ const ACTIVITY = {
   eating: 'Eating', 'to-head': 'Heading to the head', washing: 'In the shower', 'to-rec': 'Heading to the exercise rig',
   exercising: 'On the exercise rig', socializing: 'Talking at the mess table', 'to-station': 'Reporting for watch',
   'standing-by': 'Standing by to relieve the watch', flying: 'Flying the ship by hand', 'to-helm': 'Running to the helm',
-  'watch-helm': 'On watch at the helm', 'watch-ops': 'On watch at ops', 'watch-engineering': 'On the engineering watch',
+  'watch-helm': 'On watch at the helm', 'watch-ops': 'On watch at ops', 'watch-weapons': 'On watch at fire control', 'watch-engineering': 'On the engineering watch',
   'watch-workshop': 'On duty in the machine shop', 'watch-medbay': 'On duty in sick bay', 'watch-galley': 'Cooking in the galley',
   'to-fabricating': 'Heading to the machine shop', fabricating: 'Refurbishing spare parts',
   'to-sealing': 'Heading out to patch the hull breach', sealing: 'Sealing a hull breach',

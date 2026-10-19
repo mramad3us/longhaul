@@ -123,6 +123,24 @@ export const SYSTEMS = {
       major: ['Surgical arm actuator failure', 'Autodoc controller fault'],
     },
   },
+  pdc: {
+    name: 'Point defense', short: 'PDC', fixture: 'pdc', wear: 0.4, mtbf: 150,
+    load: () => 1, stress: (c) => 1 + c.g * 0.1,
+    effects: { degraded: 'Half the PDC mounts answering fire control', failed: 'Point defense down — nothing stops a torpedo' },
+    faults: {
+      minor: ['PDC feed jam', 'Fire-control radar drift', 'Turret traverse motor overheating'],
+      major: ['PDC barrel assembly cracked', 'Fire-control computer fault'],
+    },
+  },
+  launcher: {
+    name: 'Torpedo launcher', short: 'TUBES', fixture: 'launcher', wear: 0.3, mtbf: 180,
+    load: () => 1, stress: (c) => 1 + c.g * 0.1,
+    effects: { degraded: 'Autoloader slow — reloads take twice as long', failed: 'Tubes offline — no torpedo launches' },
+    faults: {
+      minor: ['Autoloader cradle misaligned', 'Tube door actuator sticking'],
+      major: ['Launch rail coil burned out', 'Magazine handling arm seized'],
+    },
+  },
 };
 
 export const SYSTEM_IDS = Object.keys(SYSTEMS);
@@ -164,8 +182,11 @@ const by = (perf, full, half, none) => perf >= 1 ? full : perf > 0 ? half : none
 export function driveLimitG(state) {
   const drive = by(systemPerf(state, 'drive'), Infinity, 3, 0);
   const cool = by(systemPerf(state, 'coolant'), Infinity, 3, 0.3);
-  return Math.min(drive, cool);
+  // A battered hull can't take hard burns: below half structure, 3G at most
+  const hull = (state.hull?.integrity ?? 100) < HULL_SAFE_PCT ? 3 : Infinity;
+  return Math.min(drive, cool, hull);
 }
+export const HULL_SAFE_PCT = 50;
 export const driveFuelFactor = (state) => systemPerf(state, 'drive') === 0.5 ? 1.25 : 1;
 export const slewFactor = (state) => by(systemPerf(state, 'rcs'), 1, 0.5, 0.2);
 export const rcsAvailable = (state) => systemPerf(state, 'rcs') > 0;

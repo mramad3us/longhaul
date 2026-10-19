@@ -8,7 +8,9 @@
 import { AU_KM, DAY_MIN } from '../core/constants.js';
 import { BODIES, bodyPos } from '../sim/ephemeris.js';
 import { getWorld } from '../sim/world.js';
-import { FACTION_COLORS } from '../sim/entities.js';
+import { factionColor, INFLUENCE_SOURCES } from '../sim/factions.js';
+import { zonePos, ZONE_KINDS } from '../sim/conflict.js';
+import { getBody } from '../sim/ephemeris.js';
 import { FitCanvas, fmtKm } from './dom.js';
 
 const MIN_SCALE = 6;          // px per AU (whole system)
@@ -39,6 +41,7 @@ export class SolarMap {
     this.hover = null;
     this.preview = null;                // [{x,y}] planned path to draw
     this.routePath = null;              // active route predicted path
+    this.showPolitics = true;           // spheres of influence and hot zones
     this.onSelect = onSelect || (() => {});
     this.onHover = onHover || (() => {});
     this._pickables = [];
@@ -211,6 +214,42 @@ export class SolarMap {
     }
     ctx.setLineDash([]);
 
+    // Spheres of influence: each source as a soft disc in its power's color
+    if (this.showPolitics) {
+      for (const src of INFLUENCE_SOURCES) {
+        let cx, cy, r;
+        const col = factionColor(src.faction);
+        if (src.ring) {
+          ctx.strokeStyle = col; ctx.globalAlpha = 0.07 * src.s;
+          ctx.lineWidth = Math.max(1, src.ring.w * 1.6 * S);
+          ctx.beginPath(); ctx.arc(sx0, sy0, src.ring.a * S, 0, Math.PI * 2); ctx.stroke();
+          ctx.lineWidth = 1; ctx.globalAlpha = 1;
+          continue;
+        }
+        bodyPos(getBody(src.body), days, _bp);
+        [cx, cy] = sp(_bp.x, _bp.y);
+        r = src.r * S;
+        if (cx + r < 0 || cx - r > W || cy + r < 0 || cy - r > H || r < 2) continue;
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.5);
+        g.addColorStop(0, col + '30'); g.addColorStop(1, col + '00');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(cx, cy, r * 1.5, 0, Math.PI * 2); ctx.fill();
+      }
+      // Hot zones
+      for (const z of state.politics.zones) {
+        const p = zonePos(z, state.clock.minute);
+        const [zx, zy] = sp(p.x, p.y);
+        const zr = Math.max(8, z.radius * S);
+        if (zx + zr < 0 || zx - zr > W || zy + zr < 0 || zy - zr > H) continue;
+        const col = z.kind === 'pirates' ? '#C05AA0' : z.kind === 'skirmish' ? '#FF5555' : z.kind === 'insurgency' ? '#E2A355' : '#E8D56B';
+        ctx.strokeStyle = col; ctx.globalAlpha = 0.4 + 0.4 * z.intensity; ctx.setLineDash([5, 4]);
+        ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = col; ctx.font = font(10);
+        ctx.fillText(`${ZONE_KINDS[z.kind].label} · ${z.body}`, zx + zr * 0.72 + 4, zy - zr * 0.72);
+        ctx.globalAlpha = 1;
+      }
+    }
+
     // Sun
     {
       const r = Math.max(4, 696_000 / AU_KM * S);
@@ -270,7 +309,19 @@ export class SolarMap {
       if (e.type === 'nav' && !opts.showNav?.has(e.id)) continue;
       if (many && !important(e)) continue;
       const [x, y] = sp(e.pos.x, e.pos.y);
-      const color = e.sos ? '#FF5555' : (FACTION_COLORS[e.faction] || '#8A8A6A');
+      const color = e.sos ? '#FF5555' : e.tags?.wreck ? '#5A5A5A' : factionColor(e.faction);
+      if (e.type === 'ordnance') {
+        const tgt = e.ord.target === 'player' ? state.flight.pos : world.get(e.ord.target)?.pos;
+        const c = e.ord.target === 'player' ? 'rgba(255,85,85,' : e.ord.owner === 'player' ? 'rgba(79,209,197,' : 'rgba(226,163,85,';
+        if (tgt && e.ord.kind === 'torpedo') {
+          const [tx, ty] = sp(tgt.x, tgt.y);
+          ctx.strokeStyle = c + '0.35)'; ctx.setLineDash([2, 4]);
+          ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.stroke(); ctx.setLineDash([]);
+        }
+        ctx.fillStyle = c + '1)';
+        ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+        continue;
+      }
       if (e.type === 'station') {
         ctx.fillStyle = color;
         ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 5); ctx.lineTo(x - 5, y); ctx.closePath(); ctx.fill();

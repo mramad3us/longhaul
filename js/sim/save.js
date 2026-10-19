@@ -17,6 +17,12 @@ import { placeCrew } from './crew-ai.js';
 import { ROLE_HOME_DECK } from './crew.js';
 import { DAY_MIN } from '../core/constants.js';
 import { VERSION } from '../version.js';
+import { CLASSES, PLAYER_CLASS, classForName, techFor } from './ship-classes.js';
+import { LEGACY_FACTION } from './factions.js';
+import { createCombat, createMagazine } from './combat.js';
+import { createLaw } from './law.js';
+import { createPolitics } from './conflict.js';
+import { PDC_ROUNDS_PER_MOUNT } from './combatants.js';
 
 const INF = '__inf__', NINF = '__-inf__';
 
@@ -49,6 +55,7 @@ export function deserialize(input) {
     resetWorld(data);
     return { state: data, migrated: false, notes: [] };
   }
+  if (data && data.schema === 3) return migrateV09(data);
   if (data && data.schema === 2) return migrateV08(data);
   if (data && !data.schema && data.ship && data.resources) return migrateV07(data);
   throw new Error(`Unsupported save format (schema ${data?.schema ?? 'unknown'})`);
@@ -82,11 +89,54 @@ function migrateV08(data) {
     m.suit = { wearing: false, o2: 0, lockerId: null };
   }
   data.shipMass = computeShipMass(ship);
-  data.schema = SAVE_SCHEMA;
+  upgradeV09(data);
   resetWorld(data);
   placeCrew(data);
   for (const m of ship.crew) if (m.dead) { m.task = null; m.seat = null; m.activity = 'dead'; }
-  return { state: data, migrated: true, notes: ['Save from v0.8 — ship refitted: new decks and machinery, crew duty roster. Crew tasks were reset.'] };
+  return { state: data, migrated: true, notes: ['Save from v0.8 — ship refitted: new decks, machinery and weapons, crew duty roster. Crew tasks were reset.'] };
+}
+
+/**
+ * v0.9 saves: the same ship gets its weapons fit (fire control on the
+ * bridge, a torpedo launcher in the hold, two PDC turrets), the world
+ * gets ship classes, the three powers and their politics.
+ */
+function migrateV09(data) {
+  upgradeV09(data);
+  resetWorld(data);
+  return { state: data, migrated: true, notes: ['Save from v0.9 — ship refitted with point defense and torpedo tubes; factions, hot zones and law are now in play.'] };
+}
+
+/** Pure data upgrade from schema 3 to 4 (no world access). */
+function upgradeV09(data) {
+  const ship = data.ship;
+  const fresh = createDefaultLayout();
+  for (const d of ship.decks) {
+    const f = fresh.find(x => x.id === d.id);
+    if (f) d.tiles = f.tiles;
+  }
+  for (const m of ship.crew) m.path = [];
+  ship.classId ??= PLAYER_CLASS;
+  ship.tl ??= CLASSES[PLAYER_CLASS].tl[0];
+  data.systems.units.pdc ??= { integrity: 95, status: 'nominal', fault: null, patchUntil: null, enabled: true };
+  data.systems.units.launcher ??= { integrity: 95, status: 'nominal', fault: null, patchUntil: null, enabled: true };
+  const cls = CLASSES[ship.classId];
+  data.resources.pdcRounds ??= { current: cls.pdc * PDC_ROUNDS_PER_MOUNT * 0.6, max: cls.pdc * PDC_ROUNDS_PER_MOUNT, unit: 'rds' };
+  data.hull ??= { integrity: 100 };
+  data.magazine ??= createMagazine(ship.classId);
+  data.combat ??= createCombat(ship.classId);
+  data.law ??= createLaw();
+  data.politics ??= createPolitics();
+  data.comms.requests ??= [];
+  data.comms.nextRequest ??= 1;
+  for (const e of data.entities) {
+    e.faction = LEGACY_FACTION[e.faction] || e.faction;
+    if (e.type === 'ship' && !e.cls) e.cls = classForName(e.shipClass);
+    if (e.cls && !e.tl) e.tl = techFor(e.cls, e.faction);
+    e.driven ??= false;
+  }
+  data.shipMass = computeShipMass(ship);
+  data.schema = SAVE_SCHEMA;
 }
 
 /**

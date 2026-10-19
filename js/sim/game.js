@@ -14,7 +14,7 @@ import { VERSION } from '../version.js';
 import { getWorld, backgroundBudget } from './world.js';
 import { createDefaultEntities } from './entities.js';
 import { createDefaultLayout, computeShipMass, isSecureSeat } from './ship-layout.js';
-import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, G_THRESHOLDS } from './crew.js';
+import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, mourn, G_THRESHOLDS } from './crew.js';
 import { crewTick, placeCrew, helmsman } from './crew-ai.js';
 import { createJobs } from './jobs.js';
 import { needsTick, efficiency } from './needs.js';
@@ -33,8 +33,14 @@ import { createMissions, missionsTick } from './missions.js';
 import { createContracts, contractsTick } from './contracts.js';
 import { createTraffic, seedTraffic, trafficTick } from './traffic.js';
 import { triggerManeuver, isInertiaActive, updateInertia, Maneuver } from './inertia.js';
+import { PLAYER_CLASS, CLASSES } from './ship-classes.js';
+import { createCombat, createMagazine, combatTick, combatMove, moveAgents, jinkG } from './combat.js';
+import { createLaw, lawTick } from './law.js';
+import { createPolitics, politicsTick } from './conflict.js';
+import { destroyPlayer } from './damage.js';
+import { snapshot, PDC_ROUNDS_PER_MOUNT } from './combatants.js';
 
-export const SAVE_SCHEMA = 3;
+export const SAVE_SCHEMA = 4;
 
 // Consumption per person per minute. Crew eat meals (crew-ai); passengers
 // are fed from stores continuously. Water figures are gross — the
@@ -42,13 +48,15 @@ export const SAVE_SCHEMA = 3;
 const WATER_PER_MIN = 0.004;   // L  (≈5.8 L/day drinking & galley; showers on top)
 const FOOD_PER_MIN = 0.001;    // rations (≈1.4/day, passengers)
 const SECURE_LINGER = 10;      // minutes crew stay strapped in after the last maneuver
+const JINK_FUEL_SHARE = 0.5;   // jinking burns at full G about half the time
 
 const emit = (type, payload) => bus.emit(type, payload);
 
 export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = 36 } = {}) {
   const crew = createCrew(crewCount);
   crew[0].name = captainName;
-  const ship = { name: shipName, decks: createDefaultLayout(), crew };
+  const cls = CLASSES[PLAYER_CLASS];
+  const ship = { name: shipName, classId: PLAYER_CLASS, tl: cls.tl[0], decks: createDefaultLayout(), crew };
 
   const state = {
     schema: SAVE_SCHEMA,
@@ -69,11 +77,17 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
       medSupplies: { current: 50, max: 50, unit: 'units' },
       parts: { current: 12, max: 40, unit: 'parts' },
       scrap: { current: 0, max: 30, unit: 'units' },
+      pdcRounds: { current: cls.pdc * PDC_ROUNDS_PER_MOUNT * 0.6, max: cls.pdc * PDC_ROUNDS_PER_MOUNT, unit: 'rds' },
     },
+    hull: { integrity: 100 },
+    magazine: createMagazine(PLAYER_CLASS),
+    combat: createCombat(PLAYER_CLASS),
+    law: createLaw(),
+    politics: createPolitics(),
     cargo: [],
-    cargoCapacity: 15_000,
+    cargoCapacity: cls.cargoT * 1000,
     passengers: [],
-    berths: 12,
+    berths: cls.berths,
     lifeSupport: null,
     reactor: createReactor(),
     systems: createSystems(),
@@ -127,7 +141,8 @@ function handFlown(cmd, pilot, ap) {
 /**
  * Advance the whole game by one minute.
  * Order matters: decide (autopilot) → move ship → advance clock & world →
- * hold station → people → systems → sensors → missions.
+ * NPC ships fly → hold station → ordnance flies and strikes → people →
+ * systems → sensors → combat decisions, politics, missions.
  */
 export function minuteTick(state, { lite = false } = {}) {
   const f = state.flight;
@@ -135,6 +150,9 @@ export function minuteTick(state, { lite = false } = {}) {
   const prevG = f.thrustG;
   const prevTurn = f.turning;
   const policyBefore = state.crewPolicy;
+  state.$prev = snapshot(f.pos, f.vel);          // for closest-approach checks this minute
+  const jink = jinkG(state);                     // evasive maneuvering: random hard thrust, no net Δv
+  state.$jinkG = jink;
 
   // ---- Machinery limits for this minute
   f.maxG = Math.min(DRIVE_MAX_G, driveLimitG(state));
@@ -196,6 +214,7 @@ export function minuteTick(state, { lite = false } = {}) {
   // Lite minutes (intermediate minutes of a heavy time-warp frame) skip the
   // observation work; the frame's final minute brings everything up to date.
   if (!lite) world.tick(state.clock.minute, f.pos);
+  moveAgents(state);
 
   let holdG = 0;
   if (f.hold) {
@@ -205,13 +224,14 @@ export function minuteTick(state, { lite = false } = {}) {
       else { f.thrustG = holdG; out.mainG = holdG; }
     }
   }
+  combatMove(state, emit);
 
   // Overdriven drive: each minute past the rated limit risks the magnetic bottle
   if (out.mainG > RATED_G && random() < 0.00012 * (out.mainG - RATED_G) ** 2 && triggerContainmentFailure(state)) {
     emit('drive-overstress', { g: out.mainG });
   }
 
-  const burn = fuelUsed(out.mainG, out.rcsG) * driveFuelFactor(state);
+  const burn = (fuelUsed(out.mainG, out.rcsG) + fuelUsed(jink * JINK_FUEL_SHARE, 0)) * driveFuelFactor(state);
   res.fuel.current = Math.max(0, res.fuel.current - burn);
   state.stats.fuelBurned += burn;
   if (res.fuel.current <= 0 && prevG > 0) emit('fuel-exhausted', {});
@@ -227,8 +247,8 @@ export function minuteTick(state, { lite = false } = {}) {
   // A flip proper: a big rotation (well past 90°) starting from rest
   if (out.rotation > 2.4 && Math.abs(prevTurn) < SLEW_RATE * 0.5 && Math.abs(out.turned) > 0) fireInertia(state, Maneuver.FLIP, { gForce: gNow });
 
-  // ---- People
-  const g = gNow + f.rcsG;
+  // ---- People (jinking throws the crew around on top of the burn)
+  const g = Math.hypot(gNow, jink) + f.rcsG;
   // Hysteresis: once called to couches, the crew stay strapped in until the
   // ship has been quiet for a while (no unstrapping between two maneuvers).
   if (crewPolicy(state) === 'secure') state.secureUntil = state.clock.minute + SECURE_LINGER;
@@ -251,7 +271,7 @@ export function minuteTick(state, { lite = false } = {}) {
     m.$effG = eff;                       // what the body feels (couch + juice)
     const wasCritical = m.conditions.includes('critical');
     for (const ev of physiologyTick(m, eff, g)) {
-      if (ev === 'died') { mourn(state, m); emit('crew-died', { member: m }); }
+      if (ev === 'died') { mourn(state.ship.crew, m); emit('crew-died', { member: m }); }
       else if (ev === 'critical' && !wasCritical) emit('crew-critical', { member: m });
       else if (ev === 'brain-damage') emit('crew-brain-damage', { member: m });
       else if (ev === 'stroke') emit('crew-stroke', { member: m });
@@ -283,6 +303,7 @@ export function minuteTick(state, { lite = false } = {}) {
   // ---- Plant
   lifeSupportTick(state, { emit });
   reactorTick(state, emit);
+  if (state.reactor.supercritical && !state.lost) destroyPlayer(state, 'reactor', emit);
 
   // ---- Sensors & comms (blind in a blackout)
   if (!lite) {
@@ -291,16 +312,14 @@ export function minuteTick(state, { lite = false } = {}) {
   }
 
   // ---- The wider world
+  combatTick(state, emit);
+  lawTick(state);
+  politicsTick(state, emit);
   missionsTick(state, emit);
   contractsTick(state, emit);
   trafficTick(state);
 
   if (state.crewPolicy !== policyBefore) emit('crew-policy', { policy: state.crewPolicy });
-}
-
-/** A death aboard weighs on everyone for days. */
-function mourn(state, dead) {
-  for (const m of state.ship.crew) if (m !== dead && !m.dead) m.moraleMod = (m.moraleMod || 0) - 25;
 }
 
 function fireInertia(state, type, opts) {

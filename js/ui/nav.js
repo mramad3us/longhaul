@@ -26,8 +26,9 @@ import { TacView, TAC_LABELS } from './tac.js';
 import { SolarMap } from './solar-map.js';
 import { ScannerView } from './scanner.js';
 import { relativeTo, velocityReference } from './hud.js';
+import { ThreatView, renderFireControl, onFireControlClick, targetContact } from './combat.js';
 
-let tacModal = null, map = null, scanner = null, tacSmall = null;
+let tacModal = null, map = null, scanner = null, tacSmall = null, threat = null;
 let routeUI = null;          // { target, standoffKey, options, selected, computing }
 let etaCache = { at: 0, key: '', minutes: null, path: null };
 let hooks = {};
@@ -54,6 +55,12 @@ export function initNav(h) {
       renderSelection();
     },
   });
+
+  threat = new ThreatView($('[data-nav-screen="combat"]'), {
+    onSelect: (id) => { if (ui.state && id) { targetContact(ui.state, id); selectContact(ui.state, id); } },
+  });
+  $('#combat-panel').addEventListener('click', onFireControlClick);
+  $$('[data-solar-politics]').forEach(b => b.addEventListener('click', () => { map.showPolitics = !map.showPolitics; toggleClass(b, 'active', map.showPolitics); }));
 
   $$('[data-nav-tab]').forEach(b => b.addEventListener('click', () => setTab(b.dataset.navTab)));
   $$('[data-tac-zoom-modal]').forEach(b => b.addEventListener('click', () => { ui.nav.modalZoom = +b.dataset.tacZoomModal; tacModal.zoom = ui.nav.modalZoom; syncButtons(); }));
@@ -104,6 +111,7 @@ function setTab(tab) {
   $$('[data-nav-tab]').forEach(b => toggleClass(b, 'active', b.dataset.navTab === tab));
   $$('[data-nav-screen]').forEach(s => show(s, s.dataset.navScreen === tab));
   $$('[data-tab-controls]').forEach(c => show(c, c.dataset.tabControls === tab, 'flex'));
+  show($('#combat-panel'), tab === 'combat', 'flex');
   syncButtons();
   renderSelection();
 }
@@ -177,6 +185,7 @@ function renderSelection() {
         <button class="scanner-track-btn ${lock ? 'tracking' : ''}" data-act="lock">${lock ? 'UNLOCK' : 'LOCK'}</button>
         ${routing ? '<button class="scanner-intercept-btn intercepting" data-act="abort">ABORT INTERCEPT</button>' : '<button class="scanner-intercept-btn" data-act="plot">INTERCEPT</button>'}
         ${canHail ? '<button class="scanner-track-btn" data-act="hail">HAIL</button>' : ''}
+        ${!c.ordnance && !c.station ? `<button class="scanner-track-btn ${s.combat.target === t.id ? 'tracking' : ''}" data-act="target">${s.combat.target === t.id ? 'TARGETED' : 'TARGET'}</button>` : ''}
       </div>`;
     setHTML(scanPanel, html);
     show(scanPanel, true);
@@ -213,6 +222,7 @@ function onPanelClick(e) {
       renderSelection();
       break;
     case 'plot': if (t) openRoutePanel(t); break;
+    case 'target': if (t) { targetContact(s, t.id); setTab('combat'); } break;
     case 'hail': if (t) hooks.hail(t.id); break;
     case 'focus': if (t) { const p = navTargetPos(); if (p) map.focusOn(p, t.kind === 'entity' ? 2e6 : Math.max(map.scale, 300)); } break;
     case 'abort':
@@ -401,6 +411,10 @@ export function updateNav(state, alpha) {
     if (ui.nav.tab === 'tactical') tacModal.render(state, alpha, { reference: rel, highlight: ref?.target.id });
     else if (ui.nav.tab === 'solar') map.render(state, { targetPos: navTargetPos(), targetId: ui.nav.target?.id, lockedId: state.sensors.locked });
     else if (ui.nav.tab === 'scanner') scanner.render(state);
+    else if (ui.nav.tab === 'combat') {
+      threat.render(state);
+      if (performance.now() - (ui.nav._fcAt || 0) > 250) { ui.nav._fcAt = performance.now(); renderFireControl(state, $('#combat-panel')); }
+    }
     if (!routeUI && (performance.now() - (ui.nav._selAt || 0) > 400)) { ui.nav._selAt = performance.now(); renderSelection(); }
     renderNavInfo(state, rel);
     renderRouteStatus(state, eta, $('#route-status'), true);
@@ -417,6 +431,10 @@ function renderNavInfo(state, rel) {
     const b = SENSOR_RANGES[state.sensors.range];
     parts.push(`${b.name} · ${state.sensors.contacts.length} contacts`);
     if (state.sensors.locked) parts.push(`LOCK ${esc(contactById(state, state.sensors.locked)?.name || 'contact')}`);
+  } else if (ui.nav.tab === 'combat') {
+    const tgt = state.combat.target && getWorld(state).get(state.combat.target);
+    parts.push(state.combatStations ? 'BATTLE STATIONS' : 'CONDITION GREEN', `PDC ${state.combat.pdc.toUpperCase()}`, `AIM ${state.combat.aim.toUpperCase()}`);
+    if (tgt) parts.push(`TARGET ${esc(tgt.transponder ? tgt.name : 'contact')}`);
   } else if (ui.nav.tab === 'solar') {
     parts.push(`SUN ${Math.hypot(f.pos.x, f.pos.y).toFixed(3)} AU`, `HELIO V ${fmtSpeed(Math.hypot(f.vel.vx, f.vel.vy))}`);
     parts.push('drag to pan · wheel to zoom · click to select');

@@ -10,8 +10,9 @@ import { ui, inGame } from './context.js';
 import { toast } from './toast.js';
 import { logEntry } from './log.js';
 import { fmtNum } from './dom.js';
-import { openDistress } from './dialogs.js';
+import { openDistress, openRequest } from './dialogs.js';
 import { RANGE } from '../core/constants.js';
+import { getWorld } from '../sim/world.js';
 
 let noFoodAt = null;
 
@@ -72,7 +73,7 @@ const HANDLERS = {
 
   'system-fault': ({ id, name, fault, status, cause }) => {
     const failed = status === 'failed';
-    const why = cause === 'meteoroid' ? ' (meteoroid damage)' : cause === 'power loss' ? ' (after power loss)' : '';
+    const why = cause === 'meteoroid' ? ' (meteoroid damage)' : cause === 'combat' ? ' (battle damage)' : cause === 'power loss' ? ' (after power loss)' : '';
     logEntry(`${name}: ${fault.text}${why} — ${failed ? 'FAILED' : 'degraded'}`, failed ? 'danger' : 'warn');
     if (id === 'flightComputer' && failed) toast('FLIGHT COMPUTER DOWN — a pilot must fly from the helm', 'danger');
     else toast(`${name.toUpperCase()} ${failed ? 'FAILED' : 'DEGRADED'}`, failed ? 'danger' : 'warn');
@@ -101,7 +102,7 @@ const HANDLERS = {
   'reactor-scrammed': () => { logEntry('Emergency scram — reactor offline, containment breached', 'danger'); toast('REACTOR SCRAMMED', 'danger'); },
   'reactor-fuel-dumped': ({ remaining }) => { logEntry(`Fuel dumped to ${fmtNum(remaining)} kg — reactor offline`, 'danger'); toast('FUEL DUMPED', 'danger'); },
   'reactor-procedure-aborted': ({ work, reason }) => { logEntry(`Reactor ${work} aborted: ${reason}`, 'danger'); toast(`Reactor ${work} aborted`, 'danger'); },
-  'reactor-supercritical': () => { logEntry('REACTOR SUPERCRITICAL. Ship lost.', 'danger'); ui.onGameOver?.('The reactor went supercritical.'); },
+  'reactor-supercritical': () => logEntry('REACTOR SUPERCRITICAL.', 'danger'),
   'blackout': () => { logEntry('Emergency power exhausted — total blackout', 'danger'); toast('TOTAL BLACKOUT', 'danger'); },
   'blackout-end': () => logEntry('Power restored', 'ok'),
 
@@ -117,7 +118,69 @@ const HANDLERS = {
 
   'contract-progress': ({ text }) => { logEntry(text, 'nav'); toast(text, 'nav'); },
   'contract-failed': ({ contract, reason }) => { logEntry(`Contract failed: ${contract.title} — ${reason}`, 'danger'); toast('Contract failed', 'danger'); },
+
+  // ---- Combat
+  'torpedo-launched': ({ owner, warhead }) => { if (owner === 'player') logEntry(`${warhead === 'nuke' ? 'Nuclear' : 'HE'} torpedo away`, 'danger'); },
+  'ordnance-inbound': ({ kind, warhead, etaS }) => {
+    const what = kind === 'slug' ? 'RAILGUN SLUG' : warhead === 'nuke' ? 'NUCLEAR TORPEDO' : 'TORPEDO';
+    logEntry(`Ops: ${what.toLowerCase()} inbound${isFinite(etaS) ? `, impact in ${formatDuration(etaS / 60)}` : ''}`, 'danger');
+    toast(`${what} INBOUND`, 'danger');
+  },
+  'torpedo-intercepted': ({ owner, target }) => {
+    if (target === 'player') logEntry('PDCs: torpedo splashed', 'ok');
+    else if (owner === 'player') logEntry(`Our torpedo was shot down by ${nameOf(target)}`, 'warn');
+  },
+  'torpedo-hit': ({ owner, target, warhead }) => {
+    if (owner === 'player') { logEntry(`Torpedo hit on ${nameOf(target)}${warhead === 'nuke' ? ' — nuclear detonation' : ''}`, 'ok'); toast('TORPEDO HIT', 'ok'); }
+  },
+  'torpedo-missed': ({ owner, target }) => { if (owner === 'player') logEntry(`Torpedo missed ${nameOf(target)}`, 'warn'); else if (target === 'player') logEntry('Torpedo overshot us', 'ok'); },
+  'torpedo-track-lost': ({ owner }) => { if (owner === 'player') logEntry('Torpedo lost its track — flying on dead reckoning', 'warn'); },
+  'torpedo-reacquired': ({ target }) => { if (target !== 'player') logEntry('Torpedo seeker reacquired the target', 'nav'); },
+  'ordnance-gone': ({ owner, why, kind }) => {
+    if (owner !== 'player' || kind !== 'torpedo' || why === 'missed') return;
+    const text = { expired: 'reactor burned out', lost: 'found nothing at the predicted point — self-destructed', spent: 'out of Δv, falling behind — self-destructed' }[why] || 'self-destructed: target gone';
+    logEntry(`Torpedo ${text}`, 'system');
+  },
+  'slug-hit': ({ owner, target }) => { if (target === 'player') toast('RAILGUN HIT', 'danger'); else if (owner === 'player') logEntry(`Slug hit on ${nameOf(target)}`, 'ok'); },
+  'player-hit': ({ kind, section, effects }) => {
+    const what = kind === 'blast' ? 'Blast wave' : kind === 'pdc' ? 'PDC fire' : kind === 'slug' ? 'Railgun slug' : kind === 'he' ? 'Torpedo' : 'Hit';
+    const parts = [effects.breaches.length ? `breach: ${effects.breaches.join(', ')}` : '', effects.systems.length ? effects.systems.join(', ') : '', effects.containment ? 'REACTOR CONTAINMENT FAILING' : ''].filter(Boolean);
+    logEntry(`${what} strikes the ${section === 'all' ? 'whole hull' : section} — hull ${Math.round(ui.state.hull.integrity)}%${parts.length ? ' · ' + parts.join(' · ') : ''}`, 'danger');
+    toast(effects.containment ? 'HIT — CONTAINMENT FAILURE, SCRAM THE REACTOR' : `HIT — HULL ${Math.round(ui.state.hull.integrity)}%`, 'danger');
+    document.body.classList.add('hit-flash');
+    setTimeout(() => document.body.classList.remove('hit-flash'), 350);
+  },
+  'crew-wounded': ({ message }) => logEntry(message, 'danger'),
+  'player-destroyed': ({ cause }) => { ui.onGameOver?.(cause === 'reactor' ? 'The reactor lost containment. For a moment the ship was a small sun.' : 'The hull broke apart under fire.'); },
+  'ship-hit': ({ by, name, section }) => { if (by === 'player') logEntry(`Hit on ${name} — ${section === 'all' ? 'blast damage' : section}`, 'ok'); },
+  'ship-disabled': ({ name, by }) => { logEntry(`${name} is dead in space`, by === 'player' ? 'ok' : 'warn'); if (by === 'player') toast(`${name} DISABLED`, 'ok'); },
+  'ship-destroyed': ({ name, by, how }) => { logEntry(how === 'reactor' ? `${name} — reactor detonation` : `${name} breaks up`, 'danger'); if (by === 'player') toast(`${name.replace(' (wreck)', '')} DESTROYED`, 'ok'); },
+  'ship-scrammed': ({ name }) => logEntry(`${name} scrammed its reactor`, 'warn'),
+  'ship-surrendered': ({ name }) => { logEntry(`${name} has surrendered`, 'ok'); toast(`${name} SURRENDERS`, 'ok'); },
+  'detonation': ({ kind }) => { if (kind === 'nuclear') logEntry('Nuclear detonation', 'danger'); },
+  'target-destroyed': ({ name }) => logEntry(`Fire control: ${name} — target destroyed`, 'ok'),
+  'under-attack': ({ name }) => { logEntry(`${name} is firing on us!`, 'danger'); toast(`UNDER ATTACK — ${name}`, 'danger'); },
+  'agent-retreats': ({ name }) => logEntry(`${name} is breaking off`, 'nav'),
+  'agent-left': () => {},
+  'encounter': ({ kind, name }) => { if (kind === 'battle') logEntry(`Ops: warships maneuvering for a fight nearby — ${name}`, 'warn'); },
+
+  // ---- Comms demands & the law
+  'comm-request': ({ request }) => { logEntry(`[${request.fromName}] ${request.text}`, 'comms'); openRequest(request); },
+  'comm-request-expired': ({ request }) => logEntry(`No answer to ${request.fromName}`, 'warn'),
+  'inspection-started': ({ name }) => logEntry(`${name} alongside — inspection team boarding`, 'comms'),
+  'inspection-complete': ({ name, text }) => { logEntry(`${name}: ${text}`, 'comms'); toast(text, 'info'); },
+  'pirates-paid': ({ name, credits }) => logEntry(`Paid ${fmtNum(credits)} MCR to the ${name}`, 'warn'),
+  'crime': ({ kind, victim, factions }) => { logEntry(`${factions.join(' / ')} record: ${kind === 'resisting' ? 'resisting inspection' : `attack on ${victim}`}`, 'danger'); toast('CRIME RECORDED', 'danger'); },
+  'player-identified': ({ name, faction }) => logEntry(`${name} (${faction}) has identified us`, 'warn'),
+  'zone-news': ({ text }) => logEntry(`Newsfeed: ${text}`, 'comms'),
+  'zone-incident': ({ text }) => logEntry(`Newsfeed: ${text}`, 'comms'),
 };
+
+function nameOf(id) {
+  if (id === 'player') return ui.state.ship.name;
+  const e = getWorld(ui.state).get(id);
+  return e ? (e.transponder ? e.name : 'contact') : 'target';
+}
 
 export function initPresenter() {
   bus.on('*', (type, payload) => {

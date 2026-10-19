@@ -190,8 +190,16 @@ function holdBurnG(state) {
   return e && !e.orbit ? (e.thrust || 0) : 0;
 }
 
-/** KSP-style time warp limits: fast-forward only through quiet stretches. */
+/**
+ * KSP-style time warp limits: fast-forward only through quiet stretches.
+ * The tactical picture (inbound ordnance, hostiles close by, a demand
+ * awaiting an answer) caps it too — combat.js leaves that in $combatWarp.
+ */
 export function maxSpeed(state) {
+  return Math.min(state.$combatWarp ?? 3, flightSpeedLimit(state));
+}
+
+function flightSpeedLimit(state) {
   if (state.combatStations) return 1;
   const ap = state.autopilot;
   const f = state.flight;

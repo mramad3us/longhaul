@@ -12,10 +12,13 @@ import { formatDuration } from '../core/clock.js';
 import { getWorld } from '../sim/world.js';
 import { hailDialogue, signalBars } from '../sim/comms.js';
 import { activeMissions, acceptMission, declineMission, completeRescue, missionForEntity } from '../sim/missions.js';
-import { contractsAt, acceptContract, completeContract, deliverable, dockedStation, hailContractTarget, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, PRICES, CONTRACT_LABEL } from '../sim/contracts.js';
+import { contractsAt, acceptContract, completeContract, deliverable, dockedStation, hailContractTarget, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, PRICES, CONTRACT_LABEL } from '../sim/contracts.js';
 import { bus } from '../core/events.js';
 import { jobLabel, describeActivity } from './shipboard.js';
 import { canTransmit } from '../sim/comms.js';
+import { respondToRequest } from '../sim/agents.js';
+import { WARHEADS } from '../sim/weapons.js';
+import { WANTED_LABEL } from '../sim/law.js';
 
 let hooks = {};
 let onClose = null;
@@ -58,8 +61,8 @@ export function closeDialog(id = '#dialog-generic') {
   }
   if (id === '#dialog-event') {
     hooks.setPaused('distress', false);
-    const next = distressQueue.shift();
-    if (next) setTimeout(() => openDistress(next), 250);
+    eventRequest = null;
+    nextEvent();
   }
 }
 
@@ -106,8 +109,14 @@ export function openMissions() {
     }).join('');
     const cRows = act.map(c => {
       const target = c.phase === 'return' ? { id: c.station, label: `RETURN TO ${c.stationName}` }
-        : c.dest ? { id: c.dest, label: `TO ${c.destName}` } : { id: c.targetId, label: `TO TARGET` };
-      const phase = c.phase === 'return' ? `Return to ${c.stationName}` : c.dest ? `Deliver at ${c.destName}` :
+        : c.type === 'ESCORT' && c.phase !== 'arrived' ? { id: c.targetId, label: 'TO CONVOY' }
+        : c.dest ? { id: c.dest, label: `TO ${c.destName}` }
+        : c.markId && (c.type === 'BOUNTY' || c.type === 'RECON') ? { id: c.markId, label: 'TO LAST POSITION' } : { id: c.targetId, label: 'TO TARGET' };
+      const phase = c.phase === 'return' ? `Return to ${c.stationName}`
+        : c.type === 'ESCORT' ? (c.phase === 'active' ? `Join the ${c.targetName} (within 10 km)` : c.phase === 'underway' ? `Escorting to ${c.destName}` : `Dock at ${c.destName}`)
+        : c.type === 'RECON' ? `Lock the picket inside 300,000 km — ${Math.round(c.scanned / c.scanMin * 100)}%`
+        : c.type === 'BOUNTY' ? `Find the ${c.targetName}: destroy it, or disable it and accept its surrender`
+        : c.dest ? `Deliver at ${c.destName}` :
         c.type === 'SURVEY' ? `Survey ${Math.round(c.scanned / c.scanMin * 100)}%` : c.type === 'SALVAGE' && c.worked ? `Salvage ${Math.round(c.worked / c.workMin * 100)}%` : 'Proceed to target';
       return row(c.id, c.title, 'accepted', '', `${CONTRACT_LABEL[c.type]} · ${phase}`, timer(c.dueAt - s.clock.minute),
         `<button class="btn btn-primary btn-small" data-act="plot" data-kind="entity" data-id="${target.id}">PLOT ${esc(target.label)}</button>
@@ -200,14 +209,58 @@ function rewardsHTML(r) {
   return parts.length ? `<div class="mission-rewards">${parts.join('')}</div>` : '';
 }
 
-// ---- DISTRESS CALL ----
+// ---- DISTRESS CALLS & DEMANDS ----
+// One event dialog at a time; distress calls and comm requests queue for it.
 
 let eventMission = null;
-const distressQueue = [];
+let eventRequest = null;
+const eventQueue = [];
+
+const eventBusy = () => eventMission || eventRequest;
+
+function nextEvent() {
+  const next = eventQueue.shift();
+  if (!next) return;
+  setTimeout(() => (next.request ? openRequest(next.request) : openDistress(next.call)), 250);
+}
+
+/** Someone wants an answer from us: a patrol, a pirate, a warship, a beaten enemy. */
+export function openRequest(r) {
+  if (eventBusy()) { eventQueue.push({ request: r }); return; }
+  if (!ui.state.comms.requests.some(x => x.id === r.id)) return;    // answered or expired meanwhile
+  eventRequest = r;
+  const body = $('#dialog-event-body');
+  const label = { inspect: 'ORDER TO HEAVE TO', demand: 'ULTIMATUM', warning: 'WARNING', surrender: 'SURRENDER' }[r.kind] || 'TRANSMISSION';
+  const left = Math.max(0, r.expires - ui.state.clock.minute);
+  body.innerHTML = `<div class="event-header"><span class="event-sos-icon">◈</span><span class="event-sos-label">${label}</span><span class="event-urgency">${left} min to answer</span></div>
+    <div class="event-body">
+      <div class="event-ship-info"><span class="event-ship-name">${esc(r.fromName)}</span><span class="event-ship-faction">${esc(r.faction)}</span></div>
+      <div class="event-narrative">${esc(r.text)}</div>
+      <div class="event-feasibility">${esc(REQUEST_HINT[r.kind] || '')}</div>
+    </div>
+    <div class="form-actions event-actions">${r.options.map((o, i) => `<button class="btn ${i === 0 ? 'btn-primary' : 'btn-secondary'}" data-act="reply" data-opt="${o.id}">${esc(o.label)}</button>`).join('')}</div>`;
+  hooks.setPaused('distress', true);
+  show($('#dialog-event'), true, 'flex');
+}
+
+const REQUEST_HINT = {
+  inspect: 'Comply and they search the ship (≈45 min alongside): contraband is seized and fines paid. Run and you are wanted — patrols will try to disable you. Sitting still counts as complying.',
+  demand: 'Pay and they leave. Refuse and they come for your drive — they want you crippled, not dead.',
+  warning: 'Complying switches the transponder on and cuts the drive. Ignoring it makes you a target.',
+  surrender: 'Accept and they strike: drive cold, weapons safe. Hail them in formation to take them in.',
+};
+
+function answerRequest(opt) {
+  const r = eventRequest;
+  eventRequest = null;
+  closeDialog('#dialog-event');
+  const res = respondToRequest(ui.state, r.id, opt, (t, p) => bus.emit(t, p));
+  if (res.text) { logEntry(res.text, opt === 'refuse' ? 'danger' : 'comms'); toast(res.text, opt === 'refuse' ? 'danger' : 'info'); }
+}
 
 export function openDistress(call) {
   const { mission, entity, distanceAU, feasibility } = call;
-  if (eventMission) { distressQueue.push(call); return; }      // one at a time
+  if (eventBusy()) { eventQueue.push({ call }); return; }       // one at a time
   if (mission.status !== 'offered') return;                     // stale by the time it surfaced
   eventMission = mission;
   const body = $('#dialog-event-body');
@@ -230,6 +283,7 @@ export function openDistress(call) {
 }
 
 function decline() {
+  if (eventRequest) { eventRequest = null; closeDialog('#dialog-event'); return; }    // unanswered: silence decides
   if (eventMission) { declineMission(ui.state, eventMission.id); logEntry(`Distress call from ${eventMission.title.replace('SOS — ', '')} logged — not responding`, 'system'); }
   eventMission = null;
   closeDialog('#dialog-event');
@@ -237,7 +291,9 @@ function decline() {
 
 function onEventClick(e) {
   const b = e.target.closest('[data-act]');
-  if (!b || !eventMission) return;
+  if (!b) return;
+  if (b.dataset.act === 'reply' && eventRequest) { answerRequest(b.dataset.opt); return; }
+  if (!eventMission) return;
   if (b.dataset.act === 'decline') { decline(); return; }
   const m = eventMission;
   acceptMission(ui.state, m.id);
@@ -288,19 +344,28 @@ function renderStation() {
   } else {
     if (!docked) content = '<div class="station-mission-empty">Dock within 50 km to trade.</div>';
     else {
-      const rows = [['fuel', 'Reaction mass', 'kg'], ['water', 'Water', 'L'], ['food', 'Rations', ''], ['o2Tank', 'Oxygen', 'kg'], ['n2Tank', 'Nitrogen', 'kg'], ['medSupplies', 'Medical supplies', 'unit'], ['parts', 'Spare parts', 'unit']].map(([k, name, unit]) => {
+      const rows = [['fuel', 'Reaction mass', 'kg'], ['water', 'Water', 'L'], ['food', 'Rations', ''], ['o2Tank', 'Oxygen', 'kg'], ['n2Tank', 'Nitrogen', 'kg'], ['medSupplies', 'Medical supplies', 'unit'], ['parts', 'Spare parts', 'unit'], ['pdcRounds', 'PDC rounds', 'rd']].map(([k, name, unit]) => {
         const q = serviceQuote(s, k);
         return `<div class="service-row"><span class="service-name">${name}</span><span class="service-stock">${fmtNum(s.resources[k].current)} / ${fmtNum(s.resources[k].max)} ${unit === 'unit' ? 'units' : unit}</span>
           <span class="service-price">${PRICES[k]} MCR/${unit || 'unit'}</span>
           <button class="station-mission-accept" data-act="buy" data-key="${k}" ${q.qty < 0.5 ? 'disabled' : ''}>FILL · ${fmtNum(q.cost)} MCR</button></div>`;
       }).join('');
-      content = `<div class="service-list">${rows}
-        <div class="service-row"><span class="service-name">Dockside overhaul</span><span class="service-stock">Every system to spec, suits, containment</span><span class="service-price">${fmtNum(overhaulQuote(s))} MCR</span>
+      const M = s.magazine;
+      const torps = ['he', 'nuke'].map(w => {
+        const no = torpedoRefusal(s, st, w);
+        const full = M.he + M.nuke >= M.capacity;
+        return `<div class="service-row"><span class="service-name">${WARHEADS[w].name}</span><span class="service-stock">${M[w]} aboard · magazine ${M.he + M.nuke}/${M.capacity}${no ? ` · ${esc(no)}` : ''}</span>
+          <span class="service-price">${fmtNum(WARHEADS[w].price)} MCR</span>
+          <button class="station-mission-accept" data-act="buy-torp" data-w="${w}" ${no || full ? 'disabled' : ''}>${full ? 'FULL' : 'LOAD ONE'}</button></div>`;
+      }).join('');
+      content = `<div class="service-list">${rows}${torps}
+        <div class="service-row"><span class="service-name">Dockside overhaul</span><span class="service-stock">Hull ${Math.round(s.hull.integrity)}% · every system to spec, suits, containment</span><span class="service-price">${fmtNum(overhaulQuote(s))} MCR</span>
         <button class="station-mission-accept" data-act="overhaul">OVERHAUL</button></div>
         <div class="service-credits">Credits: <b>${fmtNum(s.resources.credits.current)} MCR</b></div></div>`;
     }
   }
-  $('#dialog-station-body').innerHTML = `<div class="station-header"><span class="station-name">${esc(st.name)}</span><span class="station-faction">${st.faction !== 'independent' ? esc(st.faction.toUpperCase()) : ''}</span>
+  const record = st.faction in s.law.standing ? `<span class="station-record">STANDING ${Math.round(s.law.standing[st.faction])} · ${WANTED_LABEL[s.law.wanted[st.faction]]}</span>` : '';
+  $('#dialog-station-body').innerHTML = `<div class="station-header"><span class="station-name">${esc(st.name)}</span><span class="station-faction">${st.faction !== 'independent' ? esc(st.faction.toUpperCase()) : ''}</span>${record}
       <span class="station-signal">${docked ? 'DOCKED' : '◈ ' + '■'.repeat(bars) + '□'.repeat(5 - bars)}</span></div>
     <div class="station-greeting">${esc(hailDialogue(st))}</div>
     <div class="station-tabs">${tabs.map(([k, l]) => `<button class="tac-tab ${k === stationTab ? 'active' : ''}" data-act="tab" data-tab="${k}">${l}</button>`).join('')}</div>
@@ -331,6 +396,12 @@ function onStationClick(e) {
     }
     case 'buy': {
       const r = buy(s, b.dataset.key);
+      toast(r.text, r.ok ? 'ok' : 'warn');
+      if (r.ok) logEntry(r.text, 'system');
+      break;
+    }
+    case 'buy-torp': {
+      const r = buyTorpedo(s, b.dataset.w);
       toast(r.text, r.ok ? 'ok' : 'warn');
       if (r.ok) logEntry(r.text, 'system');
       break;

@@ -273,6 +273,24 @@ function tileHTML(s, sel) {
     case TileType.AIRLOCK:
       lines.push(s.flight.hold ? 'Cycled for docking' : 'Sealed');
       break;
+    case TileType.PDC_MOUNT:
+      lines.push(`${fmtNum(s.resources.pdcRounds.current)} rounds · mode ${s.combat.pdc.toUpperCase()}`);
+      actions.push(btn('open-combat', 'FIRE CONTROL'));
+      break;
+    case TileType.TORPEDO_LAUNCHER: {
+      const M = s.magazine;
+      lines.push(`Magazine ${M.he} HE · ${M.nuke} nuclear (${M.he + M.nuke}/${M.capacity})`);
+      const now = s.clock.minute;
+      lines.push(s.combat.tubes.map((t, i) => `Tube ${i + 1} ${t <= now ? 'loaded' : `cycling ${t - now} min`}`).join(' · '));
+      actions.push(btn('open-combat', 'FIRE CONTROL'));
+      break;
+    }
+    case TileType.WEAPONS_CONSOLE: {
+      const who = s.ship.crew.find(c => isConscious(c) && seatKind(c.seat) === 'weapons');
+      lines.push(who ? `${who.name} at fire control — PDCs laid by hand` : 'Unmanned — PDCs on automatic');
+      actions.push(btn('open-combat', 'FIRE CONTROL'));
+      break;
+    }
     case TileType.TERMINAL:
     case TileType.CONSOLE: {
       const crewHere = s.ship.crew.filter(m => geo.deckOfRow(m.pos.sy) === di && !m.dead).map(m => m.name);
@@ -316,6 +334,7 @@ function onClick(e) {
     case 'transponder': { const on = toggleTransponder(s); toast(on ? 'Transponder active' : 'Transponder silenced', on ? 'ok' : 'warn'); logEntry(on ? 'Transponder broadcasting' : 'Transponder silenced — running dark', on ? 'system' : 'warn'); break; }
     case 'hail': hooks.hail(b.dataset.id); break;
     case 'open-nav': hooks.openNav('solar'); break;
+    case 'open-combat': hooks.openNav('combat'); break;
   }
   renderSelection(true);
 }

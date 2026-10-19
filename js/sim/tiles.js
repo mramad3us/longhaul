@@ -31,6 +31,9 @@ export const TileType = {
   OPS_CONSOLE: 25,
   ENG_CONSOLE: 26,
   REC: 27,
+  PDC_MOUNT: 28,
+  TORPEDO_LAUNCHER: 29,
+  WEAPONS_CONSOLE: 30,
 };
 
 export const TILE_NAMES = {
@@ -61,6 +64,9 @@ export const TILE_NAMES = {
   [TileType.OPS_CONSOLE]: 'Ops Station',
   [TileType.ENG_CONSOLE]: 'Engineering Station',
   [TileType.REC]: 'Exercise Rig',
+  [TileType.PDC_MOUNT]: 'PDC Turret',
+  [TileType.TORPEDO_LAUNCHER]: 'Torpedo Launcher',
+  [TileType.WEAPONS_CONSOLE]: 'Weapons Station',
 };
 
 export const TILE_DESCRIPTIONS = {
@@ -86,6 +92,9 @@ export const TILE_DESCRIPTIONS = {
   [TileType.EVA_LOCKER]: 'EVA suit locker. Holds one suit with 48h of independent life support.',
   [TileType.RADIO]: 'High-gain communications array. Contacts ships and stations in range; broadcasts SOS.',
   [TileType.TRANSPONDER]: 'Identity transponder. Can be silenced for stealth — the drive plume is still visible while burning.',
+  [TileType.PDC_MOUNT]: 'Point-defense cannon: a radar-laid gatling throwing tungsten at 1.2 km/s. Shoots down torpedoes in their last seconds; at a few km it shreds hulls too. Engineers service it from inside the hull.',
+  [TileType.TORPEDO_LAUNCHER]: 'Torpedo tubes and magazine with autoloader. Each tube takes a few minutes to cycle.',
+  [TileType.WEAPONS_CONSOLE]: 'Fire control. A gunner here lays the PDCs by hand and makes them far deadlier than the automatic mode. Built into an acceleration couch.',
 };
 
 /** Tiles with info panels / actions. */
@@ -97,16 +106,17 @@ export const INTERACTIVE_TILES = new Set([
   TileType.RADIO, TileType.TRANSPONDER,
   TileType.BUNK, TileType.TABLE, TileType.GALLEY, TileType.HEAD, TileType.WATER_RECYCLER,
   TileType.WORKBENCH, TileType.OPS_CONSOLE, TileType.ENG_CONSOLE, TileType.REC,
+  TileType.PDC_MOUNT, TileType.TORPEDO_LAUNCHER, TileType.WEAPONS_CONSOLE,
 ]);
 
 /** Crew can stand on / walk through these. */
 export const WALKABLE = new Set([TileType.FLOOR, TileType.DOOR, TileType.LADDER, TileType.MEDBAY]);
 
 /** Solid for sliding bodies (inertial events). */
-export const BLOCKING = new Set([TileType.HULL_WALL, TileType.INTERIOR_WALL, TileType.ENGINE, TileType.REACTOR]);
+export const BLOCKING = new Set([TileType.HULL_WALL, TileType.INTERIOR_WALL, TileType.ENGINE, TileType.REACTOR, TileType.PDC_MOUNT]);
 
-/** Pressurized volume (not structure). */
-export const isInterior = (t) => t !== TileType.EMPTY && t !== TileType.HULL_WALL && t !== TileType.INTERIOR_WALL;
+/** Pressurized volume (not structure; PDC turrets sit in the hull wall). */
+export const isInterior = (t) => t !== TileType.EMPTY && t !== TileType.HULL_WALL && t !== TileType.INTERIOR_WALL && t !== TileType.PDC_MOUNT;
 
 /** Structural mass per tile type, kg. */
 export const TILE_MASS = {
@@ -138,4 +148,7 @@ export const TILE_MASS = {
   [TileType.OPS_CONSOLE]: 140,
   [TileType.ENG_CONSOLE]: 140,
   [TileType.REC]: 110,
+  [TileType.PDC_MOUNT]: 1400,
+  [TileType.TORPEDO_LAUNCHER]: 2600,
+  [TileType.WEAPONS_CONSOLE]: 140,
 };

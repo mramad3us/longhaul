@@ -1,0 +1,101 @@
+// Politics: spheres of influence, hot zones, the encounter director, conflict contracts.
+import { assert, fmt } from './helpers.mjs';
+import { DAY_MIN } from '../js/core/constants.js';
+import { seedRandom } from '../js/core/rng.js';
+import { bus } from '../js/core/events.js';
+import { createGame, advance } from '../js/sim/game.js';
+import { getWorld } from '../js/sim/world.js';
+import { getBody, bodyPos } from '../js/sim/ephemeris.js';
+import { controlAt, spaceLabel } from '../js/sim/factions.js';
+import { zoneCandidates, spawnZone, zonePos, zonesAt, director, spawnEncounter } from '../js/sim/conflict.js';
+import { acceptContract, ContractType, contractsTick } from '../js/sim/contracts.js';
+
+function game(seed = 5) {
+  seedRandom(seed);
+  bus.clear();
+  const s = createGame({ crewCount: 4, traffic: 0 });
+  s.missions.cooldown = 1e9;
+  return s;
+}
+
+const at = (name, minute = 0) => bodyPos(getBody(name), minute / DAY_MIN);
+
+export default [
+  {
+    name: 'spheres of influence: Earth, Mars and the Belt are held; deep space is not',
+    fn: () => {
+      const cases = [['Earth', 'UN'], ['Luna', 'UN'], ['Mars', 'MCR'], ['Phobos', 'MCR'], ['Ceres', 'OPA'], ['Tycho/Juno', 'OPA', 'Juno'], ['Titan', 'OPA']];
+      for (const [label, want, body = label] of cases) {
+        const p = at(body);
+        const c = controlAt(p.x, p.y, 0);
+        assert(c.faction === want, `${label}: ${spaceLabel(c)}`);
+      }
+      const gany = at('Ganymede');
+      const g = controlAt(gany.x, gany.y, 0);
+      console.log(`      Ganymede: ${spaceLabel(g)} · Pallas: ${spaceLabel(controlAt(at('Pallas').x, at('Pallas').y, 0))}`);
+      assert(g.contested, 'Ganymede is contested between Earth and Mars');
+      const deep = controlAt(0, 4.4, 0);
+      assert(!deep.faction, `between Belt and Jupiter: ${spaceLabel(deep)}`);
+    },
+  },
+  {
+    name: 'hot zones are born where influence overlaps or fails, and come and go',
+    fn: () => {
+      const s = game(7);
+      const cands = zoneCandidates(s);
+      const kinds = new Set(cands.map(c => c.kind));
+      console.log(`      ${cands.length} candidates: ${[...kinds].join(', ')}`);
+      assert(kinds.has('pirates') && kinds.has('standoff'), 'pirate havens and contested places');
+      const seen = new Set();
+      for (let d = 0; d < 60; d++) {
+        advance(s, DAY_MIN);
+        for (const z of s.politics.zones) seen.add(`${z.kind}@${z.body}`);
+        assert(s.politics.zones.length <= 6, 'zone cap');
+      }
+      console.log(`      60 days: ${seen.size} zones (${[...seen].slice(0, 8).join(', ')}…); tension ${Object.entries(s.politics.tension).map(([k, v]) => `${k} ${fmt(v, 2)}`).join(', ')}`);
+      assert(seen.size >= 3, 'zones should come and go');
+    },
+  },
+  {
+    name: 'the director sends pirates into a pirate zone and patrols into held space',
+    fn: () => {
+      const s = game(9);
+      const z = spawnZone(s, { body: 'Hygiea', kind: 'pirates', factions: ['pirate'], w: 1 });
+      z.intensity = 1;
+      s.flight.pos = { ...zonePos(z, s.clock.minute) };
+      assert(zonesAt(s, s.flight.pos).includes(z), 'we are in the zone');
+      const roles = {};
+      for (let h = 0; h < 72; h++) {
+        s.politics.quietUntil = 0;
+        const e = director(s);
+        if (e) roles[e.agent.role] = (roles[e.agent.role] || 0) + 1;
+        for (const x of [...getWorld(s).driven]) if (x.agent?.ambient) getWorld(s).remove(x);   // keep the cap free
+      }
+      console.log(`      72 h in a pirate zone near Hygiea: ${JSON.stringify(roles)}`);
+      assert((roles.pirate || 0) + (roles.civilian || 0) > 0, 'pirates (or their victims) should show up');
+      const b = spawnEncounter(s, { kind: 'battle', zone: { id: 'z', factions: ['UN', 'MCR'] } });
+      assert(b?.agent.hostile.length === 1, 'warships spawn at war');
+    },
+  },
+  {
+    name: 'a bounty: the wanted pirate is out there, and destroying it pays at the station',
+    fn: () => {
+      const s = game(13);
+      const world = getWorld(s);
+      const st = world.get('ceres-station');
+      const c = { id: 'c-t', type: ContractType.BOUNTY, station: st.id, stationName: st.name, phase: 'offered', zone: null,
+        ship: { cls: 'pirate-raider', name: 'Test Raider', faction: 'pirate', tl: 1, shipClass: 'Pirate raider', mass: 700 },
+        body: 'Ceres', distAU: 0.01, reward: { credits: 5000 }, aliveBonus: 0.5, deadline: 10 * DAY_MIN, expires: s.clock.minute + DAY_MIN, title: 'Bounty: Test Raider' };
+      st.board.missions.push(c);
+      st.board.lastRefresh = s.clock.minute;
+      const r = acceptContract(s, st.id, c.id);
+      assert(r.ok, r.text);
+      const pirate = world.get(c.targetId);
+      assert(pirate?.agent?.role === 'pirate' && pirate.tags.wanted, 'the wanted pirate is in the world');
+      pirate.combat.hp = 0;
+      pirate.combat.status = 'wreck';
+      contractsTick(s);
+      assert(c.phase === 'return', 'bounty earned, return to the station');
+    },
+  },
+];

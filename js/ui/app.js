@@ -29,6 +29,9 @@ import { dockedStation } from '../sim/contracts.js';
 import { forceDistress } from '../sim/missions.js';
 import { damageSystem, meteoroidStrike, SYSTEM_IDS } from '../sim/systems.js';
 import { spawnTrafficShip } from '../sim/traffic.js';
+import { spawnEncounter } from '../sim/conflict.js';
+import { controlAt } from '../sim/factions.js';
+import { initFx, resetFx } from './fx.js';
 import {
   iconNewGame, iconLoadGame, iconSettings, iconPause, iconHudSettings, iconHudSave, iconHudExit,
   iconMinus, iconPlus, logoShip, createStarfield,
@@ -89,7 +92,9 @@ export async function boot() {
   refreshContinue();
 
   // In-game UI
-  initHud(requestSpeed, toggleCombat, openSystems);
+  initHud(requestSpeed, toggleCombat, openSystems, () => openNav('combat'));
+  initFx();
+  ui.toggleCombat = toggleCombat;
   initLog();
   setResourceAlertHandler(resourceAlert);
   initNav({ hail, openStation: () => openStation() });
@@ -100,7 +105,7 @@ export async function boot() {
     speed: requestSpeed, togglePause, nav: (tab) => toggleNav(tab), missions: openMissions, jobs: openJobs,
     systems: openSystems, roster: openRoster,
     station: () => dockedStation(ui.state) ? openStation() : toast('Not docked', 'warn'),
-    combat: toggleCombat, escape: onEscape, save: () => quickSave(), devFlip, devCut,
+    combat: toggleCombat, weapons: () => toggleNav('combat'), escape: onEscape, save: () => quickSave(), devFlip, devCut,
   });
   $$('[data-action]').forEach(b => {
     const a = b.dataset.action;
@@ -166,6 +171,7 @@ function startGame(state, fresh) {
   ui.selection.crew = null; ui.selection.tile = null;
   resetNavForGame();
   resetTacCache();
+  resetFx();
   resetLogView();
   resetResourceAlerts();
   buildShipView($('#ship-container'), state, {
@@ -350,6 +356,11 @@ function initDevHelm() {
     ['WEAR ALL', () => { for (const id of SYSTEM_IDS) ui.state.systems.units[id].integrity = Math.max(0, ui.state.systems.units[id].integrity - 40); }],
     ['+10 SPARES', () => { const p = ui.state.resources.parts; p.current = Math.min(p.max, p.current + 10); }],
     ['REFUEL', () => { ui.state.resources.fuel.current = ui.state.resources.fuel.max; }],
+    ['PIRATE', () => spawnEncounter(ui.state, { kind: 'pirate' }, (t, p) => bus.emit(t, p))],
+    ['AMBUSH', () => spawnEncounter(ui.state, { kind: 'ambush' }, (t, p) => bus.emit(t, p))],
+    ['PATROL', () => { const f = controlAt(ui.state.flight.pos.x, ui.state.flight.pos.y, ui.state.clock.minute).faction || 'OPA'; spawnEncounter(ui.state, { kind: 'patrol', faction: f }, (t, p) => bus.emit(t, p)); }],
+    ['BATTLE', () => spawnEncounter(ui.state, { kind: 'battle', zone: { id: null, factions: ['UN', 'MCR'] } }, (t, p) => bus.emit(t, p))],
+    ['+TORPS', () => { const M = ui.state.magazine; M.he = M.capacity - M.nuke; }],
     ['+1K TRAFFIC', () => { for (let i = 0; i < 1000; i++) spawnTrafficShip(ui.state); toast(`${ui.state.entities.length} entities`); }],
     ['+50K TRAFFIC', () => { for (let i = 0; i < 50_000; i++) spawnTrafficShip(ui.state); toast(`${ui.state.entities.length} entities`); }],
   ];

@@ -10,7 +10,8 @@
 import { AU_M, G0, MIN_S } from '../core/constants.js';
 import { random, randRange, randInt, pick } from '../core/rng.js';
 import { getWorld, WORLD_VISITORS } from './world.js';
-import { createEntity, rollShipIdentity } from './entities.js';
+import { createEntity } from './entities.js';
+import { rollIdentity, CLASSES } from './ship-classes.js';
 
 export function createTraffic(population = 36) {
   return { population, spawned: 0 };
@@ -62,11 +63,11 @@ export function spawnTrafficShip(state, minute = state.clock.minute) {
   const world = getWorld(state);
   const all = world.stations;
   if (!all.length) return null;
-  const id = rollShipIdentity();
   const home = pick(all);
+  const id = rollIdentity({ category: 'civilian', near: home.faction });
   const e = createEntity({
-    id: world.newId('npc'), name: id.name, type: 'ship', faction: id.faction, shipClass: id.shipClass, mass: id.mass,
-    orbit: { ...home.orbit }, t: minute, tags: { traffic: true, g: pick([0.3, 0.3, 0.5, 1, 1, 1.5]) },
+    id: world.newId('npc'), name: id.name, type: 'ship', faction: id.faction, cls: id.cls, tl: id.tl, shipClass: id.shipClass, mass: id.mass,
+    orbit: { ...home.orbit }, t: minute, tags: { traffic: true, g: Math.min(CLASSES[id.cls].drive.maxG, pick([0.3, 0.3, 0.5, 1, 1, 1.5])) },
   });
   e.transponder = random() > 0.1;
   dockBeside(e, home, minute, randInt(60, 3 * 1440));

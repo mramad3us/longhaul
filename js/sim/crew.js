@@ -298,6 +298,11 @@ export function refreshDerivedConditions(m) {
   else removeCondition(m, 'unconscious');
 }
 
+/** A death aboard weighs on everyone for days. */
+export function mourn(crew, dead) {
+  for (const m of crew) if (m !== dead && !m.dead) m.moraleMod = (m.moraleMod || 0) - 25;
+}
+
 export function kill(m) {
   m.dead = true;
   m.consciousness = 0;

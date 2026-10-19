@@ -126,6 +126,8 @@
         <div class="hud-center">
           <span class="hud-ship-name" id="hud-ship-name">—</span>
           <span class="hud-nav-chip" id="hud-nav-chip">—</span>
+          <span class="hud-space-chip" id="hud-space" title="Who holds this space"></span>
+          <button class="hud-threat-chip" id="hud-threat" style="display:none" title="Combat (W)"></button>
         </div>
         <div class="hud-right">
           <button class="hud-icon-btn hud-text-btn" data-action="open-map" title="Navigation (M)">NAV</button>
@@ -186,6 +188,7 @@
               <p class="info-line"><span class="info-key">Rel. velocity</span> <span class="info-val" id="info-velocity">—</span></p>
               <p class="info-line info-vel-ref"><span class="info-key">Reference</span> <span class="info-val info-val-ref" id="info-vel-ref">—</span></p>
               <p class="info-line"><span class="info-key">Orbit (Sun)</span> <span class="info-val" id="info-orbit">—</span></p>
+              <p class="info-line"><span class="info-key">Hull</span> <span class="info-val" id="info-hull">—</span></p>
               <p class="info-line"><span class="info-key">Mass</span> <span class="info-val" id="info-mass">—</span></p>
               <p class="info-line"><span class="info-key">Cargo</span> <span class="info-val" id="info-cargo">—</span></p>
             </div>
@@ -238,6 +241,7 @@
               <button class="tac-tab" data-nav-tab="tactical">TACTICAL</button>
               <button class="tac-tab" data-nav-tab="solar">SOLAR</button>
               <button class="tac-tab" data-nav-tab="scanner">SCANNER</button>
+              <button class="tac-tab tac-tab-combat" data-nav-tab="combat">COMBAT</button>
             </div>
             <div class="tac-zoom-controls" data-tab-controls="tactical">
               <button class="tac-zoom-btn-modal" data-tac-zoom-modal="0">1 KM</button>
@@ -250,6 +254,7 @@
               <button class="solar-zoom-btn" data-solar-view="belt">BELT</button>
               <button class="solar-zoom-btn" data-solar-view="system">SYSTEM</button>
               <button class="solar-zoom-btn" data-solar-view="target">TARGET</button>
+              <button class="solar-zoom-btn active" data-solar-politics title="Spheres of influence and hot zones">POLITICS</button>
             </div>
             <div class="tac-zoom-controls" data-tab-controls="scanner">
               <button class="scanner-range-btn" data-scanner-range="0">SHORT</button>
@@ -262,6 +267,8 @@
             <div class="tac-screen tac-screen-modal" data-nav-screen="tactical"></div>
             <div class="tac-screen tac-screen-modal tac-screen-solar" data-nav-screen="solar"></div>
             <div class="tac-screen tac-screen-modal tac-screen-scanner" data-nav-screen="scanner"></div>
+            <div class="tac-screen tac-screen-modal tac-screen-combat" data-nav-screen="combat"></div>
+            <div class="combat-panel" id="combat-panel" style="display:none"></div>
             <div class="scanner-detail-panel" id="scanner-detail" style="display:none"></div>
             <div class="map-selection" id="map-selection" style="display:none"></div>
             <div class="route-panel" id="route-panel" style="display:none"></div>

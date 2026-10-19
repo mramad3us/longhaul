@@ -15,9 +15,11 @@ const E = T.EMPTY, HW = T.HULL_WALL, F = T.FLOOR, L = T.LADDER, CC = T.CRASH_COU
 const EV = T.EVA_LOCKER, BK = T.BUNK, TB = T.TABLE, ST = T.STORAGE;
 
 /**
- * Default corvette-class hauler: seven decks stacked on the torch, one
- * ladder shaft down the spine. Bow first: command, living, working,
- * cargo, then the machinery.
+ * Default light freighter (ship-classes.js: 'light-freighter'): seven
+ * decks stacked on the torch, one ladder shaft down the spine. Bow
+ * first: command (with fire control), living, working, cargo (with the
+ * torpedo magazine), then the machinery — two PDC turrets sit in the
+ * engine-deck hull, port and starboard.
  */
 export function createDefaultLayout() {
   return [
@@ -26,7 +28,7 @@ export function createDefaultLayout() {
       glow: { color: 'rgba(91, 192, 235, 0.06)', accent: '#5BC0EB' },
       tiles: [
         [E, HW, HW, HW, HW, HW, HW, HW, E],
-        [HW, T.RADIO, T.OPS_CONSOLE, F, T.NAV_CONSOLE, F, CC, T.TRANSPONDER, HW],
+        [HW, T.RADIO, T.OPS_CONSOLE, F, T.NAV_CONSOLE, T.WEAPONS_CONSOLE, CC, T.TRANSPONDER, HW],
         [HW, F, F, F, F, F, F, F, HW],
         [HW, EV, CC, F, L, F, CC, EV, HW],
       ],
@@ -62,7 +64,7 @@ export function createDefaultLayout() {
       name: 'Cargo', id: 'cargo',
       glow: { color: 'rgba(79, 209, 197, 0.03)', accent: '#4FD1C5' },
       tiles: [
-        [HW, ST, ST, F, L, F, ST, ST, HW],
+        [HW, T.TORPEDO_LAUNCHER, ST, F, L, F, ST, ST, HW],
         [HW, F, F, F, F, F, F, ST, HW],
         [HW, T.AIRLOCK, EV, F, L, F, EV, ST, HW],
       ],
@@ -72,7 +74,7 @@ export function createDefaultLayout() {
       glow: { color: 'rgba(226, 163, 85, 0.06)', accent: '#E2A355' },
       tiles: [
         [HW, T.ENG_CONSOLE, F, CC, L, CC, F, EV, HW],
-        [HW, F, F, F, F, F, F, F, HW],
+        [T.PDC_MOUNT, F, F, F, F, F, F, F, T.PDC_MOUNT],
         [HW, EV, T.ENGINE, F, L, F, T.ENGINE, F, HW],
       ],
     },
@@ -98,8 +100,8 @@ export function deckIndex(ship, id) {
 // against sustained G (couch gel, juice); restraints only against being
 // thrown around (a sleeper in a bunk is strapped in, but not juiced).
 
-export const SEAT_KINDS = new Set(['couch', 'helm', 'ops', 'engStation', 'medbay', 'bunk', 'head', 'rec']);
-const SECURE_SEATS = new Set(['couch', 'helm', 'ops', 'engStation', 'medbay']);
+export const SEAT_KINDS = new Set(['couch', 'helm', 'ops', 'weapons', 'engStation', 'medbay', 'bunk', 'head', 'rec']);
+const SECURE_SEATS = new Set(['couch', 'helm', 'ops', 'weapons', 'engStation', 'medbay']);
 const RESTRAINTS = new Set([...SECURE_SEATS, 'bunk']);
 
 export const seatKind = (seatId) => seatId ? seatId.slice(0, seatId.indexOf(':')) : null;
@@ -207,6 +209,7 @@ export const FIXTURE_KIND = {
   [T.BUNK]: 'bunk', [T.TABLE]: 'table', [T.GALLEY]: 'galley', [T.HEAD]: 'head',
   [T.WATER_RECYCLER]: 'recycler', [T.WORKBENCH]: 'workbench', [T.OPS_CONSOLE]: 'ops',
   [T.ENG_CONSOLE]: 'engStation', [T.REC]: 'rec',
+  [T.PDC_MOUNT]: 'pdc', [T.TORPEDO_LAUNCHER]: 'launcher', [T.WEAPONS_CONSOLE]: 'weapons',
 };
 
 /** Node index nearest to a ship-coord point (same deck preferred). */

@@ -5,7 +5,12 @@
 
 import { AU_KM } from '../core/constants.js';
 import { SENSOR_RANGES } from '../sim/sensors.js';
-import { FACTION_COLORS } from '../sim/entities.js';
+import { factionColor } from '../sim/factions.js';
+import { getWorld } from '../sim/world.js';
+import { PLAYER } from '../sim/combatants.js';
+import { timeToGo } from '../sim/ordnance.js';
+import { hostilesOfPlayer } from '../sim/agents.js';
+import { formatDuration } from '../core/clock.js';
 import { FitCanvas, fmtKm } from './dom.js';
 
 export class ScannerView {
@@ -72,13 +77,39 @@ export class ScannerView {
     ctx.fillText('FWD', cx, cy - R - 8);
 
     const facing = state.flight.facing;
+    const world = getWorld(state);
+    const hostile = new Set(hostilesOfPlayer(state).map(e => e.id));
     for (const c of s.contacts) {
       const frac = Math.min(1, c.dist / band.au);
       const rel = c.bearing - facing;                    // relative bearing (0 = nose, + = port)
       const px = cx - Math.sin(rel) * frac * R;
       const py = cy - Math.cos(rel) * frac * R;
-      const color = c.sos ? '#E25555' : c.faction ? (FACTION_COLORS[c.faction] || '#8A8A6A') : c.station ? '#4FD1C5' : '#8A8A6A';
+      if (c.ordnance) {
+        // Ordnance: a small diamond — red when it is coming for us
+        const o = world.get(c.id)?.ord;
+        const inbound = o?.target === PLAYER;
+        ctx.fillStyle = inbound ? '#FF5555' : o?.owner === PLAYER ? '#4FD1C5' : '#E2A355';
+        ctx.beginPath(); ctx.moveTo(px, py - 4); ctx.lineTo(px + 3, py); ctx.lineTo(px, py + 4); ctx.lineTo(px - 3, py); ctx.closePath(); ctx.fill();
+        if (inbound) {
+          const eta = timeToGo(state, world.get(c.id));
+          ctx.font = '10px "Share Tech Mono", monospace'; ctx.textAlign = 'left';
+          ctx.fillText(`${c.name} ${isFinite(eta) ? formatDuration(eta / 60) : ''}`, px + 6, py + 3);
+        }
+        this._hits.push({ id: c.id, x: px, y: py });
+        continue;
+      }
+      const color = c.sos ? '#E25555' : c.faction ? factionColor(c.faction) : c.station ? '#4FD1C5' : '#8A8A6A';
       const sz = c.station ? 4 : 3;
+      if (hostile.has(c.id)) {
+        ctx.strokeStyle = '#FF5555'; ctx.lineWidth = 1.5;
+        ctx.strokeRect(px - sz - 4, py - sz - 4, (sz + 4) * 2, (sz + 4) * 2);
+        ctx.lineWidth = 1;
+      }
+      if (state.combat.target === c.id) {
+        ctx.strokeStyle = '#FF8C42';
+        ctx.beginPath(); ctx.moveTo(px - 12, py); ctx.lineTo(px - 6, py); ctx.moveTo(px + 6, py); ctx.lineTo(px + 12, py);
+        ctx.moveTo(px, py - 12); ctx.lineTo(px, py - 6); ctx.moveTo(px, py + 6); ctx.lineTo(px, py + 12); ctx.stroke();
+      }
       if (c.sos) {
         const ph = (t % 2) / 2;
         ctx.strokeStyle = `rgba(226,85,85,${0.6 * (1 - ph)})`;

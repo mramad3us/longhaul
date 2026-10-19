@@ -261,3 +261,44 @@ body.reduce-motion .sys-led, body.reduce-motion .sys-frame { animation: none !im
 .crew-stat-fill.need-fill { background: var(--ok); }
 .crew-stat-fill.need-fill.need-mid { background: var(--warning); }
 .crew-stat-fill.need-fill.need-low { background: var(--danger); }
+
+/* ---- Combat (v0.10) ---- */
+.tac-tab-combat { color: #E27A6A; }
+.tac-tab-combat.active { color: #FF8C7A; border-color: rgba(226, 85, 85, 0.6); }
+.tac-screen-combat { cursor: crosshair; }
+.combat-panel {
+  width: 300px; flex: 0 0 300px; overflow-y: auto; flex-direction: column; gap: 8px; padding: 10px;
+  background: rgba(10, 6, 8, 0.96); border-left: 1px solid rgba(226, 85, 85, 0.25);
+}
+.fc-section { border: 1px solid rgba(226, 85, 85, 0.18); padding: 6px 8px; }
+.fc-title { font-family: var(--font-pixel); font-size: 0.42rem; letter-spacing: 0.15em; color: #E27A6A; margin-bottom: 5px; }
+.fc-row, .fc-threat { display: flex; justify-content: space-between; gap: 8px; font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); }
+.fc-row b, .fc-threat b { color: var(--text-primary); font-weight: 400; }
+.fc-threat { color: var(--danger); }
+.fc-threat.fc-hostile b { color: var(--warning); }
+.fc-target-name { font-family: var(--font-mono); font-size: 0.85rem; margin-bottom: 4px; }
+.fc-dim, .fc-desc { font-family: var(--font-mono); font-size: 0.64rem; color: var(--text-dim); line-height: 1.45; margin: 3px 0; }
+.fc-warn { color: var(--warning) !important; }
+.fc-choice, .fc-actions, .fc-tubes, .fc-laws { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.fc-btn {
+  font-family: var(--font-pixel); font-size: 0.4rem; letter-spacing: 0.1em; padding: 5px 7px; cursor: pointer;
+  background: transparent; color: var(--text-secondary); border: 1px solid var(--hull-primary);
+}
+.fc-btn:hover:not([disabled]) { color: #FF8C7A; border-color: rgba(226, 85, 85, 0.5); }
+.fc-btn.active { color: #FFFFFF; background: rgba(226, 85, 85, 0.22); border-color: rgba(226, 85, 85, 0.7); }
+.fc-btn[disabled] { opacity: 0.4; cursor: default; }
+.fc-btn[data-fc="fire"]:not([disabled]) { color: #FFFFFF; background: rgba(226, 85, 85, 0.35); border-color: var(--danger); }
+.fc-tube, .fc-law { font-family: var(--font-mono); font-size: 0.64rem; padding: 1px 5px; border: 1px solid var(--hull-primary); color: var(--text-dim); }
+.fc-tube.ready { color: var(--ok); border-color: rgba(107, 203, 119, 0.4); }
+.hud-space-chip { font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.1em; color: var(--text-dim); }
+.hud-space-chip.space-contested { color: var(--warning); }
+.hud-space-chip.space-lawless { color: #C05AA0; }
+.hud-space-chip.space-hot { color: #FF8C7A; }
+.hud-threat-chip {
+  font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.08em; padding: 1px 10px; cursor: pointer;
+  color: #FF8C7A; background: rgba(226, 85, 85, 0.12); border: 1px solid rgba(226, 85, 85, 0.6);
+}
+.hud-threat-chip.urgent { color: #FFFFFF; background: rgba(226, 85, 85, 0.35); animation: condPulse 0.8s ease-in-out infinite; }
+.station-record { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); margin-left: 10px; }
+.bar-ammo { background: #C9A050; }
+body.hit-flash .ship-viewport { box-shadow: inset 0 0 120px rgba(255, 90, 60, 0.45); }

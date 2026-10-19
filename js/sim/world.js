@@ -10,6 +10,9 @@
 //           time, O(1), no drift (stations, parked ships, nav marks)
 //   transit — NPC traffic between two rails entities, analytic
 //   free  — integrated under solar gravity + own thrust
+//   driven — stepped every minute by its controller (an NPC at the
+//           helm, a torpedo's guidance): the world never moves it,
+//           only indexes it. Driven entities are few and bounded.
 //
 // Level of detail (scales to 200k+ entities):
 //   entities near the player update every game-minute; the far world is
@@ -149,6 +152,7 @@ export class World {
     this.hash = new SpatialHash(0.05);
     this.stations = [];             // rails stations (destinations for traffic & contracts)
     this.beacons = new Set();       // entities broadcasting SOS — tiny, so no spatial search needed
+    this.driven = new Set();        // NPC ships under a pilot, ordnance in flight — stepped every minute
     this._anchorMemo = new Map();   // id → { minute, pos, vel } for transit endpoints
     this.cursor = 0;                // background round-robin position
     this._near = [];
@@ -162,6 +166,7 @@ export class World {
     this.byId.set(e.id, e);
     if (e.type === 'station' && e.orbit) this.stations.push(e);
     if (e.sos) this.beacons.add(e);
+    if (e.driven) this.driven.add(e);
     this.refresh(e, this.state.clock.minute);
     this.hash.insert(e);
   }
@@ -191,8 +196,15 @@ export class World {
     if (last !== e) { list[e.$i] = last; last.$i = e.$i; }
     if (e.type === 'station') this.stations = this.stations.filter(s => s !== e);
     this.beacons.delete(e);
+    this.driven.delete(e);
     this._anchorMemo.delete(e.id);
     return true;
+  }
+
+  /** Hand an entity to (or take it from) a controller (keeps the driven index in sync). */
+  setDriven(e, on) {
+    e.driven = !!on;
+    if (on) { e.orbit = null; e.transit = null; this.driven.add(e); } else this.driven.delete(e);
   }
 
   /** Turn an entity's distress beacon on/off (keeps the beacon index in sync). */
@@ -217,6 +229,7 @@ export class World {
 
   /** Bring one entity exactly up to `minute`. */
   refresh(e, minute) {
+    if (e.driven) return;                         // its controller steps it (combat.js)
     if (e.orbit) {
       orbitStateAt(e.orbit, minute, e.pos, e.vel);
     } else if (e.transit) {

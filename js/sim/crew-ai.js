@@ -386,11 +386,29 @@ function holdsUnderG(m) {
   return false;
 }
 
+/**
+ * At battle stations the best shot takes fire control, the best engineer
+ * the engineering station, the next best eye ops. Returns a seat kind or null.
+ */
+function battleSeat(state, m) {
+  if (!state.combatStations) return null;
+  const pilot = activePilot(state);
+  const able = state.ship.crew.filter(o => isAble(o) && o !== pilot);
+  const best = (skill, not = []) => able.filter(o => !not.includes(o)).sort((a, b) => b.skills[skill] - a.skills[skill])[0];
+  const gunner = best('security');
+  if (gunner === m) return 'weapons';
+  const eng = best('engineering', [gunner]);
+  if (eng === m) return 'engStation';
+  return best('security', [gunner, eng]) === m ? 'ops' : null;
+}
+
 function assignSecure(state, m) {
   const pilot = activePilot(state) === m;
   let seat = null;
   const ok = (f) => reachable(state, m, f.deck);
   if (pilot) seat = nearestFixture(state, m, 'helm', true, ok);
+  const station = !pilot && battleSeat(state, m);
+  if (station) seat = nearestFixture(state, m, station, true, ok);
   seat ||= nearestFixture(state, m, 'couch', true, ok);
   if (!seat) return false;
   abandonTask(state, m);
@@ -587,6 +605,11 @@ function decide(state, m, env) {
     if (helmJob && m.task?.type !== 'helm' && bestPilotFor(state, helmJob, env) === m) { startJob(state, m, helmJob); return; }
     // Watch over while strapped in at a station: stay in the seat, off duty (and asleep, if it's time)
     if (m.task?.type === 'watch' && block !== 'duty' && m.seat && isSecured(m)) { m.task = { type: 'secure', seat: m.seat }; return; }
+    // Battle stations called while already strapped in: move to your station while you still can
+    if (m.task?.type === 'secure' && env.g <= 1.5 && isAble(m)) {
+      const want = battleSeat(state, m);
+      if (want && seatKind(m.task.seat) !== want && nearestFixture(state, m, want, true)) { assignSecure(state, m); return; }
+    }
     if (holdsUnderG(m) || (m.task?.type === 'heal' && m.seat) || (m.task?.type === 'rescue' && m.task.phase === 'carry')) return;
     // Below 1.5G people can still move: rescues and damage control go on until the ship pulls hard
     if (env.g <= 1.5 && isAble(m)) {
@@ -1007,10 +1030,12 @@ function healStep(state, m, ctx) {
 
 /** Who is actually manning each station this minute (station → crew id). */
 function watchState(state) {
-  const w = { helm: null, ops: null, engineering: null, workshop: null, medbay: null, galley: null };
+  const w = { helm: null, ops: null, weapons: null, engineering: null, workshop: null, medbay: null, galley: null };
   for (const m of state.ship.crew) {
     if (!isConscious(m)) continue;
     if (seatKind(m.seat) === 'helm') w.helm = m.id;
+    if (seatKind(m.seat) === 'weapons') w.weapons = m.id;
+    if (seatKind(m.seat) === 'ops' && m.task?.type === 'secure') w.ops ??= m.id;
     if (m.task?.type === 'watch' && m.task.phase === 'on') w[m.task.station] ??= m.id;
   }
   return w;

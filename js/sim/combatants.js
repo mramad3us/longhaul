@@ -1,0 +1,179 @@
+// ============================================================
+// LONGHAUL — Combatants: one view of every ship that can fight
+//
+// The player's ship lives in state.flight / state.ship; NPC ships are
+// world entities. Weapons, damage and AI never care which: they ask
+// for a ship's kinematics and its combat profile by id ('player' or
+// an entity id).
+//
+// NPC hulls carry a compact combat state (e.combat), created the
+// first time the ship matters to a fight: structure, the condition of
+// four sections, reactor containment, ammunition. Traffic that never
+// fights never pays for it.
+// ============================================================
+
+import { G0 } from '../core/constants.js';
+import { getWorld } from './world.js';
+import { CLASSES, SIZES, TECH, classOf, targetRadius, isEvasive, PLAYER_CLASS } from './ship-classes.js';
+import { PDC, PDC_AUTO_FACTOR, TORPEDO_MOTOR, RAILGUN } from './weapons.js';
+import { systemPerf } from './systems.js';
+import { isConscious } from './crew.js';
+import { seatKind } from './ship-layout.js';
+import { sizeForMass, signatureRange, playerSignatureRange, playerSensorQuality, canSee } from './sensors.js';
+
+export const PLAYER = 'player';
+
+export const SECTIONS = ['drive', 'reactor', 'weapons', 'sensors'];
+export const DISABLED_BELOW = 0.25;       // a section under this is out of action
+export const PDC_ROUNDS_PER_MOUNT = 20_000;
+
+const ZERO = { ax: 0, ay: 0 };
+
+/** Kinematic view of a ship: { id, pos (AU), vel (m/s), ax, ay (own thrust, m/s²), prev, e }. */
+export function kinematics(state, id) {
+  if (id === PLAYER) {
+    const f = state.flight;
+    const a = f.thrustG * G0;
+    return { id, pos: f.pos, vel: f.vel, ax: a * Math.cos(f.facing), ay: a * Math.sin(f.facing), prev: state.$prev || null, e: null };
+  }
+  const e = getWorld(state).get(id);
+  if (!e) return null;
+  const a = (e.thrust || 0) * G0;
+  return { id, pos: e.pos, vel: e.vel, ax: a ? a * Math.cos(e.heading) : ZERO.ax, ay: a ? a * Math.sin(e.heading) : ZERO.ay, prev: e.$prev || null, e };
+}
+
+/** Start-of-minute snapshot for closest-approach checks. */
+export function snapshot(pos, vel) {
+  return { x: pos.x, y: pos.y, vx: vel.vx, vy: vel.vy };
+}
+
+// ---- SEEING EACH OTHER ----
+
+/** How far (AU) a quality-1 sensor holds this ship. */
+export function signatureOf(state, id) {
+  if (id === PLAYER) return playerSignatureRange(state);
+  const e = getWorld(state).get(id);
+  return e ? signatureRange(e) : 0;
+}
+
+/** A ship's sensor quality (tech level, damage; the player's ops watch). */
+export function sensorQuality(state, id) {
+  if (id === PLAYER) return playerSensorQuality(state);
+  const e = getWorld(state).get(id);
+  if (!e) return 0;
+  return TECH[e.tl || 2].sensors * (e.combat ? 0.3 + 0.7 * e.combat.sensors : 1);
+}
+
+/** Does `observer` hold `target` on its sensors right now? */
+export function sees(state, observerId, targetId) {
+  const a = kinematics(state, observerId), b = kinematics(state, targetId);
+  if (!a || !b) return false;
+  const d = Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y);
+  return canSee(d, signatureOf(state, targetId), sensorQuality(state, observerId));
+}
+
+// ---- NPC HULLS ----
+
+/** The combat state of an NPC hull (created on first use). */
+export function ensureHull(e) {
+  if (e.combat) return e.combat;
+  const c = classOf(e);
+  const size = SIZES[c?.size || sizeForMass(e.mass)];
+  const tubes = c?.tubes || 0;
+  e.combat = {
+    hp: size.hp, hpMax: size.hp,
+    drive: 1, reactor: 1, weapons: 1, sensors: 1,
+    crew: 1,                                   // fraction of the crew still standing
+    status: 'ok',                              // ok | disabled | surrendered | wreck
+    containment: null,                         // minutes to detonation once containment fails
+    scrammed: false,
+    rounds: (c?.pdc || 0) * PDC_ROUNDS_PER_MOUNT,
+    magazine: { he: c?.magazine?.he || 0, nuke: c?.magazine?.nuke || 0 },
+    tubes: new Array(tubes).fill(0),           // minute each tube is loaded again
+    rail: new Array(c?.railgun || 0).fill(0),
+  };
+  return e.combat;
+}
+
+export const isWreck = (e) => e?.combat?.status === 'wreck';
+export const isOutOfFight = (e) => !e || e.combat?.status === 'wreck' || e.combat?.status === 'surrendered';
+
+// ---- WHO IS AT THE GUNS ----
+
+/** The crew member at the weapons station (fire control), if anyone. */
+export function gunner(state) {
+  return state.ship.crew.find(m => isConscious(m) && seatKind(m.seat) === 'weapons') || null;
+}
+
+// ---- PROFILES ----
+
+/**
+ * What a ship can do in a fight right now:
+ *   radiusM, armor, maxG (drive available), evadeG (jinking now),
+ *   pdc { mounts (effective), lambda, rangeM, strafeM, sigmaRad, factor, ammo },
+ *   tubes, torps (in the magazine), torpedo { maxG, dv } (motor at this TL),
+ *   railgun (spec | null), railMounts
+ */
+export function profile(state, id) {
+  return id === PLAYER ? playerProfile(state) : npcProfile(state, getWorld(state).get(id));
+}
+
+function playerProfile(state) {
+  const c = CLASSES[state.ship.classId || PLAYER_CLASS];
+  const tl = state.ship.tl || 2;
+  const g = gunner(state);
+  return {
+    id: PLAYER, isPlayer: true, cls: c, tl, faction: null,
+    radiusM: targetRadius(c),
+    armor: c.armor + TECH[tl].armor,
+    maxG: state.flight.maxG,
+    evadeG: state.$jinkG || 0,
+    pdc: {
+      mounts: c.pdc * systemPerf(state, 'pdc'), ...PDC[tl],
+      factor: g ? 0.7 + 0.6 * g.skills.security / 100 : PDC_AUTO_FACTOR,
+      ammo: state.resources.pdcRounds.current,
+    },
+    tubes: c.tubes * (systemPerf(state, 'launcher') > 0 ? 1 : 0),
+    torps: state.magazine.he + state.magazine.nuke,
+    torpedo: TORPEDO_MOTOR[tl],
+    railgun: null, railMounts: 0,
+    alive: !state.lost,
+  };
+}
+
+const CREW_FACTOR = { military: 1.1, authority: 1, irregular: 0.85, civilian: 0.8 };
+
+function npcProfile(state, e) {
+  if (!e) return null;
+  const c = classOf(e);
+  const h = ensureHull(e);
+  const tl = e.tl || 2;
+  const armed = h.weapons >= DISABLED_BELOW && h.status !== 'surrendered' && h.status !== 'wreck';
+  const maxG = h.drive < DISABLED_BELOW || h.scrammed || h.status === 'wreck' ? 0 : (c?.drive.maxG || 1) * (0.5 + 0.5 * h.drive);
+  return {
+    id: e.id, isPlayer: false, cls: c, tl, faction: e.faction,
+    radiusM: c ? targetRadius(c) : 20,
+    armor: (c?.armor || 0) + TECH[tl].armor,
+    maxG,
+    evadeG: e.agent?.evade && isEvasive(c) && maxG > 0 ? Math.min(3, maxG * 0.5) : 0,
+    pdc: {
+      mounts: armed ? (c?.pdc || 0) * h.weapons : 0, ...PDC[tl],
+      factor: (CREW_FACTOR[c?.category] || 0.8) * (0.5 + 0.5 * h.crew) * (0.5 + 0.5 * h.sensors),
+      ammo: h.rounds,
+    },
+    tubes: armed ? h.tubes.length : 0,
+    torps: h.magazine.he + h.magazine.nuke,
+    torpedo: TORPEDO_MOTOR[tl],
+    railgun: armed && c?.railgun ? RAILGUN[Math.max(2, tl)] : null,
+    railMounts: armed ? (c?.railgun || 0) : 0,
+    alive: h.status !== 'wreck',
+  };
+}
+
+/** Rough fighting strength (for an AI deciding whether to start or keep a fight). */
+export function strength(p) {
+  if (!p || !p.alive) return 0;
+  const offense = 1 + (p.torps > 0 ? p.tubes * 3 + Math.min(p.torps, 12) * 0.5 : 0) + (p.pdc.ammo > 0 ? p.pdc.mounts * 0.5 : 0) + p.railMounts * 4;
+  const defense = (1 + p.armor * 0.5) * (1 + p.pdc.mounts * p.pdc.lambda * p.pdc.factor * 2) * (1 + p.maxG * 0.05);
+  return offense * defense;
+}

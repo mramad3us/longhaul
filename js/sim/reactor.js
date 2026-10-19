@@ -127,7 +127,8 @@ export function reactorTick(state, emit = () => {}) {
         r.status = ReactorState.OFFLINE;
         r.countdown = 0;
         emit('reactor-scrammed', {});
-      } else if (--r.countdown <= 0) {
+      } else if (--r.countdown <= 0 && !r.supercritical) {
+        r.supercritical = true;           // game.js turns this into the ship's destruction
         emit('reactor-supercritical', {});
       }
       break;

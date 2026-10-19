@@ -13,10 +13,16 @@ import { activeMissions } from '../sim/missions.js';
 import { iconFuel, iconOxygen, iconN2, iconWater, iconFood, iconPower, iconMedical, iconCrew, iconParts } from '../svg-icons.js';
 import { SYSTEM_IDS, Status, waterRecovery } from '../sim/systems.js';
 import { systemsStripHTML } from './shipboard.js';
+import { controlAt, spaceLabel } from '../sim/factions.js';
+import { zonesAt, ZONE_KINDS } from '../sim/conflict.js';
+import { hostilesOfPlayer } from '../sim/agents.js';
+import { threatSummary } from './combat.js';
 
 let el = {};
+let onThreat = null;
 
-export function initHud(onSpeed, onCombat, onSystems) {
+export function initHud(onSpeed, onCombat, onSystems, openCombatTab) {
+  onThreat = openCombatTab;
   el = {
     date: $('#hud-date'), time: $('#hud-time'), ship: $('#hud-ship-name'), chip: $('#hud-nav-chip'),
     perf: $('#hud-perf'), combat: $('#combat-toggle'), combatStatus: $('#combat-status'),
@@ -24,7 +30,9 @@ export function initHud(onSpeed, onCombat, onSystems) {
     drive: $('#info-drive'), attitude: $('#info-attitude'), vel: $('#info-velocity'), ref: $('#info-vel-ref'),
     orbit: $('#info-orbit'), mass: $('#info-mass'), cargo: $('#info-cargo'), alert: $('#alert-border'),
     speedBtns: $$('.speed-btn'), strip: $('#systems-strip'), sysCount: $('#hud-systems-count'),
+    space: $('#hud-space'), threat: $('#hud-threat'), hull: $('#info-hull'),
   };
+  el.threat.addEventListener('click', () => onThreat?.());
   el.strip.addEventListener('click', (e) => { if (e.target.closest('[data-act="open-systems"]')) onSystems(); });
   el.speedBtns.forEach(b => b.addEventListener('click', () => onSpeed(+b.dataset.speed)));
   el.combat.addEventListener('click', onCombat);
@@ -109,6 +117,7 @@ export function updateHud(state) {
   toggleClass(el.jobs, 'has-jobs', jobs > 0);
   toggleClass(el.jobs, 'has-critical', state.jobs.list.some(j => j.priority === 0));
   updateSystemsStrip(state);
+  updateTactical(state);
 
   // Ship status
   const f = state.flight;
@@ -131,6 +140,8 @@ export function updateHud(state) {
   setText(el.orbit, `${r.toFixed(3)} AU · ${fmtSpeed(Math.hypot(f.vel.vx, f.vel.vy))}`);
   const cargoKg = state.cargo.reduce((s, c) => s + c.mass, 0);
   setText(el.mass, fmtMass(state.shipMass + cargoKg + state.resources.fuel.current));
+  setText(el.hull, `${Math.round(state.hull.integrity)}%${state.hull.integrity < 50 ? ' · burns limited to 3G' : ''}`);
+  toggleClass(el.hull, 'val-hot', state.hull.integrity < 50);
   const pax = state.passengers.reduce((s, p) => s + p.count, 0);
   setText(el.cargo, `${fmtMass(cargoKg)} / ${fmtMass(state.cargoCapacity)}${pax ? ` · ${pax} pax` : ''}`);
 
@@ -142,6 +153,30 @@ export function updatePerf(fps) {
   if (!ui.settings.showPerf || !ui.loop) return;
   const n = ui.state?.entities.length ?? 0;
   setText(el.perf, `${fps} FPS · sim ${ui.loop.simMsLastFrame.toFixed(1)}ms · ${ui.loop.stepsLastFrame} min/f · ${fmtNum(n)} ent`);
+}
+
+// ---- TACTICAL: whose space, what's coming ----
+
+let spaceAt = 0;
+function updateTactical(state) {
+  const now = performance.now();
+  if (now - spaceAt > 1000) {
+    spaceAt = now;
+    const p = state.flight.pos;
+    const ctl = controlAt(p.x, p.y, state.clock.minute);
+    const zone = zonesAt(state, p)[0];
+    setText(el.space, zone ? `${spaceLabel(ctl)} · ${ZONE_KINDS[zone.kind].label}` : spaceLabel(ctl));
+    el.space.className = `hud-space-chip ${zone ? 'space-hot' : ctl.lawless ? 'space-lawless' : ctl.contested ? 'space-contested' : ''}`;
+  }
+  const th = threatSummary(state);
+  const hostiles = hostilesOfPlayer(state).length;
+  const show_ = !!th || hostiles > 0;
+  show(el.threat, show_);
+  if (!show_) return;
+  setText(el.threat, th
+    ? `⚠ ${th.count} ${th.nuke ? 'NUCLEAR ' : ''}INBOUND · ${isFinite(th.eta) ? formatDuration(th.eta / 60) : '—'}`
+    : `⚠ ${hostiles} HOSTILE${hostiles > 1 ? 'S' : ''}`);
+  toggleClass(el.threat, 'urgent', !!th && th.eta < 30 * 60);
 }
 
 // ---- SYSTEMS ----
@@ -171,6 +206,7 @@ const RES = [
   { key: 'medSupplies', name: 'Medical', icon: iconMedical, bar: 'bar-medical', fmt: (r) => `${r.current.toFixed(1)} / ${r.max}` },
   { key: 'parts', name: 'Spare parts', icon: iconParts, bar: 'bar-parts', fmt: (r, s) => `${r.current.toFixed(1)} · scrap ${s.resources.scrap.current.toFixed(1)}`,
     level: (r) => r.current < 2 ? 'critical' : r.current < 5 ? 'warning' : 'ok' },
+  { key: 'pdcRounds', name: 'PDC rounds', icon: iconParts, bar: 'bar-ammo', fmt: (r, s) => `${fmtNum(r.current)} · torps ${s.magazine.he} HE ${s.magazine.nuke} NUKE` },
 ];
 // Gross water per person per minute (drinking, galley, a shower a day) — reclamation recovers most of it
 const WATER_GROSS = 0.004 + 12 / 1440;

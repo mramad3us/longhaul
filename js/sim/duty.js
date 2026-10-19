@@ -15,6 +15,10 @@ export const STATIONS = {
     label: 'Ops', fixture: 'ops', seat: true, skill: 'security',
     desc: 'Sensors and comms. Contacts are identified twice as fast, range is longer, and debris is often spotted in time to dodge.',
   },
+  weapons: {
+    label: 'Weapons', fixture: 'weapons', seat: true, skill: 'security',
+    desc: 'Fire control. A gunner at the console lays the PDCs by hand — far deadlier than the automatic mode. At battle stations the best shot takes it.',
+  },
   engineering: {
     label: 'Engineering', fixture: 'engStation', seat: true, skill: 'engineering',
     desc: 'Watches the drive, reactor and plant. Faults are caught early (40% fewer breakdowns); does maintenance rounds.',
