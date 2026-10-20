@@ -11,7 +11,7 @@ import { logEntry } from './log.js';
 import { openDialog } from './dialogs.js';
 import { formatDuration } from '../core/clock.js';
 import {
-  SYSTEMS, SYSTEM_IDS, Status, MAINTAIN_AT, statusLabel, repairMode, orderService, prioritizeRepair, toggleSystem,
+  SYSTEMS, shipSystems, Status, MAINTAIN_AT, statusLabel, repairMode, orderService, prioritizeRepair, toggleSystem,
 } from '../sim/systems.js';
 import { STATIONS, STATION_IDS, SHIFTS, scheduleBlock, minutesLeftInBlock, setDuty, rostered } from '../sim/duty.js';
 import { NEEDS, NEED_LABEL, efficiency } from '../sim/needs.js';
@@ -93,7 +93,7 @@ export function systemCardHTML(state, id, { compact = false } = {}) {
   if (u.status === Status.NOMINAL && u.integrity < 90 && !(job?.type === JobType.MAINTAIN && job.priority <= 1)) actions.push(`<button class="crew-action-btn crew-action-recover" data-act="sys-service" data-sys="${id}">SERVICE NOW</button>`);
   if (id === 'lifeSupport') actions.push(`<button class="crew-action-btn ${u.enabled ? 'crew-action-cancel' : 'crew-action-recover'}" data-act="sys-toggle" data-sys="${id}">${u.enabled ? 'SHUT DOWN' : 'POWER UP'}</button>`);
   return `<div class="sys-card ${systemClass(u)}${compact ? ' sys-compact' : ''}">
-    <div class="sys-card-head"><span class="sys-name">${esc(def.name)}</span><span class="sys-status">${statusLabel(u)}</span></div>
+    <div class="sys-card-head"><span class="sys-name lib-inline" data-lib="sys:${id}" title="Ship's library">${esc(def.name)}</span><span class="sys-status">${statusLabel(u)}</span></div>
     <div class="sys-integrity"><div class="sys-bar"><div class="sys-bar-fill" style="width:${u.integrity.toFixed(0)}%"></div></div><span class="sys-int">${u.integrity.toFixed(0)}%</span></div>
     ${u.fault ? `<div class="sys-fault">${esc(u.fault.text)}${patch}</div>` : ''}
     ${effect ? `<div class="sys-effect">${esc(effect)}</div>` : ''}
@@ -133,7 +133,7 @@ export function openSystems() {
     const w = s.$watch || {};
     const eng = w.engineering != null ? s.ship.crew.find(c => c.id === w.engineering) : null;
     const shop = w.workshop != null ? s.ship.crew.find(c => c.id === w.workshop) : null;
-    const faults = SYSTEM_IDS.filter(id => s.systems.units[id].status !== Status.NOMINAL).length;
+    const faults = shipSystems(s).filter(id => s.systems.units[id].status !== Status.NOMINAL).length;
     return `<div class="sys-summary">
         <span>SPARES <b>${res.parts.current.toFixed(1)}</b> parts</span>
         <span>SCRAP <b>${res.scrap.current.toFixed(1)}</b></span>
@@ -141,7 +141,7 @@ export function openSystems() {
         <span>MACHINE SHOP <b class="${shop ? '' : 'sys-none'}">${shop ? esc(shop.name) : '—'}</b></span>
         <span>${faults ? `<b class="sys-faults">${faults} FAULT${faults > 1 ? 'S' : ''}</b>` : 'ALL SYSTEMS NOMINAL'}</span>
       </div>
-      <div class="sys-grid">${SYSTEM_IDS.map(id => systemCardHTML(s, id)).join('')}</div>
+      <div class="sys-grid">${shipSystems(s).map(id => systemCardHTML(s, id)).join('')}</div>
       <p class="sys-legend">Machinery wears with use — hard burns most of all. Worn systems fault far more often. Engineers service them from spare parts; with no spares, repairs are jury-rigged and won't hold. The machine shop refurbishes scrap into spares. Docks sell parts and full overhauls.</p>`;
   };
   const body = openDialog({
@@ -233,7 +233,7 @@ export function openRoster() {
 
 /** Compact per-system status pips for the left panel. */
 export function systemsStripHTML(state) {
-  return SYSTEM_IDS.map(id => {
+  return shipSystems(state).map(id => {
     const u = state.systems.units[id];
     return `<button class="sys-pip ${systemClass(u)}" data-act="open-systems" title="${esc(SYSTEMS[id].name)} — ${statusLabel(u)} · ${u.integrity.toFixed(0)}%">
       <span class="sys-pip-name">${SYSTEMS[id].short}</span><span class="sys-pip-bar"><span style="width:${u.integrity.toFixed(0)}%"></span></span></button>`;

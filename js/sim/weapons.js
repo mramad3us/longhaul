@@ -14,6 +14,8 @@
 //   Railguns — naval spinal/turret mounts. A slug at tens of km/s is
 //         unguided: it hits wherever the target is not, unless the
 //         target holds still. Ruinous against anything predictable.
+// And one that isn't a weapon at all: mining gear (ore mass drivers,
+// rock-cracking charges) turned on a hull in an emergency.
 //
 // Performance scales with the tech level of the ship that carries
 // the weapon (fire-control radar, motors, coil efficiency).
@@ -95,6 +97,19 @@ export const RAIL_DP = 45;
 export const RAIL_RELOAD_MIN = 1;          // capacitor recharge per mount
 export const RAIL_RANGE_M = 30_000_000;    // past this no fire-control solution is worth a slug
 
+// ---- MINING GEAR ----
+// Tools of the trade, not weapons: unguided, slow, aimed by eye, useless
+// against a torpedo. They hurt a ship only inside a few kilometres — which
+// is exactly where a pirate comes to loot a ship it thinks is helpless.
+// rangeM: furthest useful shot · speed: projectile (m/s) · sigmaRad:
+// dispersion · dp: damage of a minute of hits per mount. They throw rock,
+// so they never run dry.
+
+export const MINING_GEAR = {
+  charges: { id: 'charges', name: 'rock-cracking charges', rangeM: 3_000, speed: 300, sigmaRad: 4e-3, dp: 3 },
+  driver: { id: 'driver', name: 'ore mass driver', rangeM: 8_000, speed: 2_500, sigmaRad: 2.5e-3, dp: 4 },
+};
+
 // ---- EVASION ----
 // A jinking ship changes its thrust vector at random every few seconds.
 // Over a flight time t, a weapon aimed at its predicted position misses
@@ -115,6 +130,16 @@ export function hitChance(radiusM, sigmaM) {
   if (sigmaM <= 0) return 1;
   return 1 - Math.exp(-(radiusM * radiusM) / (2 * sigmaM * sigmaM));
 }
+
+// ---- DOCTRINE UNDER TORPEDO FIRE ----
+// What a fire-control computer that plots the threat axis (TECH.counterBurn,
+// TL2 and up) makes of inbound torpedoes, for NPC crews (agents.js) and our
+// stances (stance.js) alike: turn away and burn from any torpedo this close,
+// so it arrives slowly, long under the PDCs, and spends its Δv catching up;
+// and close on the enemy no faster than this while one is inbound, since
+// every m/s of closing speed is a m/s on the enemy's torpedoes.
+export const COUNTER_BURN_S = 45 * 60;
+export const UNDER_FIRE_CLOSE_MS = 5_000;
 
 // ---- AMMUNITION ----
 

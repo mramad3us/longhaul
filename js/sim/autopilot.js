@@ -8,6 +8,18 @@
 //   active  — guidance flies the plan (burn / flip / brake / coast /
 //             RCS approach), re-planning every minute.
 //   arrive  — co-moving within the standoff: hold station on target.
+// A stance (stance.js) goes through prepare and active the same way but
+// never arrives: it keeps its relation to the target, flown, until it is
+// released, the target is lost, or another route replaces it.
+//
+// Crew safety. A flip throws anyone not strapped in, at any G. So the
+// crew are called to the couches for every stretch in which the nav
+// computer may turn the ship: preparing, the flip and the half hour before
+// it, the end of an approach, a stance moving into place. And whatever the
+// plan, the computer won't start a flip with anyone able still on their
+// feet: it holds the turn (drive cold, time warp off) until they are in
+// (a walk to the couches can take a quarter of an hour), until the captain
+// says FLIP NOW, or for half an hour at most.
 //
 // Holding station: the ship rides with its target at a fixed offset
 // (parked off a station, formation with a ship, parking orbit at a
@@ -17,7 +29,10 @@
 import { AU_M, G0, DAY_MIN } from '../core/constants.js';
 import { getWorld } from './world.js';
 import { targetStateAt, targetName, guidanceStep } from './nav.js';
+import { turnAhead, FLIP_TURN, SLEW_RATE } from './flight.js';
 import { crewSecureStatus } from './crew-ai.js';
+import { stanceDoctrine, STANCE_MODES } from './stance.js';
+import { isTracked, setSensorRange, SENSOR_RANGES } from './sensors.js';
 
 /** Begin flying a plan. opts: { missionId, intercept, estimate } */
 export function engageRoute(state, plan, opts = {}) {
@@ -42,18 +57,71 @@ export function engageRoute(state, plan, opts = {}) {
   return state.autopilot;
 }
 
+/**
+ * Take up a stance (stance.createStance). The sensors are opened out to a
+ * band that holds the stance range: a ship is kept only while it is tracked.
+ */
+export function engageStance(state, plan, opts = {}) {
+  if (plan.target.kind === 'entity') widenSensors(state, plan.standoff);
+  return engageRoute(state, plan, opts);
+}
+
+/** Open the sensor board out to a band that holds a contact `m` metres away (with room to spare). */
+function widenSensors(state, m) {
+  const need = 1.25 * m / AU_M;
+  if (SENSOR_RANGES[state.sensors.range].au >= need) return;
+  const band = SENSOR_RANGES.findIndex(b => b.au >= need);
+  setSensorRange(state, band >= 0 ? band : SENSOR_RANGES.length - 1);
+}
+
 export function abortRoute(state, emit = () => {}) {
   if (!state.autopilot) return false;
   const name = targetName(state, state.autopilot.plan.target);
+  const stance = state.autopilot.plan.kind === 'stance';
   state.autopilot = null;
   state.flight.thrustG = 0;
-  emit('route-aborted', { target: name });
+  emit('route-aborted', { target: name, stance });
   return true;
 }
 
 export function overrideSecure(state) {
   if (state.autopilot?.phase !== 'prepare') return false;
   state.autopilot.override = true;
+  return true;
+}
+
+export const TURN_HOLD_MAX_MIN = 30;      // a flip waits for the crew this long at most (the longest walk to a couch, and then some)
+
+/**
+ * The flip interlock: given the command the autopilot is about to fly, hold
+ * a flip from rest while anyone able is on their feet. Returns the command
+ * to fly (the drive cold, the nose where it is, while held). Running from a
+ * torpedo doesn't wait.
+ */
+export function flipInterlock(state, cmd, emit = () => {}) {
+  const ap = state.autopilot, f = state.flight;
+  const flip = Math.abs(f.turning || 0) < 0.5 * SLEW_RATE && turnAhead(f, cmd) > FLIP_TURN;
+  if (!flip || ap.display === 'evade') { ap.turnHeld = null; return cmd; }
+  const st = crewSecureStatus(state);
+  const now = state.clock.minute;
+  if (!st.unsecured.length || ap.forceTurn || (ap.turnHeld != null && now - ap.turnHeld >= TURN_HOLD_MAX_MIN)) {
+    if (st.unsecured.length) emit('turn-forced', { count: st.unsecured.length, names: st.unsecured.map(m => m.name), captain: !!ap.forceTurn });
+    ap.turnHeld = null;
+    ap.forceTurn = false;
+    return cmd;
+  }
+  if (ap.turnHeld == null) {
+    ap.turnHeld = now;
+    emit('turn-held', { count: st.unsecured.length, names: st.unsecured.map(m => m.name) });
+  }
+  ap.display = 'held';
+  return { ax: 0, ay: 0, maxG: cmd.maxG };
+}
+
+/** The captain's EXECUTE on a held flip. */
+export function forceTurn(state) {
+  if (state.autopilot?.turnHeld == null) return false;
+  state.autopilot.forceTurn = true;
   return true;
 }
 
@@ -123,11 +191,12 @@ export function autopilotTick(state, emit = () => {}) {
       ap.phase = 'active';
       ap.engagedAt = now;
       state.flight.hold = null;
-      emit('route-engaged', { target: targetName(state, plan.target), unsecured: st.unsecured.map(m => m.name), override: ap.override && !allIn });
+      emit('route-engaged', { target: targetName(state, plan.target), unsecured: st.unsecured.map(m => m.name), override: ap.override && !allIn, stance: plan.kind === 'stance' ? STANCE_MODES[plan.mode].label : null });
     } else {
       return null;
     }
   }
+  if (plan.kind === 'stance') return stanceTick(state, ap, tgt, emit);
 
   const arrival = plan.kind === 'transfer' ? arrivalTarget(state, ap) : null;
   const g = guidanceStep(plan, state.flight, now, tgt, arrival);
@@ -141,6 +210,60 @@ export function autopilotTick(state, emit = () => {}) {
     emit('route-arrived', { target: name, targetSpec: plan.target, minutes: now - (ap.engagedAt ?? now), fuelUsed, peakG: ap.peakG, missionId: ap.missionId, intercept: ap.intercept });
     return null;
   }
+  return g.cmd;
+}
+
+const STANCE_TRACK_GRACE_MIN = 10;   // minutes a stance flies on without a sensor track
+
+/** A minute of a stance: the doctrine first (running from torpedoes), then the stance itself. */
+function stanceTick(state, ap, tgt, emit) {
+  const now = state.clock.minute;
+  const plan = ap.plan, f = state.flight;
+  const name = targetName(state, plan.target);
+  // A ship is kept on the sensor track (the board opened out as it draws
+  // away): lose it for longer than a sensor sweep or two and the stance is over
+  const e = plan.target.kind === 'entity' ? getWorld(state).get(plan.target.id) : null;
+  if (e) widenSensors(state, Math.hypot(e.pos.x - f.pos.x, e.pos.y - f.pos.y) * AU_M);
+  if (e?.type === 'ship' && !isTracked(state, e.id)) {
+    ap.untrackedSince ??= now;
+    if (now - ap.untrackedSince >= STANCE_TRACK_GRACE_MIN) {
+      state.autopilot = null;
+      emit('stance-lost', { target: name });
+      return null;
+    }
+  } else ap.untrackedSince = null;
+  const doc = stanceDoctrine(state, plan);
+  plan.$underFire = doc.underFire;
+  if (doc.evadeFrom) {
+    // Turn away and burn from the nearest torpedo: it arrives slowly, long
+    // under the PDCs, and has to spend its Δv to catch up
+    if (!ap.evading) emit('stance-evading', { target: name, etaS: doc.eta });
+    ap.evading = true;
+    ap.settled = false;
+    ap.unsettledAt ??= now;
+    ap.display = 'evade';
+    ap.flipIn = Infinity;
+    plan.$holding = false;
+    const dx = f.pos.x - doc.evadeFrom.x, dy = f.pos.y - doc.evadeFrom.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const a = Math.min(plan.accelG, f.maxG) * G0;
+    return { ax: dx / d * a, ay: dy / d * a, maxG: plan.accelG, lean: true };
+  }
+  ap.evading = false;
+  const g = guidanceStep(plan, f, now, tgt, null);
+  ap.d = g.d; ap.vClose = g.vClose; ap.relSpeed = g.relSpeed; ap.flipIn = g.flipIn; ap.range = g.range;
+  ap.display = g.phase;
+  if (g.settled) {
+    // (announced when first in place, and when back in place after a real move)
+    if (!ap.settled && (ap.settledOnce !== true || now - (ap.unsettledAt ?? now) >= 10)) {
+      emit('stance-settled', { target: name, mode: plan.mode, rangeM: plan.standoff, first: !ap.settledOnce });
+      ap.settledOnce = true;
+    }
+    ap.unsettledAt = null;
+  } else {
+    ap.unsettledAt ??= now;
+  }
+  ap.settled = g.settled;
   return g.cmd;
 }
 
@@ -166,6 +289,8 @@ export function autopilotAfterStep(state, out) {
 
 // ---- POLICIES ----
 
+const ENDGAME_S = 60 * 60;          // the last hour of an approach is flown strapped in
+
 /** Should the crew be in couches right now? */
 export function crewPolicy(state) {
   if (state.combatStations) return 'secure';
@@ -174,12 +299,22 @@ export function crewPolicy(state) {
   if (f.manual && f.manual.throttleG > 1.5) return 'secure';
   const ap = state.autopilot;
   if (!ap) return 'free';
-  if (ap.phase === 'prepare') return 'secure';
+  if (ap.phase === 'prepare' || ap.turnHeld != null) return 'secure';
+  if (ap.plan.kind === 'stance') {
+    // Settled, or guarding the range on a steady burn, the crew may move
+    // about; moving into place, turning to guard, or running from a torpedo,
+    // a turn can come any minute
+    if (ap.display === 'holding' || ap.display === 'watch' || ap.display === 'guard') return 'free';
+    return 'secure';
+  }
   if (Math.min(ap.plan.accelG, state.$driveCap ?? f.maxG) > 1.5 && (ap.display === 'burn' || ap.display === 'brake' || ap.display === 'transfer-burn')) return 'secure';
   if (ap.display === 'flip' || ap.display === 'orient') return 'secure';
   if (ap.flipIn <= 30) return 'secure';                               // re-secure ahead of the flip
   if (ap.ignitedAt != null && state.clock.minute - ap.ignitedAt < 10) return 'secure';  // settle into the burn
-  if (ap.display === 'approach' && ap.d != null && ap.d < 50_000_000) return 'free';
+  // The end of an approach (the last of the brake, the turn into the target's
+  // pull, the near zone, the RCS terminal) can turn the ship at any time
+  const togo = ap.d == null ? Infinity : ap.d - ap.plan.standoff;
+  if (ap.display === 'approach' || ap.plan.$keep || (ap.vClose > 1 && togo / ap.vClose < ENDGAME_S)) return 'secure';
   return 'free';
 }
 
@@ -209,10 +344,17 @@ function flightSpeedLimit(state) {
   // A human flying, or nobody flying: no skipping ahead
   if (ap.helm === 'unmanned') return 1;
   const cap = ap.helm === 'manual' || ap.helm === 'degraded' ? 2 : 3;
-  if (ap.display === 'flip' || ap.display === 'orient') return 1;
+  if (ap.display === 'flip' || ap.display === 'orient' || ap.turnHeld != null) return 1;
+  const stance = ap.plan.kind === 'stance';
+  if (stance) {
+    if (ap.display === 'evade' || ap.display === 'guard' || ap.display === 'ready') return 1;
+    if (ap.display === 'holding' || ap.display === 'watch') return f.thrustG > 0.05 ? 2 : cap;
+  }
   if (ap.flipIn <= 15) return 1;
   if (ap.ignitedAt != null && state.clock.minute - ap.ignitedAt < 5) return 1;
-  const eta = ap.vClose > 1 && ap.d != null ? (ap.d - ap.plan.standoff) / ap.vClose / 60 : Infinity;
+  // (a stance measures to its stance point)
+  const togo = ap.d == null ? null : stance ? ap.d : ap.d - ap.plan.standoff;
+  const eta = ap.vClose > 1 && togo != null ? togo / ap.vClose / 60 : Infinity;
   if (ap.display === 'approach' || eta < 45) return 1;
   if (f.thrustG > 0.05) return 2;
   if (ap.flipIn > 6 * 60 && eta > 12 * 60) return cap;

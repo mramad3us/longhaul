@@ -12,15 +12,26 @@
 // Spent parts become scrap; the machine shop refurbishes scrap into
 // spare parts, so a ship with a working shop and a mechanic can stay
 // out longer.
+//
+// How the ship was built changes all of it (TECH in ship-classes.js).
+// A Martian ship's machinery wears slowly and rarely faults, but each
+// repair eats more spares, takes longer, and a jury-rig on naval-grade
+// kit holds only hours. A Belt refit breaks twice as often, is fixed
+// quickly from a handful of parts, and its jury-rigs hold for days.
+//
+// Machinery follows the hull's fit: a ship without guns has no PDC or
+// launcher to wear (shipSystems).
 // ============================================================
 
 import { random, pick, randInt, weightedPick } from '../core/rng.js';
 import { addJob, closeJob, setJobPriority, JobType, JOB_PRIORITY } from './jobs.js';
+import { CLASSES, TECH, PLAYER_CLASS } from './ship-classes.js';
 
 export const Status = { NOMINAL: 'nominal', DEGRADED: 'degraded', PATCHED: 'patched', FAILED: 'failed' };
 
 /**
  * System catalogue (display order). Per system:
+ *   desc    — what it is (the ship's library)
  *   fixture — where the work is done (fixture kind in the layout)
  *   wear    — integrity lost per day at idle
  *   mtbf    — days between faults at 50% integrity under nominal load
@@ -28,6 +39,7 @@ export const Status = { NOMINAL: 'nominal', DEGRADED: 'degraded', PATCHED: 'patc
  */
 export const SYSTEMS = {
   flightComputer: {
+    desc: 'Triple-redundant guidance core fed by ring-laser gyros, accelerometers and a star tracker. It flies every route and stance a minute at a time: the burns, the flips, the last metres of a docking. If it dies, someone has to fly by hand from the helm couch.',
     name: 'Flight computer', short: 'FLT CMP', fixture: 'helm', wear: 0.8, mtbf: 70,
     load: (c) => c.autopilot ? 1.5 : 1,
     stress: (c) => 1 + c.g * 0.2,
@@ -38,6 +50,7 @@ export const SYSTEMS = {
     },
   },
   drive: {
+    desc: 'Fusion torch. Frozen deuterium pellets are compressed and lit inside a magnetic bottle, and the plasma leaves through a magnetic nozzle: enough thrust to hold several G for weeks on one load of reaction mass. Pushed past its rating it runs hot and thirsty, and the bottle can fail.',
     name: 'Epstein drive', short: 'DRIVE', fixture: 'engine', wear: 0.6, mtbf: 60,
     load: (c) => 1 + c.g * 2 + Math.max(0, c.g - 7) * 6,
     stress: (c) => 1 + c.g * 0.6 + Math.max(0, c.g - 7) * 2,
@@ -48,6 +61,7 @@ export const SYSTEMS = {
     },
   },
   coolant: {
+    desc: 'The pumps, heat exchangers and radiator loop that carry waste heat off the reactor. A reactor runs only as hard as it can be cooled: a degraded loop throttles it, and a dead one leaves it idling on batteries.',
     name: 'Reactor cooling', short: 'COOLANT', fixture: 'reactor', wear: 0.7, mtbf: 80,
     load: (c) => 1 + c.g,
     stress: (c) => 1 + c.g * 0.4,
@@ -58,6 +72,7 @@ export const SYSTEMS = {
     },
   },
   rcs: {
+    desc: "Thruster clusters round the hull. They swing the nose (a full flip takes six minutes) and push the ship sideways for docking and fine station-keeping, at about twelve times the main drive's reaction mass per G.",
     name: 'RCS thrusters', short: 'RCS', fixture: 'engStation', wear: 0.5, mtbf: 90,
     load: (c) => 1 + c.rcsG * 300 + Math.abs(c.turned) * 20,
     stress: (c) => 1 + Math.abs(c.turned) * 2,
@@ -68,6 +83,7 @@ export const SYSTEMS = {
     },
   },
   sensors: {
+    desc: 'Radar, lidar, thermal imagers and optical telescopes, fused at the ops console into one contact picture. A lit drive plume shows across millions of km; a cold, silent hull only at radar range.',
     name: 'Sensor suite', short: 'SENSORS', fixture: 'ops', wear: 0.5, mtbf: 110,
     load: () => 1, stress: (c) => 1 + c.g * 0.1,
     effects: { degraded: 'Sensor range halved', failed: 'Short-range optics only' },
@@ -77,6 +93,7 @@ export const SYSTEMS = {
     },
   },
   comms: {
+    desc: 'High-gain dish, omni antennas and laser link. Hails, distress calls and torpedo datalinks all go through it.',
     name: 'Comms array', short: 'COMMS', fixture: 'radio', wear: 0.5, mtbf: 120,
     load: () => 1, stress: (c) => 1 + c.g * 0.1,
     effects: { degraded: 'Radio range halved', failed: 'No radio — cannot hail or call for help' },
@@ -86,6 +103,7 @@ export const SYSTEMS = {
     },
   },
   lifeSupport: {
+    desc: 'CO₂ scrubbers, oxygen fed from the stores and nitrogen make-up, holding the air at Earth-normal pressure. Without it CO₂ builds up within hours.',
     name: 'Life support', short: 'LIFE SUP', fixture: 'lifeSupport', wear: 0.9, mtbf: 90,
     load: (c) => 1 + c.breathers * 0.1,
     stress: (c) => 1 + Math.max(0, c.g - 1.5) * 2,
@@ -96,6 +114,7 @@ export const SYSTEMS = {
     },
   },
   waterRecycler: {
+    desc: 'Reclaims water from humidity, wash water and waste: 95% of what the crew use comes back. Without it every litre drunk or washed is gone.',
     name: 'Water reclamation', short: 'WATER', fixture: 'recycler', wear: 0.9, mtbf: 90,
     load: (c) => 1 + c.breathers * 0.1,
     stress: () => 1,
@@ -106,6 +125,7 @@ export const SYSTEMS = {
     },
   },
   galley: {
+    desc: 'Food printers and a pantry that turn stores into meals. When it fails the crew eat cold ration packs, and morale shows it.',
     name: 'Galley', short: 'GALLEY', fixture: 'galley', wear: 0.6, mtbf: 140,
     load: () => 1, stress: () => 1,
     effects: { degraded: 'Slow, joyless meals', failed: 'Cold rations only' },
@@ -115,6 +135,7 @@ export const SYSTEMS = {
     },
   },
   autodoc: {
+    desc: 'The automated medical bay: diagnosis, surgery, trauma care and drug delivery (juice included) in an acceleration couch. It heals far faster than any medic working by hand.',
     name: 'Autodoc', short: 'AUTODOC', fixture: 'medbay', wear: 0.4, mtbf: 160,
     load: () => 1, stress: (c) => 1 + c.g * 0.1,
     effects: { degraded: 'Treatment at half speed', failed: 'Manual care only — very slow healing' },
@@ -124,6 +145,7 @@ export const SYSTEMS = {
     },
   },
   pdc: {
+    desc: 'Point-defense cannons: radar-laid gatling turrets firing tungsten at about 1.2 km/s, fifty rounds a second. Their job is shredding torpedoes in the last seconds of an approach; inside a few km they can also rake a hull.',
     name: 'Point defense', short: 'PDC', fixture: 'pdc', wear: 0.4, mtbf: 150,
     load: () => 1, stress: (c) => 1 + c.g * 0.1,
     effects: { degraded: 'Half the PDC mounts answering fire control', failed: 'Point defense down — nothing stops a torpedo' },
@@ -133,6 +155,7 @@ export const SYSTEMS = {
     },
   },
   launcher: {
+    desc: 'Torpedo tubes, and the autoloader that feeds them from the magazine. A tube takes three minutes to cycle.',
     name: 'Torpedo launcher', short: 'TUBES', fixture: 'launcher', wear: 0.3, mtbf: 180,
     load: () => 1, stress: (c) => 1 + c.g * 0.1,
     effects: { degraded: 'Autoloader slow — reloads take twice as long', failed: 'Tubes offline — no torpedo launches' },
@@ -149,22 +172,39 @@ export const SYSTEM_IDS = Object.keys(SYSTEMS);
 export const SYSTEM_BY_FIXTURE = Object.fromEntries(SYSTEM_IDS.map(id => [SYSTEMS[id].fixture, id]));
 
 export const MAINTAIN_AT = 75;                 // integrity below which maintenance is scheduled
-export const PARTS_FOR = { minor: 1, major: 3 };
+export const PARTS_FOR = { minor: 1, major: 3 };   // at TL2; scaled by TECH.parts
 const MAINT_PARTS_PER_POINT = 0.02;            // 25 points of maintenance ≈ half a part
 const SCRAP_PER_PART = 0.6;
 export const FABRICATE_SCRAP = 1.5;            // scrap per refurbished part
 export const FABRICATE_MINUTES = 240;
 const METEOROID_DAYS = 150;                    // mean days between damaging strikes
 
-export function createSystems() {
+/** Systems a class carries: everything, less the weapons it was built without. */
+export function systemsFor(classId = PLAYER_CLASS) {
+  const c = CLASSES[classId];
+  return SYSTEM_IDS.filter(id => (id !== 'pdc' || c.pdc > 0) && (id !== 'launcher' || c.tubes > 0));
+}
+
+/** A fresh set of machinery, in the condition ships of this class are found in. */
+export function createSystems(classId = PLAYER_CLASS) {
+  const [lo, hi] = TECH[CLASSES[classId].tl].condition;
   const units = {};
-  for (const id of SYSTEM_IDS) {
-    units[id] = { integrity: Math.round(88 + random() * 12), status: Status.NOMINAL, fault: null, patchUntil: null, enabled: true };
+  for (const id of systemsFor(classId)) {
+    units[id] = { integrity: Math.round(lo + random() * (hi - lo)), status: Status.NOMINAL, fault: null, patchUntil: null, enabled: true };
   }
   return { units, wasBlackout: false };
 }
 
 export const unit = (state, id) => state.systems.units[id];
+
+/** The systems this ship actually has (display order). */
+export const shipSystems = (state) => SYSTEM_IDS.filter(id => state.systems.units[id]);
+
+/** Tech level of our ship's machinery. */
+const techOf = (state) => TECH[state.ship.tl || CLASSES[state.ship.classId || PLAYER_CLASS].tl];
+
+/** Spare parts a repair of this severity takes on our ship. */
+export const partsFor = (state, severity) => Math.ceil(PARTS_FOR[severity] * techOf(state).parts);
 
 /** 1 = full, 0.5 = degraded/patched, 0 = failed, disabled or unpowered. */
 export function systemPerf(state, id) {
@@ -233,12 +273,13 @@ export function systemsTick(state, ctx) {
   const emit = ctx.emit || (() => {});
   const now = state.clock.minute;
   const S = state.systems;
+  const T = techOf(state);
 
   for (const id of SYSTEM_IDS) {
     const u = S.units[id];
     const def = SYSTEMS[id];
-    if (!u.enabled) continue;
-    u.integrity = Math.max(0, u.integrity - def.wear / 1440 * def.load(ctx));
+    if (!u || !u.enabled) continue;
+    u.integrity = Math.max(0, u.integrity - def.wear * T.wear / 1440 * def.load(ctx));
 
     if (u.status === Status.PATCHED && now >= u.patchUntil) {
       u.status = Status.FAILED;
@@ -251,7 +292,7 @@ export function systemsTick(state, ctx) {
     // Worn machines fault far more often; an engineer on watch catches
     // trouble early (fewer faults reach the point of breaking)
     const wornness = 1 - u.integrity / 100;
-    const hazard = def.stress(ctx) * (0.4 + 3 * wornness * wornness) / (def.mtbf * 1440) * (ctx.engWatch ? 0.6 : 1);
+    const hazard = def.stress(ctx) * (0.4 + 3 * wornness * wornness) / (def.mtbf * T.mtbf * 1440) * (ctx.engWatch ? 0.6 : 1);
     if (random() < hazard) {
       const severity = random() < 0.25 + 0.5 * wornness ? 'major' : 'minor';
       u.integrity = Math.max(0, u.integrity - (severity === 'major' ? 12 : 5));
@@ -277,7 +318,7 @@ export function meteoroidStrike(state, emit = () => {}, dodgeChance = 0) {
   if (breach) decks[deck].atmosphere.breached = true;
   let system = null;
   if (random() < 0.7) {
-    system = weightedPick(SYSTEM_IDS, (id) => id === 'drive' || id === 'coolant' || id === 'sensors' || id === 'comms' || id === 'rcs' ? 2 : 1);
+    system = weightedPick(shipSystems(state), (id) => id === 'drive' || id === 'coolant' || id === 'sensors' || id === 'comms' || id === 'rcs' ? 2 : 1);
     damageSystem(state, system, { severity: random() < 0.35 ? 'major' : 'minor', loss: randInt(10, 30), cause: 'meteoroid' }, emit);
   }
   emit('meteoroid-strike', { deck, deckName: decks[deck].name, breach, system, systemName: system && SYSTEMS[system].name });
@@ -291,7 +332,7 @@ const skillFactor = (skill) => Math.max(0.6, 1.6 - skill / 100);
 /** Will a repair now be a proper fix (parts aboard) or a jury-rig? */
 export function repairMode(state, id) {
   const u = state.systems.units[id];
-  const need = PARTS_FOR[u.fault?.severity || 'major'];
+  const need = partsFor(state, u.fault?.severity || 'major');
   return state.resources.parts.current >= need ? 'repair' : 'jury';
 }
 
@@ -305,7 +346,7 @@ export function workMinutes(state, type, id, skill, eff = 1) {
     base = u.fault?.severity === 'major' ? 150 : 50;
     if (repairMode(state, id) === 'jury') base *= 0.6;
   }
-  return Math.round(base * skillFactor(skill) / Math.max(0.25, eff));
+  return Math.round(base * techOf(state).repairTime * skillFactor(skill) / Math.max(0.25, eff));
 }
 
 /** Finish a repair attempt. Returns { success, mode, message }. */
@@ -315,7 +356,7 @@ export function completeRepair(state, id, skill) {
   if (u.status === Status.NOMINAL) return { success: true, mode: 'none', message: `${def.name} already working` };
   if (random() > Math.min(0.97, 0.55 + skill * 0.005)) return { success: false, mode: 'retry', message: `${def.name}: couldn't isolate the fault — trying again` };
   const res = state.resources;
-  const need = PARTS_FOR[u.fault?.severity || 'major'];
+  const need = partsFor(state, u.fault?.severity || 'major');
   if (res.parts.current >= need) {
     res.parts.current -= need;
     res.scrap.current = Math.min(res.scrap.max, res.scrap.current + need * SCRAP_PER_PART);
@@ -325,8 +366,9 @@ export function completeRepair(state, id, skill) {
     return { success: true, mode: 'repair', message: `${def.name} repaired (${what}) — ${need} part${need > 1 ? 's' : ''} used` };
   }
   if (u.status === Status.PATCHED) return { success: false, mode: 'no-parts', message: `${def.name}: no spare parts for a proper repair` };
+  const [lo, hi] = techOf(state).patchHours;
   u.status = Status.PATCHED;
-  u.patchUntil = state.clock.minute + randInt(12 * 60, 36 * 60);
+  u.patchUntil = state.clock.minute + randInt(lo * 60, hi * 60);
   return { success: true, mode: 'jury', message: `${def.name} jury-rigged — no spare parts. It won't hold for long.` };
 }
 
@@ -335,7 +377,7 @@ export function completeMaintenance(state, id) {
   const u = state.systems.units[id];
   const def = SYSTEMS[id];
   const parts = state.resources.parts;
-  const cost = (100 - u.integrity) * MAINT_PARTS_PER_POINT;
+  const cost = (100 - u.integrity) * MAINT_PARTS_PER_POINT * techOf(state).parts;
   if (parts.current >= cost) {
     parts.current -= cost;
     u.integrity = 100;
@@ -404,12 +446,12 @@ function repairPriority(state, id, u) {
 export function systemsJobs(state) {
   const jobs = state.jobs.list;
   const parts = state.resources.parts.current;
-  for (const id of SYSTEM_IDS) {
+  for (const id of shipSystems(state)) {
     const u = state.systems.units[id];
     const repair = jobs.find(j => j.type === JobType.REPAIR && j.data.system === id);
     const maint = jobs.find(j => j.type === JobType.MAINTAIN && j.data.system === id);
     const needsRepair = u.status === Status.DEGRADED || u.status === Status.FAILED ||
-      (u.status === Status.PATCHED && parts >= PARTS_FOR[u.fault?.severity || 'major']);
+      (u.status === Status.PATCHED && parts >= partsFor(state, u.fault?.severity || 'major'));
     if (needsRepair) {
       const pr = repair?.data.urgent ? JOB_PRIORITY.CRITICAL : repairPriority(state, id, u);
       if (!repair) addJob(state, JobType.REPAIR, pr, { system: id });

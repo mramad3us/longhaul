@@ -51,12 +51,14 @@ After each encounter the director rests 6–24 hours (`politics.quietUntil`), an
 An agent is a driven ship with a role. It flies our own flight model and guidance laws.
 
 - **Patrol / picket.** Watches the ships it can see. It stops ships that are suspect: wanted, running without a transponder, or caught in a random check (15%, or 60% inside a zone). It hails from about 300,000 km with an order to heave to. It goes after pirates it sees. If we are wanted at level 3, it fires on sight.
-- **Pirate.** Lurks dark. It stalks us if it judges itself strong enough, or jumps nearby civilian traffic. From about 75,000 km it demands about 30% of our credits. Pay and it leaves; refuse and it attacks from about 100,000 km, aiming to disable (it wants a prize, not a fireball). Once our drive is out it stops launching torpedoes and makes a last demand: about 60% of our credits, or its guns. It slips away when law ships are near, and it breaks off when hurt.
+- **Pirate.** Lurks dark. It stalks us if it is at least half our strength (pirates bluff), or jumps nearby civilian traffic. From about 75,000 km it demands about 30% of our credits. Pay and it leaves; refuse and it attacks from about 100,000 km, aiming to disable (it wants a prize, not a fireball). Once our drive is out it stops launching torpedoes and makes a last demand: about 60% of our credits, or its guns. It slips away when law ships are near, and it breaks off when hurt.
 - **Navy.** In a zone, fights the enemy navy. It warns off unidentified ships that come inside 75,000 km, and engages anyone who ignores it or whom its power wants at level 2+. Doctrine is KILL, with nuclear torpedoes against warships.
-- **Civilian.** Flees from any ship or ordnance it can see coming for it, at full drive, with no jinking. It surrenders when disabled.
+- **Civilian.** Flees from any ship or ordnance it can see coming for it, at full drive, with no jinking, and from us while we are within 0.01 AU after firing on it. A miner turns its mining gear on any attacker that comes within reach. It surrenders when disabled.
 - **Convoy.** Flies to its destination (escort contracts) and docks there.
 
-In a fight an agent keeps its doctrine's standoff range (pirates 100,000 km, police 50,000 km, navies 20,000 km, inside railgun range). It launches salvos sized to saturate the enemy's point defense, fires railguns when it has them, rakes the enemy with PDCs at close range, and jinks when ordnance is close or the enemy is near. Ships out to disable stop launching once the target is crippled and close in to finish it with guns; navies don't. Agents retreat when badly hurt or outgunned.
+In a fight an agent keeps its doctrine's standoff range (pirates 100,000 km, police 50,000 km, navies 20,000 km, inside railgun range). It launches salvos sized to saturate the enemy's point defense, fires railguns when it has them, rakes the enemy with PDCs at close range, and jinks when ordnance is close or the enemy is near. Ships out to disable stop launching once the target is crippled and close in to finish it with guns; navies don't. Ships at TL2 and above turn away from inbound torpedoes (COMBAT.md). Agents retreat when badly hurt or outgunned.
+
+Encounters ask for a kind of ship and a faction, and the faction fields its own design. Patrols are cutters (a Belt refit, a UN cutter or a Martian Security cutter). Pirates are torch raiders, stolen couriers, gunships or a stolen corvette. Skirmishes are corvettes, frigates and destroyers of each side's navy (SHIPS.md).
 
 **Requests** are how agents talk to us. Each has options and a 15-minute deadline:
 
@@ -79,7 +81,24 @@ A crime is recorded against the victim's power and the power whose space it happ
 
 **Arms**: PDC rounds sell everywhere (0.05 MCR each). HE torpedoes (1,800 MCR) sell at OPA, independent and pirate stations, and at UN or Martian yards only if our standing is 20 or more. Nuclear torpedoes (6,000 MCR) sell only at OPA stations, to friends (OPA standing 0 or more).
 
-## Contracts and distress calls
+## Stations, contracts and distress calls
+
+Eight stations (`sim/entities.js`):
+- OPA: Ceres, Pallas, Hygiea Ring, Tycho (at Juno)
+- UN: Luna Shipyards
+- MCR: Phobos Naval Yard
+- independent: Vesta Depot, Ganymede
+
+"Docked" means holding station within 50 km. Docked, you can buy fuel, water, food, gases, med supplies, spare parts and ammunition, and pay for a dockside overhaul (hull, every system, suits, containment). Spare parts and the overhaul are priced at our ship's tech level (×0.6 for a Belt refit up to ×2.5 for Martian kit), and hull plating by the size of its structure. Hailing a station in radio range opens its board. Boards refresh every 12 hours while in long sensor range. Every contract is a physical errand with something to fly to (`sim/contracts.js`):
+
+| Contract | Work |
+|---|---|
+| CARGO / PASSENGERS / FUEL | load at the station, deliver at the destination (VIP passengers pay a bonus for a fast trip) |
+| INVESTIGATE / MEDEVAC | rendezvous with a ship, hail it in formation, return (medevac casualties need berths) |
+| SALVAGE | hold formation with a derelict while the crew strips it (2 h), return |
+| SURVEY | loiter within 150,000 km of a survey mark for the required time, return |
+
+**Distress calls** (`sim/missions.js`) come in four kinds: fuel-dry drifters, dead drives, runaway torches stuck at high G, and scrammed reactors. Each comes with a survival timer and a feasibility estimate from the nav computer. Accept, intercept, hold formation within 10 km and hail to rescue.
 
 Stations near hot zones (within 0.6 AU) also post conflict work, up to 40% of their board:
 

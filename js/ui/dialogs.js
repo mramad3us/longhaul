@@ -12,12 +12,13 @@ import { formatDuration } from '../core/clock.js';
 import { getWorld } from '../sim/world.js';
 import { hailDialogue, signalBars } from '../sim/comms.js';
 import { activeMissions, acceptMission, declineMission, completeRescue, missionForEntity } from '../sim/missions.js';
-import { contractsAt, acceptContract, completeContract, deliverable, dockedStation, hailContractTarget, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, PRICES, CONTRACT_LABEL } from '../sim/contracts.js';
+import { contractsAt, acceptContract, completeContract, deliverable, dockedStation, hailContractTarget, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, priceOf, CONTRACT_LABEL } from '../sim/contracts.js';
 import { bus } from '../core/events.js';
 import { jobLabel, describeActivity } from './shipboard.js';
 import { canTransmit } from '../sim/comms.js';
 import { respondToRequest } from '../sim/agents.js';
 import { WARHEADS } from '../sim/weapons.js';
+import { TECH } from '../sim/ship-classes.js';
 import { WANTED_LABEL } from '../sim/law.js';
 
 let hooks = {};
@@ -344,14 +345,14 @@ function renderStation() {
   } else {
     if (!docked) content = '<div class="station-mission-empty">Dock within 50 km to trade.</div>';
     else {
-      const rows = [['fuel', 'Reaction mass', 'kg'], ['water', 'Water', 'L'], ['food', 'Rations', ''], ['o2Tank', 'Oxygen', 'kg'], ['n2Tank', 'Nitrogen', 'kg'], ['medSupplies', 'Medical supplies', 'unit'], ['parts', 'Spare parts', 'unit'], ['pdcRounds', 'PDC rounds', 'rd']].map(([k, name, unit]) => {
+      const rows = [['fuel', 'Reaction mass', 'kg'], ['water', 'Water', 'L'], ['food', 'Rations', ''], ['o2Tank', 'Oxygen', 'kg'], ['n2Tank', 'Nitrogen', 'kg'], ['medSupplies', 'Medical supplies', 'unit'], ['parts', `Spare parts (${TECH[s.ship.tl].label})`, 'unit'], ['pdcRounds', 'PDC rounds', 'rd']].filter(([k]) => s.resources[k].max > 0).map(([k, name, unit]) => {
         const q = serviceQuote(s, k);
         return `<div class="service-row"><span class="service-name">${name}</span><span class="service-stock">${fmtNum(s.resources[k].current)} / ${fmtNum(s.resources[k].max)} ${unit === 'unit' ? 'units' : unit}</span>
-          <span class="service-price">${PRICES[k]} MCR/${unit || 'unit'}</span>
+          <span class="service-price">${+priceOf(s, k).toFixed(2)} MCR/${unit || 'unit'}</span>
           <button class="station-mission-accept" data-act="buy" data-key="${k}" ${q.qty < 0.5 ? 'disabled' : ''}>FILL · ${fmtNum(q.cost)} MCR</button></div>`;
       }).join('');
       const M = s.magazine;
-      const torps = ['he', 'nuke'].map(w => {
+      const torps = M.capacity <= 0 ? '' : ['he', 'nuke'].map(w => {
         const no = torpedoRefusal(s, st, w);
         const full = M.he + M.nuke >= M.capacity;
         return `<div class="service-row"><span class="service-name">${WARHEADS[w].name}</span><span class="service-stock">${M[w]} aboard · magazine ${M.he + M.nuke}/${M.capacity}${no ? ` · ${esc(no)}` : ''}</span>

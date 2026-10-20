@@ -243,13 +243,13 @@ export function spawnEncounter(state, r, emit = () => {}) {
     case 'patrol': case 'picket': {
       const { pos, vel } = nearUs(state, randRange(0.003, 0.012));
       const home = r.kind === 'picket' ? { kind: 'body', id: r.body } : null;
-      const e = spawnAgent(state, { role: r.kind, cls: 'cutter', faction: r.faction, pos, vel, ambient: true, zone: r.zone || null, home });
+      const e = spawnAgent(state, { role: r.kind, kind: 'cutter', category: 'authority', faction: r.faction, pos, vel, ambient: true, zone: r.zone || null, home });
       emit('encounter', { kind: r.kind, id: e.id, name: e.name, faction: e.faction });
       return e;
     }
     case 'pirate': {
       const { pos, vel } = nearUs(state, randRange(0.006, 0.02));
-      const e = spawnAgent(state, { role: 'pirate', cls: chance(0.7) ? 'pirate-raider' : 'pirate-gunship', faction: 'pirate', pos, vel, ambient: true, zone: r.zone || null, transponder: false });
+      const e = spawnAgent(state, { role: 'pirate', category: 'irregular', faction: 'pirate', pos, vel, ambient: true, zone: r.zone || null, transponder: false });
       emit('encounter', { kind: 'pirate', id: e.id, name: e.name, faction: 'pirate' });
       return e;
     }
@@ -258,7 +258,7 @@ export function spawnEncounter(state, r, emit = () => {}) {
       const victim = spawnAgent(state, { role: 'civilian', category: 'civilian', pos, vel, ambient: true });
       const ang = random() * Math.PI * 2;
       const ppos = { x: pos.x + Math.cos(ang) * 0.0008, y: pos.y + Math.sin(ang) * 0.0008 };
-      const pirate = spawnAgent(state, { role: 'pirate', cls: chance(0.6) ? 'pirate-raider' : 'pirate-gunship', faction: 'pirate', pos: ppos, vel: { ...vel }, ambient: true, transponder: false, zone: r.zone || null });
+      const pirate = spawnAgent(state, { role: 'pirate', category: 'irregular', faction: 'pirate', pos: ppos, vel: { ...vel }, ambient: true, transponder: false, zone: r.zone || null });
       makeHostile(state, pirate, victim.id);
       makeHostile(state, victim, pirate.id);
       getWorld(state).setSos(victim, true);
@@ -271,10 +271,10 @@ export function spawnEncounter(state, r, emit = () => {}) {
       const { pos, vel } = nearUs(state, randRange(0.004, 0.012));
       const off = 0.0015;
       const ang = random() * Math.PI * 2;
-      const cls = () => pick(['corvette', 'corvette', 'frigate', 'destroyer']);
-      const a = spawnAgent(state, { role: 'navy', cls: cls(), faction: fa, pos, vel, ambient: true, zone: z.id, enemies: [fb] });
+      const kind = () => pick(['corvette', 'corvette', 'frigate', 'destroyer']);
+      const a = spawnAgent(state, { role: 'navy', kind: kind(), category: 'military', faction: fa, pos, vel, ambient: true, zone: z.id, enemies: [fb] });
       const bpos = { x: pos.x + Math.cos(ang) * off, y: pos.y + Math.sin(ang) * off };
-      const b = spawnAgent(state, { role: 'navy', cls: cls(), faction: fb, pos: bpos, vel: restFrame(bpos), ambient: true, zone: z.id, enemies: [fa] });
+      const b = spawnAgent(state, { role: 'navy', kind: kind(), category: 'military', faction: fb, pos: bpos, vel: restFrame(bpos), ambient: true, zone: z.id, enemies: [fa] });
       makeHostile(state, a, b.id);
       makeHostile(state, b, a.id);
       emit('encounter', { kind: 'battle', id: a.id, name: `${a.name} and ${b.name}`, faction: fa });

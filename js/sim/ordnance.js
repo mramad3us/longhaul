@@ -48,6 +48,9 @@
 // and the target's sub-minute jinking, and roll against its cross
 // section. Anything that holds still gets hit; anything jinking at
 // range does not.
+//
+// GUNS against hulls are resolved per minute without projectiles in
+// flight: PDC strafing, and mining gear turned on a ship at a few km.
 // ============================================================
 
 import { AU_M, G0, MIN_S, DAY_MIN, RANGE } from '../core/constants.js';
@@ -483,6 +486,25 @@ export function strafe(state, shooterId, targetId, aim = 'disable', emit = () =>
   const dp = PDC_BURST_DP * bursts;
   emit('pdc-strafe', { from: shooterId, target: targetId, rounds: got, dp });
   if (dp >= 0.5) applyHit(state, targetId, { dp, aim, precision: 0.7, kind: 'pdc', from: shooterId, weapon: 'PDC' }, emit);
+  return dp;
+}
+
+/**
+ * Mining gear turned on a hull (one minute of it): rock and charges thrown by
+ * eye. The miss is the gear's dispersion plus the target's jinking over the
+ * projectile's flight; there is nothing to run out of. Returns DP delivered.
+ */
+export function fireGear(state, shooterId, targetId, aim = 'disable', emit = () => {}) {
+  const sp = profile(state, shooterId), tp = profile(state, targetId);
+  const a = kinematics(state, shooterId), b = kinematics(state, targetId);
+  const g = sp?.gear;
+  if (!g || g.mounts <= 0 || !tp || !a || !b) return 0;
+  const d = Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y) * AU_M;
+  if (d > g.rangeM) return 0;
+  const sigma = Math.hypot(g.sigmaRad * d, jinkSigma(tp.evadeG, d / g.speed));
+  const dp = g.dp * g.mounts * g.factor * hitChance(tp.radiusM, sigma);
+  emit('gear-fired', { from: shooterId, target: targetId, gear: g.id, dp });
+  if (dp >= 0.5) applyHit(state, targetId, { dp, aim, precision: 0.3, kind: 'gear', from: shooterId, weapon: g.name }, emit);
   return dp;
 }
 

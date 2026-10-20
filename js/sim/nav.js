@@ -2,7 +2,8 @@
 // LONGHAUL — Navigation: targets, plans, route estimation
 //
 // A *plan* is a guidance recipe (closing law with a G limit and
-// optional cruise cap, or a Lambert transfer). The SAME guidanceStep
+// optional cruise cap, a Lambert transfer, or a stance kept on a
+// target until released: stance.js). The SAME guidanceStep
 // drives the live autopilot and the planner's fast-forward simulation,
 // so route previews (ETA, fuel, Δv, drawn trajectory) match what the
 // ship will actually fly.
@@ -11,10 +12,12 @@
 import { AU_M, G0, MIN_S, GM_SUN, DAY_MIN } from '../core/constants.js';
 import { getBody, bodyPos, bodyVel } from './ephemeris.js';
 import { getWorld, predictEntity, stepFree, propagateFree } from './world.js';
-import { createFlight, flightStep, fuelUsed, RCS_MAX_G } from './flight.js';
+import { createFlight, flightStep, fuelUsed, RCS_MAX_G, SLEW_RATE } from './flight.js';
+import { playerClass, ratedG } from './ship-classes.js';
 
 const RCS_LIMIT = RCS_MAX_G * G0;
-import { relativeState, closingLaw, hasArrived, transferLaw, brakingSpeed, flipSeconds, minutesToFlip } from './guidance.js';
+import { relativeState, pointFrom, closingLaw, keepLaw, hasArrived, transferLaw, brakingSpeed, flipSeconds, minutesToFlip } from './guidance.js';
+import { stanceStep } from './stance.js';
 import { solveLambert } from './lambert.js';
 
 // Standoff distances (m)
@@ -52,8 +55,29 @@ export function defaultStandoff(state, target) {
 }
 
 /**
+ * The swing of a circular orbit around its centre at `days`: the part of
+ * the orbiter's velocity and acceleration that comes round every period.
+ * r in AU, period in days, angle in rad.
+ */
+function swing(r, period, angle) {
+  const w = 2 * Math.PI / (period * 86400);
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const v = w * r * AU_M, a = w * v;
+  return { vx: -v * s, vy: v * c, ax: -a * c, ay: -a * s, period: period * 86400 };
+}
+
+/** A moon's swing around its planet (none for planets and asteroids). */
+function bodySwings(b, days, out) {
+  if (b.parent && b.period > 0) out.push(swing(b.a, b.period, b.initAngle + 2 * Math.PI * days / b.period));
+  return out;
+}
+
+/**
  * Target state {pos, vel, ax, ay} at a minute. `live` refreshes entities in
  * place (use for the current minute); otherwise predicts without mutation.
+ * Rails targets also give `atx/aty`, their total acceleration, and `swings`:
+ * the periodic parts of their motion (a station circling a moon, the moon
+ * circling its planet), which guidance follows only near arrival.
  */
 export function targetStateAt(state, target, minute, live = false) {
   if (target.kind === 'body') {
@@ -65,6 +89,7 @@ export function targetStateAt(state, target, minute, live = false) {
     // average over the coming step (what the flight integrator will see)
     const v1 = bodyVel(b, (minute + 1) / DAY_MIN), v0 = out.vel;
     out.atx = (v1.vx - v0.vx) / MIN_S; out.aty = (v1.vy - v0.vy) / MIN_S;
+    out.swings = bodySwings(b, days, []);
     return out;
   }
   if (target.kind === 'player') {
@@ -93,6 +118,12 @@ export function targetStateAt(state, target, minute, live = false) {
     // average over the coming step (what the flight integrator will see)
     const a = predictEntity(e, minute + 1, world).vel;
     out.atx = (a.vx - vel.vx) / MIN_S; out.aty = (a.vy - vel.vy) / MIN_S;
+  }
+  const b = e.orbit && getBody(e.orbit.body);
+  if (b) {
+    const days = minute / DAY_MIN, o = e.orbit;
+    out.swings = o.period > 0 ? [swing(o.r, o.period, o.phase + 2 * Math.PI * days / o.period)] : [];
+    bodySwings(b, days, out.swings);
   }
   return out;
 }
@@ -145,24 +176,51 @@ export function createPlan(kind, target, opts) {
 }
 
 const _rel = {};
+const _relP = {};
 const _cl = {};
+
+// The closing law plans an approach from afar: the flip, the brake, the turn
+// into the attitude that holding on the target takes. Close in it has no
+// room to plan, and a ship that has fallen off the plan there has nothing
+// to fall back on. So the keep law (guidance.js) flies the near zone when:
+// - the route starts there, toward a target whose pull takes the drive (a
+//   ship under thrust, a station circling a moon): no hold turn was planned;
+// - the approach has fallen off its plan there: opening on the target fast.
+// It hands back if the ship gets well clear again.
+const NEAR_M = 100_000;              // m from the stop point
+const OFF_PLAN_OPENING = 50;         // m/s opening on the target, inside NEAR_M
+const HOLD_PULL = 0.8 * RCS_LIMIT;   // a pull above this takes the drive (guidance.js)
+
+function nearHandover(plan, rel) {
+  const dEff = rel.d - plan.standoff;
+  if (plan.$keep == null) plan.$keep = dEff <= NEAR_M && Math.hypot(rel.ffx, rel.ffy) > HOLD_PULL;
+  else if (!plan.$keep && dEff <= NEAR_M && rel.vClose < -OFF_PLAN_OPENING) plan.$keep = true;
+  else if (plan.$keep && dEff > 2 * NEAR_M) plan.$keep = false;
+  return plan.$keep;
+}
+
 const _tl = {};
 
 /**
  * One guidance decision for `plan` at `minute`.
  * Returns { cmd, arrived, rel, phase, flipIn } — `phase` is a display hint:
- * 'burn' | 'coast' | 'brake' | 'approach' | 'transfer-burn'.
+ * 'burn' | 'coast' | 'brake' | 'approach' | 'transfer-burn', and for a
+ * stance (stance.js, which never ends on arrival) 'holding' | 'watch' |
+ * 'ready' | 'guard'.
  */
 export function guidanceStep(plan, flight, minute, tgtNow, arrivalTarget, dtSec = MIN_S) {
-  const aMax = plan.accelG * G0;
+  // The plan's G, or less if the machinery can't give it right now
+  const aMax = Math.min(plan.accelG, flight.maxG ?? Infinity) * G0;
+  const slew = flight.$slew ?? SLEW_RATE;
+  if (plan.kind === 'stance') return stanceStep(plan, flight, tgtNow, { aMax, slew, dtSec });
   const rel = relativeState(flight, tgtNow, _rel);
   const cruise = plan.cruise ?? Infinity;
-  const cmd = { ax: 0, ay: 0, maxG: plan.accelG };
+  const cmd = { ax: 0, ay: 0, maxG: plan.accelG, lean: true };
   let phase = 'coast';
   let flipIn = Infinity;
 
   if (plan.stage === 'transfer') {
-    const vMax = brakingSpeed(Math.max(0, rel.d - plan.standoff), aMax, flipSeconds(flight.facing, rel.ux, rel.uy));
+    const vMax = brakingSpeed(Math.max(0, rel.d - plan.standoff), aMax, flipSeconds(flight.facing, rel.ux, rel.uy, slew));
     const timeLeft = (plan.arriveAt - minute);
     if (rel.vClose >= 0.9 * vMax || timeLeft < 60 || rel.d < 0.002 * AU_M || !arrivalTarget) {
       plan.stage = 'closing';
@@ -183,9 +241,18 @@ export function guidanceStep(plan, flight, minute, tgtNow, arrivalTarget, dtSec 
     }
   }
 
-  if (plan.stage === 'closing') {
-    const cl = closingLaw(rel, { aMax, standoff: plan.standoff, cruise, facing: flight.facing, dtSec }, _cl);
+  if (plan.stage === 'closing' && nearHandover(plan, rel)) {
+    // Close in, off the closing law's plan: the keep law flies us onto the
+    // stop point (the standoff, on the line of sight) from whatever state
+    const P = pointFrom(tgtNow, rel.ux, rel.uy, -plan.standoff);
+    keepLaw(relativeState(flight, P, _relP), { aMax, facing: flight.facing, slew, dtSec, settled: false }, _cl);
+    cmd.ax = _cl.ax; cmd.ay = _cl.ay;
+    if (_cl.face != null) cmd.face = _cl.face;
+    phase = 'approach';
+  } else if (plan.stage === 'closing') {
+    const cl = closingLaw(rel, { aMax, standoff: plan.standoff, cruise, facing: flight.facing, slew, dtSec, memo: plan.$memo ??= {} }, _cl);
     cmd.ax = cl.ax; cmd.ay = cl.ay;
+    if (cl.face != null) cmd.face = cl.face;
     const along = cl.ax * rel.ux + cl.ay * rel.uy;
     const mag = Math.hypot(cl.ax, cl.ay);
     if (cl.dEff < 1e7 && mag < 0.05 * G0) phase = 'approach';
@@ -221,9 +288,11 @@ export function guidanceStep(plan, flight, minute, tgtNow, arrivalTarget, dtSec 
  * Returns { arrived, minutes, fuel, dv, peakSpeed, maxG, path:[{x,y}], end }.
  */
 export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pathPoints = 160 } = {}) {
-  const plan = { ...planIn, target: { ...planIn.target } };
+  // (a copy: what the plan remembers, it remembers for the live flight only)
+  const plan = { ...planIn, target: { ...planIn.target }, $memo: planIn.$memo && { ...planIn.$memo } };
   const f = createFlight(state.flight.pos, state.flight.vel, state.flight.facing);
   f.maxG = state.flight.maxG;
+  const rated = ratedG(playerClass(state));
   const t0 = state.clock.minute;
   let t = t0;
   let fuel = 0, dv = 0, peak = 0, maxG = 0;
@@ -244,7 +313,7 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
     const g = guidanceStep(plan, f, t, tgt, arrivalTgt, dtMin * MIN_S);
     if (g.arrived) { arrived = true; break; }
     const out = flightStep(f, g.cmd, dtMin);
-    fuel += fuelUsed(out.mainG, out.rcsG, dtMin);
+    fuel += fuelUsed(out.mainG, out.rcsG, dtMin, rated);
     dv += (out.mainG + out.rcsG) * G0 * dtMin * MIN_S;
     if (out.mainG > maxG) maxG = out.mainG;
     if (g.relSpeed > peak) peak = g.relSpeed;
@@ -297,8 +366,12 @@ const OPTION_DEFS = [
 const COMBAT_DEFS = [
   { name: 'COMBAT 5G', label: '5G brachistochrone', accelG: 5, desc: 'Combat burn. Juice mandatory; hangover guaranteed.' },
   { name: 'ASSAULT 7G', label: '7G brachistochrone', accelG: 7, desc: 'Rated maximum. Expect casualties among the unsecured.' },
-  { name: 'FLANK 10G', label: '10G — drive overdriven', accelG: 10, flank: true, desc: 'Past rated limits. High-dose juice (2 med per crew + boosters), stroke risk, double fuel above 7G, and every minute risks a containment failure.' },
+  { name: 'FLANK 10G', label: '10G — drive overdriven', accelG: 10, flank: true, desc: 'Past rated limits. High-dose juice (2 med per crew, a booster a day), stroke risk, a crash of a week or more afterwards, double fuel above 7G, and every minute risks a containment failure.' },
 ];
+
+/** Every route profile the planner can offer (the ship's library lists them). */
+export const ROUTE_PROFILES = [...OPTION_DEFS, ...COMBAT_DEFS,
+  { name: 'BALLISTIC', label: 'Lambert transfer', desc: 'Burn onto a free-fall arc and coast. Minimum fuel, very long transit.' }];
 
 /**
  * Build and estimate route options to a target.

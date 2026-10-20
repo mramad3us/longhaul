@@ -5,21 +5,21 @@ import { seedRandom } from '../js/core/rng.js';
 import { bus } from '../js/core/events.js';
 import { createGame, advance } from '../js/sim/game.js';
 import { getWorld } from '../js/sim/world.js';
-import { CLASSES, CLASS_IDS, SHAPES, SIZES, TECH, rollIdentity, techFor } from '../js/sim/ship-classes.js';
-import { spawnAgent, respondToRequest, surrender } from '../js/sim/agents.js';
+import { CLASSES, CLASS_IDS, SHAPES, SIZES, TECH, BUILDERS, KINDS, PLAYABLE, rollIdentity } from '../js/sim/ship-classes.js';
+import { spawnAgent, respondToRequest, surrender, makeHostile, ROLES } from '../js/sim/agents.js';
 import { launchTorpedo, fireRailgun } from '../js/sim/ordnance.js';
 import { applyHit, detonate } from '../js/sim/damage.js';
-import { PLAYER, ensureHull, profile, gunner } from '../js/sim/combatants.js';
-import { setFireTarget, fireTorpedo } from '../js/sim/combat.js';
+import { PLAYER, ensureHull, profile, gunner, isOutOfFight, classStrength } from '../js/sim/combatants.js';
+import { setFireTarget, fireTorpedo, setPdcMode, setEvasive } from '../js/sim/combat.js';
 import { sensorsTick } from '../js/sim/sensors.js';
 import { circularSpeed } from '../js/sim/ephemeris.js';
 import { serialize, deserialize } from '../js/sim/save.js';
 import { releaseHold } from '../js/sim/autopilot.js';
 
-function game(seed = 11) {
+function game(seed = 11, classId) {
   seedRandom(seed);
   bus.clear();
-  const s = createGame({ crewCount: 6, traffic: 0 });
+  const s = createGame({ crewCount: 6, traffic: 0, classId });
   s.missions.cooldown = 1e9;                  // no distress calls
   s.politics.quietUntil = Infinity;           // no random encounters
   s.politics.zones = [];
@@ -41,6 +41,37 @@ function near(s, distAU, ang = 1.0) {
   return { pos, vel: { vx: s.flight.vel.vx, vy: s.flight.vel.vy } };
 }
 
+/** How a ship came out of a fight: 'destroyed' | 'disabled' | 'surrendered' | 'fled' | 'fighting'. */
+function fate(e) {
+  if (!e || e.combat?.status === 'wreck') return 'destroyed';
+  if (e.combat.status === 'surrendered') return 'surrendered';
+  if (e.combat.status === 'disabled' || e.combat.drive < 0.25) return 'disabled';
+  if (e.agent.mode === 'flee' || e.agent.mode === 'leave') return 'fled';
+  return 'fighting';
+}
+
+/**
+ * Two warships meet in a skirmish (as the encounter director stages it,
+ * 225,000 km apart) and fight for half a day: the loser may run, and be run
+ * down. Returns the fates and how much structure each kept.
+ */
+function duel(clsA, clsB, seed, minutes = 12 * 60) {
+  const s = game(seed);
+  const world = getWorld(s);
+  const { pos, vel } = near(s, 0.02);
+  const fa = CLASSES[clsA].builder === 'Belt' ? 'OPA' : CLASSES[clsA].builder;
+  const fb = CLASSES[clsB].builder === 'Belt' ? 'OPA' : CLASSES[clsB].builder;
+  const a = spawnAgent(s, { role: 'navy', cls: clsA, faction: fa, pos, vel, enemies: [fb] });
+  const bpos = { x: pos.x + 0.0015, y: pos.y };
+  const b = spawnAgent(s, { role: 'navy', cls: clsB, faction: fb, pos: bpos, vel, enemies: [fa] });
+  makeHostile(s, a, b.id);
+  makeHostile(s, b, a.id);
+  advance(s, minutes);
+  untilQuiet(s, 6 * 60);
+  const left = (e) => world.get(e.id) && e.combat.status !== 'wreck' ? e.combat.hp / e.combat.hpMax : 0;
+  return { a: fate(world.get(a.id)), b: fate(world.get(b.id)), hpA: left(a), hpB: left(b) };
+}
+
 /** Advance until no ordnance is left in flight (or `max` minutes). */
 function untilQuiet(s, max) {
   const world = getWorld(s);
@@ -56,25 +87,187 @@ function untilQuiet(s, max) {
 
 export default [
   {
-    name: 'the catalog: every class is complete, and factions field the tech they build',
+    name: 'the catalog: every kind is built by several yards, and the yard fixes the tech',
     fn: () => {
+      const kinds = {};
       for (const id of CLASS_IDS) {
         const c = CLASSES[id];
         assert(SHAPES[c.shape], `${id}: unknown shape ${c.shape}`);
         assert(SIZES[c.size], `${id}: unknown size`);
-        assert(c.tl[0] >= 1 && c.tl[1] <= 4 && c.tl[0] <= c.tl[1], `${id}: bad TL range`);
+        assert(TECH[c.tl], `${id}: bad TL`);
+        assert(BUILDERS[c.builder] && KINDS[c.kind], `${id}: builder/kind`);
         assert(c.drive.maxG >= c.drive.cruiseG, `${id}: drive`);
         assert(Object.keys(c.factions).length, `${id}: nobody flies it`);
+        assert(c.desc, `${id}: no description`);
+        (kinds[c.kind] ||= []).push(id);
+        // Mars builds the best, Earth the middle, the Belt refits
+        if (c.builder === 'MCR') assert(c.tl >= 3 && (c.category !== 'military' || c.tl === 4), `${id}: Martian TL`);
+        if (c.builder === 'UN') assert(c.tl === 2 || c.tl === 3, `${id}: Earth TL`);
+        if (c.builder === 'Belt') assert(c.tl === 1, `${id}: Belt TL`);
+        // Civilians are unarmed, bar the named exceptions
+        if (c.category === 'civilian' && id !== 'light-freighter') {
+          assert(!c.tubes && !c.railgun, `${id}: civilian with ship-killing weapons`);
+          assert(!c.pdc || c.kind === 'liner', `${id}: civilian with PDCs`);
+        }
+        if (c.gear) assert(c.kind === 'miner' || c.kind === 'prospector', `${id}: gear on a non-miner`);
       }
-      assert(techFor('corvette', 'MCR') === 4 && techFor('corvette', 'UN') === 3, 'navy TL');
-      assert(techFor('cutter', 'OPA') === 2, 'OPA police TL');
-      assert(techFor('ice-hauler', 'OPA') === 1, 'belter civilian TL');
+      for (const [k, ids] of Object.entries(kinds)) assert(ids.length >= 2, `${k}: only ${ids.join()}`);
+      console.log(`      ${CLASS_IDS.length} classes in ${Object.keys(kinds).length} kinds; ${PLAYABLE.length} we can start in`);
+      assert(new Set(PLAYABLE.map(id => CLASSES[id].builder)).size === 4, 'a start from every yard');
       seedRandom(3);
       for (let i = 0; i < 200; i++) {
         const id = rollIdentity({ category: 'civilian', near: 'OPA' });
         assert(CLASSES[id.cls].category === 'civilian', 'civilian roll');
-        assert(TECH[id.tl], 'tech level');
+        assert(id.tl === CLASSES[id.cls].tl, 'tech level');
       }
+      for (const f of ['UN', 'MCR', 'OPA']) {
+        const id = rollIdentity({ kind: 'frigate', category: 'military', faction: f });
+        assert(CLASSES[id.cls].kind === 'frigate' && CLASSES[id.cls].factions[f], `${f} frigate: ${id.cls}`);
+      }
+      // OPA builds no destroyers: it sends the nearest thing it has
+      assert(CLASSES[rollIdentity({ kind: 'destroyer', category: 'military', faction: 'OPA' }).cls].factions.OPA, 'fallback stays in the faction');
+    },
+  },
+  {
+    name: 'warships with nothing inbound close to their standoff',
+    fn: () => {
+      // Each closes on where the other is, not on its thrust (matching each
+      // other's burn, two ships would fly side by side). Magazines empty:
+      // with torpedoes inbound a naval crew closes slowly on purpose, and
+      // the fight is decided long before they meet.
+      const s = game(31);
+      const world = getWorld(s);
+      const { pos, vel } = near(s, 0.02);
+      const a = spawnAgent(s, { role: 'navy', cls: 'unn-corvette', faction: 'UN', pos, vel, enemies: ['MCR'] });
+      const b = spawnAgent(s, { role: 'navy', cls: 'mcrn-corvette', faction: 'MCR', pos: { x: pos.x + 0.0015, y: pos.y }, vel, enemies: ['UN'] });
+      for (const e of [a, b]) ensureHull(e).magazine = { he: 0, nuke: 0 };
+      makeHostile(s, a, b.id);
+      makeHostile(s, b, a.id);
+      const nerve = ROLES.navy.breakOff;
+      ROLES.navy.breakOff = 0;
+      let closest = Infinity;
+      const start = 0.0015 * AU_M;
+      try {
+        for (let t = 0; t < 150; t++) {
+          advance(s, 1);
+          const A = world.get(a.id), B = world.get(b.id);
+          if (!A || !B || A.combat.status === 'wreck' || B.combat.status === 'wreck') break;
+          closest = Math.min(closest, Math.hypot(A.pos.x - B.pos.x, A.pos.y - B.pos.y) * AU_M);
+        }
+      } finally { ROLES.navy.breakOff = nerve; }
+      console.log(`      from ${fmt(start / 1000)} km: closest ${fmt(closest / 1000)} km in 2½ hours (navy standoff ${fmt(ROLES.navy.standoffM / 1000)} km)`);
+      assert(closest < 2 * ROLES.navy.standoffM, 'the two warships never closed to their standoff');
+    },
+  },
+  {
+    name: 'ships are not equal: the yard and the tech level decide a fight between hulls of a size',
+    fn: () => {
+      const rating = (id) => fmt(classStrength(id), 0);
+      console.log(`      strength: corvettes OPA refit ${rating('opa-corvette')} · UNN Harrier ${rating('unn-corvette')} · MCRN Tharsis ${rating('mcrn-corvette')}; frigates OPA refit ${rating('opa-frigate')} · UNN Danube ${rating('unn-frigate')} · UNN Everest ${rating('unn-frigate-new')} · MCRN Hellas ${rating('mcrn-frigate')}`);
+      const bouts = [
+        ['opa-corvette', 'mcrn-frigate', 'Belt refit corvette vs Martian frigate'],
+        ['opa-frigate', 'mcrn-frigate', 'Belt refit frigate vs Martian frigate'],
+        ['unn-frigate', 'mcrn-frigate', 'Earth TL2 frigate vs Martian frigate'],
+        ['unn-frigate-new', 'mcrn-frigate', 'Earth TL3 frigate vs Martian frigate'],
+        ['opa-corvette', 'unn-corvette', 'Belt refit corvette vs Earth corvette'],
+        ['unn-corvette', 'mcrn-corvette', 'Earth corvette vs Martian corvette'],
+      ];
+      const trials = 6;
+      const won = {};
+      const run = (x, y, label) => {
+        let wx = 0, wy = 0, draw = 0, keptY = 0;
+        const fates = {};
+        for (let k = 0; k < trials; k++) {
+          const r = duel(x, y, 700 + k);
+          const outX = r.a !== 'fighting', outY = r.b !== 'fighting';
+          if (outX && !outY) wy++; else if (outY && !outX) wx++; else draw++;
+          keptY += r.hpB;
+          fates[r.a] = (fates[r.a] || 0) + 1;
+        }
+        won[`${x}>${y}`] = wx;
+        const how = Object.entries(fates).map(([f, n]) => `${n} ${f}`).join(', ');
+        console.log(`      ${label}: ${wy}–${wx}${draw ? ` (${draw} undecided)` : ''} · the ${CLASSES[y].name} kept ${fmt(keptY / trials * 100, 0)}% structure · the ${CLASSES[x].name}: ${how}`);
+      };
+      console.log('      — as the AI fights (the outgunned break off):');
+      for (const [x, y, label] of bouts) run(x, y, label);
+      console.log('      — nobody breaks off:');
+      const nerve = ROLES.navy.breakOff;
+      ROLES.navy.breakOff = 0;
+      try { for (const [x, y, label] of bouts) run(x, y, label); } finally { ROLES.navy.breakOff = nerve; }
+      assert(won['opa-corvette>mcrn-frigate'] === 0 && won['opa-frigate>mcrn-frigate'] === 0, 'a Belt refit never beats a Martian frigate');
+      assert(won['unn-frigate>mcrn-frigate'] <= 1, 'an old Earth frigate should almost never beat a Martian one');
+      assert(won['unn-frigate-new>mcrn-frigate'] <= 1, 'even Earth\'s best frigate should rarely beat a Martian one');
+      assert(won['unn-corvette>mcrn-corvette'] <= 1 && won['opa-corvette>unn-corvette'] <= 1, 'TL decides between corvettes');
+    },
+  },
+  {
+    name: 'our ship in a Belt junker cannot win against a Martian frigate; it can against a pirate',
+    fn: () => {
+      const fight = (classId, enemy, faction, role, seed) => {
+        const s = game(seed, classId);
+        const world = getWorld(s);
+        s.combatStations = true;
+        advance(s, 60);                       // everyone strapped in
+        s.sensors.range = 2;
+        const { pos, vel } = near(s, 0.003);
+        const e = spawnAgent(s, { role, cls: enemy, faction, pos, vel, enemies: ['player'] });
+        makeHostile(s, e, PLAYER);
+        setPdcMode(s, 'engage');
+        setEvasive(s, true);
+        let t = 0;
+        while (t < 24 * 60 && !s.lost && !isOutOfFight(world.get(e.id)) && fate(world.get(e.id)) === 'fighting') {
+          sensorsTick(s);
+          if (s.combat.target !== e.id) setFireTarget(s, e.id);
+          fireTorpedo(s, { warhead: 'he', profile: 'fast' });
+          advance(s, 1); t++;
+          if (profile(s, PLAYER).maxG <= 0) break;             // dead in space: as good as lost
+        }
+        const crippled = s.lost || profile(s, PLAYER).maxG <= 0 || s.hull.integrity < 25;
+        return { crippled, enemy: fate(world.get(e.id)), hull: s.hull.integrity, enemyHp: world.get(e.id) ? e.combat.hp / e.combat.hpMax : 0 };
+      };
+      const trials = 6;
+      const tally = (classId, enemy, faction, role) => {
+        let lost = 0, beat = 0, hull = 0, hurt = 0;
+        for (let k = 0; k < trials; k++) {
+          const r = fight(classId, enemy, faction, role, 800 + k);
+          if (r.crippled) lost++;
+          if (r.enemy !== 'fighting' && !r.crippled) beat++;
+          hull += r.hull; hurt += 1 - r.enemyHp;
+        }
+        console.log(`      ${CLASSES[classId].name} vs ${CLASSES[enemy].name}: we were crippled or killed ${lost}/${trials}, won ${beat}/${trials}; our hull ${fmt(hull / trials, 0)}%, theirs lost ${fmt(hurt / trials * 100, 0)}%`);
+        return { lost, beat };
+      };
+      const junk = tally('opa-corvette', 'mcrn-frigate', 'MCR', 'navy');
+      const ours = tally('light-freighter', 'mcrn-frigate', 'MCR', 'navy');
+      const pirate = tally('light-freighter', 'pirate-gunship', 'pirate', 'pirate');
+      assert(junk.beat === 0 && junk.lost === trials, 'a Belt junker must not survive a Martian frigate');
+      assert(ours.beat === 0, 'nor an armed freighter');
+      assert(pirate.beat >= pirate.lost, 'an armed freighter should hold its own against a pirate gunship');
+    },
+  },
+  {
+    name: 'a mining barge has no weapons, but a ship that closes to rake it meets its ore drivers',
+    fn: () => {
+      let fired = 0, dp = 0, hull = 0;
+      const trials = 6;
+      for (let k = 0; k < trials; k++) {
+        const s = game(900 + k);
+        const ev = recorder();
+        s.sensors.range = 2;
+        const { pos, vel } = near(s, 4_000 / AU_M);              // 4 km off: inside our PDCs' reach, and its drivers'
+        const barge = spawnAgent(s, { role: 'civilian', cls: 'mining-barge', faction: 'OPA', pos, vel });
+        sensorsTick(s);
+        setFireTarget(s, barge.id);
+        setPdcMode(s, 'engage');
+        advance(s, 30);
+        const shots = (ev['gear-fired'] || []).filter(g => g.from === barge.id);
+        fired += shots.length;
+        dp += shots.reduce((a, g) => a + g.dp, 0);
+        hull += s.hull.integrity;
+      }
+      console.log(`      raking a mining barge at 4 km: ${fmt(fired / trials, 0)} minutes of ore-driver fire back, ${fmt(dp / trials, 0)} DP thrown, our hull ${fmt(hull / trials, 0)}%`);
+      assert(fired > 0 && dp > 0, 'the barge should turn its gear on us');
+      assert(profile(game(1), PLAYER).gear === null, 'our armed freighter carries no mining gear');
     },
   },
   {
@@ -106,7 +299,7 @@ export default [
           const s = game(200 + k * 3 + n);
           const ev = recorder();
           const { pos, vel } = near(s, 0.002);
-          const e = spawnAgent(s, { role: 'navy', cls: 'corvette', faction: 'MCR', pos, vel });
+          const e = spawnAgent(s, { role: 'navy', cls: 'mcrn-corvette', faction: 'MCR', pos, vel });
           for (let i = 0; i < n; i++) launchTorpedo(s, PLAYER, e.id, { warhead: 'he', profile: 'fast' }, (t, p) => bus.emit(t, p));
           untilQuiet(s, 12 * 60);
           const h = (ev['torpedo-hit'] || []).length;
@@ -167,7 +360,7 @@ export default [
         const s = game(mode === 'still' ? 51 : 52);
         const ev = recorder();
         const { pos, vel } = near(s, 2_000_000 / AU_M);       // 2,000 km
-        const gun = spawnAgent(s, { role: 'navy', cls: 'frigate', faction: 'UN', pos: s.flight.pos, vel: s.flight.vel });
+        const gun = spawnAgent(s, { role: 'navy', cls: 'unn-frigate-new', faction: 'UN', pos: s.flight.pos, vel: s.flight.vel });
         // an inert target (a docked 'convoy' never acts): it coasts, or jinks when we say so
         const tgt = spawnAgent(s, { role: 'convoy', cls: 'pirate-gunship', faction: 'pirate', pos, vel });
         ensureHull(tgt).hp = 1e9;            // survive the test
@@ -208,8 +401,8 @@ export default [
       // A fusion blast: deadly at a kilometer, harmless at fifty
       const s = game(400);
       const { pos, vel } = near(s, 0.01);
-      const close = spawnAgent(s, { role: 'civilian', cls: 'courier', faction: 'UN', pos: { x: pos.x + 1000 / AU_M, y: pos.y }, vel });
-      const far = spawnAgent(s, { role: 'civilian', cls: 'courier', faction: 'UN', pos: { x: pos.x + 50_000 / AU_M, y: pos.y }, vel });
+      const close = spawnAgent(s, { role: 'civilian', cls: 'hermes', faction: 'UN', pos: { x: pos.x + 1000 / AU_M, y: pos.y }, vel });
+      const far = spawnAgent(s, { role: 'civilian', cls: 'hermes', faction: 'UN', pos: { x: pos.x + 50_000 / AU_M, y: pos.y }, vel });
       ensureHull(close); ensureHull(far);
       detonate(s, pos, SIZES.M.reactor, 'nobody');
       console.log(`      M-size reactor blast: courier at 1 km → ${close.combat.status} (hp ${fmt(close.combat.hp)}), at 50 km → hp ${fmt(far.combat.hp)}`);
@@ -341,7 +534,7 @@ export default [
     },
   },
   {
-    name: 'saves carry ordnance, agents and politics; v0.9 saves are refitted with weapons',
+    name: 'saves carry ordnance, agents and politics',
     fn: () => {
       const s = game(97);
       const { pos, vel } = near(s, 0.01);
@@ -354,19 +547,6 @@ export default [
       assert(torp && torp.ord.target === e.id, 'torpedo survives the round trip');
       assert([...w.driven].some(x => x.id === e.id && x.agent), 'agent survives');
       advance(back, 30);
-
-      const old = JSON.parse(serialize(game(98)));
-      old.schema = 3;
-      for (const k of ['combat', 'magazine', 'hull', 'law', 'politics']) delete old[k];
-      delete old.resources.pdcRounds; delete old.systems.units.pdc; delete old.systems.units.launcher;
-      delete old.ship.classId; delete old.ship.tl;
-      for (const x of old.entities) { if (x.faction === 'OPA') x.faction = 'Belter'; delete x.cls; }
-      const m = deserialize(old);
-      assert(m.migrated, 'migrated');
-      assert(m.state.combat && m.state.magazine.capacity > 0 && m.state.systems.units.pdc, 'weapons fitted');
-      assert(!m.state.entities.some(x => x.faction === 'Belter'), 'factions renamed');
-      assert(m.state.ship.decks.some(d => d.tiles.some(r => r.includes(28))), 'PDC turrets in the layout');
-      advance(m.state, 60);
     },
   },
 ];

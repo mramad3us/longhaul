@@ -10,6 +10,7 @@ import { toast } from './toast.js';
 import { logEntry } from './log.js';
 import { G0, MIN_S } from '../core/constants.js';
 import { TileType, TILE_NAMES, TILE_DESCRIPTIONS } from '../sim/tiles.js';
+import { tileEntry } from './library.js';
 import { overallHealth, isConscious, CONDITION_LABELS } from '../sim/crew.js';
 import { orderHeal, orderStandDown } from '../sim/crew-ai.js';
 import { shipGeometry, FIXTURE_KIND, seatKind } from '../sim/ship-layout.js';
@@ -81,7 +82,7 @@ function crewHTML(s, m) {
   if (m.juiced) conds.unshift('juiced');
   const condHtml = conds.length ? conds.map(c => {
     if (c === 'juiced') return `<span class="crew-condition crew-condition-juice">${m.juiceDose === 'high' ? 'HIGH-DOSE JUICE' : 'JUICED'}</span>`;
-    if (c === 'juice-hangover') return `<span class="crew-condition crew-condition-hangover">HANGOVER ${Math.ceil(m.juiceHangover / 60)}h</span>`;
+    if (c === 'juice-hangover') return `<span class="crew-condition crew-condition-hangover">${m.juiceCrash ? 'JUICE CRASH' : 'HANGOVER'} ${Math.ceil(m.juiceHangover / 60)}h</span>`;
     const sev = ['dead', 'crushed', 'unconscious', 'decompression', 'internal-bleeding'].includes(c) ? 'danger'
       : c === 'critical' ? 'critical'
       : ['brain-damage', 'cardiac-stress', 'injured', 'hypoxic', 'hypercapnia', 'fracture', 'dehydrated', 'starving'].includes(c) ? 'warning' : 'dim';
@@ -302,7 +303,7 @@ function tileHTML(s, sel) {
   const atmoCls = st === 'nominal' ? 'atmo-ok' : st === 'warning' ? 'atmo-warn' : 'atmo-danger';
   return `<div class="tile-detail-name">${esc(TILE_NAMES[tile] || 'Unknown')}</div>
     <div class="tile-detail-deck">${esc(deck.name.toUpperCase())}</div>
-    <p class="tile-detail-desc">${esc(TILE_DESCRIPTIONS[tile] || '')}</p>
+    <p class="tile-detail-desc">${esc(TILE_DESCRIPTIONS[tile] || '')}${TILE_DESCRIPTIONS[tile] ? ` <button class="lib-ref" data-lib="${tileEntry(tile)}">LIBRARY</button>` : ''}</p>
     ${lines.length ? `<div class="tile-detail-status"><span class="tile-status-label">STATUS</span>${lines.map(l => `<span class="tile-status-value">${esc(l)}</span>`).join('')}</div>` : ''}
     ${sysId ? systemCardHTML(s, sysId, { compact: true }) : ''}
     <div class="tile-detail-atmosphere"><span class="tile-status-label">COMPARTMENT — ${st.toUpperCase()}</span>

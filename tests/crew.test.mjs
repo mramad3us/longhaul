@@ -7,10 +7,16 @@ import { triggerManeuver, updateInertia, isInertiaActive, Maneuver } from '../js
 import { shipGeometry, isRestraint } from '../js/sim/ship-layout.js';
 import { setBreach } from '../js/sim/life-support.js';
 import { planRoutes } from '../js/sim/nav.js';
-import { engageRoute } from '../js/sim/autopilot.js';
+import { engageRoute, engageStance, overrideSecure, forceTurn } from '../js/sim/autopilot.js';
+import { createStance } from '../js/sim/stance.js';
+import { spawnAgent } from '../js/sim/agents.js';
+import { getWorld } from '../js/sim/world.js';
+import { sensorsTick } from '../js/sim/sensors.js';
+import { AU_M } from '../js/core/constants.js';
 import { orderShutdown, orderStartup, ReactorState } from '../js/sim/reactor.js';
 import { forceDistress } from '../js/sim/missions.js';
 import { protectedG, physiologyTick } from '../js/sim/crew.js';
+import { efficiency } from '../js/sim/needs.js';
 import { fuelUsed } from '../js/sim/flight.js';
 import { createPlan, STANDOFF } from '../js/sim/nav.js';
 
@@ -102,17 +108,21 @@ export default [
     },
   },
   {
-    name: 'express 3G trip with juice: crew survive, hangover applied',
+    name: 'express 3G trip with juice: one dose each (the flip is covered), hangover once it wears off',
     fn: () => {
       const s = game(6);
       const r = planRoutes(s, { kind: 'entity', id: 'pallas-station' }).find(o => o.name === 'EXPRESS');
       engageRoute(s, r.plan);
       let t = 0;
       while (s.autopilot && t < r.estimate.minutes + 3000) { advance(s, 1); t++; }
+      const arrived = !s.autopilot;
+      advance(s, 90);                     // the last dose wears off an hour after the burn
+      const used = 50 - s.resources.medSupplies.current;
       const alive = s.ship.crew.filter(m => !m.dead).length;
       const hung = s.ship.crew.filter(m => m.conditions.includes('juice-hangover')).length;
-      console.log(`      ${fmt(t / 1440, 2)}d, alive ${alive}/${s.ship.crew.length}, hangovers ${hung}, med supplies ${fmt(s.resources.medSupplies.current)}`);
-      assert(!s.autopilot, 'did not arrive');
+      console.log(`      ${fmt(t / 1440, 2)}d, alive ${alive}/${s.ship.crew.length}, hangovers ${hung}, med used ${fmt(used)}`);
+      assert(arrived, 'did not arrive');
+      assert(used <= s.ship.crew.length, `one standard dose per person for the whole trip, used ${used}`);
       assert(alive === s.ship.crew.length, 'crew died on an express run');
       assert(hung > 0, 'juice should leave a hangover');
     },
@@ -136,6 +146,51 @@ export default [
         assert(!s.autopilot, `seed ${seed}: did not arrive`);
         assert(thrown === 0, `seed ${seed}: ${thrown} crew thrown during an autopilot intercept`);
       }
+    },
+  },
+  {
+    name: 'the nav computer holds a flip while anyone is on their feet; a stance flies its moves strapped in',
+    fn: () => {
+      // A stance taken with the crew about (the captain didn't wait): 30 km
+      // from a hauler, the nose pointing away and opening at 200 m/s, so the
+      // very first thing to do is flip
+      const setup = (seed) => {
+        const s = game(seed, 5);
+        const world = getWorld(s);
+        const { x, y } = s.flight.pos;
+        s.flight.hold = null;
+        const e = spawnAgent(s, { role: 'civilian', cls: 'mule', pos: { x: x + 30_000 / AU_M, y }, vel: { ...s.flight.vel }, transponder: true });
+        s.flight.facing = Math.PI;
+        s.flight.vel.vx -= 200;
+        sensorsTick(s);
+        engageStance(s, createStance({ kind: 'entity', id: e.id }, { mode: 'hold', rangeM: 2_000, accelG: 1 }));
+        overrideSecure(s);
+        const ev = { held: 0, forced: 0, thrown: 0, heldMin: 0 };
+        bus.on('turn-held', () => { ev.held++; });
+        bus.on('turn-forced', () => { ev.forced++; });
+        bus.on('inertia-start', p => { ev.thrown += p.count; });
+        return { s, ev, world };
+      };
+      const fly = ({ s, ev }, minutes, each = () => {}) => {
+        for (let t = 0; t < minutes; t++) {
+          minuteTick(s);
+          while (isInertiaActive(s)) updateInertia(s, 0.05);
+          if (s.autopilot?.turnHeld != null) ev.heldMin++;
+          each(t);
+        }
+      };
+      for (const seed of [1, 2, 3]) {
+        const run = setup(seed);
+        fly(run, 240);
+        console.log(`      seed ${seed}: flip held ${run.ev.heldMin} min · ${run.ev.thrown} thrown · on station: ${!!run.s.autopilot?.settled}`);
+        assert(run.ev.held >= 1 && run.ev.heldMin <= 30, `seed ${seed}: the flip was not held for the crew (${JSON.stringify(run.ev)})`);
+        assert(run.ev.thrown === 0, `seed ${seed}: ${run.ev.thrown} crew thrown`);
+        assert(run.s.autopilot?.settled, `seed ${seed}: never got on station`);
+      }
+      // The captain's call: flip now, whoever is up
+      const run = setup(1);
+      fly(run, 3, (t) => { if (t === 0) forceTurn(run.s); });
+      assert(run.ev.forced === 1 && run.ev.heldMin <= 1, `the captain's FLIP NOW waited (${JSON.stringify(run.ev)})`);
     },
   },
   {
@@ -168,9 +223,15 @@ export default [
       engageRoute(s, flank.plan);
       let t = 0;
       while (s.autopilot && t < 3000) { minuteTick(s); while (isInertiaActive(s)) updateInertia(s, 0.05); t++; }
-      const hung = s.ship.crew.filter(m => m.juiceHangover > 4320).length;
-      console.log(`      ${fmt(t / 60)}h dash, dead ${s.ship.crew.filter(m => m.dead).length}, long hangovers ${hung}, med left ${fmt(s.resources.medSupplies.current)}, reactor ${s.reactor.status}`);
-      assert(!s.autopilot, 'flank dash did not arrive');
+      const arrived = !s.autopilot;
+      const used = 50 - s.resources.medSupplies.current;
+      for (let k = 0; k < 90; k++) minuteTick(s);
+      const hung = s.ship.crew.filter(m => m.juiceHangover > 4320 && m.juiceCrash).length;
+      const eff = Math.max(...s.ship.crew.filter(m => !m.dead).map(efficiency));
+      console.log(`      ${fmt(t / 60)}h dash, dead ${s.ship.crew.filter(m => m.dead).length}, crashed ${hung}, med used ${fmt(used)}, best efficiency after ${fmt(eff, 2)}, reactor ${s.reactor.status}`);
+      assert(arrived, 'flank dash did not arrive');
+      assert(used <= 2 * s.ship.crew.length, `a short high-dose dash costs 2 med each, used ${used}`);
+      assert(eff <= 0.6, 'a high-dose crash should leave the crew working badly');
       assert(s.ship.crew.every(m => !m.dead), 'a short flank dash should not kill strapped-in crew');
       assert(hung > 0, 'high dose should leave a long hangover');
     },

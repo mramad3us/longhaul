@@ -8,7 +8,9 @@
 // own sensor picture; ordnance coming for us is red, ours teal.
 //
 // The fire-control panel drives sim/combat.js: target, torpedo
-// warhead and profile, launch, PDC mode, aim, evasive maneuvers.
+// warhead and profile, launch, PDC mode, aim, evasive maneuvers, and
+// the stance kept on the target (one click to hold at a weapon's range;
+// the full stance panel for the rest).
 // ============================================================
 
 import { ui } from './context.js';
@@ -29,10 +31,14 @@ import { AIM } from '../sim/damage.js';
 import { WARHEADS, PROFILES } from '../sim/weapons.js';
 import { WANTED_LABEL } from '../sim/law.js';
 import { contactById, REVEAL } from '../sim/sensors.js';
-import { relativeTo } from './hud.js';
+import { relativeTo, STANCE_PHASE } from './hud.js';
+import { stanceRanges, STANCE_MODES } from '../sim/stance.js';
+import { quickStance, openStance, currentStance, release as releaseStance } from './stance.js';
+import { targetName } from '../sim/nav.js';
 import { fxList } from './fx.js';
 
 const DECADES = 7;                 // 1 km … 10,000,000 km
+const QUICK_STANCES = ['guns', 'gear', 'torpedo', 'long'];
 const choice = { warhead: 'he', profile: 'fast' };
 
 export class ThreatView {
@@ -172,7 +178,7 @@ export function renderFireControl(state, box) {
     const known = c && (tgt.transponder || c.scan >= REVEAL.PROFILE);
     const hull = tgt.combat && c?.scan >= REVEAL.MASS ? `${Math.max(0, Math.round(tgt.combat.hp / tgt.combat.hpMax * 100))}%${tgt.combat.status !== 'ok' ? ' · ' + tgt.combat.status.toUpperCase() : ''}` : '…';
     target = `<div class="fc-target-name" style="color:${factionColor(known ? tgt.faction : null)}">${esc(known ? tgt.name : c?.signature || 'Unidentified contact')}</div>
-      <div class="fc-row"><span>CLASS</span><b>${known ? `${esc(classLabel(tgt))} · TL${tgt.tl}` : '—'}</b></div>
+      <div class="fc-row"><span>CLASS</span><b>${known ? `<span class="lib-inline" data-lib="ship:${tgt.cls}" title="Ship's library">${esc(classLabel(tgt))}</span> · TL${tgt.tl}` : '—'}</b></div>
       <div class="fc-row"><span>FLAG</span><b>${known ? esc(FACTIONS[tgt.faction]?.name || tgt.faction) : '—'}</b></div>
       <div class="fc-row"><span>RANGE</span><b>${rel ? fmtKm(rel.dist / 1000) : '—'}</b></div>
       <div class="fc-row"><span>CLOSING</span><b>${rel ? fmtSpeed(rel.closing) : '—'}</b></div>
@@ -190,11 +196,15 @@ export function renderFireControl(state, box) {
     <div class="fc-desc">${esc(PROFILES[choice.profile].desc)}</div>
     <div class="fc-actions">${btn('fire', why ? `FIRE — ${why.toUpperCase()}` : 'FIRE TORPEDO', false, why ? 'disabled' : '')}</div>`;
 
+  const gear = p.gear ? `<div class="fc-row"><span>MINING GEAR</span><b>${p.gear.mounts > 1 ? p.gear.mounts + ' × ' : ''}${esc(p.gear.name)} · ${fmtKm(p.gear.rangeM / 1000)}</b></div>` : '';
   const pdc = `<div class="fc-choice">${Object.entries(PDC_MODES).map(([k, m]) => btn(`pdc:${k}`, m.label, C.pdc === k)).join('')}</div>
-    <div class="fc-desc">${esc(PDC_MODES[C.pdc].desc)}</div>
-    <div class="fc-row"><span>MOUNTS</span><b>${p.pdc.mounts.toFixed(1)} of ${p.cls.pdc} · TL${p.tl}</b></div>
-    <div class="fc-row"><span>ROUNDS</span><b>${fmtNum(state.resources.pdcRounds.current)}</b></div>
+    <div class="fc-desc">${esc(p.cls.pdc ? PDC_MODES[C.pdc].desc : 'ENGAGE turns the mining gear on the target when it comes inside its reach. It is no use against torpedoes.')}</div>
+    ${p.cls.pdc ? `<div class="fc-row"><span>MOUNTS</span><b>${p.pdc.mounts.toFixed(1)} of ${p.cls.pdc} · TL${p.tl}</b></div>
+    <div class="fc-row"><span>ROUNDS</span><b>${fmtNum(state.resources.pdcRounds.current)}</b></div>` : ''}${gear}
     <div class="fc-row"><span>FIRE CONTROL</span><b class="${g ? '' : 'fc-warn'}">${g ? esc(g.name) : 'AUTOMATIC (−40%)'}</b></div>`;
+  const guns = p.cls.pdc ? sec('POINT DEFENSE', pdc) : p.gear ? sec('MINING GEAR', pdc) : '';
+  const tubeSec = p.cls.tubes ? sec('TORPEDOES', torps) : '';
+  const unarmed = !p.cls.pdc && !p.cls.tubes && !p.gear ? sec('WEAPONS', '<div class="fc-dim">Unarmed. Run, go dark, or call for help.</div>') : '';
 
   const aim = `<div class="fc-choice">${Object.values(AIM).map(a => btn(`aim:${a.id}`, a.label, C.aim === a.id)).join('')}</div>
     <div class="fc-desc">${esc(AIM[C.aim].desc)}</div>`;
@@ -209,9 +219,26 @@ export function renderFireControl(state, box) {
     + hostiles.map(h => `<div class="fc-threat fc-hostile"><span>${esc(h.transponder ? h.name : 'hostile contact')}</span><b>${fmtKm(Math.hypot(h.pos.x - state.flight.pos.x, h.pos.y - state.flight.pos.y) * AU_KM)}</b></div>`).join('');
   const record = ['UN', 'MCR', 'OPA'].map(f => `<span class="fc-law ${state.law.wanted[f] ? 'fc-warn' : ''}">${f} ${Math.round(state.law.standing[f])} · ${WANTED_LABEL[state.law.wanted[f]]}</span>`).join('');
 
-  setHTML(box, `${sec('TARGET', target)}${sec('TORPEDOES', torps)}${sec('POINT DEFENSE', pdc)}${sec('AIM', aim)}${sec('HELM', helm)}
+  const stance = tgt ? sec('STANCE', stanceControls(state, tgt, btn)) : '';
+
+  setHTML(box, `${sec('TARGET', target)}${stance}${tubeSec}${guns}${unarmed}${unarmed ? '' : sec('AIM', aim)}${sec('HELM', helm)}
     ${sec('THREATS', threatRows || '<div class="fc-dim">Nothing inbound.</div>')}
     ${sec('STATUS', `<div class="fc-row"><span>HULL</span><b class="${state.hull.integrity < 50 ? 'fc-warn' : ''}">${Math.round(state.hull.integrity)}%</b></div><div class="fc-laws">${record}</div>`)}`);
+}
+
+/** Hold at one of the target's ranges in one click; where the stance stands. */
+function stanceControls(state, tgt, btn) {
+  const spec = { kind: 'entity', id: tgt.id };
+  const rel = relativeTo(state, spec);
+  const cur = currentStance(state, spec);
+  const quick = stanceRanges(state, spec, rel ? rel.dist : null).filter(r => QUICK_STANCES.includes(r.key));
+  const on = (r) => cur && cur.plan.mode === 'hold' && Math.abs(cur.plan.standoff - r.m) < 1;
+  const other = state.autopilot?.plan.kind === 'stance' && !cur ? targetName(state, state.autopilot.plan.target) : null;
+  const now = cur
+    ? `<div class="fc-row"><span>${STANCE_MODES[cur.plan.mode].label} ${fmtKm(cur.plan.standoff / 1000)}</span><b>${STANCE_PHASE[cur.display] || cur.display.toUpperCase()}</b></div>`
+    : `<div class="fc-dim">${other ? `Holding a stance on ${esc(other)}: a pick here moves it.` : 'Hold at a range: the nav computer keeps it, flown, until released.'}</div>`;
+  return `${now}<div class="fc-choice">${quick.map(r => btn(`stance:${r.key}`, `${r.label} ${fmtKm(r.m / 1000)}`, on(r))).join('')}</div>
+    <div class="fc-actions">${btn('stance-more', 'MORE…')}${cur ? btn('stance-release', 'RELEASE') : ''}</div>`;
 }
 
 /** Fire-control panel clicks. */
@@ -228,6 +255,9 @@ export function onFireControlClick(e) {
     case 'pdc': setPdcMode(s, arg); logEntry(`PDCs: ${PDC_MODES[arg].label}`, 'system'); break;
     case 'aim': setAim(s, arg); break;
     case 'stations': ui.toggleCombat?.(); break;
+    case 'stance': if (s.combat.target) quickStance(s, { kind: 'entity', id: s.combat.target }, arg); break;
+    case 'stance-more': if (s.combat.target) openStance({ kind: 'entity', id: s.combat.target }); break;
+    case 'stance-release': releaseStance(s); break;
     case 'evasive': { const r = setEvasive(s, !s.combat.evasive); toast(r.text, r.ok ? 'info' : 'warn'); if (r.ok) logEntry(r.text, 'nav'); break; }
     case 'fire': {
       const r = fireTorpedo(s, choice, emit);

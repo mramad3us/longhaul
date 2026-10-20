@@ -19,6 +19,7 @@ import { initSettings, renderSettings } from './settings.js';
 import { saveCurrent, loadSave, latestSave, renderSaveList, scheduleAutosave, stopAutosave } from './persistence.js';
 import { startParticles, stopParticles, updateParticleMotion } from './particles.js';
 import { initKeyboard } from './keyboard.js';
+import { initLibrary, toggleLibrary, closeLibrary } from './library.js';
 import { initStorage } from '../storage.js';
 import { VERSION } from '../version.js';
 import { bus } from '../core/events.js';
@@ -27,17 +28,20 @@ import { maxSpeed, releaseHold } from '../sim/autopilot.js';
 import { randomCaptainName, ROLES } from '../sim/crew.js';
 import { dockedStation } from '../sim/contracts.js';
 import { forceDistress } from '../sim/missions.js';
-import { damageSystem, meteoroidStrike, SYSTEM_IDS } from '../sim/systems.js';
+import { damageSystem, meteoroidStrike, shipSystems } from '../sim/systems.js';
 import { spawnTrafficShip } from '../sim/traffic.js';
 import { spawnEncounter } from '../sim/conflict.js';
 import { controlAt } from '../sim/factions.js';
 import { initFx, resetFx } from './fx.js';
+import { renderShipPicker, crewRange } from './ship-picker.js';
+import { CLASSES, TECH, PLAYER_CLASS, PLAYER_MAX_CREW } from '../sim/ship-classes.js';
 import {
   iconNewGame, iconLoadGame, iconSettings, iconPause, iconHudSettings, iconHudSave, iconHudExit,
   iconMinus, iconPlus, logoShip, createStarfield,
 } from '../svg-icons.js';
 
 let crewCount = 4;
+let shipClass = PLAYER_CLASS;
 let storageOK = true;
 let speedBeforePause = 1;
 let fps = { frames: 0, at: 0, value: 0 };
@@ -80,14 +84,14 @@ export async function boot() {
   // Menu
   $$('.menu-btn').forEach(b => b.addEventListener('click', () => {
     const a = b.dataset.action;
-    if (a === 'new-game') { updateCrewHint(); showScreen('new-game'); }
+    if (a === 'new-game') { openShipPicker(); updateCrewHint(); showScreen('new-game'); }
     if (a === 'load-game') { renderSaveList($('#save-list'), loadAndStart); showScreen('load-game'); }
     if (a === 'settings') { renderSettings($('#screen-settings [data-settings]')); showScreen('settings'); }
     if (a === 'continue') latestSave().then(s => s && loadAndStart(s.id));
   }));
   $$('[data-action="back"]').forEach(b => b.addEventListener('click', () => { refreshContinue(); showScreen('landing'); }));
   $('#crew-minus').addEventListener('click', () => { crewCount = Math.max(1, crewCount - 1); updateCrewHint(); });
-  $('#crew-plus').addEventListener('click', () => { crewCount = Math.min(8, crewCount + 1); updateCrewHint(); });
+  $('#crew-plus').addEventListener('click', () => { crewCount = Math.min(PLAYER_MAX_CREW, crewCount + 1); updateCrewHint(); });
   $('[data-action="start-game"]').addEventListener('click', newGame);
   refreshContinue();
 
@@ -101,17 +105,18 @@ export async function boot() {
   initSelection({ hail, openNav });
   initDialogs({ plotRoute: (t) => openRoutePanel(t), setPaused });
   initPresenter();
+  initLibrary();
   initKeyboard({
     speed: requestSpeed, togglePause, nav: (tab) => toggleNav(tab), missions: openMissions, jobs: openJobs,
     systems: openSystems, roster: openRoster,
     station: () => dockedStation(ui.state) ? openStation() : toast('Not docked', 'warn'),
-    combat: toggleCombat, weapons: () => toggleNav('combat'), escape: onEscape, save: () => quickSave(), devFlip, devCut,
+    combat: toggleCombat, weapons: () => toggleNav('combat'), library: toggleLibrary, escape: onEscape, save: () => quickSave(), devFlip, devCut,
   });
   $$('[data-action]').forEach(b => {
     const a = b.dataset.action;
     const fn = {
       'open-map': () => openNav('solar'), 'open-station': () => openStation(), 'open-missions': openMissions,
-      'open-jobs': openJobs, 'open-systems': openSystems, 'open-roster': openRoster, 'game-settings': openSettingsDialog, 'save-game': openSaveDialog, 'exit-game': openExitDialog,
+      'open-jobs': openJobs, 'open-systems': openSystems, 'open-roster': openRoster, 'open-library': () => toggleLibrary(), 'game-settings': openSettingsDialog, 'save-game': openSaveDialog, 'exit-game': openExitDialog,
     }[a];
     if (fn) b.addEventListener('click', fn);
   });
@@ -129,8 +134,19 @@ export async function boot() {
 }
 
 function updateCrewHint() {
+  const [lo, hi] = crewRange(shipClass);
   setText($('#crew-count'), crewCount);
-  setText($('#crew-hint'), ROLES.slice(0, crewCount).join(' · '));
+  setText($('#crew-hint'), `${ROLES.slice(0, crewCount).join(' · ')}${crewCount < lo ? ` — short-handed: this ship wants ${lo}–${hi}` : ''}`);
+  toggleClass($('#crew-hint'), 'form-hint-warn', crewCount < lo);
+}
+
+/** The ship list on the new-game screen; picking a hull fills its minimum crew. */
+function openShipPicker() {
+  renderShipPicker($('#ship-picker'), shipClass, (id) => {
+    shipClass = id;
+    crewCount = Math.max(crewCount, Math.min(PLAYER_MAX_CREW, CLASSES[id].crew[0]));
+    updateCrewHint();
+  });
 }
 
 async function refreshContinue() {
@@ -142,21 +158,20 @@ async function refreshContinue() {
 // ---- GAME LIFECYCLE ----
 
 function newGame() {
-  const shipName = $('#input-ship-name').value.trim() || 'UNN Longhaul';
+  const shipName = $('#input-ship-name').value.trim() || 'Longhaul';
   const captainName = $('#input-captain-name').value.trim() || randomCaptainName();
-  const state = createGame({ shipName, captainName, crewCount });
+  const state = createGame({ shipName, captainName, crewCount, classId: shipClass });
   startGame(state, true);
-  logEntry(`Mission start — ${state.ship.name}, Captain ${captainName}`, 'system');
+  logEntry(`Mission start — ${state.ship.name}, ${CLASSES[shipClass].name} (${TECH[state.ship.tl].label}), Captain ${captainName}`, 'system');
   logEntry(`Docked at Ceres Station. Crew of ${state.ship.crew.length}. Hail the station for contracts.`, 'nav');
   toast('Good luck, Captain.', 'ok');
 }
 
 async function loadAndStart(id) {
   try {
-    const { state, migrated, notes } = await loadSave(id);
+    const { state } = await loadSave(id);
     startGame(state, false);
-    toast(migrated ? 'Save migrated from an older version' : 'Mission loaded', 'ok');
-    for (const n of notes) logEntry(n, 'system');
+    toast('Mission loaded', 'ok');
   } catch (e) {
     console.error(e);
     toast(`Could not load save: ${e.message}`, 'danger');
@@ -170,6 +185,7 @@ function startGame(state, fresh) {
   ui.state = state;
   ui.selection.crew = null; ui.selection.tile = null;
   resetNavForGame();
+  closeLibrary();
   resetTacCache();
   resetFx();
   resetLogView();
@@ -234,6 +250,7 @@ function frame(state, alpha) {
   toggleClass($('#ship-container'), 'ship-fast-forward', state.speed > 1);
   toggleClass($('#screen-game'), 'game-paused', state.speed === 0);
   toggleClass($('#ship-container'), 'combat-lit', state.combatStations);
+  toggleClass($('#ship-container'), 'maneuver-lit', !!state.$maneuverAlert);
   setShipAnimationsPaused(state.speed === 0);
 
   if (!gameOver && state.ship.crew.every(m => m.dead)) endGame('No survivors. The ship drifts on, silent.');
@@ -284,6 +301,7 @@ function toggleCombat() {
 
 function onEscape() {
   if (closeTopDialog()) return;
+  if (closeLibrary()) return;
   if (ui.nav.open) { closeNav(); return; }
   document.getElementById('compartment-menu')?.remove();
   clearSelection();
@@ -353,7 +371,7 @@ function initDevHelm() {
     ['+10K MCR', () => { ui.state.resources.credits.current += 10_000; }],
     ['KILL FLT CMP', () => damageSystem(ui.state, 'flightComputer', { severity: 'major', cause: 'dev' }, (t, p) => bus.emit(t, p))],
     ['METEOROID', () => meteoroidStrike(ui.state, (t, p) => bus.emit(t, p))],
-    ['WEAR ALL', () => { for (const id of SYSTEM_IDS) ui.state.systems.units[id].integrity = Math.max(0, ui.state.systems.units[id].integrity - 40); }],
+    ['WEAR ALL', () => { for (const id of shipSystems(ui.state)) ui.state.systems.units[id].integrity = Math.max(0, ui.state.systems.units[id].integrity - 40); }],
     ['+10 SPARES', () => { const p = ui.state.resources.parts; p.current = Math.min(p.max, p.current + 10); }],
     ['REFUEL', () => { ui.state.resources.fuel.current = ui.state.resources.fuel.max; }],
     ['PIRATE', () => spawnEncounter(ui.state, { kind: 'pirate' }, (t, p) => bus.emit(t, p))],

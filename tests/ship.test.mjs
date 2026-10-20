@@ -6,7 +6,9 @@ import { bus } from '../js/core/events.js';
 import { createGame, advance } from '../js/sim/game.js';
 import { planRoutes } from '../js/sim/nav.js';
 import { engageRoute } from '../js/sim/autopilot.js';
-import { damageSystem, systemPerf, SYSTEM_IDS, meteoroidStrike } from '../js/sim/systems.js';
+import { damageSystem, systemPerf, meteoroidStrike, partsFor, shipSystems } from '../js/sim/systems.js';
+import { CLASSES, TECH } from '../js/sim/ship-classes.js';
+import { overhaulQuote, priceOf } from '../js/sim/contracts.js';
 import { setBreach } from '../js/sim/life-support.js';
 import { isInertiaActive, updateInertia } from '../js/sim/inertia.js';
 import { minuteTick } from '../js/sim/game.js';
@@ -14,10 +16,10 @@ import { minuteOfDay } from '../js/sim/duty.js';
 import { serialize, deserialize } from '../js/sim/save.js';
 import { seatKind } from '../js/sim/ship-layout.js';
 
-function game(seed = 1, crewCount = 6) {
+function game(seed = 1, crewCount = 6, classId) {
   seedRandom(seed);
   bus.clear();
-  const s = createGame({ crewCount });
+  const s = createGame({ crewCount, classId });
   s.missions.cooldown = 1e9;            // no distress calls interrupting the routine
   s.politics.quietUntil = Infinity;     // nor patrols and pirates
   return s;
@@ -90,6 +92,37 @@ export default [
       assert(worst > 50, 'serviced machinery should stay in shape');
       assert(units.every(u => u.status !== 'failed'), 'nothing should be left broken');
       assert(s.resources.parts.current < parts0, 'servicing uses spares');
+    },
+  },
+  {
+    name: 'the yard decides upkeep: Belt kit breaks often and mends cheap; Martian kit rarely breaks and costs dearly',
+    fn: () => {
+      const days = 45, seeds = [11, 12];
+      const rows = {};
+      for (const cls of ['tramp', 'meridian', 'ares', 'mcrn-corvette']) {
+        let faults = 0, parts = 0;
+        for (const seed of seeds) {
+          const s = game(seed, 6, cls);
+          s.resources.parts.max = s.resources.parts.current = 1000;      // count what is used, never run dry
+          bus.on('system-fault', p => { if (p.cause === 'wear') faults++; });
+          advance(s, days * DAY_MIN);
+          parts += 1000 - s.resources.parts.current;
+        }
+        // The same damage at the yard: every system half worn, the hull at 70%
+        const s = game(1, 6, cls);
+        for (const id of shipSystems(s)) s.systems.units[id].integrity = 50;
+        s.hull.integrity = 70;
+        const T = TECH[CLASSES[cls].tl];
+        const spare = priceOf(s, 'parts');
+        rows[cls] = { faults: faults / seeds.length, parts: parts / seeds.length, spend: parts / seeds.length * spare, major: partsFor(s, 'major'), yard: overhaulQuote(s), spare, patch: T.patchHours };
+        const r = rows[cls];
+        console.log(`      ${CLASSES[cls].name} (${T.label}): ${fmt(r.faults, 1)} faults in ${days} days, ${fmt(r.parts, 1)} parts (${fmt(r.spend, 0)} MCR) used; a major repair ${r.major} parts at ${r.spare} MCR, jury-rig holds ${r.patch[0]}–${r.patch[1]}h; yard bill ${r.yard.toLocaleString()} MCR`);
+      }
+      const { tramp, meridian, ares } = rows, mars = rows['mcrn-corvette'];
+      assert(tramp.faults > meridian.faults && tramp.faults > 2 * mars.faults, 'better kit breaks less');
+      assert(tramp.spend < meridian.spend && meridian.spend < ares.spend && ares.spend < mars.spend, 'and costs more in spares to keep running');
+      assert(tramp.major < meridian.major && meridian.major < ares.major && ares.major < mars.major, 'better kit eats more spares per repair');
+      assert(tramp.yard < meridian.yard && meridian.yard < ares.yard && ares.yard < mars.yard, 'and costs more at the yard');
     },
   },
   {
@@ -235,7 +268,7 @@ export default [
     },
   },
   {
-    name: 'saves carry systems and needs; v0.8 saves are refitted',
+    name: 'saves carry systems and needs; saves from older schemas are refused',
     fn: () => {
       const s = game(13, 5);
       advance(s, 600);
@@ -243,17 +276,12 @@ export default [
       const { state: s2 } = deserialize(serialize(s));
       assert(s2.systems.units.sensors.status === 'degraded', 'system state lost');
       assert(s2.ship.crew.every(m => m.needs && m.duty), 'crew needs lost');
-      // A v0.8 save: schema 2, no systems, needs or roster
+      // A save from an older schema is refused, not half-loaded
       const old = JSON.parse(serialize(s));
-      old.schema = 2;
-      delete old.systems;
-      delete old.resources.parts; delete old.resources.scrap;
-      for (const m of old.ship.crew) { delete m.needs; delete m.duty; delete m.moraleMod; }
-      const { state: s3, migrated } = deserialize(JSON.stringify(old));
-      assert(migrated, 'should report a migration');
-      assert(SYSTEM_IDS.every(id => s3.systems.units[id]), 'systems added');
-      advance(s3, DAY_MIN);
-      assert(s3.ship.crew.every(m => !m.dead), 'migrated crew should live');
+      old.schema -= 1;
+      let refused = false;
+      try { deserialize(old); } catch { refused = true; }
+      assert(refused, 'an old save should be refused');
     },
   },
 ];

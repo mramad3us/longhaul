@@ -25,9 +25,9 @@ import { AU_M, AU_KM, RANGE, DAY_MIN, G0, MIN_S } from '../core/constants.js';
 import { random, randInt, randRange, pick, weightedPick, chance } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { createEntity } from './entities.js';
-import { rollIdentity, CLASSES } from './ship-classes.js';
+import { rollIdentity, CLASSES, TECH, hullPoints, PLAYER_CLASS } from './ship-classes.js';
 import { restockSuits } from './life-support.js';
-import { overhaulSystems, SYSTEM_IDS, unit } from './systems.js';
+import { overhaulSystems, shipSystems, unit } from './systems.js';
 import { FACTIONS, POWERS } from './factions.js';
 import { zonePos } from './conflict.js';
 import { spawnAgent, wake, makeHostile } from './agents.js';
@@ -58,6 +58,12 @@ const PASSENGER_KINDS = ['workers', 'miners', 'engineers', 'families', 'refugees
 const SECTORS = ['7-G', '12-K', '3-B', '9-F', '15-D', '22-A', '6-H', '18-C', '4-E', '11-J', '8-M', '14-L', '1-N', '20-P', '5-R'];
 
 export const PRICES = { fuel: 2, water: 0.5, food: 3, o2Tank: 4, n2Tank: 1, medSupplies: 40, parts: 120, pdcRounds: AMMO_PRICES.pdcRounds };
+
+/** Spares and yard time are priced by how the ship was built (TECH.price): Martian kit costs the most. */
+const shipTech = (state) => TECH[state.ship.tl || CLASSES[state.ship.classId || PLAYER_CLASS].tl];
+
+/** Unit price of a resource for our ship. */
+export const priceOf = (state, key) => PRICES[key] * (key === 'parts' ? shipTech(state).price : 1);
 
 export function createContracts() {
   return { active: [], history: [], nextId: 1 };
@@ -205,7 +211,7 @@ function generateHot(state, station, others) {
     }
     case ContractType.ESCORT: {
       const dest = pick(others);
-      const ship = rollIdentity({ category: 'civilian', role: pick(['freighter', 'hauler', 'tanker']), near: station.faction });
+      const ship = rollIdentity({ category: 'civilian', kind: pick(['freighter', 'hauler', 'tanker']), near: station.faction });
       const g = Math.min(0.5, CLASSES[ship.cls].drive.cruiseG);
       const d = distAU(station, dest);
       return { ...base, dest: dest.id, destName: dest.name, ship, g,
@@ -259,7 +265,7 @@ function spawnHotTarget(state, station, c) {
   const vel = { vx: mark.vel.vx, vy: mark.vel.vy };
   const e = c.type === ContractType.BOUNTY
     ? spawnAgent(state, { role: 'pirate', cls: c.ship.cls, faction: 'pirate', name: c.ship.name, pos, vel, contract: c.id, transponder: false, tags: { wanted: true, contract: c.id } })
-    : spawnAgent(state, { role: 'navy', cls: pick(['corvette', 'frigate']), faction: c.watched, pos, vel, contract: c.id, home: { kind: 'entity', id: mark.id }, zone: c.zone, tags: { contract: c.id } });
+    : spawnAgent(state, { role: 'navy', kind: pick(['corvette', 'frigate']), category: 'military', faction: c.watched, pos, vel, contract: c.id, home: { kind: 'entity', id: mark.id }, zone: c.zone, tags: { contract: c.id } });
   c.markId = mark.id;
   c.targetId = e.id; c.targetName = e.name;
   c.acceptedAt = now;
@@ -306,7 +312,7 @@ function hotProgress(state, c, emit) {
           for (let i = 0; i < n; i++) {
             const ang = random() * Math.PI * 2;
             const pos = { x: t.pos.x + Math.cos(ang) * 0.004, y: t.pos.y + Math.sin(ang) * 0.004 };
-            const p = spawnAgent(state, { role: 'pirate', cls: chance(0.6) ? 'pirate-raider' : 'pirate-gunship', faction: 'pirate', pos, vel: { ...t.vel }, contract: c.id, transponder: false, mode: 'stalk', target: t.id });
+            const p = spawnAgent(state, { role: 'pirate', category: 'irregular', faction: 'pirate', pos, vel: { ...t.vel }, contract: c.id, transponder: false, mode: 'stalk', target: t.id });
             makeHostile(state, p, t.id);
           }
           emit('contract-progress', { contract: c, text: `Contacts closing on the ${c.targetName} — raiders!` });
@@ -592,15 +598,15 @@ export function serviceQuote(state, key) {
   const r = state.resources[key];
   if (!r || !(key in PRICES)) return null;
   const qty = Math.max(0, r.max - r.current);
-  return { qty, cost: Math.ceil(qty * PRICES[key]) };
+  return { qty, cost: Math.ceil(qty * priceOf(state, key)) };
 }
 
 /** Buy up to `qty` of a resource (or as much as credits allow). */
 export function buy(state, key, qty = Infinity) {
   if (!dockedStation(state)) return { ok: false, text: 'Not docked.' };
   const r = state.resources[key];
-  const price = PRICES[key];
-  if (!r || price == null) return { ok: false, text: 'Not sold here.' };
+  if (!r || PRICES[key] == null) return { ok: false, text: 'Not sold here.' };
+  const price = priceOf(state, key);
   const room = r.max - r.current;
   const afford = state.resources.credits.current / price;
   const amount = Math.max(0, Math.min(qty, room, afford));
@@ -611,20 +617,24 @@ export function buy(state, key, qty = Infinity) {
   return { ok: true, amount, cost, text: `Bought ${Math.round(amount).toLocaleString()} ${key} for ${cost.toLocaleString()} MCR` };
 }
 
-/** Dockyard price to bring every system back to factory condition. */
+/**
+ * Dockyard price to bring every system back to factory condition: labour and
+ * spares at the ship's tech level, hull plating by the tonne of structure.
+ */
 export function overhaulQuote(state) {
   let cost = 250;
-  for (const id of SYSTEM_IDS) {
+  for (const id of shipSystems(state)) {
     const u = unit(state, id);
     cost += (100 - u.integrity) * 8;
     if (u.fault) cost += u.fault.severity === 'major' ? 450 : 150;
   }
   if (state.reactor.breach && state.reactor.status === 'offline') cost += 800;
-  cost += (100 - state.hull.integrity) * HULL_REPAIR_PER_PCT;
-  return Math.round(cost / 10) * 10;
+  const c = CLASSES[state.ship.classId || PLAYER_CLASS];
+  cost += (100 - state.hull.integrity) * HULL_REPAIR_PER_PCT * hullPoints(c) / 120;
+  return Math.round(cost * shipTech(state).price / 10) * 10;
 }
 
-const HULL_REPAIR_PER_PCT = 30;
+const HULL_REPAIR_PER_PCT = 30;                // per % of a 120-DP hull, at TL2
 
 export function buyOverhaul(state) {
   if (!dockedStation(state)) return { ok: false, text: 'Not docked.' };

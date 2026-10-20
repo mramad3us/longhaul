@@ -17,21 +17,38 @@ import { getWorld } from '../sim/world.js';
 let noFoodAt = null;
 
 const HANDLERS = {
-  'route-engaged': ({ target, unsecured, override }) => {
+  'route-engaged': ({ target, unsecured, override, stance }) => {
     if (override && unsecured.length) {
       logEntry(`Helm: executing with ${unsecured.length} crew unsecured (${unsecured.join(', ')})`, 'danger');
       toast(`BURN — ${unsecured.length} CREW UNSECURED`, 'danger');
+    } else if (stance) {
+      logEntry(`Helm: all hands secured — taking up the stance on ${target}`, 'nav');
     } else {
       logEntry(`Helm: all hands secured — burning for ${target}`, 'nav');
       toast(`MANEUVER → ${target}`, 'nav');
     }
   },
+  'stance-settled': ({ target, mode, rangeM, first }) => {
+    const where = `${mode === 'hold' ? 'on station' : mode === 'out' ? 'outside' : 'inside'} ${fmtNum(rangeM / 1000)} km ${mode === 'hold' ? 'off' : 'of'} ${target}`;
+    logEntry(first ? `Helm: ${where}` : `Helm: back ${where}`, 'nav');
+    if (first) toast('STANCE TAKEN', 'ok');
+  },
+  'stance-evading': ({ etaS }) => {
+    logEntry(`Helm: torpedo ${Math.round(etaS / 60)} min out — turning away and burning`, 'danger');
+    toast('EVADING TORPEDO', 'danger');
+  },
+  'turn-held': ({ count, names }) => {
+    logEntry(`Helm: holding the flip — ${count} crew still on their feet (${names.join(', ')}). All hands, secure for maneuvering`, 'danger');
+    toast('FLIP HELD — SECURE ALL HANDS', 'danger');
+  },
+  'turn-forced': ({ count, captain }) => logEntry(`Helm: flipping with ${count} crew on their feet${captain ? ' — captain\'s order' : ''}`, 'danger'),
+  'stance-lost': ({ target }) => { logEntry(`Lost the track on ${target} — stance released, drifting`, 'danger'); toast('STANCE LOST', 'danger'); },
   'route-arrived': ({ target, minutes, fuelUsed, intercept }) => {
     const what = intercept === 'formation' ? 'Formation established with' : intercept === 'dock' || intercept == null ? 'Arrived at' : 'In range of';
     logEntry(`${what} ${target} — ${formatDuration(minutes)}, ${fmtNum(fuelUsed)} kg burned. Holding station.`, 'nav');
     toast(`${what.toUpperCase()} ${target}`, 'ok');
   },
-  'route-aborted': ({ target }) => logEntry(`Route to ${target} aborted — drive cut, drifting`, 'warn'),
+  'route-aborted': ({ target, stance }) => logEntry(stance ? `Stance on ${target} released — drive cut, drifting` : `Route to ${target} aborted — drive cut, drifting`, 'warn'),
   'route-target-lost': () => { logEntry('Route target lost — autopilot disengaged', 'danger'); toast('TARGET LOST', 'danger'); },
   'hold-lost': ({ reason }) => { logEntry(`Lost station-keeping: ${reason}`, 'danger'); toast('STATION-KEEPING LOST', 'danger'); },
   'fuel-exhausted': () => { logEntry('Reaction mass exhausted — drive cold', 'danger'); toast('FUEL EXHAUSTED', 'danger'); },
@@ -51,7 +68,7 @@ const HANDLERS = {
   'crew-brain-damage': ({ member }) => logEntry(`${member.name} — severe head trauma, brain damage`, 'danger'),
   'crew-stroke': ({ member }) => { logEntry(`${member.name} suffered a stroke under high-dose juice`, 'danger'); toast(`${member.name} — STROKE`, 'danger'); },
   'drive-overstress': ({ g }) => { logEntry(`Drive overstress at ${g.toFixed(1)}G — CONTAINMENT FAILURE. Scram the reactor!`, 'danger'); toast('CONTAINMENT FAILURE — DRIVE OVERSTRESS', 'danger'); },
-  'crew-hangover': ({ member, minutes }) => logEntry(`${member.name}: juice hangover, ~${formatDuration(minutes)}`, 'warn'),
+  'crew-hangover': ({ member, minutes }) => logEntry(`${member.name}: ${member.juiceCrash ? 'high-dose crash' : 'juice hangover'}, ~${formatDuration(minutes)}`, member.juiceCrash ? 'danger' : 'warn'),
   'crew-stabilized': ({ member, medic }) => logEntry(`${medic.name} stabilized ${member.name}`, 'crew'),
   'crew-delivered': ({ member, medic }) => logEntry(`${medic.name} carried ${member.name} to the autodoc`, 'crew'),
   'crew-healed': ({ member }) => logEntry(`${member.name} discharged from the autodoc`, 'ok'),
@@ -142,8 +159,8 @@ const HANDLERS = {
     logEntry(`Torpedo ${text}`, 'system');
   },
   'slug-hit': ({ owner, target }) => { if (target === 'player') toast('RAILGUN HIT', 'danger'); else if (owner === 'player') logEntry(`Slug hit on ${nameOf(target)}`, 'ok'); },
-  'player-hit': ({ kind, section, effects }) => {
-    const what = kind === 'blast' ? 'Blast wave' : kind === 'pdc' ? 'PDC fire' : kind === 'slug' ? 'Railgun slug' : kind === 'he' ? 'Torpedo' : 'Hit';
+  'player-hit': ({ kind, weapon, section, effects }) => {
+    const what = kind === 'blast' ? 'Blast wave' : kind === 'pdc' ? 'PDC fire' : kind === 'slug' ? 'Railgun slug' : kind === 'he' ? 'Torpedo' : kind === 'gear' ? `Improvised fire (${weapon})` : 'Hit';
     const parts = [effects.breaches.length ? `breach: ${effects.breaches.join(', ')}` : '', effects.systems.length ? effects.systems.join(', ') : '', effects.containment ? 'REACTOR CONTAINMENT FAILING' : ''].filter(Boolean);
     logEntry(`${what} strikes the ${section === 'all' ? 'whole hull' : section} — hull ${Math.round(ui.state.hull.integrity)}%${parts.length ? ' · ' + parts.join(' · ') : ''}`, 'danger');
     toast(effects.containment ? 'HIT — CONTAINMENT FAILURE, SCRAM THE REACTOR' : `HIT — HULL ${Math.round(ui.state.hull.integrity)}%`, 'danger');

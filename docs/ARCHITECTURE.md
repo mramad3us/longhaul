@@ -12,13 +12,13 @@
 
 ## State
 
-One plain, serializable object holds the game. Keys starting with `$` are runtime-only (caches, per-minute scratch) and are stripped from saves. `sim/save.js` saves and loads it and migrates older schemas forward: v0.7, schema 2 (v0.8) and schema 3 (v0.9) all load into schema 4 (v0.10).
+One plain, serializable object holds the game. Keys starting with `$` are runtime-only (caches, per-minute scratch) and are stripped from saves. `sim/save.js` saves and loads it. A save from any other schema (the current one is 5) is refused with a message to start a new game; there are no migrations.
 
 Main branches of the state:
 
 | Key | Module | |
 |---|---|---|
-| `flight`, `autopilot` | flight.js, autopilot.js, nav.js, guidance.js | our ship's motion, plans and guidance |
+| `flight`, `autopilot` | flight.js, autopilot.js, nav.js, guidance.js, stance.js | our ship's motion, plans (routes and stances) and guidance |
 | `ship` (`decks`, `crew`, `classId`, `tl`) | ship-layout.js, crew.js, crew-ai.js | interior, people |
 | `systems`, `reactor`, `lifeSupport`, `jobs` | systems.js, reactor.js, life-support.js, jobs.js | machinery and the work it makes |
 | `hull`, `magazine`, `combat` | combat.js, damage.js | structure, torpedoes aboard, fire control |
@@ -69,3 +69,40 @@ The target is more than 200,000 entities. The rules:
 ## Events
 
 The sim emits facts (`torpedo-hit`, `crime`, `comm-request`, …). `ui/presenter.js` is the one place that decides how a fact is shown (log, toast, dialog). `ui/fx.js` keeps positioned combat effects for the canvases.
+
+## UI modules (`js/ui/`)
+
+| Module | |
+|---|---|
+| `app.js` | screens, game lifecycle, frame loop wiring, dev tools, the `window.__longhaul` debug handle (`state`, `loop`, `step(n)`) |
+| `context.js` | the shared `ui` object: live state, loop, settings, selection |
+| `hud.js` | top bar (clock, warp, battle stations, nav/space/threat chips), ship status, stores |
+| `ship-view.js` | the SVG cross-section of the decks and crew (tile art in `js/svg-icons.js`) |
+| `selection.js` | the side panel for a selected crew member or console |
+| `nav.js` | the navigation modal: TACTICAL, SOLAR, SCANNER and COMBAT tabs; route planning; route and stance status |
+| `stance.js` | the stance panel (order, range, drive, band, doctrine, preview), and one-click stances for fire control |
+| `library.js` | the ship's library: reference pages built from the simulation's own tables (classes, tech, systems, fittings, weapons, navigation, factions, stations); anything marked `data-lib` opens its page |
+| `tac.js`, `solar-map.js`, `scanner.js`, `combat.js` | the four canvases (`combat.js` also renders the fire-control panel) |
+| `dialogs.js` | generic dialog, missions log, jobs, hail, distress calls and comm requests, station board and services |
+| `shipboard.js` | engineering board, duty roster, words for activities and jobs |
+| `presenter.js`, `fx.js`, `log.js`, `toast.js` | how events are shown |
+| `persistence.js`, `settings.js`, `../storage.js` | IndexedDB saves and settings |
+
+CSS lives in `css/main.css` (the original design system: tokens, pixel type, teal/amber) and `css/ui.css` (components added since v0.8, combat at the end).
+
+## Tests (`tests/`)
+
+`node tests/run.mjs [filter]`. Each `*.test.mjs` default-exports `[{ name, fn }]`.
+
+| Suite | Covers |
+|---|---|
+| flight | Lambert, brachistochrones, economy cruise, ballistic transfers, intercepts |
+| guidance | how approaches look from the bridge: turns, wobbles, backing off, for stations, moons, bodies, intercepts, failing machinery and close starts |
+| stance | stances held against coasting, thrusting, charging and fleeing ships and stations, the doctrine under fire, saves |
+| game | whole-game integration, saves, SOS, contracts, the 200k-entity scale budget |
+| crew | medicine, inertial events, breaches, reactor procedures, juice, FLANK |
+| ship | watches, needs, wear and repair, hand flying, life support failures |
+| combat | classes, torpedoes and PDC, dead reckoning, railguns, damage, fire control, patrols, pirates, surrender, saves |
+| factions | influence, hot zones, the director, bounties |
+
+Tests are seeded (`seedRandom`). Suites that aren't about encounters switch them off with `s.politics.quietUntil = Infinity` and `s.missions.cooldown = 1e9`.

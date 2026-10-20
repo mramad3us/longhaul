@@ -24,12 +24,12 @@
 import { AU_M } from '../core/constants.js';
 import { random, randInt, weightedPick } from '../core/rng.js';
 import { getWorld } from './world.js';
-import { SYSTEMS, SYSTEM_IDS, damageSystem } from './systems.js';
+import { SYSTEMS, damageSystem, shipSystems } from './systems.js';
 import { setBreach } from './life-support.js';
 import { applyImpact, mourn } from './crew.js';
 import { triggerContainmentFailure } from './reactor.js';
 import { shipGeometry } from './ship-layout.js';
-import { CLASSES, SIZES, PLAYER_CLASS, classOf } from './ship-classes.js';
+import { CLASSES, SIZES, PLAYER_CLASS, classOf, hullPoints } from './ship-classes.js';
 import { PLAYER, ensureHull, profile, DISABLED_BELOW } from './combatants.js';
 import { recordAttack } from './law.js';
 import { sizeForMass } from './sensors.js';
@@ -81,7 +81,7 @@ function deckSystems(state) {
   if (!map) {
     const geo = shipGeometry(state.ship);
     map = state.ship.decks.map(() => []);
-    for (const id of SYSTEM_IDS) {
+    for (const id of shipSystems(state)) {
       for (const f of geo.fixtures[SYSTEMS[id].fixture] || []) if (!map[f.deck].includes(id)) map[f.deck].push(id);
     }
     _deckSystems.set(state.ship.decks, map);
@@ -98,7 +98,7 @@ function hitPlayer(state, hit, emit) {
   if (state.lost) return null;
   const p = profile(state, PLAYER);
   const dp = shed(hit.dp, p.armor, hit.spread);
-  const hpMax = SIZES[CLASSES[state.ship.classId || PLAYER_CLASS].size].hp;
+  const hpMax = hullPoints(CLASSES[state.ship.classId || PLAYER_CLASS]);
   state.hull.integrity = Math.max(0, state.hull.integrity - dp / hpMax * 100);
   const section = hit.spread ? 'all' : (hit.section || pickSection(hit.aim, hit.precision ?? 0.5));
   const decks = hit.spread ? state.ship.decks.map((_, i) => i) : (() => { const ds = decksFor(state, section); return [ds[randInt(0, ds.length - 1)]]; })();

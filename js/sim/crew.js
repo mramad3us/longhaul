@@ -65,7 +65,12 @@ export function createCrew(count, homeFixtures = null) {
       deathTimer: -1,
       conditions: [],
       juiced: false,
+      juiceDose: null,    // 'standard' | 'high' while the drug is in the blood
+      juiceMin: 0,        // minutes on the high dose this burn
+      juiceIdleMin: 0,    // minutes since the couch last dosed (the drug lingers)
+      juicePeakG: 0,      // hardest G felt on this dose
       juiceHangover: 0,
+      juiceCrash: false,  // the hangover is a high-dose crash (much worse)
       suit: { wearing: false, o2: 0, lockerId: null },
       hunger: 0,          // minutes spent with nothing in the stomach
       thirst: 0,          // minutes without water aboard
@@ -126,40 +131,78 @@ export function mobility(m, gForce) {
 }
 
 // ---- G-FORCE PHYSIOLOGY (per game-minute) ----
+//
+// Juice is cheap to give and expensive to have taken. A dose stays in the
+// blood for a while, so a flip or a lull between combat burns does not mean
+// a fresh dose: the couch doses once per burn (standard: 1 med unit, high
+// dose: 2, plus a booster each day). The bill comes afterwards. The hangover
+// lasts up to three days after a standard dose. After a high dose it is a
+// crash: a hammered heart, a long hangover that grows with every hour spent
+// on the high dose, and while it lasts people work badly, feel wretched, and
+// risk brain bleeds under any real G.
 
 /** Above this the couch gives a high dose: more protection, more supplies, real risk. */
 export const HIGH_DOSE_G = 6;
-const HIGH_DOSE_BOOSTER_MIN = 120;   // a high dose needs a booster every 2 h
+const HIGH_DOSE_BOOSTER_MIN = 24 * 60;  // a high dose needs a booster once a day
+const JUICE_LINGER_MIN = 60;            // the drug covers a flip or a lull this long
+const HANGOVER_MAX_MIN = 10 * 1440;
+const CRASH_MIN_PER_HIGH_MIN = 1.5;     // each hour on the high dose adds 1.5 h of crash
 
 /**
  * Effective G after couch and juice protection. Consumes med supplies when a
- * dose is given (standard: 1; high dose: 2 up front + 1 per booster).
+ * dose is given (standard: 1; high dose: 2 in all, + 1 per daily booster).
  */
 export function protectedG(m, gForce, secured, resources) {
   const med = resources.medSupplies;
-  if (!secured) { m.juiced = false; m.juiceDose = null; return gForce; }
-  if (gForce > G_THRESHOLDS.HIGH && med.current > 0) {
-    const dose = gForce > HIGH_DOSE_G ? 'high' : 'standard';
-    if (!m.juiced || (dose === 'high' && m.juiceDose !== 'high')) {
-      med.current = Math.max(0, med.current - (dose === 'high' ? 2 : 1));
-      m.juiceMin = 0;
-    } else if (dose === 'high' && ++m.juiceMin % HIGH_DOSE_BOOSTER_MIN === 0) {
-      med.current = Math.max(0, med.current - 1);
-    }
-    m.juiced = true;
-    m.juiceDose = dose;
-    return gForce / (dose === 'high' ? 4.5 : 3);   // 6G feels like 2G; 10G like 2.2G
+  const dosing = secured && gForce > G_THRESHOLDS.HIGH && (m.juiced || med.current > 0);
+  if (!dosing) {
+    if (m.juiced) m.juiceIdleMin = (m.juiceIdleMin || 0) + 1;
+    if (!secured) return gForce;
+    return m.juiced && gForce > G_THRESHOLDS.HIGH ? gForce / (m.juiceDose === 'high' ? 4.5 : 3) : gForce * 0.7;
   }
-  return gForce * 0.7;              // couch alone
+  const high = gForce > HIGH_DOSE_G || m.juiceDose === 'high';     // once on the high dose, it stays in you
+  if (!m.juiced) {
+    med.current = Math.max(0, med.current - (high ? 2 : 1));
+    m.juiceMin = 0;
+    m.juicePeakG = 0;
+  } else if (high && m.juiceDose !== 'high') {
+    med.current = Math.max(0, med.current - 1);                    // topped up from standard
+  } else if (high && m.juiceMin > 0 && m.juiceMin % HIGH_DOSE_BOOSTER_MIN === 0) {
+    if (med.current > 0) med.current = Math.max(0, med.current - 1);
+  }
+  if (high) m.juiceMin = (m.juiceMin || 0) + 1;
+  m.juiced = true;
+  m.juiceDose = high ? 'high' : 'standard';
+  m.juiceIdleMin = 0;
+  m.juicePeakG = Math.max(m.juicePeakG || 0, gForce);
+  return gForce / (high ? 4.5 : 3);   // 6G feels like 2G; 10G like 2.2G
 }
 
-/** When a juiced burn ends, the body pays for it (high doses twice as hard). */
-export function endJuice(m, peakG) {
+/** True once the last dose has worn off: time to pay for it. */
+export const juiceLapsed = (m) => m.juiced && (m.juiceIdleMin || 0) >= JUICE_LINGER_MIN;
+
+/**
+ * When a juiced burn ends, the body pays for it. A standard dose leaves up to
+ * three days of hangover. A high dose crashes the heart and leaves a hangover
+ * twice as long plus 1.5 h for every hour spent on it.
+ */
+export function endJuice(m) {
   if (!m.juiced || m.dead) { m.juiced = false; m.juiceDose = null; return 0; }
   const high = m.juiceDose === 'high';
+  let minutes = 4320 * Math.min(Math.max(m.juicePeakG || 0, 1.5) / 5, high ? 2 : 1);
+  if (high) {
+    minutes += (m.juiceMin || 0) * CRASH_MIN_PER_HIGH_MIN;
+    m.juiceCrash = true;
+    m.heart.stress = clamp(m.heart.stress + 40);
+    m.heart.health = clamp(m.heart.health - 15);
+    m.moraleMod = (m.moraleMod || 0) - 10;
+  }
+  minutes = Math.round(Math.min(HANGOVER_MAX_MIN, minutes));
   m.juiced = false;
   m.juiceDose = null;
-  const minutes = Math.round(4320 * Math.min(Math.max(peakG, 1.5) / 5, high ? 2 : 1));
+  m.juiceMin = 0;
+  m.juiceIdleMin = 0;
+  m.juicePeakG = 0;
   m.juiceHangover = Math.max(m.juiceHangover, minutes);
   addCondition(m, 'juice-hangover');
   return minutes;
@@ -228,8 +271,9 @@ export function physiologyTick(m, effectiveG, gForceRaw) {
     }
   }
 
+  // (a crashed heart barely mends until the hangover clears: about a day for the crash itself)
   if (!hasCondition(m, 'cardiac-stress') && !hasCondition(m, 'critical') && h.health < 100) {
-    h.health = clamp(h.health + 0.15);
+    h.health = clamp(h.health + (m.juiceCrash && m.juiceHangover > 0 ? 0.01 : 0.15));
   }
 
   // ---- High-dose juice: the drugs keep you conscious, not intact — stroke risk
@@ -239,11 +283,11 @@ export function physiologyTick(m, effectiveG, gForceRaw) {
     ev.push('stroke');
   }
 
-  // ---- Juice hangover: brain-bleed risk under G
+  // ---- Juice hangover: brain-bleed risk under G (twice as likely in a crash)
   if (m.juiceHangover > 0) {
     m.juiceHangover -= 1;
-    if (m.juiceHangover <= 0) { m.juiceHangover = 0; removeCondition(m, 'juice-hangover'); }
-    if (G >= G_THRESHOLDS.HIGH && random() < 0.003) {
+    if (m.juiceHangover <= 0) { m.juiceHangover = 0; m.juiceCrash = false; removeCondition(m, 'juice-hangover'); }
+    if (G >= G_THRESHOLDS.HIGH && random() < (m.juiceCrash ? 0.006 : 0.003)) {
       b.head = clamp(b.head - 3);
       m.consciousness = clamp(m.consciousness - 5, 10, 100);
     }
@@ -309,6 +353,7 @@ export function kill(m) {
   m.heart.bpm = 0;
   m.heart.stress = 0;
   m.juiced = false;
+  m.juiceDose = null;
   m.conditions = ['dead'];
   m.task = null;
   m.path = [];

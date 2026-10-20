@@ -47,24 +47,32 @@
     <!-- New game -->
     <div id="screen-new-game" class="screen">
       <div class="landing-bg"></div>
-      <div class="panel-screen">
+      <div class="panel-screen panel-newgame">
         <h2 class="panel-title">New Mission</h2>
-        <div class="form-group">
-          <label class="form-label" for="input-ship-name">Ship Name</label>
-          <input type="text" id="input-ship-name" class="form-input" placeholder="UNN Longhaul" maxlength="32">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="input-captain-name">Captain Name</label>
-          <input type="text" id="input-captain-name" class="form-input" placeholder="Captain" maxlength="32">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Starting Crew</label>
-          <div class="crew-count-selector">
-            <button class="crew-btn" id="crew-minus" aria-label="Fewer crew"><span id="icon-minus"></span></button>
-            <span class="crew-count" id="crew-count">4</span>
-            <button class="crew-btn" id="crew-plus" aria-label="More crew"><span id="icon-plus"></span></button>
+        <div class="newgame-grid">
+          <div class="newgame-form">
+            <div class="form-group">
+              <label class="form-label" for="input-ship-name">Ship Name</label>
+              <input type="text" id="input-ship-name" class="form-input" placeholder="Longhaul" maxlength="32">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="input-captain-name">Captain Name</label>
+              <input type="text" id="input-captain-name" class="form-input" placeholder="Captain" maxlength="32">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Starting Crew</label>
+              <div class="crew-count-selector">
+                <button class="crew-btn" id="crew-minus" aria-label="Fewer crew"><span id="icon-minus"></span></button>
+                <span class="crew-count" id="crew-count">4</span>
+                <button class="crew-btn" id="crew-plus" aria-label="More crew"><span id="icon-plus"></span></button>
+              </div>
+              <p class="form-hint" id="crew-hint"></p>
+            </div>
           </div>
-          <p class="form-hint" id="crew-hint"></p>
+          <div class="form-group newgame-ship">
+            <label class="form-label">Ship</label>
+            <div class="ship-picker" id="ship-picker"></div>
+          </div>
         </div>
         <div class="form-actions">
           <button class="btn btn-secondary" data-action="back">Back</button>
@@ -124,10 +132,14 @@
           </button>
         </div>
         <div class="hud-center">
-          <span class="hud-ship-name" id="hud-ship-name">—</span>
-          <span class="hud-nav-chip" id="hud-nav-chip">—</span>
-          <span class="hud-space-chip" id="hud-space" title="Who holds this space"></span>
-          <button class="hud-threat-chip" id="hud-threat" style="display:none" title="Combat (W)"></button>
+          <div class="hud-center-row hud-center-sub">
+            <span class="hud-ship-name" id="hud-ship-name">—</span>
+            <span class="hud-space-chip" id="hud-space" title="Who holds this space"></span>
+          </div>
+          <div class="hud-center-row">
+            <span class="hud-nav-chip" id="hud-nav-chip">—</span>
+            <button class="hud-threat-chip" id="hud-threat" style="display:none" title="Combat (W)"></button>
+          </div>
         </div>
         <div class="hud-right">
           <button class="hud-icon-btn hud-text-btn" data-action="open-map" title="Navigation (M)">NAV</button>
@@ -135,6 +147,7 @@
           <div class="hud-divider"></div>
           <button class="hud-icon-btn hud-text-btn hud-systems-btn" data-action="open-systems" title="Ship systems (E)">SYSTEMS<span class="hud-systems-count" id="hud-systems-count"></span></button>
           <button class="hud-icon-btn hud-text-btn" data-action="open-roster" title="Duty roster (D)">ROSTER</button>
+          <button class="hud-icon-btn hud-text-btn" data-action="open-library" title="Ship's library (I)">LIBRARY</button>
           <button class="hud-icon-btn hud-missions-btn" data-action="open-missions" title="Mission log (L)">
             <span class="hud-missions-label">MISSIONS</span>
             <span class="hud-missions-count" id="hud-missions-count">0</span>
@@ -275,6 +288,21 @@
           </div>
           <div class="tac-modal-info" id="nav-info"></div>
           <div class="route-status-bar" id="route-status" style="display:none"></div>
+        </div>
+      </div>
+
+      <!-- The ship's library (content rendered by js/ui/library.js; the game keeps running) -->
+      <div class="library" id="library" style="display:none">
+        <div class="library-window">
+          <div class="library-header">
+            <span class="library-title">SHIP'S LIBRARY</span>
+            <input class="library-search" id="library-search" type="search" placeholder="Search ships, systems, weapons…" autocomplete="off">
+            <button class="tac-modal-close" id="library-close" aria-label="Close">&times;</button>
+          </div>
+          <div class="library-body">
+            <nav class="library-index" id="library-index"></nav>
+            <article class="library-page" id="library-page"></article>
+          </div>
         </div>
       </div>
 

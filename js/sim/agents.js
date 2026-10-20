@@ -7,14 +7,17 @@
 // fleeing an attack, a convoy we are escorting. Agents are driven
 // world entities: every minute they decide (this module) and fly
 // (moveAgents) with the same flight model and guidance laws as our
-// own ship — slew limits, drive limits, the closing law.
+// own ship — slew limits, drive limits, the closing law. An enemy is
+// flown to on where it is and how it moves, never on its thrust (two
+// ships matching each other's burn would never meet).
 //
 // Roles and their modes:
 //   patrol/picket  cruise → intercept → (inspection) search → cruise
 //                  … or engage criminals and anyone resisting arrest
 //   pirate         lurk → stalk → demand → engage → loot → leave
 //   navy           patrol → engage enemy warships; warn off strangers
-//   civilian       flee from whoever is shooting, then drift
+//   civilian       flee from whoever is shooting, then drift (a miner
+//                  turns its gear on anyone who comes close)
 //   convoy         travel to a destination (escort contracts)
 //
 // Talking to us goes through *requests* (state.comms.requests): an
@@ -30,7 +33,7 @@ import { AU_M, G0, MIN_S, DAY_MIN } from '../core/constants.js';
 import { randInt, chance } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { createEntity } from './entities.js';
-import { rollIdentity, CLASSES } from './ship-classes.js';
+import { rollIdentity, CLASSES, TECH } from './ship-classes.js';
 import { FACTIONS } from './factions.js';
 import { flightStep, SLEW_RATE } from './flight.js';
 import { createPlan, guidanceStep, targetStateAt } from './nav.js';
@@ -39,21 +42,23 @@ import { REVEAL, canSee, signatureRange } from './sensors.js';
 import {
   PLAYER, kinematics, profile, snapshot, sees, strength, ensureHull, isOutOfFight, sensorQuality, DISABLED_BELOW,
 } from './combatants.js';
-import { launchTorpedo, fireRailgun, strafe, inboundTo, launchedBy, timeToGo } from './ordnance.js';
+import { launchTorpedo, fireRailgun, strafe, fireGear, inboundTo, launchedBy, timeToGo } from './ordnance.js';
 import { hullTick } from './damage.js';
 import { wantedBy, settleInspection, adjustStanding } from './law.js';
-import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M } from './weapons.js';
+import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from './weapons.js';
 
 /**
  * How each role fights. launchAU: torpedo launch range · standoffM: distance
  * held in a fight (m) — outside the enemy's guns; ships that `closeIn` come
- * to PDC range only to finish a crippled or toothless target.
+ * to PDC range only to finish a crippled or toothless target. They break off
+ * below retreatHp structure, or when outgunned past breakOff (own strength
+ * over the enemy's).
  */
 export const ROLES = {
-  patrol: { aim: 'disable', launchAU: 0.003, standoffM: 50_000_000, closeIn: true, retreatHp: 0.3, surrenders: true, nukes: false, approachG: 3 },     // 50,000 km
-  picket: { aim: 'disable', launchAU: 0.003, standoffM: 50_000_000, closeIn: true, retreatHp: 0.3, surrenders: true, nukes: false, approachG: 3 },
-  pirate: { aim: 'disable', launchAU: 0.004, standoffM: 100_000_000, closeIn: true, retreatHp: 0.5, surrenders: true, nukes: false, approachG: 3 },    // 100,000 km
-  navy: { aim: 'kill', launchAU: 0.02, standoffM: 20_000_000, closeIn: false, retreatHp: 0.25, surrenders: false, nukes: true, approachG: 4 },        // 20,000 km: railgun range
+  patrol: { aim: 'disable', launchAU: 0.003, standoffM: 50_000_000, closeIn: true, retreatHp: 0.3, breakOff: 0.35, surrenders: true, nukes: false, approachG: 3 },     // 50,000 km
+  picket: { aim: 'disable', launchAU: 0.003, standoffM: 50_000_000, closeIn: true, retreatHp: 0.3, breakOff: 0.35, surrenders: true, nukes: false, approachG: 3 },
+  pirate: { aim: 'disable', launchAU: 0.004, standoffM: 100_000_000, closeIn: true, retreatHp: 0.5, breakOff: 0.35, surrenders: true, nukes: false, approachG: 3 },    // 100,000 km
+  navy: { aim: 'kill', launchAU: 0.02, standoffM: 20_000_000, closeIn: false, retreatHp: 0.25, breakOff: 0.35, surrenders: false, nukes: true, approachG: 4 },        // 20,000 km: railgun range
   civilian: { surrenders: true, flees: true },
   convoy: { surrenders: true },
 };
@@ -69,17 +74,20 @@ const LOOT_MIN = 60;
 const REQUEST_MIN = 15;               // minutes to answer a request
 const CALM_MIN = 360;                 // a fleeing civilian calms down after this long unthreatened
 const PANIC_S = 2 * 3600;             // civilians run from torpedoes arriving within this
+const PLAYER_THREAT_AU = 0.01;        // a civilian we fired on stays scared while we are this close
+const PIRATE_NERVE = 0.5;             // pirates stalk ships up to twice their strength: a demand is a bluff
 
 // ---- SPAWNING ----
 
 /**
  * Put a new agent into the world.
- * opts: { role, cls?, category?, faction?, near?, pos, vel, mode?, home?, zone?, contract?,
+ * opts: { role, cls?, kind?, category?, faction?, near?, pos, vel, mode?, home?, zone?, contract?,
  *         ambient?, hostile?: [ids], transponder?, tags?, name? }
+ * Ask for a `kind` (a frigate) and the faction fields its own design; `cls` pins one.
  */
 export function spawnAgent(state, opts) {
   const world = getWorld(state);
-  const id = rollIdentity({ cls: opts.cls, category: opts.category, faction: opts.faction, near: opts.near });
+  const id = rollIdentity({ cls: opts.cls, kind: opts.kind, category: opts.category, faction: opts.faction, near: opts.near });
   const role = opts.role;
   const e = createEntity({
     id: world.newId(role), name: opts.name || id.name, type: 'ship', faction: id.faction, cls: id.cls, tl: id.tl,
@@ -117,7 +125,7 @@ export function wake(state, e, role, opts = {}) {
   if (e.tags.traffic) { e.tags.traffic = false; if (state.traffic) state.traffic.spawned = Math.max(0, state.traffic.spawned - 1); }
   world.setDriven(e, true);
   e.t = state.clock.minute;
-  if (!e.cls) e.cls = 'freighter';
+  if (!e.cls) { e.cls = 'freighter'; e.tl = CLASSES.freighter.tl; }
   makeAgent(state, e, role, { ambient: true, ...opts });
   return e;
 }
@@ -288,7 +296,7 @@ export function moveAgents(state) {
     if (e.type !== 'ship' || !e.agent) continue;
     e.$prev = snapshot(e.pos, e.vel);
     const p = profile(state, e.id);
-    const f = { pos: e.pos, vel: e.vel, facing: e.nav.facing, maxG: p.maxG, $slew: SLEW_RATE, thrustG: 0, rcsG: 0, turning: 0 };
+    const f = { pos: e.pos, vel: e.vel, facing: e.nav.facing, maxG: p.maxG, $slew: SLEW_RATE, thrustG: 0, rcsG: 0, turning: e.nav.turning || 0 };
     flightStep(f, p.maxG > 0 ? e.agent.cmd : null, 1);
     e.nav.facing = f.facing;
     e.nav.turning = f.turning;
@@ -410,7 +418,7 @@ const BRAINS = {
     // Lawmen about: slip away
     if (lawNearby(state, e)) { a.mode = 'leave'; return; }
     if (a.mode === 'lurk') {
-      if (!state.lost && sees(state, e.id, PLAYER) && strength(p) >= 0.7 * strength(profile(state, PLAYER))) {
+      if (!state.lost && sees(state, e.id, PLAYER) && strength(p) >= PIRATE_NERVE * strength(profile(state, PLAYER))) {
         a.target = PLAYER; a.mode = 'stalk';
       } else {
         const prey = civilianPrey(state, e);
@@ -453,10 +461,10 @@ const BRAINS = {
     }
   },
 
-  civilian(state, e) {
+  civilian(state, e, emit) {
     const a = e.agent;
     const threatened = threatTo(state, e);
-    if (threatened) { a.mode = 'flee'; a.calmSince = state.clock.minute; a.threat = threatened; return; }
+    if (threatened) { a.mode = 'flee'; a.calmSince = state.clock.minute; a.threat = threatened; defendWithGear(state, e, emit); return; }
     if (a.mode === 'flee' && state.clock.minute - a.calmSince > CALM_MIN) {
       a.mode = 'drift';
       getWorld(state).setSos(e, false);
@@ -557,6 +565,24 @@ function civilianPrey(state, e) {
   return pool.length ? pool[randInt(0, pool.length - 1)] : null;
 }
 
+/**
+ * A miner run down by an attacker: turn the mining gear on the closest
+ * hostile inside its reach. It is all a civilian crew has, and it only
+ * works on a ship that comes in close — to strafe, or to loot.
+ */
+function defendWithGear(state, e, emit) {
+  const g = profile(state, e.id).gear;
+  if (!g) return;
+  let best = null, bestD = Infinity;
+  for (const id of e.agent.hostile) {
+    const k = kinematics(state, id);
+    if (!k || (k.e && isOutOfFight(k.e))) continue;
+    const d = distAU(e.pos, k.pos) * AU_M;
+    if (d < bestD) { bestD = d; best = id; }
+  }
+  if (best && bestD <= g.rangeM) fireGear(state, e.id, best, 'disable', emit);
+}
+
 /** Ordnance coming for `e` that its sensors hold (a cold-coasting torpedo is invisible until late). */
 function seenInbound(state, e) {
   const q = sensorQuality(state, e.id);
@@ -572,6 +598,8 @@ function threatTo(state, e) {
   const inbound = seenInbound(state, e).filter(o => timeToGo(state, o) < PANIC_S);
   if (inbound.length) return inbound[0].ord.owner;
   for (const o of getWorld(state).driven) if (o.agent?.hostile.includes(e.id) && !isOutOfFight(o)) return o.id;
+  // We fired on it, and we are still close
+  if (e.agent.hostile.includes(PLAYER) && !state.lost && distAU(e.pos, state.flight.pos) < PLAYER_THREAT_AU) return PLAYER;
   return null;
 }
 
@@ -592,27 +620,57 @@ function steer(state, e, emit) {
       fleeFrom(e, from?.pos || state.flight.pos, p.maxG);
       return;
     }
-    case 'stalk': case 'demand': goTo(state, e, spec(a.target), a.mode === 'demand' ? 50_000_000 : 40_000_000, R.approachG); return;
-    case 'intercept': goTo(state, e, playerSpec, 20_000_000, R.approachG); return;
-    case 'search-approach': case 'search': goTo(state, e, playerSpec, 2_000, 1); return;
-    case 'loot': if (a.target) goTo(state, e, spec(a.target), 2_000, 1); else a.cmd = null; return;
-    case 'travel': if (a.dest) goTo(state, e, { kind: 'entity', id: a.dest }, 3_000, CLASSES[e.cls]?.drive.cruiseG || 0.3); return;
+    case 'stalk': case 'demand': goTo(state, e, spec(a.target), a.mode === 'demand' ? 50_000_000 : 40_000_000, R.approachG, true); break;
+    case 'intercept': goTo(state, e, playerSpec, 20_000_000, R.approachG, true); break;
+    case 'search-approach': case 'search': goTo(state, e, playerSpec, 2_000, 1); break;
+    case 'loot': if (a.target) goTo(state, e, spec(a.target), 2_000, 1); else a.cmd = null; break;
+    case 'travel': if (a.dest) goTo(state, e, { kind: 'entity', id: a.dest }, 3_000, CLASSES[e.cls]?.drive.cruiseG || 0.3); break;
     case 'cruise': case 'patrol':
       if (a.home) goTo(state, e, a.home, 30_000_000, 1); else a.cmd = null;
-      return;
+      break;
     default: a.cmd = null;
+  }
+  // A torpedo outlives the ship that fired it: warships stay on guard until
+  // the last one is accounted for
+  if (a.role === 'navy' || a.role === 'patrol' || a.role === 'picket') guardAgainst(state, e, seenInbound(state, e), p, R);
+}
+
+/**
+ * Point defense is automatic; what the crew adds is jinking when ordnance is
+ * close and, by naval doctrine (TECH.counterBurn), turning away from inbound
+ * torpedoes so they arrive slowly, long under the PDCs, and must burn to catch
+ * up. A ship that keeps charging meets them at a hundred km/s, inside its
+ * point defense for half a second. Jury-rigged ships hold course and jink.
+ */
+function guardAgainst(state, e, inbound, p, R) {
+  if (!inbound.length) return;
+  if (inbound.some(o => timeToGo(state, o) < 20 * MIN_S)) e.agent.evade = true;
+  if (TECH[p.tl].counterBurn && p.maxG > 0) {
+    const torp = inbound.filter(o => o.ord.kind === 'torpedo' && timeToGo(state, o) < COUNTER_BURN_S)
+      .sort((x, y) => timeToGo(state, x) - timeToGo(state, y))[0];
+    if (torp) fleeFrom(e, torp.pos, Math.min(R.approachG || 1, p.maxG));
   }
 }
 
-function goTo(state, e, target, standoff, accelG) {
+/**
+ * Fly to a target with the shared closing law, closing no faster than
+ * `cruise` (m/s) when given. Against an enemy (`hostile`)
+ * its thrust is left out of the guidance: that thrust is a reaction to us, and
+ * two ships each matching the other's burn end up flying side by side. So we
+ * close on where it is and how it moves, re-measured every minute.
+ */
+function goTo(state, e, target, standoff, accelG, hostile = false, cruise = null) {
   const a = e.agent;
   const now = state.clock.minute;
-  const key = `${target.kind}:${target.id ?? ''}:${standoff}:${accelG}`;
-  if (a.planKey !== key) { a.plan = createPlan('closing', target, { accelG, standoff }); a.planKey = key; }
+  const key = `${target.kind}:${target.id ?? ''}:${standoff}:${accelG}:${cruise}`;
+  if (a.planKey !== key) { a.plan = createPlan('closing', target, { accelG, standoff, cruise }); a.planKey = key; }
   const tgt = targetStateAt(state, target, now, true);
   if (!tgt) { a.cmd = null; return; }
   const f = { pos: e.pos, vel: e.vel, facing: e.nav.facing, turning: e.nav.turning };
-  const g = guidanceStep(a.plan, f, now, tgt, null);
+  const g = guidanceStep(a.plan, f, now, hostile ? { pos: tgt.pos, vel: tgt.vel } : tgt, null);
+  // (against an enemy the drive fires only once the nose is on the vector:
+  // a fighting ship's commands jump about as it dodges and counter-burns)
+  if (hostile && !g.arrived) g.cmd.lean = false;
   a.cmd = g.arrived ? holdWith(tgt) : g.cmd;
 }
 
@@ -641,7 +699,7 @@ function fight(state, e, emit) {
   const now = state.clock.minute;
 
   // Break off: badly hurt, or hopelessly outgunned
-  if (p.maxG > 0 && (h.hp / h.hpMax < R.retreatHp || strength(p) < 0.35 * strength(tp))) {
+  if (p.maxG > 0 && (h.hp / h.hpMax < R.retreatHp || strength(p) < R.breakOff * strength(tp))) {
     a.mode = a.role === 'navy' ? 'flee' : 'leave';
     a.threat = tid;
     emit('agent-retreats', { id: e.id, name: e.name });
@@ -649,13 +707,20 @@ function fight(state, e, emit) {
   }
 
   // Jink when ordnance is coming or the enemy is close
-  a.evade = seenInbound(state, e).some(o => timeToGo(state, o) < 20 * MIN_S) || dM < 50_000_000;
+  const inbound = seenInbound(state, e);
+  a.evade = inbound.some(o => timeToGo(state, o) < 20 * MIN_S) || dM < 50_000_000;
 
   // Distance: stand off for torpedoes; close in to finish a crippled or toothless target with PDCs
   const crippled = tp.maxG <= 0 || tp.pdc.mounts < 0.5 || tp.pdc.ammo <= 0;
   const close = R.closeIn && crippled && p.pdc.mounts > 0;
   const spec = tid === PLAYER ? { kind: 'player' } : { kind: 'entity', id: tid };
-  goTo(state, e, spec, close ? Math.min(3_000, p.pdc.strafeM * 0.5) : R.standoffM, Math.min(R.approachG, p.maxG || 1));
+  // Every m/s of closing speed is a m/s on the enemy's torpedoes and less time
+  // under our PDCs: a naval crew under fire closes slowly
+  const underFire = TECH[p.tl].counterBurn && inbound.some(o => o.ord.kind === 'torpedo');
+  goTo(state, e, spec, close ? Math.min(3_000, p.pdc.strafeM * 0.5) : R.standoffM, Math.min(R.approachG, p.maxG || 1), true,
+    underFire ? UNDER_FIRE_CLOSE_MS : null);
+
+  guardAgainst(state, e, inbound, p, R);
 
   // A pirate that has crippled us wants paying, not a wreck: one last chance
   if (a.role === 'pirate' && tid === PLAYER && tp.maxG <= 0 && !a.flags.lastDemand && !a.request) {

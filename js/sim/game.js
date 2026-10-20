@@ -14,12 +14,12 @@ import { VERSION } from '../version.js';
 import { getWorld, backgroundBudget } from './world.js';
 import { createDefaultEntities } from './entities.js';
 import { createDefaultLayout, computeShipMass, isSecureSeat } from './ship-layout.js';
-import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, mourn, G_THRESHOLDS } from './crew.js';
-import { crewTick, placeCrew, helmsman } from './crew-ai.js';
+import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, juiceLapsed, mourn } from './crew.js';
+import { crewTick, placeCrew, helmsman, crewSecureStatus } from './crew-ai.js';
 import { createJobs } from './jobs.js';
 import { needsTick, efficiency } from './needs.js';
-import { createFlight, flightStep, fuelUsed, angleDiff, SLEW_RATE, RATED_G, RCS_MAX_G, DRIVE_MAX_G } from './flight.js';
-import { autopilotTick, autopilotAfterStep, holdStep, holdStation, crewPolicy, maxSpeed } from './autopilot.js';
+import { createFlight, flightStep, fuelUsed, angleDiff, SLEW_RATE, RCS_MAX_G, FLIP_TURN } from './flight.js';
+import { autopilotTick, autopilotAfterStep, holdStep, holdStation, crewPolicy, maxSpeed, flipInterlock } from './autopilot.js';
 import { createLifeSupport, lifeSupportTick, breachJobs } from './life-support.js';
 import { createReactor, reactorTick, isReactorOnline, triggerContainmentFailure } from './reactor.js';
 import {
@@ -33,14 +33,14 @@ import { createMissions, missionsTick } from './missions.js';
 import { createContracts, contractsTick } from './contracts.js';
 import { createTraffic, seedTraffic, trafficTick } from './traffic.js';
 import { triggerManeuver, isInertiaActive, updateInertia, Maneuver } from './inertia.js';
-import { PLAYER_CLASS, CLASSES } from './ship-classes.js';
+import { PLAYER_CLASS, CLASSES, playerClass, ratedG } from './ship-classes.js';
 import { createCombat, createMagazine, combatTick, combatMove, moveAgents, jinkG } from './combat.js';
 import { createLaw, lawTick } from './law.js';
 import { createPolitics, politicsTick } from './conflict.js';
 import { destroyPlayer } from './damage.js';
 import { snapshot, PDC_ROUNDS_PER_MOUNT } from './combatants.js';
 
-export const SAVE_SCHEMA = 4;
+export const SAVE_SCHEMA = 5;
 
 // Consumption per person per minute. Crew eat meals (crew-ai); passengers
 // are fed from stores continuously. Water figures are gross — the
@@ -52,11 +52,17 @@ const JINK_FUEL_SHARE = 0.5;   // jinking burns at full G about half the time
 
 const emit = (type, payload) => bus.emit(type, payload);
 
-export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = 36 } = {}) {
+/**
+ * A new game. `classId` is the hull we start in (any PLAYABLE class): it
+ * sets the interior fit, the machinery, the drive, hold, berths and
+ * weapons. A navy hull in private hands comes without its nuclear warheads.
+ */
+export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = 36, classId = PLAYER_CLASS } = {}) {
   const crew = createCrew(crewCount);
   crew[0].name = captainName;
-  const cls = CLASSES[PLAYER_CLASS];
-  const ship = { name: shipName, classId: PLAYER_CLASS, tl: cls.tl[0], decks: createDefaultLayout(), crew };
+  if (!CLASSES[classId]) classId = PLAYER_CLASS;
+  const cls = CLASSES[classId];
+  const ship = { name: shipName, classId, tl: cls.tl, decks: createDefaultLayout(classId), crew };
 
   const state = {
     schema: SAVE_SCHEMA,
@@ -80,8 +86,8 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
       pdcRounds: { current: cls.pdc * PDC_ROUNDS_PER_MOUNT * 0.6, max: cls.pdc * PDC_ROUNDS_PER_MOUNT, unit: 'rds' },
     },
     hull: { integrity: 100 },
-    magazine: createMagazine(PLAYER_CLASS),
-    combat: createCombat(PLAYER_CLASS),
+    magazine: { ...createMagazine(classId), nuke: 0 },
+    combat: createCombat(classId),
     law: createLaw(),
     politics: createPolitics(),
     cargo: [],
@@ -90,7 +96,7 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
     berths: cls.berths,
     lifeSupport: null,
     reactor: createReactor(),
-    systems: createSystems(),
+    systems: createSystems(classId),
     comms: createComms(),
     sensors: createSensors(),
     jobs: createJobs(),
@@ -155,7 +161,8 @@ export function minuteTick(state, { lite = false } = {}) {
   state.$jinkG = jink;
 
   // ---- Machinery limits for this minute
-  f.maxG = Math.min(DRIVE_MAX_G, driveLimitG(state));
+  const cls = playerClass(state);
+  f.maxG = Math.min(cls.drive.maxG, driveLimitG(state));
   // Damage control: with the hull holed, the burn eases to 1G so the crew can move
   const breach = state.ship.decks.some(d => d.atmosphere?.breached);
   if (breach) f.maxG = Math.min(f.maxG, 1);
@@ -183,6 +190,8 @@ export function minuteTick(state, { lite = false } = {}) {
     }
     if (ap.helm !== (ap.helmWas ?? null)) emit('helm-status', { status: ap.helm, was: ap.helmWas ?? null, by: ap.helmBy });
     ap.helmWas = ap.helm;
+    // No flip with the crew on their feet
+    if (cmd) cmd = flipInterlock(state, cmd, emit);
   }
   if (!cmd && f.manual && f.manual.throttleG > 0) {
     cmd = { ax: Math.cos(f.facing) * f.manual.throttleG * G0, ay: Math.sin(f.facing) * f.manual.throttleG * G0, maxG: f.manual.throttleG };
@@ -227,11 +236,12 @@ export function minuteTick(state, { lite = false } = {}) {
   combatMove(state, emit);
 
   // Overdriven drive: each minute past the rated limit risks the magnetic bottle
-  if (out.mainG > RATED_G && random() < 0.00012 * (out.mainG - RATED_G) ** 2 && triggerContainmentFailure(state)) {
+  const rated = ratedG(cls);
+  if (out.mainG > rated && random() < 0.00012 * (out.mainG - rated) ** 2 && triggerContainmentFailure(state)) {
     emit('drive-overstress', { g: out.mainG });
   }
 
-  const burn = (fuelUsed(out.mainG, out.rcsG) + fuelUsed(jink * JINK_FUEL_SHARE, 0)) * driveFuelFactor(state);
+  const burn = (fuelUsed(out.mainG, out.rcsG, 1, rated) + fuelUsed(jink * JINK_FUEL_SHARE, 0, 1, rated)) * driveFuelFactor(state);
   res.fuel.current = Math.max(0, res.fuel.current - burn);
   state.stats.fuelBurned += burn;
   if (res.fuel.current <= 0 && prevG > 0) emit('fuel-exhausted', {});
@@ -245,7 +255,7 @@ export function minuteTick(state, { lite = false } = {}) {
   else if (prevG >= 0.05 && gNow < 0.05) fireInertia(state, Maneuver.BURN_STOP, { deltaG: prevG, surprise, gForce: gNow });
   else if (Math.abs(gNow - prevG) > 0.5) fireInertia(state, Maneuver.THRUST_CHANGE, { deltaG: gNow - prevG, surprise, gForce: gNow });
   // A flip proper: a big rotation (well past 90°) starting from rest
-  if (out.rotation > 2.4 && Math.abs(prevTurn) < SLEW_RATE * 0.5 && Math.abs(out.turned) > 0) fireInertia(state, Maneuver.FLIP, { gForce: gNow });
+  if (out.rotation > FLIP_TURN && Math.abs(prevTurn) < SLEW_RATE * 0.5 && Math.abs(out.turned) > 0) fireInertia(state, Maneuver.FLIP, { gForce: gNow });
 
   // ---- People (jinking throws the crew around on top of the burn)
   const g = Math.hypot(gNow, jink) + f.rcsG;
@@ -253,6 +263,8 @@ export function minuteTick(state, { lite = false } = {}) {
   // ship has been quiet for a while (no unstrapping between two maneuvers).
   if (crewPolicy(state) === 'secure') state.secureUntil = state.clock.minute + SECURE_LINGER;
   state.crewPolicy = state.clock.minute < (state.secureUntil ?? -1) ? 'secure' : 'free';
+  // The maneuvering lights: the nav computer has called the crew in, and someone able is still up
+  state.$maneuverAlert = !!state.autopilot && state.crewPolicy === 'secure' && !state.combatStations && crewSecureStatus(state).unsecured.length > 0;
   const living = state.ship.crew.filter(m => !m.dead).length;
 
   // ---- Machinery: wear, faults, and the work they make
@@ -276,8 +288,8 @@ export function minuteTick(state, { lite = false } = {}) {
       else if (ev === 'brain-damage') emit('crew-brain-damage', { member: m });
       else if (ev === 'stroke') emit('crew-stroke', { member: m });
     }
-    if (m.juiced && g <= G_THRESHOLDS.HIGH) {
-      const minutes = endJuice(m, Math.max(prevG, state.autopilot?.peakG || 0));
+    if (juiceLapsed(m)) {
+      const minutes = endJuice(m);
       if (minutes) emit('crew-hangover', { member: m, minutes });
     }
   }

@@ -19,26 +19,11 @@ import { getBody, bodyPos } from './ephemeris.js';
 import { DAY_MIN } from '../core/constants.js';
 
 export const FACTIONS = {
-  UN: {
-    id: 'UN', name: 'United Nations', short: 'UN', navy: 'UNN', police: 'UN Security', color: '#4A90D9',
-    tech: { civilian: 2, police: 3, navy: 3 },
-  },
-  MCR: {
-    id: 'MCR', name: 'Martian Congressional Republic', short: 'MCR', navy: 'MCRN', police: 'Martian Security', color: '#C1553B',
-    tech: { civilian: 3, police: 3, navy: 4 },
-  },
-  OPA: {
-    id: 'OPA', name: 'Outer Planets Alliance', short: 'OPA', navy: 'OPA', police: 'Star Helix Security', color: '#E2A355',
-    tech: { civilian: 1, police: 2, navy: 2 },
-  },
-  independent: {
-    id: 'independent', name: 'Independent', short: 'IND', navy: null, police: null, color: '#8A8A6A',
-    tech: { civilian: 2 },
-  },
-  pirate: {
-    id: 'pirate', name: 'Pirates', short: 'PIRATE', navy: null, police: null, color: '#C05AA0',
-    tech: { civilian: 1, navy: 2 },
-  },
+  UN: { id: 'UN', name: 'United Nations', desc: "Earth and Luna: thirty billion people, the oldest navy in the system and most of its money. UN ships are many, sound, and a generation old.", short: 'UN', navy: 'UNN', police: 'UN Security', color: '#4A90D9' },
+  MCR: { id: 'MCR', name: 'Martian Congressional Republic', desc: "Mars: a frontier world under a terraforming project that will take centuries, and the best warships ever built. MCRN crews are drilled hard and fly TL4 hulls.", short: 'MCR', navy: 'MCRN', police: 'Martian Security', color: '#C1553B' },
+  OPA: { id: 'OPA', name: 'Outer Planets Alliance', desc: "The Outer Planets Alliance: Belter unions, cells and militias holding the stations of the Belt. Refit hulls, jury-rigged kit, and crews who can fix anything with a wrench.", short: 'OPA', navy: 'OPA', police: 'Star Helix Security', color: '#E2A355' },
+  independent: { id: 'independent', name: 'Independent', desc: "Corporations, private captains and stations that answer to no flag, for as long as nobody makes them.", short: 'IND', navy: null, police: null, color: '#8A8A6A' },
+  pirate: { id: 'pirate', name: 'Pirates', desc: "Raiders working the lanes where nobody's writ runs. Their demand is often a bluff, but they will take what they can off a wreck.", short: 'PIRATE', navy: null, police: null, color: '#C05AA0' },
 };
 
 /** The three powers that hold territory. */
@@ -48,8 +33,6 @@ export const POWERS = ['UN', 'MCR', 'OPA'];
 export const factionColor = (id) => id === 'player' ? '#4FD1C5' : FACTIONS[id]?.color || '#8A8A6A';
 export const factionName = (id) => FACTIONS[id]?.name || 'Unknown';
 
-/** Faction ids from saves before v0.10 (navies were factions, Belters their own). */
-export const LEGACY_FACTION = { UNN: 'UN', MCRN: 'MCR', Belter: 'OPA' };
 
 // ---- INFLUENCE SOURCES ----
 // Body sources: strength s at the body, Gaussian falloff with radius r (AU).

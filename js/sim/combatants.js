@@ -14,8 +14,8 @@
 
 import { G0 } from '../core/constants.js';
 import { getWorld } from './world.js';
-import { CLASSES, SIZES, TECH, classOf, targetRadius, isEvasive, PLAYER_CLASS } from './ship-classes.js';
-import { PDC, PDC_AUTO_FACTOR, TORPEDO_MOTOR, RAILGUN } from './weapons.js';
+import { CLASSES, SIZES, TECH, classOf, targetRadius, isEvasive, hullPoints, PLAYER_CLASS } from './ship-classes.js';
+import { PDC, PDC_AUTO_FACTOR, TORPEDO_MOTOR, RAILGUN, MINING_GEAR } from './weapons.js';
 import { systemPerf } from './systems.js';
 import { isConscious } from './crew.js';
 import { seatKind } from './ship-layout.js';
@@ -78,10 +78,10 @@ export function sees(state, observerId, targetId) {
 export function ensureHull(e) {
   if (e.combat) return e.combat;
   const c = classOf(e);
-  const size = SIZES[c?.size || sizeForMass(e.mass)];
+  const hp = c ? hullPoints(c) : SIZES[sizeForMass(e.mass)].hp;
   const tubes = c?.tubes || 0;
   e.combat = {
-    hp: size.hp, hpMax: size.hp,
+    hp, hpMax: hp,
     drive: 1, reactor: 1, weapons: 1, sensors: 1,
     crew: 1,                                   // fraction of the crew still standing
     status: 'ok',                              // ok | disabled | surrendered | wreck
@@ -112,7 +112,12 @@ export function gunner(state) {
  *   radiusM, armor, maxG (drive available), evadeG (jinking now),
  *   pdc { mounts (effective), lambda, rangeM, strafeM, sigmaRad, factor, ammo },
  *   tubes, torps (in the magazine), torpedo { maxG, dv } (motor at this TL),
- *   railgun (spec | null), railMounts
+ *   railgun (spec | null), railMounts,
+ *   gear (mining gear: MINING_GEAR spec + mounts, factor | null)
+ *
+ * Tech level runs through all of it: better guns and motors (weapons.js),
+ * armor, and fire control — the radar, the gun laying and the targeting AI
+ * behind every mount (TECH.fireControl) — and how hard the helm can jink.
  */
 export function profile(state, id) {
   return id === PLAYER ? playerProfile(state) : npcProfile(state, getWorld(state).get(id));
@@ -120,23 +125,27 @@ export function profile(state, id) {
 
 function playerProfile(state) {
   const c = CLASSES[state.ship.classId || PLAYER_CLASS];
-  const tl = state.ship.tl || 2;
+  const tl = state.ship.tl || c.tl;
+  const T = TECH[tl];
   const g = gunner(state);
+  const factor = (g ? 0.7 + 0.6 * g.skills.security / 100 : PDC_AUTO_FACTOR) * T.fireControl;
   return {
     id: PLAYER, isPlayer: true, cls: c, tl, faction: null,
+    hp: state.hull.integrity / 100 * hullPoints(c),
     radiusM: targetRadius(c),
-    armor: c.armor + TECH[tl].armor,
+    armor: c.armor + T.armor,
     maxG: state.flight.maxG,
     evadeG: state.$jinkG || 0,
     pdc: {
       mounts: c.pdc * systemPerf(state, 'pdc'), ...PDC[tl],
-      factor: g ? 0.7 + 0.6 * g.skills.security / 100 : PDC_AUTO_FACTOR,
+      factor,
       ammo: state.resources.pdcRounds.current,
     },
     tubes: c.tubes * (systemPerf(state, 'launcher') > 0 ? 1 : 0),
     torps: state.magazine.he + state.magazine.nuke,
     torpedo: TORPEDO_MOTOR[tl],
     railgun: null, railMounts: 0,
+    gear: c.gear ? { ...MINING_GEAR[c.gear.type], mounts: c.gear.mounts, factor } : null,
     alive: !state.lost,
   };
 }
@@ -147,20 +156,24 @@ function npcProfile(state, e) {
   if (!e) return null;
   const c = classOf(e);
   const h = ensureHull(e);
-  const tl = e.tl || 2;
+  const tl = c?.tl || e.tl || 2;
+  const T = TECH[tl];
   const armed = h.weapons >= DISABLED_BELOW && h.status !== 'surrendered' && h.status !== 'wreck';
   const maxG = h.drive < DISABLED_BELOW || h.scrammed || h.status === 'wreck' ? 0 : (c?.drive.maxG || 1) * (0.5 + 0.5 * h.drive);
+  const factor = (CREW_FACTOR[c?.category] || 0.8) * T.fireControl * (0.5 + 0.5 * h.crew) * (0.5 + 0.5 * h.sensors);
   return {
     id: e.id, isPlayer: false, cls: c, tl, faction: e.faction,
+    hp: h.hp,
     radiusM: c ? targetRadius(c) : 20,
-    armor: (c?.armor || 0) + TECH[tl].armor,
+    armor: (c?.armor || 0) + T.armor,
     maxG,
-    evadeG: e.agent?.evade && isEvasive(c) && maxG > 0 ? Math.min(3, maxG * 0.5) : 0,
+    evadeG: e.agent?.evade && isEvasive(c) && maxG > 0 ? Math.min(3, maxG * 0.5) * T.evade : 0,
     pdc: {
       mounts: armed ? (c?.pdc || 0) * h.weapons : 0, ...PDC[tl],
-      factor: (CREW_FACTOR[c?.category] || 0.8) * (0.5 + 0.5 * h.crew) * (0.5 + 0.5 * h.sensors),
+      factor,
       ammo: h.rounds,
     },
+    gear: armed && c?.gear ? { ...MINING_GEAR[c.gear.type], mounts: c.gear.mounts * h.weapons, factor } : null,
     tubes: armed ? h.tubes.length : 0,
     torps: h.magazine.he + h.magazine.nuke,
     torpedo: TORPEDO_MOTOR[tl],
@@ -170,10 +183,31 @@ function npcProfile(state, e) {
   };
 }
 
-/** Rough fighting strength (for an AI deciding whether to start or keep a fight). */
+/**
+ * Rough fighting strength (for an AI deciding whether to start or keep a
+ * fight, and for comparing classes). Offense: torpedoes (better motors home
+ * harder), guns laid by fire control, railguns, gear. Defense: armor, point
+ * defense, drive, and the structure left to lose.
+ */
 export function strength(p) {
   if (!p || !p.alive) return 0;
-  const offense = 1 + (p.torps > 0 ? p.tubes * 3 + Math.min(p.torps, 12) * 0.5 : 0) + (p.pdc.ammo > 0 ? p.pdc.mounts * 0.5 : 0) + p.railMounts * 4;
-  const defense = (1 + p.armor * 0.5) * (1 + p.pdc.mounts * p.pdc.lambda * p.pdc.factor * 2) * (1 + p.maxG * 0.05);
+  const torp = p.torps > 0 ? (p.tubes * 3 + Math.min(p.torps, 12) * 0.5) * p.torpedo.maxG / 18 : 0;
+  const offense = 1 + torp + (p.pdc.ammo > 0 ? p.pdc.mounts * 0.5 * p.pdc.factor : 0) + p.railMounts * 4
+    + (p.gear ? p.gear.mounts * 0.3 : 0);
+  const defense = (1 + p.armor * 0.5) * (1 + p.pdc.mounts * p.pdc.lambda * p.pdc.factor * 2) * (1 + p.maxG * 0.05)
+    * Math.sqrt(Math.max(1, p.hp ?? 120) / 120);
   return offense * defense;
+}
+
+/** Strength of a class fresh from the yard, crewed and stocked (for comparing designs). */
+export function classStrength(id) {
+  const c = CLASSES[id];
+  const T = TECH[c.tl];
+  const factor = (CREW_FACTOR[c.category] || 0.8) * T.fireControl;
+  return strength({
+    alive: true, hp: hullPoints(c), armor: c.armor + T.armor, maxG: c.drive.maxG,
+    tubes: c.tubes, torps: (c.magazine?.he || 0) + (c.magazine?.nuke || 0), torpedo: TORPEDO_MOTOR[c.tl],
+    pdc: { mounts: c.pdc, ...PDC[c.tl], factor, ammo: 1 },
+    railMounts: c.railgun, gear: c.gear ? { mounts: c.gear.mounts } : null,
+  });
 }

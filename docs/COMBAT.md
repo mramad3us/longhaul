@@ -1,6 +1,6 @@
 # Combat
 
-Nothing in LONGHAUL glows. There are three weapon families: point-defense cannons, torpedoes and railguns. All of them obey the same flight physics as the ships that carry them. Modules:
+Nothing in LONGHAUL glows. There are three weapon families: point-defense cannons, torpedoes and railguns. All of them obey the same flight physics as the ships that carry them. A fourth thing isn't a weapon at all: mining gear, which a miner can turn on a ship that comes close. How well all of it works depends on the tech level the ship was built to (SHIPS.md). Modules:
 
 | Module | Role |
 |---|---|
@@ -67,12 +67,12 @@ Launched at a target 6 million km away, a TL2 cold torpedo flies for about nine 
 | 3 | 0.5 | 55 km | 10 km | 0.5 mrad |
 | 4 | 0.55 | 70 km | 15 km | 0.35 mrad |
 
-Fire-control factor: our PDCs run at 0.6 on automatic, and at 0.7 + 0.6 × security skill/100 with a gunner at the weapons console. NPC factors depend on the crew (military 1.1, authority 1, pirates 0.85, civilians 0.8), scaled by crew losses and sensor damage. A mount fires 50 rounds per second.
+Fire-control factor: our PDCs run at 0.6 on automatic, and at 0.7 + 0.6 × security skill/100 with a gunner at the weapons console. NPC factors depend on the crew (military 1.1, authority 1, pirates 0.85, civilians 0.8), scaled by crew losses and sensor damage. Every factor is then multiplied by the ship's fire control (TL1 ×0.8, TL2 ×1, TL3 ×1.15, TL4 ×1.3), which covers the radar, the gun laying and the targeting AI. A mount fires 50 rounds per second.
 
 Typical outcomes (printed by `tests/combat.test.mjs`):
 
 - An unarmed hauler 300,000 km away is hit 12 times out of 12.
-- A single torpedo against an MCRN corvette's six TL4 mounts never gets through (0/10); six-torpedo salvos land about one hit in five.
+- A single torpedo against an MCRN corvette's six TL4 mounts never gets through (0/10); six-torpedo salvos land about one hit in six.
 - Our two TL2 mounts stop 11 of 12 single pirate torpedoes with a gunner at fire control, and 9 of 12 on automatic. Pirate salvos of two are much more dangerous.
 - One HE hit takes about half our hull.
 
@@ -80,11 +80,36 @@ Typical outcomes (printed by `tests/combat.test.mjs`):
 
 A slug is unguided. At firing, fire control solves for the intercept, assuming the target keeps its current thrust, and launches the slug at the gun's speed (TL2 20, TL3 30, TL4 45 km/s) on top of the ship's velocity. When the slug passes the target, the miss is taken from the actual motion and combined with Gaussian errors: the gun's angular dispersion (TL2 4, TL3 2, TL4 1 µrad × range) and the target's jinking over the flight time. Hit if within the target radius.
 
-Jinking: the target picks a new random thrust direction every 8 s at its evasive G. Over a flight time t, the position uncertainty is σ = a·min(t²/2, √(8/3)·t^1.5). A ship holding still is hit at long range; a jinking one, only at knife-fight range.
+Jinking: the target picks a new random thrust direction every 8 s at its evasive G. An NPC jinks at half its available G (at most 3G), times its TL's jinking factor (0.8–1.2). Over a flight time t, the position uncertainty is σ = a·min(t²/2, √(8/3)·t^1.5). A ship holding still is hit at long range; a jinking one, only at knife-fight range. At 2,000 km a TL3 railgun hits a coasting target 29 times in 30 and a jinking one once.
 
 ## PDCs against hulls
 
 Inside gun range a ship can rake another with PDC fire. Each minute the stream's dispersion (angle × range, plus jinking over the rounds' time of flight at 1.2 km/s) is compared with the target radius. Damage = 6 DP × mounts × fire-control factor × P(burst hits). It burns 30% duty × 50 rounds/s × mounts of ammunition.
+
+## Mining gear
+
+Mining ships carry their trade's tools (`MINING_GEAR`), resolved each minute like PDC strafing: the gear's dispersion × range, plus the target's jinking over the projectile's flight, against the target radius. Damage = DP × mounts × fire-control factor × P(hit). It throws rock, so it never runs dry, and it can't touch a torpedo.
+
+| Gear | Reach | Projectile | Dispersion | DP per mount-minute |
+|---|---|---|---|---|
+| Rock-cracking charges (prospectors) | 3 km | 300 m/s | 4 mrad | 3 |
+| Ore mass driver (mining ships) | 8 km | 2.5 km/s | 2.5 mrad | 4 |
+
+A civilian miner turns its gear on any hostile inside reach while it runs. That includes us: rake a mining barge from 4 km and it throws back about 6 DP. Pirates take a miner for toothless and close in on it. On ENGAGE our own gear fires at the target whenever it is inside reach.
+
+## Doctrine and the tiers
+
+Ships at TL2 and up have a fire-control computer that plots the threat axis (`TECH.counterBurn`). When torpedoes are inbound within 45 minutes (`COUNTER_BURN_S`, weapons.js), they turn away and burn from the nearest one. The torpedoes then arrive slowly, spend a long time inside the PDC envelope, and have to spend Δv to catch up. A ship that keeps charging meets them at a hundred km/s or more and gets half a second of point defense against each. A jury-rigged TL1 ship holds its course and jinks. Two more rules follow from the same arithmetic:
+- With any torpedo inbound, a TL2+ crew closes on the enemy at no more than 5 km/s (`UNDER_FIRE_CLOSE_MS`), because every m/s of closing speed is added to the enemy's torpedoes.
+- A torpedo outlives the ship that fired it. Warships (navy, patrol, picket) keep jinking and turning away until the last one inbound is accounted for, whatever they are doing.
+
+Our ship follows the same doctrine while it keeps a stance (below and FLIGHT.md), if its own fire control has the computer for it.
+
+Agents fly to an enemy on where it is and how it moves, not on its thrust. That thrust is a reaction to us, and two ships each matching the other's burn would fly side by side and never meet. Against an enemy their drive also fires only once the nose is on the vector (no lit lean, FLIGHT.md): a fighting ship's commands jump about as it dodges and counter-burns, and leaning would misdirect them.
+
+Agents weigh a fight with `strength` (combatants.js). Offense is torpedoes (TL motor G ÷ 18), guns × fire control, railguns and gear. Defense is armor, point defense, drive and the square root of the structure left. A ship breaks off when its strength falls below `breakOff` (0.35) of its enemy's. Pirates stalk ships up to twice their strength (`PIRATE_NERVE` 0.5), because a demand is a bluff.
+
+The upshot (printed by the duel tests, SHIPS.md): between hulls of a size, the better-built ship wins. A Belt junker cannot beat a Martian frigate, and neither can our armed freighter. Only Earth's best (TL3) frigate has an outside chance against the Martian one.
 
 ## Damage
 
@@ -108,7 +133,7 @@ How well a weapon aims blends those weights with an unaimed spread: railgun 0.8,
 - sensors → Bridge
 - hull → living decks
 
-On each deck hit with DP d: a hull breach with P = d/40; each system housed on that deck faults with P = d/45 (major above 35 DP); each person on that deck is wounded with P = d/90, through the same trauma model as being thrown around; on the reactor deck, containment fails with P = d/70 (90 minutes to scram). A KILL hit of 50+ DP on the reactor can end the ship outright. Hull integrity falls by DP ÷ 120; under 50% the hull can't take burns above 3G, and at 0 the ship breaks up. A dockside overhaul restores the hull.
+On each deck hit with DP d: a hull breach with P = d/40; each system housed on that deck faults with P = d/45 (major above 35 DP); each person on that deck is wounded with P = d/90, through the same trauma model as being thrown around; on the reactor deck, containment fails with P = d/70 (90 minutes to scram). A KILL hit of 50+ DP on the reactor can end the ship outright. Hull integrity falls by DP ÷ the hull's structure (120 for the armed freighter); under 50% the hull can't take burns above 3G, and at 0 the ship breaks up. A dockside overhaul restores the hull.
 
 **NPC hulls** (`e.combat`, created when a ship first matters to a fight) track structure and four sections. Drive under 25%: disabled, and civilians, pirates and police offer to surrender. No structure: a wreck that drifts on as salvage. A damaged reactor counts down 3–30 minutes to detonation; a trained crew may scram it in time. A KILL hit that tears into the reactor can set it off immediately.
 
@@ -119,10 +144,13 @@ On each deck hit with DP d: a hull breach with P = d/40; each system housed on t
 The COMBAT tab (`W`) shows the threat board (log range, 1 km to 10M km) and the fire-control panel:
 
 - **Target**: any ship our sensors hold (click it on the board, or TARGET from the scanner).
+- **Stance**: where the nav computer keeps us relative to the target, flown until released. One click holds at a weapon's range: GUNS (60% of PDC reach, 3.6 km at TL2), GEAR for a miner, TORPEDO (50,000 km, outside guns and railguns), LONG (300,000 km). MORE… opens the stance panel: HOLD, KEEP OUT or KEEP WITHIN, any range (formation, the edge of our sensors, where we are, or typed in), the G to fly it at, a TIGHT or LOOSE band, and the doctrine under fire. That means turning away from torpedoes less than 45 minutes out (TL2 and up) and closing no faster than 5 km/s while one is inbound. Ranges inside the target's known guns are flagged.
 - **Torpedoes**: choose HE or NUKE and FAST or COLD COAST, then FIRE. One per loaded tube; the autoloader takes 3 minutes per tube (6 if the launcher is degraded).
 - **Point defense**: AUTO shoots down torpedoes; HOLD stays silent; ENGAGE also rakes the target whenever it comes inside gun range.
 - **Aim**: DISABLE, DISARM or KILL.
-- **Evasive** (battle stations only): 2.5G of random jinking. It throws off homing, railguns and PDC aim, burns reaction mass at about half that G, and puts the load on the crew. It also lights our plume.
+- **Evasive** (battle stations only): 2.5G of random jinking, times our TL's jinking factor. It throws off homing, railguns and PDC aim, burns reaction mass at about half that G, and puts the load on the crew. It also lights our plume.
+
+The panel shows only what the ship carries. A hull without tubes has no torpedo section. A miner's guns section is its mining gear. An unarmed hull is told so.
 
 At **battle stations** the best shot takes the weapons console, the best engineer the engineering station, the next best eye ops, and the pilot the helm. Everyone else goes to a couch.
 

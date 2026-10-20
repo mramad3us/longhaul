@@ -1,20 +1,21 @@
 // ============================================================
 // LONGHAUL — Navigation UI
 // Nav modal (tactical / solar / scanner), target selection, route
-// planning, route status, the "secure for burn" prompt, and the
-// station-keeping indicator.
+// planning, route and stance status, the "secure for burn" prompt,
+// and the station-keeping indicator. The stance panel (stance.js)
+// shares the route panel's slot.
 // ============================================================
 
 import { ui } from './context.js';
 import { $, $$, esc, setText, setHTML, show, toggleClass, fmtSpeed, fmtMeters, fmtKm, fmtG, fmtNum, fmtAngle } from './dom.js';
 import { toast } from './toast.js';
 import { logEntry } from './log.js';
-import { AU_M, AU_KM, RANGE } from '../core/constants.js';
+import { AU_M, AU_KM, RANGE, DAY_MIN } from '../core/constants.js';
 import { formatDuration } from '../core/clock.js';
 import { getBody } from '../sim/ephemeris.js';
 import { getWorld } from '../sim/world.js';
 import { planRoutes, simulatePlan, targetStateAt, targetName, defaultStandoff, STANDOFF, PREP_MINUTES } from '../sim/nav.js';
-import { engageRoute, abortRoute, overrideSecure } from '../sim/autopilot.js';
+import { engageRoute, abortRoute, overrideSecure, forceTurn, TURN_HOLD_MAX_MIN } from '../sim/autopilot.js';
 import { crewSecureStatus, isSecured } from '../sim/crew-ai.js';
 import { driveLimitG, systemPerf, flightComputerState } from '../sim/systems.js';
 import { isConscious } from '../sim/crew.js';
@@ -25,7 +26,9 @@ import { bus } from '../core/events.js';
 import { TacView, TAC_LABELS } from './tac.js';
 import { SolarMap } from './solar-map.js';
 import { ScannerView } from './scanner.js';
-import { relativeTo, velocityReference } from './hud.js';
+import { relativeTo, velocityReference, STANCE_PHASE } from './hud.js';
+import { initStance, openStance, closeStance, stanceOpen, release as releaseStance } from './stance.js';
+import { STANCE_MODES } from '../sim/stance.js';
 import { ThreatView, renderFireControl, onFireControlClick, targetContact } from './combat.js';
 
 let tacModal = null, map = null, scanner = null, tacSmall = null, threat = null;
@@ -77,6 +80,10 @@ export function initNav(h) {
     $(id).addEventListener('click', onPanelClick);
   }
   bus.on('route-arrived', () => { etaCache.key = ''; });
+  initStance({
+    preview: (path) => { if (map) map.preview = path; },
+    closed: () => renderSelection(),
+  });
 }
 
 function setTacZoom(z) {
@@ -100,6 +107,7 @@ export function closeNav() {
   ui.nav.open = false;
   show($('#nav-modal'), false);
   hideRoutePanel();
+  closeStance();
 }
 
 export function toggleNav(tab) {
@@ -111,7 +119,7 @@ function setTab(tab) {
   $$('[data-nav-tab]').forEach(b => toggleClass(b, 'active', b.dataset.navTab === tab));
   $$('[data-nav-screen]').forEach(s => show(s, s.dataset.navScreen === tab));
   $$('[data-tab-controls]').forEach(c => show(c, c.dataset.tabControls === tab, 'flex'));
-  show($('#combat-panel'), tab === 'combat', 'flex');
+  show($('#combat-panel'), tab === 'combat' && !stanceOpen(), 'flex');
   syncButtons();
   renderSelection();
 }
@@ -146,6 +154,12 @@ function describeTarget(state, t) {
   };
 }
 
+/** A class or station name that opens its page in the ship's library. */
+function libRef(e, html) {
+  const id = e?.cls ? `ship:${e.cls}` : e?.type === 'station' ? `stn:${e.id}` : null;
+  return id ? `<span class="lib-inline" data-lib="${id}" title="Ship's library">${html}</span>` : html;
+}
+
 function inRadio(state, id) {
   return state.comms.radio.includes(id);
 }
@@ -158,7 +172,7 @@ function renderSelection() {
   const mapPanel = $('#map-selection');
   const scanPanel = $('#scanner-detail');
   show(mapPanel, false); show(scanPanel, false);
-  if (!s || !t || routeUI) return;
+  if (!s || !t || routeUI || stanceOpen()) return;
   const d = describeTarget(s, t);
   if (!d) return;
   const rel = relativeTo(s, t);
@@ -175,7 +189,7 @@ function renderSelection() {
       ${row('TRANSPONDER', c.name ? esc(c.name) : 'SILENT', c.name ? 'scanner-val-accent' : 'scanner-val-dim')}
       ${row('SIGNATURE', c.signature || '—')}
       ${row('FACTION', c.faction || '—', c.faction ? '' : 'scanner-val-dim')}
-      ${row('CLASS', esc(c.shipClass || '—'))}
+      ${row('CLASS', c.shipClass ? libRef(d.entity, esc(c.shipClass)) : '—')}
       ${row('RANGE', fmtKm(c.dist * AU_KM))}
       ${row('REL SPEED', c.velocityKnown && rel ? fmtSpeed(rel.speed) : `scanning… ${Math.max(0, REVEAL.VELOCITY - c.scan)}m`)}
       ${row('BEARING', fmtAngle(c.bearing - s.flight.facing))}
@@ -185,6 +199,7 @@ function renderSelection() {
         <button class="scanner-track-btn ${lock ? 'tracking' : ''}" data-act="lock">${lock ? 'UNLOCK' : 'LOCK'}</button>
         ${routing ? '<button class="scanner-intercept-btn intercepting" data-act="abort">ABORT INTERCEPT</button>' : '<button class="scanner-intercept-btn" data-act="plot">INTERCEPT</button>'}
         ${canHail ? '<button class="scanner-track-btn" data-act="hail">HAIL</button>' : ''}
+        ${!c.ordnance ? '<button class="scanner-track-btn" data-act="stance">STANCE</button>' : ''}
         ${!c.ordnance && !c.station ? `<button class="scanner-track-btn ${s.combat.target === t.id ? 'tracking' : ''}" data-act="target">${s.combat.target === t.id ? 'TARGETED' : 'TARGET'}</button>` : ''}
       </div>`;
     setHTML(scanPanel, html);
@@ -203,6 +218,7 @@ function renderSelection() {
     </div>
     <div class="panel-actions">
       ${routing ? '<button class="route-abort-btn" data-act="abort">ABORT ROUTE</button>' : t.id === 'Sol' ? '' : '<button class="route-plot-btn" data-act="plot">PLOT ROUTE</button>'}
+      ${t.id === 'Sol' ? '' : '<button class="route-zoom-btn" data-act="stance">STANCE</button>'}
       <button class="route-zoom-btn" data-act="focus">FOCUS</button>
       ${canHail ? '<button class="route-zoom-btn" data-act="hail">HAIL</button>' : ''}
     </div>`;
@@ -222,6 +238,16 @@ function onPanelClick(e) {
       renderSelection();
       break;
     case 'plot': if (t) openRoutePanel(t); break;
+    case 'stance': if (t) showStancePanel(t); break;
+    case 'stance-edit': {
+      const ap = s.autopilot;
+      if (ap?.plan.kind !== 'stance') break;
+      if (!ui.nav.open) openNav();
+      ui.nav.target = { ...ap.plan.target };
+      showStancePanel(ap.plan.target);
+      break;
+    }
+    case 'release': releaseStance(s); break;
     case 'target': if (t) { targetContact(s, t.id); setTab('combat'); } break;
     case 'hail': if (t) hooks.hail(t.id); break;
     case 'focus': if (t) { const p = navTargetPos(); if (p) map.focusOn(p, t.kind === 'entity' ? 2e6 : Math.max(map.scale, 300)); } break;
@@ -243,9 +269,19 @@ function onPanelClick(e) {
     case 'engage':
       if (overrideSecure(s)) { logEntry('Captain: execute — not waiting for the rest of the crew', 'warn'); }
       break;
+    case 'force-turn':
+      if (forceTurn(s)) { logEntry('Captain: flip now — not waiting for the crew', 'danger'); }
+      break;
     case 'station': hooks.openStation(); break;
     case 'open-nav': openNav('solar'); break;
   }
+}
+
+/** The stance panel takes the slot of the route panel and the selection panels. */
+function showStancePanel(target) {
+  hideRoutePanel();
+  show($('#map-selection'), false); show($('#scanner-detail'), false);
+  openStance(target);
 }
 
 // ---- ROUTE PLANNING ----
@@ -268,7 +304,8 @@ function standoffChoices(state, t) {
 export function openRoutePanel(target) {
   const s = ui.state;
   if (!s) return;
-  if (s.autopilot && s.autopilot.plan.target.id === target.id) { toast('Already en route', 'info'); return; }
+  if (s.autopilot && s.autopilot.plan.kind !== 'stance' && s.autopilot.plan.target.id === target.id) { toast('Already en route', 'info'); return; }
+  closeStance();
   ui.nav.target = target;
   if (!ui.nav.open) openNav(target.kind === 'entity' && contactById(s, target.id) ? 'scanner' : 'solar');
   const choices = standoffChoices(s, target);
@@ -318,7 +355,7 @@ function renderRoutePanel() {
       const est = o.estimate;
       const crew = s.ship.crew.filter(m => !m.dead).length;
       const juiceNote = o.flank
-        ? `<div class="route-juice-note">☢ OVERDRIVE: high-dose juice ≈ ${crew * 2}+ med (${s.resources.medSupplies.current.toFixed(0)} aboard) · stroke risk · containment failure risk</div>`
+        ? `<div class="route-juice-note">☢ OVERDRIVE: high-dose juice ≈ ${crew * 2} med (${s.resources.medSupplies.current.toFixed(0)} aboard) · stroke risk · week-long crash after · containment failure risk</div>`
         : o.juice ? `<div class="route-juice-note">⚠ Juice: crash couches the whole burn · ${s.resources.medSupplies.current.toFixed(0)} med supplies aboard</div>` : '';
       return `<div class="route-card ${o.feasible ? '' : 'infeasible'} ${i === routeUI.selected ? 'selected' : ''}" data-act="option" data-i="${i}">
         <div class="route-card-header"><span class="route-card-name">${esc(o.name)}</span><span class="route-card-type">${esc(o.label)}</span></div>
@@ -385,13 +422,38 @@ function hideRoutePanel() {
 
 // ---- ROUTE STATUS / PROMPTS (every frame) ----
 
+/** The flip interlock is holding a turn: who is still up, and the captain's choice. */
+function renderHeldPrompt(state, box, st) {
+  const ap = state.autopilot;
+  const left = Math.max(0, TURN_HOLD_MAX_MIN - (state.clock.minute - ap.turnHeld));
+  const up = st.unsecured.map(m => esc(m.name)).join(', ');
+  setHTML(box, `<div class="mp-header mp-danger">FLIP HELD → ${esc(targetName(state, ap.plan.target))}</div>
+    ${crewDots(state, st)}
+    <span class="mp-status mp-caution">${st.unsecured.length} CREW ON THEIR FEET: ${up}</span>
+    <span class="mp-status mp-waiting">Drive cold, nose held. Flipping when all hands are in${left ? `, or in ${left} min` : ''}</span>
+    <div class="mp-actions">
+      <button class="mp-engage-btn" data-act="force-turn" ${ap.forceTurn ? 'disabled' : ''}>${ap.forceTurn ? 'FLIPPING…' : 'FLIP NOW'}</button>
+      <button class="route-abort-btn" data-act="abort">ABORT</button>
+    </div>`);
+}
+
+function crewDots(state, st) {
+  const dots = state.ship.crew.filter(isConscious).map(m => {
+    const ok = isSecured(m);
+    const p = st.pilot === m;
+    return `<span class="mp-dot ${ok ? 'mp-dot-ok' : 'mp-dot-wait'} ${p ? 'mp-dot-pilot' : ''}" title="${esc(m.name)} — ${ok ? 'secured' : m.activity}">${p ? 'P' : '·'}</span>`;
+  }).join('');
+  return `<div class="mp-crew-row">${dots}</div>`;
+}
+
 function refreshEta(s) {
   const ap = s.autopilot;
   if (!ap) { etaCache.key = ''; return null; }
   const key = `${ap.plan.target.id}:${ap.createdAt}`;
   const now = performance.now();
   if (etaCache.key !== key || now - etaCache.at > 2500) {
-    const est = simulatePlan(s, ap.plan, { pathPoints: 120 });
+    // (a stance that can't get into place within days is shown as such, not chased for years)
+    const est = simulatePlan(s, ap.plan, { pathPoints: 120, maxMinutes: ap.plan.kind === 'stance' ? 3 * DAY_MIN : undefined });
     etaCache = { key, at: now, minutes: est.arrived ? est.minutes + (ap.phase === 'prepare' ? PREP_MINUTES : 0) : null, path: est.path, fuel: est.fuel };
   }
   return etaCache;
@@ -413,9 +475,10 @@ export function updateNav(state, alpha) {
     else if (ui.nav.tab === 'scanner') scanner.render(state);
     else if (ui.nav.tab === 'combat') {
       threat.render(state);
+      show($('#combat-panel'), !stanceOpen(), 'flex');
       if (performance.now() - (ui.nav._fcAt || 0) > 250) { ui.nav._fcAt = performance.now(); renderFireControl(state, $('#combat-panel')); }
     }
-    if (!routeUI && (performance.now() - (ui.nav._selAt || 0) > 400)) { ui.nav._selAt = performance.now(); renderSelection(); }
+    if (!routeUI && !stanceOpen() && (performance.now() - (ui.nav._selAt || 0) > 400)) { ui.nav._selAt = performance.now(); renderSelection(); }
     renderNavInfo(state, rel);
     renderRouteStatus(state, eta, $('#route-status'), true);
   }
@@ -445,13 +508,14 @@ function renderNavInfo(state, rel) {
   setHTML($('#nav-info'), parts.map(p => `<span>${p}</span>`).join('<span class="tac-info-sep">·</span>'));
 }
 
-const PHASE_LABEL = { prepare: 'SECURING', burn: 'BURN', brake: 'BRAKE', coast: 'COAST', approach: 'RCS APPROACH', flip: 'FLIP', orient: 'ORIENT', 'transfer-burn': 'TRANSFER BURN' };
+const PHASE_LABEL = { prepare: 'SECURING', held: 'FLIP HELD', burn: 'BURN', brake: 'BRAKE', coast: 'COAST', approach: 'RCS APPROACH', flip: 'FLIP', orient: 'ORIENT', 'transfer-burn': 'TRANSFER BURN' };
 
 function renderRouteStatus(state, eta, box, full) {
   const ap = state.autopilot;
   const visible = !!ap && (full || ap.phase !== 'prepare');    // the prepare prompt covers that phase
   show(box, visible, 'flex');
   if (!visible) return;
+  if (ap.plan.kind === 'stance') { renderStanceStatus(state, eta, box, full); return; }
   const name = targetName(state, ap.plan.target);
   const dist = ap.d != null ? Math.max(0, ap.d - ap.plan.standoff) : null;
   const tp = targetStateAt(state, ap.plan.target, state.clock.minute)?.pos;
@@ -471,13 +535,32 @@ function renderRouteStatus(state, eta, box, full) {
   setHTML(box, html);
 }
 
+/** A stance in the status bar: the order, where it stands, the range now. */
+function renderStanceStatus(state, eta, box, full) {
+  const ap = state.autopilot, plan = ap.plan;
+  const name = targetName(state, plan.target);
+  const rel = relativeTo(state, plan.target);
+  const phase = ap.helm === 'unmanned' ? 'HELM UNMANNED — COASTING' : (STANCE_PHASE[ap.display] || ap.display.toUpperCase()) + (ap.helm === 'manual' ? ` · HAND-FLOWN (${ap.helmBy})` : ap.helm === 'degraded' ? ' · GUIDANCE DEGRADED' : '');
+  const moving = !ap.settled && ap.phase === 'active' && ap.display !== 'evade';
+  const etaTxt = moving && eta?.minutes != null && eta.minutes > 0 ? ` · in place in ${formatDuration(eta.minutes)}` : '';
+  setHTML(box, `<div class="route-status-summary">
+      <span class="route-status-dest">◎ ${esc(STANCE_MODES[plan.mode].label)} ${fmtMeters(plan.standoff)} · ${esc(name)}</span>
+      <span class="route-status-phase phase-${ap.helm === 'unmanned' ? 'unmanned' : ap.display}">${esc(phase)}</span>
+      <span class="route-status-eta">${rel ? `range ${fmtMeters(rel.dist)} · rel ${fmtSpeed(rel.speed)}` : ''}${etaTxt}</span>
+      <button class="route-zoom-btn" data-act="stance-edit">STANCE</button>
+      <button class="route-abort-btn" data-act="release">RELEASE</button>
+    </div>`);
+}
+
 function renderPrompt(state) {
   const box = $('#nav-prompt');
   const ap = state.autopilot;
-  const on = ap?.phase === 'prepare';
+  const held = ap?.turnHeld != null;
+  const on = ap?.phase === 'prepare' || held;
   show(box, on, 'flex');
   if (!on) return;
   const st = crewSecureStatus(state);
+  if (held) { renderHeldPrompt(state, box, st); return; }
   const dots = state.ship.crew.filter(isConscious).map(m => {
     const ok = isSecured(m);
     const p = st.pilot === m;
@@ -526,6 +609,7 @@ export function resetNavForGame() {
   ui.nav.target = null;
   ui.nav.modalZoomSet = false;
   routeUI = null;
+  closeStance();
   etaCache = { at: 0, key: '' };
   if (map) { map._init = false; map.selected = null; map.preview = null; map.routePath = null; }
   setTacZoom(0);

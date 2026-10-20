@@ -12,7 +12,29 @@
 .tac-screen-solar { cursor: grab; }
 
 /* ---- HUD ---- */
-.hud-center { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+/* The bar in three parts: the sides share what the centre leaves (the centre
+   moves off the middle rather than under a long button row), and the centre
+   is two compact rows that fit the bar (--hud-height) whatever is showing */
+.hud-left, .hud-right { flex: 1 1 0; min-width: max-content; }
+.hud-right { justify-content: flex-end; }
+/* Narrower screens: tighter buttons, then the counters lose their words */
+@media (max-width: 1360px) {
+  .hud-bar .hud-left, .hud-bar .hud-right { gap: 6px; }
+  .hud-text-btn { padding: 0 6px; letter-spacing: 0.08em; }
+  .hud-missions-btn, .hud-jobs-btn { padding: 0 6px; }
+}
+@media (max-width: 1220px) {
+  .hud-missions-label, .hud-jobs-label, .hud-time-sep, .hud-center .hud-center-sub { display: none; }
+  .hud-center .hud-center-row { min-width: 0; max-width: 100%; }
+  .hud-nav-chip { min-width: 0; }
+  .hud-missions-btn::before { content: 'MSN'; } .hud-jobs-btn::before { content: 'JOB'; }
+  .hud-missions-btn::before, .hud-jobs-btn::before { font-family: var(--font-pixel); font-size: 0.42rem; letter-spacing: 0.08em; color: var(--text-secondary); margin-right: 4px; }
+}
+.hud-center { position: static; transform: none; flex: 0 1 auto; min-width: 0; margin: 0 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; max-height: var(--hud-height); }
+.hud-center-row { display: flex; align-items: center; gap: 8px; line-height: 1; }
+.hud-center-sub .hud-ship-name { padding: 1px 6px; }
+.hud-center-sub .hud-space-chip:empty { display: none; }
 .hud-nav-chip {
   font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.08em;
   padding: 1px 10px; border: 1px solid var(--hull-primary); color: var(--text-secondary);
@@ -57,8 +79,55 @@
 .route-status-phase.phase-burn, .route-status-phase.phase-brake, .route-status-phase.phase-transfer-burn { color: #FFFFFF; }
 .route-status-phase.phase-flip, .route-status-phase.phase-orient, .route-status-phase.phase-prepare { color: var(--warning); }
 .route-status-phase.phase-approach { color: var(--ok); }
+.route-status-phase.phase-holding, .route-status-phase.phase-watch { color: var(--ok); }
+.route-status-phase.phase-ready, .route-status-phase.phase-guard { color: var(--warning); }
+.route-status-phase.phase-evade { color: var(--danger); animation: condPulse 0.8s ease-in-out infinite; }
+
+/* ---- Stance panel (shares the route panel's slot) ---- */
+.stance-body { flex: 1; overflow-y: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 10px; }
+.stance-row { display: flex; flex-direction: column; gap: 4px; }
+.stance-label { font-family: var(--font-display); font-weight: 500; font-size: 0.62rem; letter-spacing: 0.2em; color: var(--text-secondary); }
+.stance-row .route-standoff { margin-top: 0; }
+.stance-ranges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.stance-range {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 4px 6px; cursor: pointer;
+  background: rgba(10, 20, 30, 0.5); border: 1px solid var(--hull-primary); color: var(--text-dim);
+  font-family: var(--font-mono); font-size: 0.62rem; text-align: left;
+}
+.stance-range b { font-family: var(--font-display); font-size: 0.66rem; letter-spacing: 0.08em; color: var(--text-secondary); font-weight: 700; }
+.stance-range:hover { border-color: var(--accent-dim); }
+.stance-range.active { border-color: var(--accent); background: rgba(79, 209, 197, 0.08); box-shadow: 0 0 6px var(--accent-glow); }
+.stance-range.active b { color: var(--accent); }
+.stance-range.warn b::after { content: ' ⚠'; color: var(--warning); }
+.stance-custom { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); display: flex; align-items: center; gap: 4px; }
+.stance-custom input {
+  width: 96px; background: rgba(10, 20, 30, 0.7); border: 1px solid var(--hull-primary); color: var(--text-primary);
+  font-family: var(--font-mono); font-size: 0.7rem; padding: 2px 4px;
+}
+.stance-custom.active input { border-color: var(--accent); }
+.stance-warn { font-family: var(--font-mono); font-size: 0.64rem; color: var(--warning); }
+.stance-check {
+  align-self: flex-start; background: none; border: 1px solid var(--hull-primary); color: var(--text-dim); cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.64rem; padding: 3px 6px; letter-spacing: 0.04em;
+}
+.stance-check.on { color: var(--accent); border-color: var(--accent-dim); }
+.stance-check[disabled] { opacity: 0.4; cursor: default; }
+.stance-preview { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.04em; padding: 8px 14px; border-top: 1px solid var(--hull-primary); }
+.stance-current { font-family: var(--font-mono); font-size: 0.68rem; color: var(--ok); letter-spacing: 0.04em; }
 
 /* Battle stations: red ambient light over the cross-section */
+/* Maneuvering with crew on their feet: amber lights over the decks and round the screen */
+.ship-container.maneuver-lit::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+  background: radial-gradient(ellipse at 50% 40%, rgba(226, 163, 85, 0.14) 0%, transparent 70%);
+  mix-blend-mode: screen; animation: maneuverAmbient 1.2s ease-in-out infinite;
+}
+@keyframes maneuverAmbient { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.alert-border.maneuver { animation: maneuverFlash 1.2s infinite; }
+@keyframes maneuverFlash { 0%, 100% { border-color: transparent; } 50% { border-color: rgba(226, 163, 85, 0.75); } }
+.nav-prompt .mp-header.mp-danger { color: var(--danger); animation: condPulse 0.8s ease-in-out infinite; }
+.route-status-phase.phase-held { color: var(--danger); animation: condPulse 0.8s ease-in-out infinite; }
+body.reduce-motion .ship-container.maneuver-lit::before, body.reduce-motion .alert-border.maneuver { animation: none; }
 .ship-container.combat-lit::after {
   content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 5;
   background: radial-gradient(ellipse at 50% 40%, rgba(226, 50, 50, 0.1) 0%, transparent 70%);
@@ -302,3 +371,90 @@ body.reduce-motion .sys-led, body.reduce-motion .sys-frame { animation: none !im
 .station-record { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); margin-left: 10px; }
 .bar-ammo { background: #C9A050; }
 body.hit-flash .ship-viewport { box-shadow: inset 0 0 120px rgba(255, 90, 60, 0.45); }
+
+/* ---- New game: ship picker ---- */
+.panel-screen.panel-newgame { max-width: 1040px; width: min(1040px, calc(100vw - 32px)); min-width: 0; }
+.newgame-grid { display: grid; grid-template-columns: 240px 1fr; gap: 28px; align-items: start; }
+.newgame-ship { margin-bottom: 0; min-width: 0; }
+.form-hint-warn { color: var(--warning); }
+.ship-picker { display: grid; grid-template-columns: minmax(220px, 0.8fr) 1.4fr; gap: 14px; height: min(470px, 62vh); }
+.sp-list { overflow-y: auto; border: 1px solid var(--hull-primary); background: rgba(12, 20, 32, 0.6); padding: 4px; }
+.sp-yard { font-family: var(--font-pixel); font-size: 0.34rem; letter-spacing: 0.2em; color: var(--yard); padding: 10px 6px 5px; border-bottom: 1px solid color-mix(in srgb, var(--yard) 30%, transparent); margin-bottom: 3px; }
+.sp-item { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; column-gap: 8px; width: 100%; text-align: left; padding: 6px 8px; background: transparent; border: 1px solid transparent; color: var(--text-primary); cursor: pointer; }
+.sp-item:hover { background: var(--accent-glow); }
+.sp-item.active { border-color: var(--accent-dim); background: var(--accent-glow-strong); }
+.sp-item-name { font-family: var(--font-display); font-weight: 600; font-size: 0.78rem; }
+.sp-item-kind { grid-row: 2; font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-secondary); }
+.sp-item .sp-tl { grid-row: 1 / span 2; grid-column: 2; align-self: center; }
+.sp-tl { font-family: var(--font-mono); font-size: 0.62rem; padding: 0 4px; border: 1px solid currentColor; }
+.sp-tl-1 { color: #E2A355; } .sp-tl-2 { color: #7A8EA2; } .sp-tl-3 { color: #5BC0EB; } .sp-tl-4 { color: #E0705A; }
+.sp-detail { overflow-y: auto; border: 1px solid var(--hull-primary); background: rgba(12, 20, 32, 0.6); padding: 10px 14px; min-width: 0; }
+.sp-hull { display: block; width: 100%; max-width: 360px; height: auto; margin: 0 auto 4px; }
+.sp-title { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--text-primary); }
+.sp-sub { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-secondary); margin: 2px 0 6px; }
+.sp-desc { font-family: var(--font-mono); font-size: 0.7rem; line-height: 1.45; color: var(--text-secondary); margin: 0 0 8px; }
+.sp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.sp-sec { font-family: var(--font-pixel); font-size: 0.32rem; letter-spacing: 0.18em; color: var(--text-dim); margin: 8px 0 4px; }
+.sp-row { display: flex; justify-content: space-between; gap: 8px; font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-secondary); padding: 2px 0; border-bottom: 1px dotted var(--hull-primary); }
+.sp-row b { font-weight: 400; color: var(--text-primary); text-align: right; }
+.sp-row b.sp-warn { color: var(--warning); }
+.sp-row b.sp-dim { color: var(--text-dim); }
+.sp-bar { flex: 0 0 55%; height: 6px; align-self: center; background: var(--hull-primary); }
+.sp-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); }
+@media (max-width: 900px) {
+  .newgame-grid { grid-template-columns: 1fr; }
+  .ship-picker { grid-template-columns: 1fr; height: auto; }
+  .sp-list { max-height: 220px; }
+  .sp-cols { grid-template-columns: 1fr; }
+}
+.sp-row > span { white-space: nowrap; }
+
+/* ---- The ship's library (a window over the game; the game keeps running) ---- */
+.library { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(2, 5, 9, 0.55); }
+.library-window {
+  width: min(96vw, 1080px); height: min(88vh, 760px); display: flex; flex-direction: column;
+  background: rgba(4, 8, 14, 0.97); border: 1px solid var(--hull-accent); box-shadow: 0 0 40px rgba(0, 0, 0, 0.7), 0 0 12px var(--accent-glow);
+}
+.library-header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--hull-accent); background: rgba(10, 20, 32, 0.5); }
+.library-title { font-family: var(--font-display); font-weight: 700; font-size: 0.9rem; letter-spacing: 0.18em; color: var(--accent); white-space: nowrap; }
+.library-search {
+  flex: 1; min-width: 0; background: rgba(10, 20, 30, 0.7); border: 1px solid var(--hull-primary); color: var(--text-primary);
+  font-family: var(--font-mono); font-size: 0.75rem; padding: 4px 8px;
+}
+.library-search:focus { outline: none; border-color: var(--accent-dim); }
+.library-body { flex: 1; display: flex; min-height: 0; }
+.library-index { width: 280px; flex-shrink: 0; overflow-y: auto; border-right: 1px solid var(--hull-primary); padding: 6px 0; }
+.lib-cat {
+  display: flex; justify-content: space-between; width: 100%; background: none; border: none; cursor: pointer; text-align: left;
+  font-family: var(--font-display); font-weight: 700; font-size: 0.7rem; letter-spacing: 0.14em; color: var(--text-secondary); padding: 6px 12px;
+}
+.lib-cat span { font-family: var(--font-mono); font-weight: 400; color: var(--text-dim); }
+.lib-cat:hover, .lib-cat.open { color: var(--accent); }
+.lib-group { font-family: var(--font-mono); font-size: 0.58rem; letter-spacing: 0.16em; color: var(--text-dim); padding: 6px 12px 2px 18px; text-transform: uppercase; }
+.lib-item {
+  display: flex; justify-content: space-between; gap: 6px; width: 100%; background: none; border: none; border-left: 2px solid transparent; cursor: pointer; text-align: left;
+  font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary); padding: 3px 12px 3px 22px;
+}
+.lib-item:hover { color: var(--text-primary); background: rgba(79, 209, 197, 0.04); }
+.lib-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(79, 209, 197, 0.07); }
+.lib-cat-tag { font-size: 0.56rem; color: var(--text-dim); letter-spacing: 0.08em; white-space: nowrap; }
+.lib-empty { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); padding: 12px; }
+.library-page { flex: 1; overflow-y: auto; padding: 16px 22px; font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-secondary); line-height: 1.55; }
+.lib-title { font-family: var(--font-display); font-weight: 700; font-size: 1.25rem; letter-spacing: 0.05em; color: var(--text-primary); }
+.lib-sub { font-size: 0.7rem; color: var(--accent); letter-spacing: 0.06em; margin: 2px 0 10px; }
+.library-page p { margin: 0 0 10px; max-width: 70ch; }
+.lib-specs { border-collapse: collapse; margin: 6px 0 12px; width: 100%; max-width: 720px; }
+.lib-specs th { text-align: left; font-weight: 400; color: var(--text-dim); padding: 3px 14px 3px 0; white-space: nowrap; vertical-align: top; width: 1%; }
+.lib-specs td { color: var(--text-primary); padding: 3px 0; border-bottom: 1px solid rgba(79, 209, 197, 0.06); }
+.lib-links { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 0.6rem; letter-spacing: 0.14em; color: var(--text-dim); margin-top: 8px; }
+.lib-link, [data-lib].lib-ref {
+  background: none; border: 1px solid var(--hull-primary); color: var(--accent); cursor: pointer;
+  font-family: var(--font-mono); font-size: 0.66rem; padding: 2px 6px; letter-spacing: 0.02em;
+}
+.lib-link:hover, [data-lib].lib-ref:hover { border-color: var(--accent); }
+[data-lib].lib-inline { cursor: pointer; border-bottom: 1px dotted var(--accent-dim); }
+[data-lib].lib-inline:hover { color: var(--accent); }
+@media (max-width: 720px) {
+  .library-body { flex-direction: column; }
+  .library-index { width: auto; max-height: 38%; border-right: none; border-bottom: 1px solid var(--hull-primary); }
+}

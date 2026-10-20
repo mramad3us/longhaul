@@ -18,6 +18,7 @@ export function initFx() {
   bus.on('slug-hit', (p) => add('hit', p));
   bus.on('pdc-fired', (p) => add('pdc', p));
   bus.on('pdc-strafe', (p) => add('strafe', p));
+  bus.on('gear-fired', (p) => add('strafe', p));
 }
 
 function add(kind, p) {

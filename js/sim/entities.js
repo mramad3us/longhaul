@@ -31,7 +31,7 @@ export function createEntity(opts) {
     type: opts.type || EntityType.SHIP,
     faction: opts.faction || 'independent',
     cls,                                          // catalog class id (ships)
-    tl: opts.tl || (cls ? CLASSES[cls].tl[0] : 2),
+    tl: cls ? CLASSES[cls].tl : (opts.tl || 2),        // a class's tech level is its yard's
     shipClass: opts.shipClass || (cls ? CLASSES[cls].name : null),
     mass: opts.mass || (cls ? CLASSES[cls].massT : 0),   // metric tons
     pos: opts.pos ? { x: opts.pos.x, y: opts.pos.y } : { x: 0, y: 0 },
@@ -52,6 +52,18 @@ export function createEntity(opts) {
   return e;
 }
 
+/** What the ship's library says about each charted station (kept out of the save). */
+export const STATION_NOTES = {
+  'ceres-station': "The Belt's biggest port: a spun-up rock at the heart of the asteroid belt, with docks, ice markets and the OPA's loudest voice.",
+  'pallas-station': 'Refinery station on Pallas, smelting metals from Belt ore. Steady work for haulers.',
+  'vesta-depot': 'Mining depot serving the prospectors and ore haulers round Vesta. Rough, cheap and independent.',
+  'hygiea-ring': 'A ring station on Hygiea, far out in the Belt: a quiet place to resupply.',
+  'tycho-station': "Tycho Manufacturing's construction platform, where the Belt builds its biggest ships.",
+  'luna-yards': "Earth's orbital yards above the Moon: home port of the UNN, and Earth-quality refits for anyone who can pay.",
+  'phobos-yard': "The MCRN's naval yard on Phobos, under Mars. Martian warships are built and overhauled here, and strangers are watched.",
+  'ganymede-station': "Ganymede's agricultural hub, the breadbasket of the outer planets, growing under mirrors and domes.",
+};
+
 // r in AU, period in days around the anchor body
 const DEFAULTS = [
   { id: 'ceres-station', name: 'Ceres Station', type: 'station', faction: 'OPA', shipClass: 'Ceres-class station', mass: 1_200_000,
@@ -71,13 +83,13 @@ const DEFAULTS = [
   { id: 'ganymede-station', name: 'Ganymede Station', type: 'station', faction: 'independent', shipClass: 'Agricultural hub', mass: 2_700_000,
     orbit: { body: 'Ganymede', r: 0.00002, phase: 4.2, period: 0.15 } },
 
-  { id: 'mcrn-scirocco', name: 'MCRN Scirocco', type: 'ship', faction: 'MCR', cls: 'battleship', tl: 4, shipClass: 'Donnager-class battleship', mass: 250_000,
+  { id: 'mcrn-scirocco', name: 'MCRN Scirocco', type: 'ship', faction: 'MCR', cls: 'mcrn-battleship', tl: 4, shipClass: 'Olympus-class battleship', mass: 250_000,
     orbit: { body: 'Mars', r: 0.001, phase: 5.2, period: 6 } },
   { id: 'ice-hauler-pk', name: "Pur'n'Kleen Weeping Somnambulist", type: 'ship', faction: 'OPA', cls: 'ice-hauler', tl: 1, shipClass: 'Canterbury-class ice hauler', mass: 120_000,
     orbit: { body: 'Ceres', r: 0.00025, phase: 2.0, period: 40 } },
-  { id: 'unn-agatha-king', name: 'UNN Agatha King', type: 'ship', faction: 'UN', cls: 'battleship', tl: 3, shipClass: 'Truman-class dreadnought', mass: 300_000,
+  { id: 'unn-agatha-king', name: 'UNN Agatha King', type: 'ship', faction: 'UN', cls: 'unn-battleship', tl: 3, shipClass: 'Leviathan-class battleship', mass: 300_000,
     orbit: { body: 'Earth', r: 0.0008, phase: 0.4, period: 4 } },
-  { id: 'opa-molinari', name: 'Guy Molinari', type: 'ship', faction: 'OPA', cls: 'opa-gunship', tl: 2, shipClass: 'Converted freighter', mass: 9_000,
+  { id: 'opa-molinari', name: 'Guy Molinari', type: 'ship', faction: 'OPA', cls: 'opa-gunship', tl: 1, shipClass: 'Converted-freighter gunship', mass: 9_000,
     orbit: { body: 'Vesta', r: 0.0004, phase: 5.5, period: 35 } },
 ];
 

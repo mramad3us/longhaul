@@ -370,7 +370,7 @@ function drawSilhouette(ctx, e, x, y, heading, color, seed, t, big) {
  * Outline of a class silhouette (ship-classes.js SHAPES), nose up, length h px:
  * the bow segment tapers to a point, the rest are blocks of their own width.
  */
-function traceShape(ctx, shape, h) {
+export function traceShape(ctx, shape, h) {
   const pts = [];
   let y = -h / 2;
   shape.segs.forEach(([lf, wf], i) => {
@@ -387,7 +387,7 @@ function traceShape(ctx, shape, h) {
   ctx.closePath();
 }
 
-function drawShapeFeatures(ctx, shape, h) {
+export function drawShapeFeatures(ctx, shape, h) {
   const segY = (i) => -h / 2 + shape.segs.slice(0, i).reduce((s, x) => s + x[0], 0) * h;
   if (shape.ring) {
     const ry = -h / 2 + shape.ring * h;

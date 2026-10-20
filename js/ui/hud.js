@@ -11,7 +11,7 @@ import { targetStateAt, targetName } from '../sim/nav.js';
 import { dockedStation } from '../sim/contracts.js';
 import { activeMissions } from '../sim/missions.js';
 import { iconFuel, iconOxygen, iconN2, iconWater, iconFood, iconPower, iconMedical, iconCrew, iconParts } from '../svg-icons.js';
-import { SYSTEM_IDS, Status, waterRecovery } from '../sim/systems.js';
+import { shipSystems, Status, waterRecovery } from '../sim/systems.js';
 import { systemsStripHTML } from './shipboard.js';
 import { controlAt, spaceLabel } from '../sim/factions.js';
 import { zonesAt, ZONE_KINDS } from '../sim/conflict.js';
@@ -63,12 +63,27 @@ export function relativeTo(state, target) {
 
 // ---- NAV STATUS ----
 
+/** How each phase of a stance (sim/stance.js) is shown. */
+export const STANCE_PHASE = {
+  prepare: 'SECURING', held: 'FLIP HELD', holding: 'ON STATION', watch: 'WATCHING', ready: 'READY TO BURN', guard: 'HOLDING THE LINE',
+  evade: 'EVADING TORPEDO', approach: 'MOVING · RCS', burn: 'MOVING · BURN', brake: 'MOVING · BRAKE', coast: 'MOVING · COAST',
+  flip: 'MOVING · FLIP', orient: 'ORIENT',
+};
+
 export function navStatus(state) {
   const ap = state.autopilot;
   if (ap) {
     const name = targetName(state, ap.plan.target);
     if (ap.phase === 'prepare') return { chip: `PREPARING → ${name}`, cls: 'chip-warn' };
     if (ap.helm === 'unmanned') return { chip: `HELM UNMANNED — COASTING → ${name}`, cls: 'chip-danger' };
+    if (ap.turnHeld != null) return { chip: `FLIP HELD — CREW ON THEIR FEET · ${name}`, cls: 'chip-danger' };
+    if (state.$maneuverAlert) return { chip: `MANEUVERING — SECURE ALL HANDS · ${name}`, cls: 'chip-danger' };
+    if (ap.plan.kind === 'stance') {
+      const hand = ap.helm === 'manual' ? ` · HAND-FLOWN (${ap.helmBy})` : '';
+      const cls = ap.display === 'evade' ? 'chip-danger' : ap.display === 'holding' || ap.display === 'watch' ? 'chip-ok'
+        : ['ready', 'guard', 'flip', 'orient'].includes(ap.display) ? 'chip-warn' : 'chip-nav';
+      return { chip: `${STANCE_PHASE[ap.display] || ap.display.toUpperCase()} · ${name}${hand}`, cls };
+    }
     const label = { burn: 'BURN', brake: 'BRAKE', coast: 'COAST', approach: 'APPROACH', flip: 'FLIP', orient: 'ORIENT', 'transfer-burn': 'BURN' }[ap.display] || ap.display.toUpperCase();
     const hand = ap.helm === 'manual' ? ` · HAND-FLOWN (${ap.helmBy})` : '';
     return { chip: `${label} → ${name}${hand}`, cls: ap.display === 'flip' || ap.helm === 'manual' ? 'chip-warn' : 'chip-nav' };
@@ -184,10 +199,11 @@ function updateTactical(state) {
 let stripAt = 0;
 function updateSystemsStrip(state) {
   const units = state.systems.units;
-  const faults = SYSTEM_IDS.filter(id => units[id].status !== Status.NOMINAL).length;
+  const ids = shipSystems(state);
+  const faults = ids.filter(id => units[id].status !== Status.NOMINAL).length;
   setText(el.sysCount, faults ? faults : '');
   toggleClass(el.sysCount, 'has-faults', faults > 0);
-  toggleClass(el.sysCount, 'has-critical', SYSTEM_IDS.some(id => units[id].status === Status.FAILED));
+  toggleClass(el.sysCount, 'has-critical', ids.some(id => units[id].status === Status.FAILED));
   const now = performance.now();
   if (now - stripAt < 500) return;
   stripAt = now;
@@ -263,6 +279,8 @@ function updateResources(state) {
     lastLevel[cfg.key] = level;
   }
   toggleClass(el.alert, 'critical', critical);
+  // amber: the nav computer is maneuvering and someone is still on their feet
+  toggleClass(el.alert, 'maneuver', !critical && !!state.$maneuverAlert);
 }
 
 export function resetResourceAlerts() {

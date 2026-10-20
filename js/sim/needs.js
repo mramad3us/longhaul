@@ -91,7 +91,7 @@ export function moraleTarget(m) {
   let t = 22 + mean * 0.75;
   for (const k of NEEDS) if (n[k] < 15) t -= 5;
   if (m.conditions.includes('injured')) t -= 8;
-  if (m.juiceHangover > 0) t -= 5;
+  if (m.juiceHangover > 0) t -= m.juiceCrash ? 15 : 5;
   return clamp(t + (m.moraleMod || 0));
 }
 
@@ -106,7 +106,7 @@ export function efficiency(m) {
   if (n.rest < 30) e *= 0.55 + 0.45 * n.rest / 30;
   if (m.morale < 40) e *= 0.75 + 0.25 * m.morale / 40;
   if (n.food < URGENT.food) e *= 0.85;
-  if (m.juiceHangover > 0) e *= 0.85;
+  if (m.juiceHangover > 0) e *= m.juiceCrash ? 0.6 : 0.85;
   const h = overallHealth(m);
   if (h < 70) e *= 0.5 + 0.5 * h / 70;
   return clamp(e, 0.2, 1);

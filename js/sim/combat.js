@@ -13,6 +13,9 @@
 //     thrust changes that throw off torpedo terminal homing, railgun
 //     and PDC aim — at the cost of reaction mass and G on the crew.
 // A gunner at the weapons console makes the PDCs far more effective.
+// A mining ship has its gear instead: on ENGAGE it throws rock at a
+// target inside a few km. How well any of it shoots, and how hard the
+// helm can jink, depends on the tech level the ship was built to.
 //
 // Shooting at a lawful ship is a crime, and it makes enemies of its
 // friends nearby. Shooting back never is.
@@ -26,7 +29,7 @@
 import { AU_M, MIN_S } from '../core/constants.js';
 import { getWorld } from './world.js';
 import { PLAYER, profile, kinematics, isOutOfFight } from './combatants.js';
-import { launchTorpedo, moveOrdnance, strafe, inboundTo, timeToGo } from './ordnance.js';
+import { launchTorpedo, moveOrdnance, strafe, fireGear, inboundTo, timeToGo } from './ordnance.js';
 import { moveAgents, agentsTick, wake, makeHostile, hostilesOfPlayer } from './agents.js';
 import { recordAttack, lawfulTarget } from './law.js';
 import { isTracked } from './sensors.js';
@@ -34,7 +37,7 @@ import { systemPerf } from './systems.js';
 import { isReactorOnline } from './reactor.js';
 import { WARHEADS, PROFILES, TORPEDO_RELOAD_MIN, EVADE_G } from './weapons.js';
 import { AIM } from './damage.js';
-import { CLASSES, PLAYER_CLASS } from './ship-classes.js';
+import { CLASSES, PLAYER_CLASS, TECH, playerClass } from './ship-classes.js';
 
 export const PDC_MODES = {
   auto: { label: 'AUTO', desc: 'Point defense shoots down incoming torpedoes.' },
@@ -57,7 +60,8 @@ export function createCombat(classId = PLAYER_CLASS) {
 /** The magazine aboard: torpedoes by warhead, and how many fit. */
 export function createMagazine(classId = PLAYER_CLASS) {
   const c = CLASSES[classId];
-  return { capacity: c.magazineCap || 0, he: c.magazine?.he || 0, nuke: c.magazine?.nuke || 0 };
+  const he = c.magazine?.he || 0, nuke = c.magazine?.nuke || 0;
+  return { capacity: c.magazineCap ?? he + nuke, he, nuke };
 }
 
 // ---- ORDERS ----
@@ -87,12 +91,12 @@ export function setEvasive(state, on) {
   return { ok: true, text: on ? 'Helm: evasive maneuvers' : 'Helm: evasive maneuvers secured' };
 }
 
-/** G of random jinking this minute (0 when not evading or no drive). */
+/** G of random jinking this minute (0 when not evading or no drive). A better flight computer jinks harder. */
 export function jinkG(state) {
   const C = state.combat;
   if (!C.evasive || !state.combatStations) return 0;
   if (!isReactorOnline(state) || state.resources.fuel.current <= 0) return 0;
-  return Math.min(EVADE_G, state.flight.maxG);
+  return Math.min(EVADE_G * TECH[playerClass(state).tl].evade, state.flight.maxG);
 }
 
 /** Tubes ready to fire right now. */
@@ -159,16 +163,20 @@ export function combatTick(state, emit = () => {}) {
     }
   }
 
-  // PDCs on ENGAGE rake the target when it is inside gun range
+  // PDCs (or mining gear) on ENGAGE rake the target when it is inside gun range
   if (C.pdc === 'engage' && C.target && !state.lost) {
     const t = getWorld(state).get(C.target);
     const p = profile(state, PLAYER);
     const k = kinematics(state, C.target);
-    if (t && k && p.pdc.mounts > 0 && t.combat?.status !== 'surrendered') {
+    if (t && k && t.combat?.status !== 'surrendered') {
       const d = Math.hypot(k.pos.x - state.flight.pos.x, k.pos.y - state.flight.pos.y) * AU_M;
-      if (d <= p.pdc.strafeM) {
+      if (p.pdc.mounts > 0 && d <= p.pdc.strafeM) {
         engage(state, t, emit);
         strafe(state, PLAYER, C.target, C.aim, emit);
+      }
+      if (p.gear && d <= p.gear.rangeM) {
+        engage(state, t, emit);
+        fireGear(state, PLAYER, C.target, C.aim, emit);
       }
     }
   }

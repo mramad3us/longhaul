@@ -7,6 +7,7 @@
 // ============================================================
 
 import { TileType, WALKABLE, TILE_MASS } from './tiles.js';
+import { CLASSES, PLAYER_CLASS, isArmed } from './ship-classes.js';
 
 export const DECK_GAP = 1;
 
@@ -15,13 +16,29 @@ const E = T.EMPTY, HW = T.HULL_WALL, F = T.FLOOR, L = T.LADDER, CC = T.CRASH_COU
 const EV = T.EVA_LOCKER, BK = T.BUNK, TB = T.TABLE, ST = T.STORAGE;
 
 /**
- * Default light freighter (ship-classes.js: 'light-freighter'): seven
- * decks stacked on the torch, one ladder shaft down the spine. Bow
- * first: command (with fire control), living, working, cargo (with the
- * torpedo magazine), then the machinery — two PDC turrets sit in the
- * engine-deck hull, port and starboard.
+ * Our ship's interior: seven decks stacked on the torch, one ladder shaft
+ * down the spine. Bow first: command (with fire control), living, working,
+ * cargo (with the torpedo magazine), then the machinery — two PDC turrets
+ * sit in the engine-deck hull, port and starboard.
+ *
+ * Every class a small crew can fly shares this plan; the fit follows the
+ * class. Without point defense the turret wells are plated over, without
+ * tubes the launcher bay is hold space, and a ship with nothing to fire has
+ * a couch where fire control would be.
  */
-export function createDefaultLayout() {
+export function createDefaultLayout(classId = PLAYER_CLASS) {
+  const c = CLASSES[classId];
+  const swap = {
+    [T.PDC_MOUNT]: c.pdc > 0 ? null : HW,
+    [T.TORPEDO_LAUNCHER]: c.tubes > 0 ? null : ST,
+    [T.WEAPONS_CONSOLE]: isArmed(c) ? null : CC,
+  };
+  const decks = baseLayout();
+  for (const d of decks) d.tiles = d.tiles.map(row => row.map(t => swap[t] ?? t));
+  return decks;
+}
+
+function baseLayout() {
   return [
     {
       name: 'Bridge', id: 'bridge',
