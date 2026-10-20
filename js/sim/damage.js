@@ -209,6 +209,7 @@ export function wreckNpc(state, e, by, emit = () => {}) {
   e.agent = null;
   e.transponder = false;
   getWorld(state).setSos(e, false);
+  getWorld(state).setForce(e, null);
   e.tags.wreck = true;
   e.tags.traffic = false;
   e.tags.despawnAt = state.clock.minute + 10 * 1440;

@@ -8,7 +8,8 @@
 // Motion models:
 //   orbit — on rails around a body: exact analytic position at any
 //           time, O(1), no drift (stations, parked ships, nav marks)
-//   transit — NPC traffic between two rails entities, analytic
+//   transit — NPC traffic between two rails entities, analytic (a ship
+//           put back on rails out in space starts from a coasting fix)
 //   free  — integrated under solar gravity + own thrust
 //   driven — stepped every minute by its controller (an NPC at the
 //           helm, a torpedo's guidance): the world never moves it,
@@ -82,11 +83,19 @@ const _d = { pos: { x: 0, y: 0 }, vel: { vx: 0, vy: 0 } };
 /**
  * NPC transit between two rails entities: brachistochrone profile along the
  * chord between the moving endpoints. Exact at any time, O(1).
+ * A transit can instead start from `fix` ({x, y, vx, vy, t}: where a ship
+ * was when it went back on rails out in space), coasted on in a straight
+ * line; its weight fades to nothing by arrival, so the error does too.
  * Also sets e.thrust / e.heading so sensors see the drive plume.
  */
 export function transitStateAt(world, e, minute, pos, vel) {
   const tr = e.transit;
-  if (!world.anchorState(tr.from, minute, _o) || !world.anchorState(tr.to, minute, _d)) return false;
+  if (tr.fix) {
+    const k = (minute - tr.fix.t) * MIN_S / AU_M;
+    _o.pos.x = tr.fix.x + tr.fix.vx * k; _o.pos.y = tr.fix.y + tr.fix.vy * k;
+    _o.vel.vx = tr.fix.vx; _o.vel.vy = tr.fix.vy;
+  } else if (!world.anchorState(tr.from, minute, _o)) return false;
+  if (!world.anchorState(tr.to, minute, _d)) return false;
   const span = Math.max(1, tr.t1 - tr.t0);
   const tau = Math.max(0, Math.min(1, (minute - tr.t0) / span));
   const frac = tau < 0.5 ? 2 * tau * tau : 1 - 2 * (1 - tau) * (1 - tau);
@@ -153,6 +162,7 @@ export class World {
     this.stations = [];             // rails stations (destinations for traffic & contracts)
     this.beacons = new Set();       // entities broadcasting SOS — tiny, so no spatial search needed
     this.driven = new Set();        // NPC ships under a pilot, ordnance in flight — stepped every minute
+    this.forces = new Set();        // police, navy and pirate hulls of the background population (forces.js)
     this._anchorMemo = new Map();   // id → { minute, pos, vel } for transit endpoints
     this.cursor = 0;                // background round-robin position
     this._near = [];
@@ -167,6 +177,7 @@ export class World {
     if (e.type === 'station' && e.orbit) this.stations.push(e);
     if (e.sos) this.beacons.add(e);
     if (e.driven) this.driven.add(e);
+    if (e.tags?.force) this.forces.add(e);
     this.refresh(e, this.state.clock.minute);
     this.hash.insert(e);
   }
@@ -197,8 +208,14 @@ export class World {
     if (e.type === 'station') this.stations = this.stations.filter(s => s !== e);
     this.beacons.delete(e);
     this.driven.delete(e);
+    this.forces.delete(e);
     this._anchorMemo.delete(e.id);
     return true;
+  }
+
+  /** Enlist an entity in (or strike it from) the background forces (keeps the index in sync). */
+  setForce(e, force) {
+    if (force) { e.tags.force = force; this.forces.add(e); } else { delete e.tags.force; this.forces.delete(e); }
   }
 
   /** Hand an entity to (or take it from) a controller (keeps the driven index in sync). */

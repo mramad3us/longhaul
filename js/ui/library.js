@@ -31,6 +31,9 @@ import { STATION_NOTES } from '../sim/entities.js';
 import { getWorld } from '../sim/world.js';
 import { G_THRESHOLDS, HIGH_DOSE_G } from '../sim/crew.js';
 import { FLIP_MINUTES, RCS_MAX_G, LEAN_MAX } from '../sim/flight.js';
+import { DIGEST_MIN, TC_REACH_AU, LIGHT_MINUTE_AU } from '../sim/intel.js';
+import { WAKE_AU, POLICE_PER_STATION, NAVY_STRENGTH, NAVY_YARDS, PIRATES_AT_LARGE } from '../sim/forces.js';
+import { DEFAULT_TRAFFIC } from '../sim/traffic.js';
 
 const CATEGORIES = [
   { id: 'ships', label: 'SHIP CLASSES' },
@@ -303,6 +306,19 @@ function navigation(add) {
     text: ['A flip throws anyone not strapped in, at any G. The nav computer calls the crew to the couches before every stretch where it may turn the ship: preparing, the half hour before a flip, the last hour of an approach, a stance moving into place.',
       `It won't start a flip with anyone able on their feet: it holds the turn, drive cold, until they are in, the captain orders FLIP NOW, or ${TURN_HOLD_MAX_MIN} minutes have gone. Amber lights show while the ship maneuvers with crew up.`],
     links: [['Acceleration', 'crew:g'], ['Crash couch', `fit:${TileType.CRASH_COUCH}`]] });
+  add({ id: 'nav:light', cat: 'nav', group: 'The plot', title: 'Light lag and the plot',
+    text: ['Light crosses an AU in 8.3 minutes, and nothing we learn travels faster. What our own sensors hold (out to 50 light-seconds) is live. Everything else on the plot is a report, and every report has an age.',
+      'A contact that drops off the board leaves its last fix: the plot coasts it on its last velocity inside a circle that grows with the hours, since it may have burned since. A lost contact can be looked at but not flown to: close in until the sensors hold it again.',
+      `Every station's traffic control publishes a digest every ${DIGEST_MIN / 60} hours: the transponder ships within ${fmtKm(TC_REACH_AU * AU_KM)} of it, berthed or with a filed flight plan. It reaches us after the light time from that station. A filed plan is flown forward on the plot, and the nav computer can plot a route to it. Ships without a transponder are never in a digest.`,
+      'News of hot zones and losses travels at light speed too. A zone is on the plot once its news has arrived, and stays there until news of its end does.'],
+    specs: [['One light-second', '299,792 km'], ['One light-minute', `${fmtNum(LIGHT_MINUTE_AU * AU_KM / 1e6, 1)} M km`], ['Earth to Ceres', '≈ 10–30 light-minutes'], ['Ceres to Jupiter', '≈ 15–50 light-minutes']],
+    links: [['Who is out there', 'nav:population']] });
+  add({ id: 'nav:population', cat: 'nav', group: 'The plot', title: 'Who is out there',
+    text: [`About ${fmtNum(DEFAULT_TRAFFIC)} traffic ships work the lanes between the stations, choosing nearer and friendlier ports. Each power keeps hulls in space as well: ${POLICE_PER_STATION} police cutters on a beat around each of its stations; ${Object.entries(NAVY_STRENGTH).map(([f, n]) => `${n} ${FACTIONS[f].navy} warships`).join(', ')} berthed at their yards until a hot zone calls for them; and about ${PIRATES_AT_LARGE} raiders lying up cold where nobody's writ runs.`,
+      'Far from us these ships fly on rails, and what happens to them is settled by outcomes: warships on station at a skirmish lose ships, pirates take haulers in the lanes through their zone. The wrecks are real and stay where they fell.',
+      `Within ${fmtKm(WAKE_AU * AU_KM)} of us (about our long sensor reach) they come alive and act for themselves. The skirmish we fly into is the one the news reported, fought by the ships that were sent to it.`],
+    specs: Object.entries(NAVY_YARDS).map(([f, ids]) => [`${FACTIONS[f].navy} yards`, ids.map(id => (ui.state && getWorld(ui.state).get(id)?.name) || id).join(', ')]),
+    links: [['Light lag and the plot', 'nav:light']] });
 }
 
 function crew(add) {

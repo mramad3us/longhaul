@@ -15,12 +15,22 @@
 // Zones shape everything nearby: who patrols, who lurks, what the
 // station boards offer, what turns up wrecked.
 //
+// Zones call for ships (forces.js): navies send squadrons from their
+// yards, pirate zones gather packs. Far from us those hulls stay on
+// rails and a zone produces outcomes, hourly: warships of both sides
+// on station may lose one, pirates may take a passing hauler, a
+// blockade may stop one that runs it. The losses are real ships, left
+// as wrecks where they fell. News of all of it travels at light speed
+// (intel.js): we hear of a zone, and of its end, when the light does.
+//
 // THE ENCOUNTER DIRECTOR runs hourly around our ship only. From the
 // local politics — who holds this space, how firmly, which zones we
 // are in — it decides whether a patrol, a pirate, a pair of warships
-// or a ship in trouble appears at the edge of sensor range. Far from
-// us, zones produce outcomes (wrecks, news) without simulating ships,
-// so the cost never grows with the size of the world.
+// or a ship in trouble turns up. It calls on the ships that are there
+// first: a police cutter on its beat is sent to look at us, a pirate
+// lying up nearby wakes, a hauler already in the lane is the one that
+// gets jumped. Only when nobody suitable is near does it bring someone
+// in from beyond sensor range. The cost never grows with the world.
 // ============================================================
 
 import { DAY_MIN } from '../core/constants.js';
@@ -28,10 +38,15 @@ import { random, randRange, randInt, pick, chance, weightedPick, gaussian } from
 import { BODIES, bodyPos, circularSpeed } from './ephemeris.js';
 import { getWorld, orbitStateAt } from './world.js';
 import { createEntity } from './entities.js';
-import { rollIdentity } from './ship-classes.js';
+import { rollIdentity, CLASSES } from './ship-classes.js';
+import { classStrength } from './combatants.js';
 import { FACTIONS, controlAt } from './factions.js';
-import { spawnAgent, makeHostile } from './agents.js';
+import { spawnAgent, makeHostile, wake } from './agents.js';
 import { offerUnderAttack } from './missions.js';
+import { relay } from './intel.js';
+import {
+  deployToZone, standDown, forcesAt, wreckInPlace, nearestAsleep, awakeNear, rouse, forcesOn,
+} from './forces.js';
 
 export const ZONE_KINDS = {
   standoff: { label: 'NAVAL STANDOFF', powers: 2, desc: 'Two navies watching each other. Patrols search everyone.' },
@@ -95,20 +110,27 @@ function dailyPolitics(state, emit) {
     z.intensity = clamp01(z.intensity + 0.08 * gaussian() + 0.08 * (t - 0.5));
     if (z.kind === 'standoff' && t > 0.65 && z.intensity > 0.7 && chance(0.3)) {
       z.kind = 'skirmish';
-      emit('zone-news', { zone: z, text: `Shots fired near ${z.body}: the ${FACTIONS[z.factions[0]].navy}–${FACTIONS[z.factions[1]].navy} standoff has turned into a fight.` });
+      news(state, z, `Shots fired near ${z.body}: the ${FACTIONS[z.factions[0]].navy}–${FACTIONS[z.factions[1]].navy} standoff has turned into a fight.`);
     }
     if (now >= z.until || z.intensity < 0.08) {
       P.zones.splice(P.zones.indexOf(z), 1);
       if (z.kind === 'skirmish') P.tension[pairKey(...z.factions)] = clamp01(tension(state, ...z.factions) - 0.05);
-      emit('zone-news', { zone: z, ended: true, text: `${ZONE_KINDS[z.kind].label} near ${z.body} is over.` });
+      standDown(state, z);
+      news(state, z, `${ZONE_KINDS[z.kind].label} near ${z.body} is over.`, { ended: true });
     }
   }
   // New flashpoints
   const avg = Object.values(P.tension).reduce((a, b) => a + b, 0) / 3;
   if (P.zones.length < MAX_ZONES && chance(0.25 + 0.6 * avg)) {
     const z = spawnZone(state);
-    if (z) emit('zone-news', { zone: z, started: true, text: zoneHeadline(z) });
+    if (z) news(state, z, zoneHeadline(z), { started: true });
   }
+}
+
+/** Zone news leaves from the zone and reaches us at light speed. */
+function news(state, z, text, { started = false, ended = false } = {}) {
+  relay(state, zonePos(z, state.clock.minute), 'zone-news', { zoneId: z.id, body: z.body, kind: z.kind, started, ended, text },
+    { id: z.id, kind: z.kind, body: z.body, factions: z.factions, r: z.r, phase: z.phase, radius: z.radius, ended });
 }
 
 /** Candidate flashpoints from the influence field right now. */
@@ -150,6 +172,7 @@ export function spawnZone(state, forced = null) {
     intensity: randRange(0.35, 0.7), born: now, until: now + randInt(5, 30) * DAY_MIN, wrecks: 0,
   };
   P.zones.push(z);
+  deployToZone(state, z);
   return z;
 }
 
@@ -165,10 +188,25 @@ function zoneHeadline(z) {
   }
 }
 
-/** Off-screen consequences: ships lost in the zone become wrecks to salvage. */
+/**
+ * Off-screen consequences, hourly. With the background forces running,
+ * the losses are real hulls: warships on station at a standoff or a
+ * skirmish, traffic in the lanes through a pirate zone or a blockade.
+ * Nobody there, nothing happens (the squadrons may still be on their
+ * way). Without them (test suites), and for insurgencies, a loss is
+ * rolled up from the zone's politics. A wreck stays where it fell.
+ */
+const INCIDENT_RATE = { skirmish: 0.06, pirates: 0.04, blockade: 0.01, standoff: 0.005, insurgency: 0.01 };
+
 function zoneIncidents(state, z, emit) {
-  const rate = { skirmish: 0.06, pirates: 0.04, blockade: 0.01, standoff: 0.005, insurgency: 0.01 }[z.kind] || 0;
-  if (z.wrecks >= MAX_ZONE_WRECKS || !chance(rate * z.intensity)) return;
+  if (z.wrecks >= MAX_ZONE_WRECKS) return;
+  const rate = (INCIDENT_RATE[z.kind] || 0) * z.intensity;
+  if (forcesOn(state) && z.kind !== 'insurgency') {
+    const loss = zoneLoss(state, z, rate);
+    if (loss) reportLoss(state, z, loss.e, loss.text);
+    return;
+  }
+  if (!chance(rate)) return;
   const world = getWorld(state);
   const victim = z.kind === 'skirmish'
     ? rollIdentity({ category: 'military', faction: pick(z.factions) })
@@ -181,8 +219,43 @@ function zoneIncidents(state, z, emit) {
   });
   e.combat = { hp: 0, hpMax: 1, drive: 0, reactor: 0, weapons: 0, sensors: 0, crew: 0, status: 'wreck', containment: null, scrammed: true, rounds: 0, magazine: { he: 0, nuke: 0 }, tubes: [], rail: [] };
   world.add(e);
+  reportLoss(state, z, e, `${victim.shipClass} ${victim.name} lost near ${z.body}.`);
+}
+
+/** Who, if anyone, the zone costs this hour. */
+function zoneLoss(state, z, rate) {
+  const there = forcesAt(state, z);
+  if (z.kind === 'skirmish' || z.kind === 'standoff') {
+    const [a, b] = z.factions.map(f => there[f] || []);
+    if (!a.length || !b.length || !chance(rate * Math.min(1, (a.length + b.length) / 4))) return null;
+    // The side facing the stronger squadron loses a ship (a Martian TL4 frigate
+    // is worth several Belt refits)
+    const might = (side) => side.reduce((m, e) => m + (CLASSES[e.cls] ? classStrength(e.cls) : 1), 0);
+    const ma = might(a), mb = might(b);
+    const side = chance(mb / (ma + mb)) ? a : b;
+    const e = pick(side);
+    return { e, text: `${e.shipClass} ${e.name} lost near ${z.body}${z.kind === 'skirmish' ? ' in the fighting' : ''}.` };
+  }
+  const hunters = z.kind === 'pirates' ? (there.pirate || []) : (there[z.factions[0]] || []);
+  if (!hunters.length || !chance(rate * Math.min(1, hunters.length / 3))) return null;
+  const lane = traffickedNear(state, z);
+  if (!lane) return null;
+  const how = z.kind === 'pirates' ? 'taken by raiders' : `disabled running the ${FACTIONS[z.factions[0]].navy} blockade`;
+  return { e: lane, text: `${lane.shipClass} ${lane.name} ${how} near ${z.body}.` };
+}
+
+/** A traffic ship in transit through the zone, if any. */
+function traffickedNear(state, z) {
+  const p = zonePos(z, state.clock.minute);
+  const pool = getWorld(state).query(p, z.radius).filter(e => e.tags?.traffic && e.transit && !e.agent && !e.tags.wreck);
+  return pool.length ? pick(pool) : null;
+}
+
+function reportLoss(state, z, e, text) {
+  if (!e.tags.wreck) wreckInPlace(state, e, z.body);
+  e.tags.zone = z.id;
   z.wrecks++;
-  emit('zone-incident', { zone: z, entity: e, text: `${victim.shipClass} ${victim.name} lost near ${z.body}.` });
+  relay(state, e.pos, 'zone-incident', { zoneId: z.id, entityId: e.id, chart: e.id, text, source: 'NEWSFEED' });
 }
 
 // ---- ENCOUNTERS ----
@@ -239,6 +312,9 @@ export function director(state, emit = () => {}) {
 
 /** Make one encounter happen now (also a dev/test hook). */
 export function spawnEncounter(state, r, emit = () => {}) {
+  // Ships already out there first; null means "already here", undefined "nobody near"
+  const local = forcesOn(state) ? fromPopulation(state, r, emit) : undefined;
+  if (local !== undefined) return local;
   switch (r.kind) {
     case 'patrol': case 'picket': {
       const { pos, vel } = nearUs(state, randRange(0.003, 0.012));
@@ -256,14 +332,7 @@ export function spawnEncounter(state, r, emit = () => {}) {
     case 'ambush': {
       const { pos, vel } = nearUs(state, randRange(0.004, 0.015));
       const victim = spawnAgent(state, { role: 'civilian', category: 'civilian', pos, vel, ambient: true });
-      const ang = random() * Math.PI * 2;
-      const ppos = { x: pos.x + Math.cos(ang) * 0.0008, y: pos.y + Math.sin(ang) * 0.0008 };
-      const pirate = spawnAgent(state, { role: 'pirate', category: 'irregular', faction: 'pirate', pos: ppos, vel: { ...vel }, ambient: true, transponder: false, zone: r.zone || null });
-      makeHostile(state, pirate, victim.id);
-      makeHostile(state, victim, pirate.id);
-      getWorld(state).setSos(victim, true);
-      offerUnderAttack(state, victim, [pirate.id], emit);
-      return victim;
+      return ambush(state, victim, r, emit);
     }
     case 'battle': {
       const z = r.zone;
@@ -282,6 +351,61 @@ export function spawnEncounter(state, r, emit = () => {}) {
     }
   }
   return null;
+}
+
+/** A pirate already on `victim` (a mayday for us to answer). */
+function ambush(state, victim, r, emit) {
+  const ang = random() * Math.PI * 2;
+  const vp = victim.pos;
+  const ppos = { x: vp.x + Math.cos(ang) * 0.0008, y: vp.y + Math.sin(ang) * 0.0008 };
+  const pirate = spawnAgent(state, { role: 'pirate', category: 'irregular', faction: 'pirate', pos: ppos, vel: { ...victim.vel }, ambient: true, transponder: false, zone: r.zone || null });
+  makeHostile(state, pirate, victim.id);
+  makeHostile(state, victim, pirate.id);
+  getWorld(state).setSos(victim, true);
+  offerUnderAttack(state, victim, [pirate.id], emit);
+  return victim;
+}
+
+/**
+ * The director's errand for ships already out there: a cutter on its beat
+ * sent to look at us, a pirate lying up nearby, a hauler in the lane.
+ * Returns the ship, null when the encounter is already here (a zone's
+ * warships, awake around us), or undefined when nobody suitable is near.
+ */
+function fromPopulation(state, r, emit) {
+  switch (r.kind) {
+    case 'patrol': {
+      const e = awakeNear(state, 'police', r.faction).find(o => o.agent.flags.routine) || nearestAsleep(state, 'police', r.faction);
+      if (!e) return undefined;
+      if (!e.agent) rouse(state, e);
+      const a = e.agent;
+      a.flags.routine = false;
+      a.flags.checked = false;
+      a.flags.beat = a.home;
+      a.home = { kind: 'player' };
+      a.mode = 'cruise';
+      emit('encounter', { kind: 'patrol', id: e.id, name: e.name, faction: e.faction });
+      return e;
+    }
+    case 'pirate': {
+      if (awakeNear(state, 'pirate').length) return null;
+      const e = nearestAsleep(state, 'pirate');
+      if (!e) return undefined;
+      rouse(state, e);
+      emit('encounter', { kind: 'pirate', id: e.id, name: e.name, faction: 'pirate' });
+      return e;
+    }
+    case 'battle': case 'picket': {
+      const zoneId = r.kind === 'battle' ? r.zone?.id : r.zone;
+      return awakeNear(state, 'navy').some(o => o.tags.force.zone === zoneId) ? null : undefined;
+    }
+    case 'ambush': {
+      const lane = getWorld(state).query(state.flight.pos, 0.015).filter(o => o.tags?.traffic && o.transit && !o.agent);
+      if (!lane.length) return undefined;
+      return ambush(state, wake(state, pick(lane), 'civilian'), r, emit);
+    }
+  }
+  return undefined;
 }
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));

@@ -3,7 +3,8 @@
 // Nav modal (tactical / solar / scanner), target selection, route
 // planning, route and stance status, the "secure for burn" prompt,
 // and the station-keeping indicator. The stance panel (stance.js)
-// shares the route panel's slot.
+// shares the route panel's slot. A ship that isn't on our board is
+// shown as what the plot reports of it (intel.js), never as it is.
 // ============================================================
 
 import { ui } from './context.js';
@@ -24,7 +25,8 @@ import { missionForEntity } from '../sim/missions.js';
 import { dockedStation } from '../sim/contracts.js';
 import { bus } from '../core/events.js';
 import { TacView, TAC_LABELS } from './tac.js';
-import { SolarMap } from './solar-map.js';
+import { SolarMap, ageLabel } from './solar-map.js';
+import { trackOf, estimate, describeRecord, liveKnowledge } from '../sim/intel.js';
 import { ScannerView } from './scanner.js';
 import { relativeTo, velocityReference, STANCE_PHASE } from './hud.js';
 import { initStance, openStance, closeStance, stanceOpen, release as releaseStance } from './stance.js';
@@ -64,6 +66,7 @@ export function initNav(h) {
   });
   $('#combat-panel').addEventListener('click', onFireControlClick);
   $$('[data-solar-politics]').forEach(b => b.addEventListener('click', () => { map.showPolitics = !map.showPolitics; toggleClass(b, 'active', map.showPolitics); }));
+  $$('[data-solar-intel]').forEach(b => b.addEventListener('click', () => { map.showIntel = !map.showIntel; toggleClass(b, 'active', map.showIntel); }));
 
   $$('[data-nav-tab]').forEach(b => b.addEventListener('click', () => setTab(b.dataset.navTab)));
   $$('[data-tac-zoom-modal]').forEach(b => b.addEventListener('click', () => { ui.nav.modalZoom = +b.dataset.tacZoomModal; tacModal.zoom = ui.nav.modalZoom; syncButtons(); }));
@@ -134,7 +137,20 @@ function syncButtons() {
 function navTargetPos() {
   const t = ui.nav.target;
   if (!t || !ui.state) return null;
+  const r = reportFor(ui.state, t);
+  if (r) {
+    const est = estimate(ui.state, r, ui.state.clock.minute);
+    return est ? { x: est.x, y: est.y } : null;
+  }
   return targetStateAt(ui.state, t, ui.state.clock.minute)?.pos || null;
+}
+
+/** The plot's record for a target we can't see or chart right now (null if we can). */
+function reportFor(state, t) {
+  if (t?.kind !== 'entity') return null;
+  const e = getWorld(state).get(t.id);
+  if (e && liveKnowledge(state, e)) return null;
+  return trackOf(state, t.id);
 }
 
 function describeTarget(state, t) {
@@ -143,7 +159,9 @@ function describeTarget(state, t) {
     return { name: t.id, kind: b?.type === 'star' ? 'Star' : (b?.type || 'body').replace(/^\w/, c => c.toUpperCase()), faction: null };
   }
   const e = getWorld(state).get(t.id);
-  if (!e) return null;
+  const report = reportFor(state, t);
+  if (report) return { name: report.name || 'Unidentified track', kind: report.shipClass || 'Ship', faction: report.faction, entity: e, report };
+  if (!e || !liveKnowledge(state, e)) return null;
   const c = contactById(state, e.id);
   const known = e.transponder || (c && c.name) || e.type === 'station' || e.type === 'nav';
   return {
@@ -191,6 +209,7 @@ function renderSelection() {
       ${row('FACTION', c.faction || '—', c.faction ? '' : 'scanner-val-dim')}
       ${row('CLASS', c.shipClass ? libRef(d.entity, esc(c.shipClass)) : '—')}
       ${row('RANGE', fmtKm(c.dist * AU_KM))}
+      ${row('LIGHT LAG', c.lagS < 0.1 ? '< 0.1 s' : `${c.lagS.toFixed(1)} s`, 'scanner-val-dim')}
       ${row('REL SPEED', c.velocityKnown && rel ? fmtSpeed(rel.speed) : `scanning… ${Math.max(0, REVEAL.VELOCITY - c.scan)}m`)}
       ${row('BEARING', fmtAngle(c.bearing - s.flight.facing))}
       ${row('DRIVE', c.thrust || (c.scan < REVEAL.THRUST ? '…' : '—'), c.thrust && c.thrust !== 'COASTING' ? 'scanner-val-warn' : '')}
@@ -208,6 +227,7 @@ function renderSelection() {
   }
 
   if (ui.nav.tab !== 'solar') return;
+  if (d.report) { renderReport(s, t, d, routing); return; }
   const html = `<div class="ms-header">
       <span class="ms-name">${esc(d.name)}</span>
       <span class="ms-kind">${esc(d.kind)}${d.faction && d.faction !== 'independent' ? ` · ${esc(d.faction)}` : ''}</span>
@@ -224,6 +244,41 @@ function renderSelection() {
     </div>`;
   setHTML(mapPanel, html);
   show(mapPanel, true);
+}
+
+/**
+ * A ship known only from the plot: what was reported, by whom, how old it
+ * is, and how far off it could be by now. A filed plan or a berth can be
+ * flown to (the nav computer works from the same public data); a lost
+ * contact's last fix can only be looked at until our sensors find it again.
+ */
+function renderReport(s, t, d, routing) {
+  const r = d.report;
+  const info = describeRecord(s, r);
+  const est = estimate(s, r, s.clock.minute);
+  const f = s.flight.pos;
+  const dist = est ? Math.hypot(est.x - f.x, est.y - f.y) * AU_KM : null;
+  const plotable = !!d.entity && r.kind !== 'fix';
+  const html = `<div class="ms-header">
+      <span class="ms-name">${esc(d.name)}</span>
+      <span class="ms-kind">${esc(d.kind)}${d.faction && d.faction !== 'independent' ? ` · ${esc(d.faction)}` : ''} · <span class="ms-report">REPORTED</span></span>
+    </div>
+    <div class="ms-stats">
+      <span>AGE <b>${ageLabel(info.ageMin)}</b></span>
+      <span>FROM <b>${esc(info.src)}</b></span>
+      ${info.lagMin > 0 ? `<span>LIGHT LAG <b>${info.lagMin} min</b></span>` : ''}
+    </div>
+    <div class="ms-stats">
+      <span>${esc(info.what)}</span>
+      <span>DIST <b>${dist != null ? '~' + fmtKm(dist) : '—'}</b></span>
+      ${est?.sigmaAU ? `<span>± <b>${fmtKm(est.sigmaAU * AU_KM)}</b></span>` : ''}
+    </div>
+    <div class="panel-actions">
+      ${routing ? '<button class="route-abort-btn" data-act="abort">ABORT ROUTE</button>' : plotable ? '<button class="route-plot-btn" data-act="plot" title="Fly to its filed plan; sensors take over on approach">PLOT ROUTE</button>' : '<span class="ms-hint">No live track: close in until our sensors hold it</span>'}
+      <button class="route-zoom-btn" data-act="focus">FOCUS</button>
+    </div>`;
+  setHTML($('#map-selection'), html);
+  show($('#map-selection'), true);
 }
 
 function onPanelClick(e) {
@@ -500,7 +555,9 @@ function renderNavInfo(state, rel) {
     if (tgt) parts.push(`TARGET ${esc(tgt.transponder ? tgt.name : 'contact')}`);
   } else if (ui.nav.tab === 'solar') {
     parts.push(`SUN ${Math.hypot(f.pos.x, f.pos.y).toFixed(3)} AU`, `HELIO V ${fmtSpeed(Math.hypot(f.vel.vx, f.vel.vy))}`);
-    parts.push('drag to pan · wheel to zoom · click to select');
+    parts.push(`LIVE ${state.sensors.contacts.length} · PLOT ${fmtNum(Object.keys(state.intel?.tracks || {}).length, 0)}`);
+    const dg = Object.values(state.intel?.digests || {}).sort((a, b) => b.issued - a.issued)[0];
+    if (dg) parts.push(`LAST DIGEST ${esc(dg.name)} · ${ageLabel(state.clock.minute - dg.issued)} old`);
   } else {
     parts.push(f.thrustG > 0.02 ? `BURN ${fmtG(f.thrustG)}` : 'DRIVE COLD');
     if (rel) parts.push(`${esc(rel.name)} ${fmtMeters(rel.dist)} · ${fmtSpeed(rel.speed)}`);

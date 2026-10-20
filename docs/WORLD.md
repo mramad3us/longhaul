@@ -18,6 +18,36 @@ Each power projects influence from the bodies it holds (`INFLUENCE_SOURCES`), wi
 
 `controlAt(x, y, minute)` returns the leading power (if its influence is at least 0.25), its level (patrol density), a rival if the space is contested (the rival has at least 60% of the leader's influence), and whether the space is lawless (under 0.15). Ganymede is contested between Earth and Mars; Pallas between Mars and the Belt; the gulf beyond the Belt is lawless.
 
+## Who is out there (`sim/traffic.js`, `sim/forces.js`)
+
+A new game has **3,000 traffic ships** (`DEFAULT_TRAFFIC`). They berth at the stations and fly between them on analytic courses. A ship picks its next port by distance and flag: weight 3 for its own power's ports, 1.5 where either side is independent, 1 otherwise, divided by (0.5 + distance in AU). So the Belt trades mostly with itself, and Earth–Mars is a busy lane.
+
+Every power also keeps hulls in space. They are real entities on rails, indexed in `world.forces`:
+
+| Force | Strength | Where |
+|---|---|---|
+| Police | 3 cutters per station of a power with police | a beat: an orbit 0.002–0.012 AU around the station's body |
+| UNN | 56 hulls | berthed at Luna Shipyards |
+| MCRN | 12 hulls | berthed at Phobos Naval Yard |
+| OPA | 8 hulls | berthed at Tycho and Ceres |
+| Pirates | about 24 at large, plus 5 per pirate zone | lying up cold, 0.004–0.03 AU from Belt and outer bodies held below 0.45 |
+
+Earth and Mars are matched in total strength, not in numbers. The UNN is a big fleet of TL2 corvettes and frigates a generation old (mean class strength about 1,200). The MCRN is a small fleet of TL4 hulls (about 5,900 each, so 56 × 1,200 ≈ 12 × 5,900). The OPA's refits are a militia.
+
+When a hot zone is born, each side commits a share of its navy (at least one hull): standoff 15% / 15%, blockade 25% for the blockader and 8% for the other side, skirmish 25% / 25%, insurgency 10% of the inner power. So a UN–Mars skirmish draws 14 UNN hulls against 3 MCRN. They take berthed hulls, commissioning more if none are in. The squadron flies out on a filed 1G course to the zone's anchor (a hidden mark on the zone's orbit) and holds station there. When the zone ends, it flies home. A pirate zone gathers a pack of 5 on the spot; when it ends they stay at large. A daily census makes losses good: police to their number, and navies at up to 5% of their strength a day. Pirates beyond 1.5× their number disperse, never in front of us.
+
+**The live window.** Within `WAKE_AU` = 0.1 AU of us (about our long sensor reach, 50 light-seconds), a hull on rails comes alive as an agent: police on routine patrol, navies with their zone and its enemies, pirates lurking. At most 3 police, 10 warships and 2 pirates are awake at once, the nearest first. A woken police cutter on **routine** leaves law-abiding ships alone. Past 0.25 AU, with no business left with us, it goes back on rails: a course from where it is (a coasting fix) to its post or home, or lying up near the nearest body. It isn't woken by proximity again for 12 hours. Traffic woken for a fight (a pirate's prey) goes back on its route the same way. A crippled hull is left out of the forces and removed.
+
+## Light lag and the plot (`sim/intel.js`)
+
+Light crosses an AU in 8.3 minutes (one light-second is 0.002 AU, one light-minute 0.12 AU). Everything our sensors hold (long range is 15M km, 50 light-seconds) is less than one sim step old, so the sensor board is live; each contact carries its light time. Everything else we know is a **report** on the plot (`state.intel`), and every report has an age:
+
+- **Our own tracks.** A contact that drops off the board leaves its last fix. The plot coasts it on its last velocity, inside a circle of 30 m/s × age + ½ · 0.05 G · age² (it may have burned since). It is forgotten after 5 days. A lost contact can be looked at, not flown to.
+- **Traffic digests.** Every station's traffic control publishes every 6 hours (staggered by station). A digest lists up to 400 transponder ships within 0.03 AU of it: berthed there, flying a filed plan (from, to, departure, arrival, G), or a plain fix. It reaches us after the light time from that station, and only if the comms array works when it lands. A filed plan is flown forward on the plot, and the nav computer can plot a route to it. Ships without a transponder are never in a digest.
+- **The newsfeed.** Zone news and losses leave from where they happened and reach us at light speed (`relay`). A zone is drawn once its news has arrived and stays until news of its end does. A wreck in the news is charted from then on.
+
+Stations, nav marks and contract targets are on published orbits: charted, not observed. The plot holds at most 6,000 records, dropping the stalest first. The solar map draws live contacts and charted orbits where they are, and reports where they should be by now: faded with age, with their circle when it says something, and as a point cloud past 1,500 in view. Light-time rings mark 1 light-second, 1 light-minute and 10 light-minutes around us. The tactical view shows only what our sensors hold.
+
 ## Tension and hot zones (`sim/conflict.js`)
 
 Each pair of powers has a tension (0 calm, 1 open war) that wanders daily, is pulled toward its baseline (UN–MCR 0.45, UN–OPA 0.3, MCR–OPA 0.35) and is pushed up by ongoing skirmishes.
@@ -30,11 +60,25 @@ Hot zones are born from the influence field, not from a script. Each day, with a
 
 A zone sits at an offset from its body and moves with it. It has a radius (0.02–0.06 AU; skirmishes 0.01–0.03) and an intensity that drifts with the tension. A hot standoff can escalate into a skirmish. Zones end after 5–30 days, or when their intensity dies. At most six exist at once. Their birth, escalation and end come over the newsfeed.
 
-Away from us, zones produce outcomes without simulating ships: hourly, with a chance scaled by kind and intensity, a ship is lost there and its wreck appears near the zone's body (salvage), at most four per zone.
+Away from us, zones produce outcomes without flying ships. Every hour, with a chance scaled by kind and intensity, a zone costs one real ship, which becomes a wreck where it was, held with the zone's body (salvage). At most four wrecks per zone:
+
+- **Skirmish and standoff:** only when both sides have hulls on station. The side facing the stronger squadron (summed class strength) loses a hull.
+- **Pirate zone:** a pack on station takes a traffic ship in transit through the zone.
+- **Blockade:** the blockader disables a traffic ship running it.
+- **Insurgency:** a loss is rolled up from the zone's politics.
+
+With nobody there, nothing happens: the squadrons may still be on their way. Test suites without the forces roll every loss up from the politics. News of the loss reaches us at light speed.
 
 ## Encounters
 
-The **director** runs hourly, only around our ship. From the local politics it rolls:
+The **director** runs hourly, only around our ship. From the local politics it rolls the table below. It first calls on ships that are already there:
+
+- **Patrol:** a police cutter awake on routine, or one on rails within 0.05 AU, is sent to look at us.
+- **Pirate:** a pirate already awake around us is the encounter; otherwise the nearest one lying up within 0.05 AU wakes.
+- **Battle and picket:** if the zone's warships are already awake around us, that is the encounter.
+- **Ambush:** a traffic ship in transit within 0.015 AU is the one that gets jumped.
+
+Only when nobody suitable is near does it bring a ship in, as before:
 
 | Encounter | Rate per hour | |
 |---|---|---|

@@ -31,7 +31,9 @@ import { createComms, commsTick } from './comms.js';
 import { createSensors, sensorsTick } from './sensors.js';
 import { createMissions, missionsTick } from './missions.js';
 import { createContracts, contractsTick } from './contracts.js';
-import { createTraffic, seedTraffic, trafficTick } from './traffic.js';
+import { createTraffic, seedTraffic, trafficTick, ensurePopulation, DEFAULT_TRAFFIC } from './traffic.js';
+import { seedForces, forcesTick } from './forces.js';
+import { createIntel, ensureIntel, intelTick, recordContacts } from './intel.js';
 import { triggerManeuver, isInertiaActive, updateInertia, Maneuver } from './inertia.js';
 import { PLAYER_CLASS, CLASSES, playerClass, ratedG } from './ship-classes.js';
 import { createCombat, createMagazine, combatTick, combatMove, moveAgents, jinkG } from './combat.js';
@@ -57,7 +59,12 @@ const emit = (type, payload) => bus.emit(type, payload);
  * sets the interior fit, the machinery, the drive, hold, berths and
  * weapons. A navy hull in private hands comes without its nuclear warheads.
  */
-export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = 36, classId = PLAYER_CLASS } = {}) {
+/**
+ * A new game. `traffic`: civilian ships in the system; `forces`: police,
+ * navies and pirates in the background (forces.js) — on whenever there is
+ * traffic, off for test suites that leave both out.
+ */
+export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = DEFAULT_TRAFFIC, forces = traffic > 0, classId = PLAYER_CLASS } = {}) {
   const crew = createCrew(crewCount);
   crew[0].name = captainName;
   if (!CLASSES[classId]) classId = PLAYER_CLASS;
@@ -99,6 +106,7 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
     systems: createSystems(classId),
     comms: createComms(),
     sensors: createSensors(),
+    intel: createIntel(),
     jobs: createJobs(),
     missions: createMissions(),
     contracts: createContracts(),
@@ -119,6 +127,20 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
   holdStation(state, { kind: 'entity', id: home.id });
   placeCrew(state);
   seedTraffic(state);
+  if (forces) seedForces(state);
+  return state;
+}
+
+/**
+ * A save from v0.10 (same schema, fewer systems): give it a plot, the
+ * traffic of a settled system, and the background forces. Nothing it
+ * already has changes.
+ */
+export function upgradeState(state) {
+  ensureIntel(state);
+  const fresh = state.traffic && !state.traffic.v;
+  ensurePopulation(state);
+  if (fresh && state.traffic.population > 0) seedForces(state);
   return state;
 }
 
@@ -319,7 +341,7 @@ export function minuteTick(state, { lite = false } = {}) {
 
   // ---- Sensors & comms (blind in a blackout)
   if (!lite) {
-    if (!state.reactor.blackout) sensorsTick(state);
+    if (!state.reactor.blackout) { sensorsTick(state); recordContacts(state); }
     commsTick(state, emit);
   }
 
@@ -330,6 +352,8 @@ export function minuteTick(state, { lite = false } = {}) {
   missionsTick(state, emit);
   contractsTick(state, emit);
   trafficTick(state);
+  forcesTick(state, { lite });
+  intelTick(state, emit);
 
   if (state.crewPolicy !== policyBefore) emit('crew-policy', { policy: state.crewPolicy });
 }

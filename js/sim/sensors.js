@@ -15,9 +15,14 @@
 // stander at ops). The player's display band caps how far the board
 // looks. Tracking a contact over time reveals more about it; a
 // ranging-laser lock is 3× faster.
+//
+// Everything on the board is under a light-minute away (long range is
+// 50 light-seconds), so the picture is live to within one sim step;
+// each contact carries its light time. Beyond the board, what we know
+// is reported and aged: intel.js.
 // ============================================================
 
-import { RANGE } from '../core/constants.js';
+import { RANGE, AU_M } from '../core/constants.js';
 import { getWorld } from './world.js';
 import { sensorRangeFactor } from './systems.js';
 import { CLASSES, SIZES, TECH, classOf, classLabel, PLAYER_CLASS } from './ship-classes.js';
@@ -100,6 +105,10 @@ export function sensorsTick(state) {
     s.scan[id] -= 2;
     if (s.scan[id] <= 0) delete s.scan[id];
   }
+  // Contacts that just dropped off the board (intel.js keeps their last fix)
+  const lost = [];
+  for (const c of s.contacts) if (!seen.has(c.id)) lost.push(c);
+  s.$lost = lost;
   s.contacts = contacts;
   s.$seen = seen;
   if (s.locked && !seen.has(s.locked)) s.locked = null;
@@ -116,6 +125,7 @@ export function describe(e, dist, bearing, scan) {
   return {
     id: e.id,
     dist,                      // AU
+    lagS: dist * AU_M / 299_792_458,   // light time: how old the picture of it is, seconds
     bearing,                   // rad, solar frame
     name: ordnance ? (e.ord?.kind === 'slug' ? 'SLUG' : 'TORPEDO') : known ? e.name : null,
     type: ordnance ? 'ordnance' : known ? e.type : null,

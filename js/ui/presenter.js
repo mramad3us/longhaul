@@ -189,9 +189,13 @@ const HANDLERS = {
   'pirates-paid': ({ name, credits }) => logEntry(`Paid ${fmtNum(credits)} MCR to the ${name}`, 'warn'),
   'crime': ({ kind, victim, factions }) => { logEntry(`${factions.join(' / ')} record: ${kind === 'resisting' ? 'resisting inspection' : `attack on ${victim}`}`, 'danger'); toast('CRIME RECORDED', 'danger'); },
   'player-identified': ({ name, faction }) => logEntry(`${name} (${faction}) has identified us`, 'warn'),
-  'zone-news': ({ text }) => logEntry(`Newsfeed: ${text}`, 'comms'),
-  'zone-incident': ({ text }) => logEntry(`Newsfeed: ${text}`, 'comms'),
+  'zone-news': ({ text, lagMin }) => logEntry(`Newsfeed${aged(lagMin)}: ${text}`, 'comms'),
+  'zone-incident': ({ text, lagMin }) => logEntry(`Newsfeed${aged(lagMin)}: ${text}`, 'comms'),
+  'intel-digest': () => {},
 };
+
+/** News is as old as the light that brought it. */
+const aged = (lagMin) => (lagMin >= 1 ? ` (${lagMin} min light lag)` : '');
 
 function nameOf(id) {
   if (id === 'player') return ui.state.ship.name;

@@ -1,8 +1,10 @@
 // ============================================================
 // LONGHAUL — Solar map (canvas)
 // Pan / zoom from the whole system down to a few hundred km. Bodies
-// are drawn from the ephemeris; entities come from a spatial query of
-// the viewport (huge populations fall back to a point cloud).
+// are drawn from the ephemeris. Entities are what we KNOW of them
+// (intel.js): live contacts and charted orbits where they are, and the
+// reports on the plot (lost contacts, traffic digests) where they should
+// be by now, faded with age. Big plots fall back to a point cloud.
 // ============================================================
 
 import { AU_KM, DAY_MIN } from '../core/constants.js';
@@ -11,7 +13,18 @@ import { getWorld } from '../sim/world.js';
 import { factionColor, INFLUENCE_SOURCES } from '../sim/factions.js';
 import { zonePos, ZONE_KINDS } from '../sim/conflict.js';
 import { getBody } from '../sim/ephemeris.js';
+import { estimate, liveKnowledge, LIGHT_SECOND_AU, LIGHT_MINUTE_AU } from '../sim/intel.js';
 import { FitCanvas, fmtKm } from './dom.js';
+
+const LIGHT_RINGS = [[LIGHT_SECOND_AU, '1 LIGHT-SEC'], [LIGHT_MINUTE_AU, '1 LIGHT-MIN'], [LIGHT_MINUTE_AU * 10, '10 LIGHT-MIN']];
+const REPORT_FADE_MIN = 3 * 1440;   // a report is drawn faintest at this age
+const _est = { x: 0, y: 0, sigmaAU: 0 };
+
+/** The name a contact goes by on our board (null until identified). */
+function contactName(state, id) {
+  for (const c of state.sensors.contacts) if (c.id === id) return c.name;
+  return null;
+}
 
 const MIN_SCALE = 6;          // px per AU (whole system)
 const MAX_SCALE = 4e8;        // px per AU (~0.4 km per px)
@@ -42,6 +55,7 @@ export class SolarMap {
     this.preview = null;                // [{x,y}] planned path to draw
     this.routePath = null;              // active route predicted path
     this.showPolitics = true;           // spheres of influence and hot zones
+    this.showIntel = true;              // reported tracks on the plot, light-time rings
     this.onSelect = onSelect || (() => {});
     this.onHover = onHover || (() => {});
     this._pickables = [];
@@ -153,6 +167,65 @@ export class SolarMap {
 
   // ---- RENDER ----
 
+  /** Reports on the plot (not on our board): where they should be by now. */
+  _drawReports(ctx, state, view, sp, drawn, opts) {
+    const tracks = state.intel?.tracks;
+    if (!tracks) return;
+    const now = state.clock.minute;
+    const W = this.fc.w, H = this.fc.h, S = this.scale;
+    const pick = this._pickables;
+    const inView = this._inView || (this._inView = []);
+    inView.length = 0;
+    for (const id in tracks) {
+      if (drawn.has(id)) continue;
+      const r = tracks[id];
+      if (r.kind === 'chart') continue;            // charted: drawn live
+      if (!estimate(state, r, now, _est)) continue;
+      if (_est.x < view.x0 || _est.x > view.x1 || _est.y < view.y0 || _est.y > view.y1) continue;
+      inView.push(r, _est.x, _est.y, _est.sigmaAU);
+    }
+    const n = inView.length / 4;
+    const crowd = n > 1500;
+    if (crowd) {
+      const cloud = this._cloudLayer(W, H);
+      const { buf, img, bw, bh } = cloud;
+      buf.fill(0);
+      for (let i = 0; i < inView.length; i += 4) {
+        const [x, y] = sp(inView[i + 1], inView[i + 2]);
+        const xi = x | 0, yi = y | 0;
+        if (xi >= 0 && xi < bw && yi >= 0 && yi < bh) buf[yi * bw + xi] = 0x806A7A8A;   // ABGR, dim
+      }
+      cloud.ctx.putImageData(img, 0, 0);
+      ctx.drawImage(cloud.canvas, 0, 0, W, H);
+    }
+    const font = (px) => `${px}px "Share Tech Mono", monospace`;
+    for (let i = 0; i < inView.length; i += 4) {
+      const r = inView[i];
+      const focus = r.id === opts.targetId || r.id === this.selected?.id || r.id === this.hover?.id;
+      const [x, y] = sp(inView[i + 1], inView[i + 2]);
+      if (crowd && !focus) { pick.push({ kind: 'entity', id: r.id, sx: x, sy: y, report: true }); continue; }   // a dot in the cloud, still clickable
+      const age = now - r.at;
+      const a = Math.max(0.25, 0.75 - 0.5 * age / REPORT_FADE_MIN);
+      const col = r.wreck ? '#5A5A5A' : r.faction ? factionColor(r.faction) : '#8A9AAA';
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = col;
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.stroke();
+      // the circle it could be anywhere inside (only where it tells something)
+      const rp = inView[i + 3] * S;
+      if (rp > 6 && rp < Math.max(W, H) && (focus || n < 200)) {
+        ctx.setLineDash([1, 4]);
+        ctx.beginPath(); ctx.arc(x, y, rp, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (focus || S > 3e4) {
+        ctx.fillStyle = col; ctx.font = font(10);
+        ctx.fillText(`${r.name || 'TRACK'} · ${ageLabel(age)}`, x + 7, y + 3);
+      }
+      ctx.globalAlpha = 1;
+      pick.push({ kind: 'entity', id: r.id, sx: x, sy: y, report: true });
+    }
+  }
+
   render(state, opts = {}) {
     const fc = this.fc;
     if (!fc.fit()) return;
@@ -235,14 +308,18 @@ export class SolarMap {
         ctx.fillStyle = g;
         ctx.beginPath(); ctx.arc(cx, cy, r * 1.5, 0, Math.PI * 2); ctx.fill();
       }
-      // Hot zones
-      for (const z of state.politics.zones) {
+      // Hot zones we have heard of (news travels at light speed: a zone that
+      // ended an hour ago at Ganymede is still on our plot at Ceres)
+      const known = state.intel?.zones || {};
+      for (const id of Object.keys(known)) {
+        const z = known[id];
+        if (z.r == null) continue;
         const p = zonePos(z, state.clock.minute);
         const [zx, zy] = sp(p.x, p.y);
         const zr = Math.max(8, z.radius * S);
         if (zx + zr < 0 || zx - zr > W || zy + zr < 0 || zy - zr > H) continue;
         const col = z.kind === 'pirates' ? '#C05AA0' : z.kind === 'skirmish' ? '#FF5555' : z.kind === 'insurgency' ? '#E2A355' : '#E8D56B';
-        ctx.strokeStyle = col; ctx.globalAlpha = 0.4 + 0.4 * z.intensity; ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = col; ctx.globalAlpha = 0.65; ctx.setLineDash([5, 4]);
         ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
         ctx.fillStyle = col; ctx.font = font(10);
         ctx.fillText(`${ZONE_KINDS[z.kind].label} · ${z.body}`, zx + zr * 0.72 + 4, zy - zr * 0.72);
@@ -284,30 +361,27 @@ export class SolarMap {
       }
     }
 
-    // Entities in view
-    _q.length = 0;
-    world.queryRect(view.x0, view.y0, view.x1, view.y1, _q);
-    const important = (e) => e.type === 'station' || e.sos || e.tags?.missionId || e.tags?.contract || e.id === opts.targetId || e.id === opts.lockedId || !e.tags?.traffic;
-    const many = _q.length > 2500;
-    if (many) {
-      // Point cloud for the crowd (pixel writes on an offscreen layer, composited
-      // over the map); vector glyphs only for what matters.
-      const cloud = this._cloudLayer(W, H);
-      const { buf, img, bw, bh } = cloud;
-      buf.fill(0);
-      const plume = 0xFFFFE0C0, coast = 0xFF8A7A6A;   // ABGR
-      for (const e of _q) {
-        if (important(e)) continue;
-        const x = (W / 2 + (e.pos.x - this.cx) * S) | 0;
-        const y = (H / 2 - (e.pos.y - this.cy) * S) | 0;
-        if (x >= 0 && x < bw && y >= 0 && y < bh) buf[y * bw + x] = e.thrust > 0 ? plume : coast;
-      }
-      cloud.ctx.putImageData(img, 0, 0);
-      ctx.drawImage(cloud.canvas, 0, 0, W, H);
-    }
-    for (const e of _q) {
+    // Entities: only what we know. LIVE contacts on our board and CHARTED
+    // things on published orbits are drawn where they are; everything else
+    // is a REPORT on the plot (intel.js), drawn where it should be by now,
+    // dimmer as it ages, with the circle it could be anywhere inside.
+    const drawn = this._drawn || (this._drawn = new Set());
+    drawn.clear();
+    const live = _q;
+    live.length = 0;
+    const add = (e) => { if (e && !drawn.has(e.id)) { drawn.add(e.id); live.push(e); } };
+    for (const st of world.stations) add(st);
+    if (opts.showNav) for (const id of opts.showNav) add(world.get(id));
+    for (const c of state.contracts.active) { const e = world.get(c.targetId); if (e && liveKnowledge(state, e)) add(e); }
+    for (const c of state.sensors.contacts) add(world.get(c.id));
+    for (const e of world.driven) if (e.type === 'ordnance' && e.ord.owner === 'player') add(e);
+    const tracks = state.intel?.tracks || {};
+    for (const id in tracks) if (tracks[id].kind === 'chart') add(world.get(id));    // wrecks in the news: charted
+    if (this.showIntel) this._drawReports(ctx, state, view, sp, drawn, opts);
+
+    for (const e of live) {
+      if (e.pos.x < view.x0 - 0.01 || e.pos.x > view.x1 + 0.01 || e.pos.y < view.y0 - 0.01 || e.pos.y > view.y1 + 0.01) continue;
       if (e.type === 'nav' && !opts.showNav?.has(e.id)) continue;
-      if (many && !important(e)) continue;
       const [x, y] = sp(e.pos.x, e.pos.y);
       const color = e.sos ? '#FF5555' : e.tags?.wreck ? '#5A5A5A' : factionColor(e.faction);
       if (e.type === 'ordnance') {
@@ -348,11 +422,28 @@ export class SolarMap {
       }
       pick.push({ kind: 'entity', id: e.id, sx: x, sy: y });
       const label = e.type === 'station' || e.sos || e.tags?.missionId || e.tags?.contract || S > 3e4 || e.id === opts.targetId;
-      if (label && (e.transponder || e.type === 'nav' || e.id === opts.targetId)) {
+      const named = e.type === 'station' || e.type === 'nav' || e.tags?.contract || contactName(state, e.id);
+      if (label && named) {
         ctx.fillStyle = color; ctx.globalAlpha = 0.8; ctx.font = font(10);
-        ctx.fillText(e.name, x + 8, y + 3);
+        ctx.fillText(named === true ? e.name : named, x + 8, y + 3);
         ctx.globalAlpha = 1;
       }
+    }
+
+    // How far light gets: one light-second (the live window of a fight),
+    // one light-minute (about our sensor reach), ten (news across the Belt)
+    if (this.showIntel) {
+      const [ux, uy] = sp(state.flight.pos.x, state.flight.pos.y);
+      ctx.setLineDash([1, 5]);
+      for (const [r, txt] of LIGHT_RINGS) {
+        const rp = r * S;
+        if (rp < 24 || rp > Math.hypot(W, H) * 1.5) continue;
+        ctx.strokeStyle = 'rgba(232,213,107,0.28)';
+        ctx.beginPath(); ctx.arc(ux, uy, rp, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = 'rgba(232,213,107,0.55)'; ctx.font = font(9);
+        ctx.fillText(txt, ux + rp * 0.71 + 3, uy - rp * 0.71 - 3);
+      }
+      ctx.setLineDash([]);
     }
 
     // Planned paths
@@ -407,3 +498,10 @@ export class SolarMap {
   }
 }
 
+
+/** "12 min", "5 h", "3 d": how old a report is. */
+export function ageLabel(min) {
+  if (min < 90) return `${Math.max(0, Math.round(min))} min`;
+  if (min < 48 * 60) return `${Math.round(min / 60)} h`;
+  return `${Math.round(min / 1440)} d`;
+}

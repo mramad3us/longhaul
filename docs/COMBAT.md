@@ -28,6 +28,8 @@ Every target has a **signature range**, the distance at which a standard (qualit
 
 An observer sees a target inside signature × its sensor quality. Quality depends on tech level and damage; for us it also improves with an ops watchstander. A torpedo's own seeker has quality 0.3. Our display band (SHORT/MED/LONG) caps how far the board looks. NPCs identify an unknown ship by tracking it for 60 minutes; a transponder identifies instantly.
 
+Everything on the board is under a light-minute away, so it is live to within one sim step; the scanner shows each contact's light time. Only what the sensors hold is drawn on the tactical view and live on the solar map. A contact that drops off the board stays on the plot as its last fix, aging (WORLD.md, *Light lag and the plot*).
+
 ## Torpedoes
 
 A torpedo is a small fusion missile: an entity of type `ordnance`, driven, integrated every minute under gravity and its own thrust.

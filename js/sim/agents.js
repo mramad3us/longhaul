@@ -24,9 +24,13 @@
 // order to heave to, a pirate's ultimatum, a warning, an offer of
 // surrender. Each has options and a deadline; silence is an answer.
 //
-// Agents are few and bounded (the encounter director and contracts
-// spawn them; they leave when their business is done or we are far
-// away), so per-minute work here never scales with the world.
+// Agents are few and bounded (the background forces wake near us, the
+// encounter director and contracts spawn them; they leave when their
+// business is done or we are far away), so per-minute work here never
+// scales with the world. A hull of the background population (forces.js)
+// or traffic woken for a fight doesn't leave the world: it goes back on
+// rails. A woken police cutter on ROUTINE leaves law-abiding ships alone;
+// the director's patrol encounter is the one that comes to look at us.
 // ============================================================
 
 import { AU_M, G0, MIN_S, DAY_MIN } from '../core/constants.js';
@@ -46,6 +50,7 @@ import { launchTorpedo, fireRailgun, strafe, fireGear, inboundTo, launchedBy, ti
 import { hullTick } from './damage.js';
 import { wantedBy, settleInspection, adjustStanding } from './law.js';
 import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from './weapons.js';
+import { putToSleep } from './forces.js';
 
 /**
  * How each role fights. launchAU: torpedo launch range · standoffM: distance
@@ -105,7 +110,7 @@ function makeAgent(state, e, role, opts = {}) {
     target: opts.target ?? null, hostile: [...(opts.hostile || [])], aggressor: false, evade: false,
     wing: [], plan: null, planKey: '', cmd: null,
     home: opts.home || null, zone: opts.zone || null, contract: opts.contract || null, ambient: !!opts.ambient,
-    dest: opts.dest || null, enemies: opts.enemies || [], scan: {}, flags: {}, request: null, calmSince: state.clock.minute,
+    dest: opts.dest || null, enemies: opts.enemies || [], scan: {}, flags: { routine: !!opts.routine }, request: null, calmSince: state.clock.minute,
   };
   e.nav = { facing: Math.atan2(e.vel.vy, e.vel.vx), turning: 0 };
   ensureHull(e);
@@ -122,7 +127,7 @@ export function wake(state, e, role, opts = {}) {
   const world = getWorld(state);
   if (e.agent) return e;
   world.refresh(e, state.clock.minute);
-  if (e.tags.traffic) { e.tags.traffic = false; if (state.traffic) state.traffic.spawned = Math.max(0, state.traffic.spawned - 1); }
+  if (e.tags.traffic) { e.tags.traffic = false; e.tags.woke = 'traffic'; if (state.traffic) state.traffic.spawned = Math.max(0, state.traffic.spawned - 1); }
   world.setDriven(e, true);
   e.t = state.clock.minute;
   if (!e.cls) { e.cls = 'freighter'; e.tl = CLASSES.freighter.tl; }
@@ -317,7 +322,11 @@ export function agentsTick(state, emit = () => {}) {
   for (const e of agents) {
     hullTick(state, e, emit);
     if (!world.get(e.id) || !e.agent) continue;
-    if (leaves(state, e)) { world.remove(e); emit('agent-left', { id: e.id, name: e.name }); continue; }
+    if (leaves(state, e)) {
+      if (!putToSleep(state, e)) world.remove(e);
+      emit('agent-left', { id: e.id, name: e.name });
+      continue;
+    }
     think(state, e, emit);
   }
 }
@@ -498,10 +507,11 @@ function lawman(state, e, emit, stayHome) {
   if (a.mode === 'cruise') {
     if (!seen || a.flags.checked) return;
     const suspicious = wanted >= 1 || (!state.comms.transponder && (a.scan.player || 0) >= 10);
-    const policy = a.zone ? 0.6 : 0.15;
+    const policy = a.flags.routine ? 0 : a.zone ? 0.6 : 0.15;
     if (suspicious || identified(state, e)) {
       a.flags.checked = true;
       if (suspicious || chance(policy)) { a.mode = 'intercept'; a.target = PLAYER; a.since = now; }
+      else if (a.flags.beat !== undefined) { a.home = a.flags.beat; delete a.flags.beat; }    // sent to look at us: seen, back to its beat
     }
   } else if (a.mode === 'intercept') {
     if (!a.request && distAU(e.pos, state.flight.pos) <= HAIL_AU) {

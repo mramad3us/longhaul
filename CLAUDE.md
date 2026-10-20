@@ -12,7 +12,7 @@ A hard sci-fi ship-captain browser game (Expanse-inspired). Vanilla ES modules, 
 
 - **The sim is pure.** `js/sim/` never touches the DOM. It reports facts through the `emit` it is given (the bus); `js/ui/presenter.js` decides how they are shown.
 - **One minute at a time.** Everything advances in `minuteTick` (sim/game.js), in a fixed order (docs/ARCHITECTURE.md). Decisions made in a minute are flown the next minute. Keep it that way.
-- **State is plain data.** Keys starting with `$` are runtime-only and stripped from saves. If you change the shape of saved state, bump `SAVE_SCHEMA` and add a migration in `sim/save.js`. Layout changes refit old saves by deck id.
+- **State is plain data.** Keys starting with `$` are runtime-only and stripped from saves. A save from another `SAVE_SCHEMA` is refused (no migrations). Prefer additive changes that `upgradeState` (sim/game.js) can fill in on load, so players keep their games; bump `SAVE_SCHEMA` only for a change that can't be filled in. Layout changes refit old saves by deck id.
 - **Scale target is 200k+ entities.** No per-minute work over all entities. Use the spatial hash, `world.driven` (agents and ordnance), `world.stations` and `world.beacons`. Far-away things get outcomes, not simulation. Traffic becomes an agent only when something near the player needs it to act.
 - **Randomness only through `core/rng.js`**, so tests can seed it.
 - **Units.** Positions are in AU, velocities in m/s, distances inside combat and guidance code in metres, and the UI shows km. Constants carry their unit in the name (`standoffM`, `launchAU`, `rangeM`). A wrong unit once made pirates charge to 800 km instead of 800,000 km, so check them.

@@ -2,10 +2,12 @@
 // LONGHAUL — Save format
 // The game state is plain data. Saving strips runtime-only keys
 // (prefixed with $) and encodes ±Infinity; loading checks the schema.
-// Saves from an older schema are refused: start a new game.
+// Saves from an older schema are refused: start a new game. A save of
+// the current schema from an earlier version is brought up to date in
+// place (upgradeState: the plot, the background population).
 // ============================================================
 
-import { SAVE_SCHEMA } from './game.js';
+import { SAVE_SCHEMA, upgradeState } from './game.js';
 import { resetWorld } from './world.js';
 import { VERSION } from '../version.js';
 
@@ -35,6 +37,7 @@ export function deserialize(input) {
   const data = typeof input === 'string' ? JSON.parse(input, reviver) : input;
   if (data && data.schema === SAVE_SCHEMA) {
     resetWorld(data);
+    upgradeState(data);
     return { state: data };
   }
   const from = data?.version ? `v${data.version}` : `schema ${data?.schema ?? 'unknown'}`;

@@ -10,6 +10,7 @@
 import { AU_M } from '../core/constants.js';
 import { hashString } from '../core/rng.js';
 import { getWorld } from '../sim/world.js';
+import { liveKnowledge } from '../sim/intel.js';
 import { factionColor } from '../sim/factions.js';
 import { CLASSES, SHAPES } from '../sim/ship-classes.js';
 import { fxList } from './fx.js';
@@ -51,7 +52,7 @@ function nearby(state, rangeM, alpha) {
   const now = state.clock.minute;
   const out = [];
   for (const e of _q) {
-    if (e.type === 'nav') continue;
+    if (e.type === 'nav' || !liveKnowledge(state, e)) continue;     // only what our sensors hold
     const x = (e.pos.x - f.pos.x) * AU_M, y = (e.pos.y - f.pos.y) * AU_M;
     let p = prevRel.get(e.id);
     if (!p || now - p.m > 1) p = { m: now, x, y, px: x, py: y };
