@@ -4,7 +4,9 @@
 // km, interpolated between sim minutes. Not to scale for our own hull
 // (it would be a few pixels); the torch plume is drawn the way it
 // looks: a fireball near the nozzle, then a long taper that dwarfs
-// the ship.
+// the ship. Only what our sensors hold is drawn (intel.liveKnowledge).
+// In the nav modal a click picks a contact (onSelect), which opens the
+// same contact panel as the scanner; the small panel isn't clickable.
 // ============================================================
 
 import { AU_M } from '../core/constants.js';
@@ -65,10 +67,25 @@ function nearby(state, rangeM, alpha) {
 }
 
 export class TacView {
-  constructor(container) {
+  /** onSelect(id | null): a click on a contact (or on empty space). Without it the view isn't clickable. */
+  constructor(container, { onSelect } = {}) {
     this.fc = new FitCanvas(container, { className: 'tac-canvas' });
     this.zoom = 0;
     this.t0 = performance.now();
+    this._hits = [];
+    if (onSelect) {
+      container.addEventListener('pointerdown', (e) => onSelect(this.hit(container, e)));
+      container.addEventListener('pointermove', (e) => { container.style.cursor = this.hit(container, e) ? 'pointer' : 'default'; });
+    }
+  }
+
+  /** The contact under the pointer, if any (within 18 px). */
+  hit(container, e) {
+    const r = container.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    let best = null, bd = 18 * 18;
+    for (const h of this._hits) { const d = (h.x - x) ** 2 + (h.y - y) ** 2; if (d < bd) { bd = d; best = h; } }
+    return best ? best.id : null;
   }
 
   render(state, alpha, opts = {}) {
@@ -128,9 +145,12 @@ export class TacView {
 
     // Contacts
     const list = nearby(state, rangeM, alpha);
+    const hits = this._hits;
+    hits.length = 0;
     for (const { e, x, y } of list) {
       const { sx, sy } = toScreen(x, y);
       if (sx < -40 || sx > W + 40 || sy < -40 || sy > H + 40) continue;
+      hits.push({ id: e.id, x: sx, y: sy });
       const heading = (e.heading || 0) + rot;   // screen-frame heading
       if (e.type === 'ordnance') { drawOrdnance(ctx, e, sx, sy, heading, t); continue; }
       const color = e.sos ? '#E25555' : e.tags?.wreck ? '#5A5A5A' : factionColor(e.faction);
@@ -161,6 +181,15 @@ export class TacView {
         ctx.setLineDash([3, 3]);
         ctx.beginPath(); ctx.arc(sx, sy, 16, 0, Math.PI * 2); ctx.stroke();
         ctx.setLineDash([]);
+      }
+      if (opts.selected === e.id) {
+        ctx.strokeStyle = '#6EEAE0';
+        ctx.lineWidth = 1.5;
+        const r = 20 + Math.sin(t * 4) * 1.5;
+        ctx.beginPath();
+        for (let k = 0; k < 4; k++) { const a0 = k * Math.PI / 2 + Math.PI / 8; ctx.arc(sx, sy, r, a0, a0 + Math.PI / 4); ctx.moveTo(sx + r * Math.cos(a0 + Math.PI / 2), sy + r * Math.sin(a0 + Math.PI / 2)); }
+        ctx.stroke();
+        ctx.lineWidth = 1;
       }
     }
 

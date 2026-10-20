@@ -4,8 +4,8 @@ A hard sci-fi ship-captain browser game (Expanse-inspired). Vanilla ES modules, 
 
 ## Commands
 
-- `npm test`, or `node tests/run.mjs <filter>`: the simulation test suites (no DOM). They print balance figures, so read them.
-- `./play.sh`: serve on :8090 and open the browser.
+- `npm test`, or `node tests/run.mjs <filter>`: the simulation test suites (no DOM). They print balance figures, so read them. `game › scale` (200k ships) is timed and can fail when the machine is busy; rerun it alone before suspecting the code.
+- `./play.sh`: serve on :8090 (with `Cache-Control: no-store`) and open the browser. A plain caching server lets Chrome mix old and new modules after an update, and the game then fails to load with "does not provide an export named …". If that happens, hard-reload (Cmd+Shift+R).
 - Browser smoke test: serve the folder (`python3 -m http.server <port>`), then drive it with `playwright-core` (install it in a scratch dir) and the system Chrome (`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`, headless). Start a game through `[data-action="new-game"]` → `[data-action="start-game"]`. `window.__longhaul` exposes `state`, `loop`, `step(n)`, and modules can be imported in `page.evaluate` (`await import('/js/sim/agents.js')`). Collect `pageerror` and console errors.
 
 ## Rules of the code
@@ -23,5 +23,7 @@ A hard sci-fi ship-captain browser game (Expanse-inspired). Vanilla ES modules, 
 - Keep `README.md`, `docs/*.md` and the module headers in step with the code. When a constant or behaviour that the docs quote changes, update the docs in the same change.
 - Balance is checked by the tests' printed numbers (combat.test.mjs, factions.test.mjs). Re-read them after tuning.
 - Suites not about encounters switch them off: `s.politics.quietUntil = Infinity; s.missions.cooldown = 1e9;`.
-- Work happens on branch `overhaul`. `main` was fast-forwarded to it at v0.10.0. Release commits are titled `vX.Y.Z: short summary`, and `js/version.js` is bumped with them. Commit, push or merge only when asked.
+- Work happens on branch `overhaul` (current release v0.11.0). `main` was last fast-forwarded to it at v0.10.0. Release commits are titled `vX.Y.Z: short summary`, and `js/version.js` is bumped with them. Commit, push or merge only when asked.
+- The user often plays from the working copy while asking for changes. Then build and test in a scratch copy and apply the patch only when they say go. The untracked `memory/` folder at the repo root is old and is never committed.
+- Kill any server you start for a smoke test.
 - If an auto-mode safety check blocks running commands (combat-heavy conversations have triggered it), say so and ask the user to switch permission modes, rather than working around it.

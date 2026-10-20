@@ -87,7 +87,7 @@ The sim emits facts (`torpedo-hit`, `crime`, `comm-request`, …). `ui/presenter
 | `solar-map.js` | the solar map: bodies, influence, and what we know: live contacts, charted orbits, the plot's reports aged and with their uncertainty, light-time rings |
 | `stance.js` | the stance panel (order, range, drive, band, doctrine, preview), and one-click stances for fire control |
 | `library.js` | the ship's library: reference pages built from the simulation's own tables (classes, tech, systems, fittings, weapons, navigation, factions, stations); anything marked `data-lib` opens its page |
-| `tac.js`, `solar-map.js`, `scanner.js`, `combat.js` | the four canvases (`combat.js` also renders the fire-control panel) |
+| `tac.js`, `solar-map.js`, `scanner.js`, `combat.js` | the four canvases (`combat.js` also renders the fire-control panel). Ships are clickable on all four: the tactical view and the scanner open the contact panel, the solar map the body or report panel, the combat board targets |
 | `dialogs.js` | generic dialog, missions log, jobs, hail, distress calls and comm requests, station board and services |
 | `shipboard.js` | engineering board, duty roster, words for activities and jobs |
 | `presenter.js`, `fx.js`, `log.js`, `toast.js` | how events are shown |

@@ -145,7 +145,7 @@ On each deck hit with DP d: a hull breach with P = d/40; each system housed on t
 
 The COMBAT tab (`W`) shows the threat board (log range, 1 km to 10M km) and the fire-control panel:
 
-- **Target**: any ship our sensors hold (click it on the board, or TARGET from the scanner).
+- **Target**: any ship our sensors hold (click it on the board, or TARGET from the scanner or the tactical view, where clicking a ship opens the same contact panel).
 - **Stance**: where the nav computer keeps us relative to the target, flown until released. One click holds at a weapon's range: GUNS (60% of PDC reach, 3.6 km at TL2), GEAR for a miner, TORPEDO (50,000 km, outside guns and railguns), LONG (300,000 km). MORE… opens the stance panel: HOLD, KEEP OUT or KEEP WITHIN, any range (formation, the edge of our sensors, where we are, or typed in), the G to fly it at, a TIGHT or LOOSE band, and the doctrine under fire. That means turning away from torpedoes less than 45 minutes out (TL2 and up) and closing no faster than 5 km/s while one is inbound. Ranges inside the target's known guns are flagged.
 - **Torpedoes**: choose HE or NUKE and FAST or COLD COAST, then FIRE. One per loaded tube; the autoloader takes 3 minutes per tube (6 if the launcher is degraded).
 - **Point defense**: AUTO shoots down torpedoes; HOLD stays silent; ENGAGE also rakes the target whenever it comes inside gun range.

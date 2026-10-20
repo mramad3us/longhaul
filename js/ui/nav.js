@@ -47,19 +47,11 @@ export function initNav(h) {
     setTacZoom(+b.dataset.tacZoom);
   }));
 
-  tacModal = new TacView($('[data-nav-screen="tactical"]'));
+  tacModal = new TacView($('[data-nav-screen="tactical"]'), { onSelect: (id) => selectOnBoard(id) });
   map = new SolarMap($('[data-nav-screen="solar"]'), {
     onSelect: (sel) => { ui.nav.target = sel; renderSelection(); },
   });
-  scanner = new ScannerView($('[data-nav-screen="scanner"]'), {
-    onSelect: (id) => {
-      if (!ui.state) return;
-      selectContact(ui.state, id);
-      ui.nav.target = id ? { kind: 'entity', id } : null;
-      hideRoutePanel();
-      renderSelection();
-    },
-  });
+  scanner = new ScannerView($('[data-nav-screen="scanner"]'), { onSelect: (id) => selectOnBoard(id) });
 
   threat = new ThreatView($('[data-nav-screen="combat"]'), {
     onSelect: (id) => { if (ui.state && id) { targetContact(ui.state, id); selectContact(ui.state, id); } },
@@ -132,6 +124,15 @@ function syncButtons() {
   if (ui.state) $$('[data-scanner-range]').forEach(b => toggleClass(b, 'active', +b.dataset.scannerRange === ui.state.sensors.range));
 }
 
+/** A contact picked on the scanner or the tactical view (null: clicked on nothing). */
+function selectOnBoard(id) {
+  if (!ui.state) return;
+  selectContact(ui.state, id);
+  ui.nav.target = id ? { kind: 'entity', id } : null;
+  hideRoutePanel();
+  renderSelection();
+}
+
 // ---- TARGET HELPERS ----
 
 function navTargetPos() {
@@ -198,7 +199,7 @@ function renderSelection() {
   const routing = ap && ap.plan.target.id === t.id;
   const canHail = t.kind === 'entity' && inRadio(s, t.id);
 
-  if (ui.nav.tab === 'scanner' && t.kind === 'entity') {
+  if ((ui.nav.tab === 'scanner' || ui.nav.tab === 'tactical') && t.kind === 'entity') {
     const c = contactById(s, t.id);
     if (!c) return;
     const lock = s.sensors.locked === t.id;
@@ -525,7 +526,7 @@ export function updateNav(state, alpha) {
   tacSmall.render(state, alpha, { reference: rel ? { ...rel } : null, highlight: ref?.target.id });
 
   if (ui.nav.open) {
-    if (ui.nav.tab === 'tactical') tacModal.render(state, alpha, { reference: rel, highlight: ref?.target.id });
+    if (ui.nav.tab === 'tactical') tacModal.render(state, alpha, { reference: rel, highlight: ref?.target.id, selected: ui.nav.target?.id });
     else if (ui.nav.tab === 'solar') map.render(state, { targetPos: navTargetPos(), targetId: ui.nav.target?.id, lockedId: state.sensors.locked });
     else if (ui.nav.tab === 'scanner') scanner.render(state);
     else if (ui.nav.tab === 'combat') {
