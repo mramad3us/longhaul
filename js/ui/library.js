@@ -182,7 +182,7 @@ function ships(add) {
     const specs = [
       ['Hull', `${c.lengthM} m · ${fmtNum(c.massT)} t · ${SIZES[c.size].label.toLowerCase()}`],
       ['Crew', `${c.crew[0]}–${c.crew[1]}, usually ${c.crewStd}${c.berths ? ` · ${c.berths} passenger berths` : ''}`],
-      ['Hull', `${fmtNum(hullOf(id).L)} × ${fmtNum(Math.round(hullOf(id).W))} × ${fmtNum(Math.round(hullOf(id).H))} m`],
+      ['Dimensions', `${fmtNum(hullOf(id).L)} × ${fmtNum(Math.round(hullOf(id).W))} × ${fmtNum(Math.round(hullOf(id).H))} m`],
       ['Collars', portSummary(id) || '—'],
       ['RCS', `${hullOf(id).rcs.accel.toFixed(2)} m/s² · ${hullOf(id).rcs.rotDeg.toFixed(1)}°/s`],
       ['Atmosphere', c.atmo ? `rated: ${c.atmo.entry === 'belly' ? 'a lifting body on a ceramic belly' : 'tail first behind an ablative shield ring'}, lands on ${c.atmo.landing}` : 'not rated for entry'],

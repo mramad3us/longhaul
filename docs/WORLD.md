@@ -20,7 +20,7 @@ Each power projects influence from the bodies it holds (`INFLUENCE_SOURCES`), wi
 
 ## Who is out there (`sim/traffic.js`, `sim/forces.js`)
 
-A new game has **3,000 traffic ships** (`DEFAULT_TRAFFIC`), nine in ten of them under way. They fly between the stations on analytic courses and make **port calls** there (DOCKING.md): a berth only for the work that needs one, the layover in the holding pattern. A ship picks its next port by distance and flag: weight 3 for its own power's ports, 1.5 where either side is independent, 1 otherwise, divided by (0.5 + distance in AU). So the Belt trades mostly with itself, and Earth–Mars is a busy lane.
+A new game has **3,000 traffic ships** (`DEFAULT_TRAFFIC`), nine in ten of them under way. They fly between the stations on analytic courses and make **port calls** there (DOCKING.md): a berth only for the work that needs one, the layover in the holding pattern, and out through the gate when it leaves (from a berth or a slot). The long legs between ports are straight courses between moving ends, and one can pass through a planet on the way (the Earth or Mars, for Luna's and Phobos' yards): they are drawn so far from us that it is rarely seen, and routing them round is still to come. A ship picks its next port by distance and flag: weight 3 for its own power's ports, 1.5 where either side is independent, 1 otherwise, divided by (0.5 + distance in AU). So the Belt trades mostly with itself, and Earth–Mars is a busy lane.
 
 Every power also keeps hulls in space. They are real entities on rails, indexed in `world.forces`:
 
@@ -178,8 +178,8 @@ Every ship has people aboard: its class's complement (SHIPS.md), its own number 
 |---|---|
 | Registry | once identified, the class: its rated complement |
 | Manifest | traffic control's declarations: in station digests (berthed ships and filed plans), and the traffic board when asked |
-| Hail | what they say when asked (honest ships truthfully) |
-| Scan | a long close look (inside 100 km, 90 minutes of track): a thermal count of the living, ± a third (a sixth with ops on watch), the locked contact and the nearest few |
+| Hail | what they say when asked (honest ships truthfully; a ship that dislikes us may inflate it, pirates won't say) |
+| Scan | a long close look (inside 100 km, 90 minutes of track): a thermal count of the living, ± a third (a sixth with ops on watch), the locked contact and the nearest few; looked at once a day: our own estimate is logged when it changes; a count the ship declared (hailed, a manifest) is never replaced by it, only checked, quietly when the heat bears it out, logged and marked doubtful when it doesn't (a ship that dislikes us may lie); a count taken aboard is not looked at |
 | Boarded | a count taken aboard: exact |
 
 The dossier keeps what we learned (1,500 ships at most, the oldest dropped). Notable learning is logged; the contact panel and the comms card show it.

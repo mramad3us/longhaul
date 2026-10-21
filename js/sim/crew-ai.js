@@ -34,7 +34,7 @@ import {
 } from './systems.js';
 
 export const WALK_TILES_PER_MIN = 0.8;
-const RUN = 2.5;                    // emergencies: sprinting to a downed crewmate
+const RUN = 2.5;                    // emergencies: sprinting to a downed crewmate, a locker in bad air, a breach or a fire
 const CRAWL = 0.15;                 // minimum speed dragging yourself to a seat under G
 const MEDBAY_SUPPLY_PER_MIN = 1 / 240;
 const MEAL_MINUTES = 20;
@@ -93,9 +93,9 @@ export function helmsman(state) {
   return state.ship.crew.find(m => isConscious(m) && seatKind(m.seat) === 'helm') || null;
 }
 
-/** The ship's pilot: the Pilot, else the best conscious pilot. */
+/** The ship's pilot: the Pilot, else the best conscious pilot aboard. */
 export function activePilot(state) {
-  const able = state.ship.crew.filter(isConscious);
+  const able = state.ship.crew.filter(m => isConscious(m) && !m.away);
   return able.find(m => m.role === 'Pilot') ||
     able.slice().sort((a, b) => b.skills.piloting - a.skills.piloting)[0] || null;
 }
@@ -220,6 +220,20 @@ export function abandonTask(state, m) {
   m.path = [];
 }
 
+/**
+ * Someone has died (crew.js kill): what they held is let go. A job they had
+ * goes back on the board, anyone they were carrying is set down where they
+ * fell, and the body is lifted off its seat (an autodoc, the helm, a couch
+ * is needed by the living).
+ */
+function layOut(state, dead) {
+  for (const j of state.jobs.list) if (j.status === 'assigned' && j.assignee === dead.id) { j.status = 'open'; j.assignee = null; }
+  for (const o of state.ship.crew) {
+    if (o.task?.type === 'carried' && o.task.by === dead.id) { o.task = null; o.pos.sx = Math.round(dead.pos.sx); o.pos.sy = Math.round(dead.pos.sy); }
+  }
+  if (dead.seat) leaveSeat(state, dead);
+}
+
 // ---- JOBS ----
 
 function generateJobs(state) {
@@ -228,6 +242,7 @@ function generateJobs(state) {
     if (p.dead) {
       const j = state.jobs.list.find(x => x.type === JobType.RESCUE && x.data.patient === p.id);
       if (j) closeJob(state, j);
+      layOut(state, p);
       continue;
     }
     const helpless = !isConscious(p) || hasCondition(p, 'critical');
@@ -278,7 +293,7 @@ function eligible(state, m, job, env) {
   const block = env.blocks.get(m.id);
   const [skill, min] = jobSkill(job);
   if (skill && (m.skills[skill] || 0) < min) return false;
-  if (!isAble(m)) return false;
+  if (!isAble(m) || m.away) return false;               // (ashore, or across with a boarding party: nobody waits on them)
   if (job.type === JobType.RESCUE && job.data.patient === m.id) return false;
   if (job.data.engineer != null && job.data.engineer !== m.id) return false;
   if ((job.type === JobType.SEAL || job.type === JobType.FIRE) && !m.suit.wearing && !lockerWithSuit(state, m)) return false;
@@ -303,6 +318,7 @@ function eligible(state, m, job, env) {
 function score(state, m, job) {
   if (job.type === JobType.RESCUE) {
     const p = state.ship.crew.find(c => c.id === job.data.patient);
+    if (!p) return -Infinity;                              // (gone: paid off, or the job outlived them)
     return -(Math.abs(m.pos.sx - p.pos.sx) + Math.abs(m.pos.sy - p.pos.sy));
   }
   const [skill] = jobSkill(job);
@@ -376,14 +392,14 @@ function startJob(state, m, job) {
   } else if ((job.type === JobType.SEAL || job.type === JobType.FIRE) && !m.suit.wearing) {
     // Into vacuum, or smoke: suit up first, then go
     const locker = lockerWithSuit(state, m);
-    m.task = { type: 'suit', locker: locker.id, phase: 'goto', timer: 0, thenJob: job.id, priority: job.priority, jobId: job.id };
+    m.task = { type: 'suit', locker: locker.id, phase: 'goto', timer: 0, thenJob: job.id, priority: job.priority, jobId: job.id, urgent: true };
     goToNode(state, m, locker.access);
   } else if (job.type === JobType.REACTOR) {
     m.task = { type: 'reactor', jobId: job.id, priority: job.priority, phase: 'goto' };
     goToNode(state, m, standNode(geo, f));
   } else {
     m.task = { type: 'work', jobId: job.id, kind: job.type, system: job.data.system ?? null, deck: job.data.deck ?? null, priority: job.priority, phase: 'goto', progress: 0, need: 0 };
-    if (job.type === JobType.SEAL || job.type === JobType.FIRE) m.suit.keep = true;
+    if (job.type === JobType.SEAL || job.type === JobType.FIRE) { m.suit.keep = true; m.task.urgent = true; }
     goToNode(state, m, f.access ?? standNode(geo, f));
   }
 }
@@ -405,7 +421,7 @@ function holdsUnderG(m) {
 function battleSeat(state, m) {
   if (!state.combatStations) return null;
   const pilot = activePilot(state);
-  const able = state.ship.crew.filter(o => isAble(o) && o !== pilot);
+  const able = state.ship.crew.filter(o => isAble(o) && !o.away && o !== pilot);
   const best = (skill, not = []) => able.filter(o => !not.includes(o)).sort((a, b) => b.skills[skill] - a.skills[skill])[0];
   const gunner = best('security');
   if (gunner === m) return 'weapons';
@@ -495,7 +511,8 @@ function planCouches(state) {
 function deckAirIsBad(state, deck) {
   const atmo = state.ship.decks[deck]?.atmosphere;
   if (!atmo) return false;
-  return atmo.breached || atmo.vented || atmo.pressure < 63 || atmo.o2Pct < 16 || atmo.co2Pct > 3;
+  // (a fire is bad air too: smoke, and it burns whoever is in it unsuited)
+  return atmo.breached || atmo.vented || !!atmo.fire || atmo.pressure < 63 || atmo.o2Pct < 16 || atmo.co2Pct > 3;
 }
 
 /** Can they get to this deck without walking through bad air unsuited? */
@@ -601,7 +618,7 @@ function startPatrol(state, m) {
 function startBoard(state, m, bd) {
   abandonTask(state, m);
   const lock = airlockFor(state.ship, bd.via === 'dock' ? state.dock?.port : null);
-  const suitUp = !m.suit.wearing && (bd.via === 'eva' || bd.defenders > 0);
+  const suitUp = !m.suit.wearing && (bd.via === 'eva' || bd.defenders > 0 || state.suitsOn);
   const locker = suitUp ? lockerWithSuit(state, m) : null;
   m.task = { type: 'board', phase: locker ? 'suit' : 'goto', locker: locker?.id ?? null, lock: lock?.id ?? null, timer: 0 };
   if (locker) goToNode(state, m, locker.access);
@@ -676,12 +693,13 @@ function decide(state, m, env) {
   if (m.seat && !m.task) leaveSeat(state, m);
 
   // ---- Bad air comes first, even mid-maneuver (crawling to the locker under G if need be)
-  if (!m.suit.wearing && m.task?.type !== 'suit' && m.task?.type !== 'carried' && !(m.task?.type === 'rescue' && m.task.phase === 'carry') &&
+  // (a boarder suits up in the boarding's own order: taken off it here, the muster would take them back, and round)
+  if (!m.suit.wearing && m.task?.type !== 'suit' && m.task?.type !== 'board' && m.task?.type !== 'carried' && !(m.task?.type === 'rescue' && m.task.phase === 'carry') &&
       !(m.task?.type === 'heal' && m.seat) && !(isSecured(m) && (m.couchAir ?? 0) > 30 && secure) && deckAirIsBad(state, deckOf(state, m))) {
     const locker = lockerWithSuit(state, m);
     if (locker) {
       abandonTask(state, m);
-      m.task = { type: 'suit', locker: locker.id, phase: 'goto', timer: 0 };
+      m.task = { type: 'suit', locker: locker.id, phase: 'goto', timer: 0, urgent: true };
       goToNode(state, m, locker.access);
       return;
     }
@@ -689,7 +707,8 @@ function decide(state, m, env) {
 
   // ---- The SUITS order: everyone into a suit while it stands (moving about
   // under 1.5G, a crash couch left for it if need be), and kept on (orderSuits)
-  if (state.suitsOn && !m.suit.wearing && !m.away && isAble(m) && env.g <= 1.5 && m.task?.type !== 'suit' && m.task?.type !== 'carried' && m.task?.type !== 'heal' && m.task?.type !== 'rescue') {
+  // (not off the stick of a hand-flown ship, nor out of a boarding party, which suits up on its own)
+  if (state.suitsOn && !m.suit.wearing && !m.away && isAble(m) && env.g <= 1.5 && !['suit', 'carried', 'heal', 'rescue', 'board', 'helm'].includes(m.task?.type)) {
     const locker = lockerWithSuit(state, m);
     if (locker) {
       abandonTask(state, m);
@@ -701,8 +720,9 @@ function decide(state, m, env) {
 
   // ---- A boarding party musters at the lock (boarding.js), maneuvers or not
   const bd = state.boarding;
-  if (bd?.phase === 'muster' && bd.party.includes(m.id) && isAble(m)) {
-    if (m.task?.type !== 'board') startBoard(state, m, bd);
+  if (bd?.phase === 'muster' && bd.party.includes(m.id) && isAble(m) && !m.away) {
+    // (someone already getting into a suit finishes first: pulled off it, they would start over)
+    if (m.task?.type !== 'board' && m.task?.type !== 'suit') startBoard(state, m, bd);
     return;
   }
 
@@ -796,7 +816,8 @@ function speedOf(m, g) {
 
 function stepTask(state, m, ctx, g, emit, block) {
   const t = m.task;
-  const speed = speedOf(m, g);
+  // (bad air, a breach, a fire: they run)
+  const speed = speedOf(m, g) * (t?.urgent ? RUN : 1);
   const G = shipGeometry(state.ship);
 
   if (!t) { m.activity = m.seat ? 'secured' : 'idle'; return; }
@@ -1060,7 +1081,8 @@ function stepWork(state, m, t, speed, emit) {
     if (walk(m, speed)) {
       t.phase = 'work';
       t.progress = 0;
-      t.need = t.kind === JobType.SEAL ? Math.round(40 * Math.max(0.6, 1.6 - m.skills.engineering / 100))
+      // (a fire has no set time: it is fought until it is out)
+      t.need = t.kind === JobType.FIRE ? Infinity : t.kind === JobType.SEAL ? Math.round(40 * Math.max(0.6, 1.6 - m.skills.engineering / 100))
         : workMinutes(state, t.kind, t.system, m.skills.engineering, 1);
       t.mode = t.kind === JobType.REPAIR ? repairMode(state, t.system) : t.kind;
     }

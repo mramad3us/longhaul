@@ -333,7 +333,7 @@ function renderStation() {
         const q = serviceQuote(s, k);
         return `<div class="service-row"><span class="service-name">${name}</span><span class="service-stock">${fmtNum(s.resources[k].current)} / ${fmtNum(s.resources[k].max)} ${unit === 'unit' ? 'units' : unit}</span>
           <span class="service-price">${+priceOf(s, k).toFixed(2)} MCR/${unit || 'unit'}</span>
-          <button class="station-mission-accept" data-act="buy" data-key="${k}" ${q.qty < 0.5 ? 'disabled' : ''}>FILL · ${fmtNum(q.cost)} MCR</button></div>`;
+          <button class="station-mission-accept" data-act="buy" data-key="${k}" ${q.qty < 0.5 ? 'disabled' : ''}>${q.qty < 0.5 ? 'FULL' : `FILL · ${fmtNum(q.cost)} MCR`}</button></div>`;
       }).join('');
       const M = s.magazine;
       const torps = M.capacity <= 0 ? '' : ['he', 'nuke'].map(w => {
@@ -409,7 +409,7 @@ function trafficHTML(s, st) {
   const rows = (m?.berths || []).map(b => {
     const who = st.berths?.[b.id];
     const e = who && who !== 'player' ? world.get(who) : null;
-    return `<div class="service-row"><span class="service-name">${esc(b.id)}</span><span class="service-stock">${esc(b.label)} · ${b.accepts.join('/')}</span><span class="service-price">${who === 'player' ? 'US' : e ? esc(e.transponder ? e.name : 'unregistered') : (st.berthsOut?.[b.id] > s.clock.minute ? 'OUT OF SERVICE' : 'free')}</span><span></span></div>`;
+    return `<div class="service-row"><span class="service-name">${esc(b.id)}</span><span class="service-stock">${esc(b.label)} · ${b.accepts.join('/')}</span><span class="service-price">${who === 'player' ? `${esc(s.ship.name)} (ours)` : e ? esc(e.transponder ? e.name : 'unregistered') : (st.berthsOut?.[b.id] > s.clock.minute ? 'OUT OF SERVICE' : 'free')}</span><span></span></div>`;
   }).join('');
   return `<div class="service-list"><div class="station-mission-desc">${t.used} of ${t.total} berths taken · ${t.holding} of ${t.holdingTotal} holding slots${t.anchored ? ` · ${t.anchored} at the anchorage` : ''} · ${t.inbound} on the approach.
     Our clearance: ${cl.dock ? `docking at ${esc(cl.dock.berth)}` : cl.hold ? `holding ${esc(cl.hold.slot)}` : cl.approach ? 'approach' : cl.depart ? 'departure' : 'none'}.</div>${rows}</div>`;

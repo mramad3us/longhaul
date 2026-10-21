@@ -59,8 +59,10 @@ A mated hull's pose is worked in three dimensions (`mating.js`): the collar norm
 | Zone | Reach | Rule |
 |---|---|---|
 | Control space | 30,000 km | transponder required: running dark is warned after 5 min, cited after 30 |
-| The approach | 2,000 km | approach clearance required (6 h); uncleared, warned at once, cited after 15 min (300 MCR), reported after 45 (SUSPECT) |
-| Keep-out | inside the gate | docking clearance (a berth, 2 h) or a departure clearance (30 min); a trespasser gets a final warning, then it is a crime (severity 1, 2 at a naval yard) and the yard opens fire. Under 200 m/s coming in. Inside the gate the nav computer holds the drive to 0.1 G (`keepOutDriveCap`): no torch near a station |
+| The approach | 2,000 km | approach clearance required (6 h); uncleared, warned at once, cited after 15 min (300 MCR), reported after 45 (SUSPECT). Those minutes run only while the ship isn't flying a route in to this port (inbound, it is told to hail), and while it isn't leaving; sat at the hold point off a berth with no route or lease, an hour counts as leaving, then it is loitering |
+| Keep-out | inside 0.92 gates (the gate itself just outside, with room to drift) | docking clearance (a berth, 2 h) or a departure clearance (30 min); a trespasser gets a final warning, then after 5 minutes (20 for a ship inbound to the gate, given time to correct) it is a crime (severity 1, 2 at a naval yard) and the yard opens fire. Under 200 m/s coming in. Inside the gate the nav computer holds the drive to 0.1 G (`keepOutDriveCap`): no torch near a station |
+
+Docking somewhere else from a station's berth or its frame (docked, backing out, holding, climbing out, or on a final approach) goes out first: undock, climb out through the gate, then the new docking begins (`dock.next`). At the hold point off a berth, coming back in needs a docking clearance (the one we came in on was used): the panel offers REQUEST DOCKING, and traffic control gives back the berth we left if it is still ours, the lease with it. A dock whose target is gone (blown up, broken up) lets go in any phase; nothing we are docking with is retired from the world while we are. Evicted for overstaying, we are not cited for undocking without clearance as well.
 
 Clearances are asked for by hailing traffic control (the comms window, or the HAIL button on the traffic-control chip). **The nav computer does not ask for us**: a docking flight plotted from afar ends at the gate and holds there, awaiting clearance. Once cleared, the docking computer takes over at once (or plots the route in, from afar); the chip carries a DOCK button while a clearance stands.
 
@@ -83,7 +85,7 @@ Near a hub the radio is busy, and it is the real traffic: traffic control clears
 | undock | 2 min to vent the lock and unlatch |
 | separate | backing out on RCS to the hold point, 150 m out (slow off the collar, 1 m/s clear of it); with a route waiting, on through it without stopping |
 | holding | station-keeping in the berth's frame until a route takes us away, or we clear off (CLEAR OFF) |
-| outbound | leaving a station: up the corridor to just through the gate (1.03 gates out), on the RCS alone (0.02 G, under 180 m/s), still in the berth's frame; there the dock lets us go. A route goes on out of the approach on RCS before its drive lights (FLIGHT.md, the departure leg); with none, we hold at the gate (leaving, as far as traffic control is concerned) |
+| outbound | leaving a station: up the corridor to just through the gate (1.03 gates out), on the RCS alone (0.02 G, under 180 m/s), still in the berth's frame, round the station's side if the gate lies beyond it, from wherever we are (backing out, holding, or stopped dead on a final approach turned back); there the dock lets us go. A route goes on out of the approach on RCS before its drive lights (FLIGHT.md, the departure leg); with none, we hold at the gate (leaving, as far as traffic control is concerned) |
 
 **The frame.** From the final approach on, our ship is held in the berth's frame: its place is the berth's plus our offset, turning with the station. The body's gravity, which station and ship share, is left out of the motion: a station circling a moon quickly would otherwise take more drive to keep up with than traffic control allows inside the gate. What holding against it costs is charged (`hoverG`): to the drive on the final approach, which flies on it anyway, and to the RCS everywhere else, so the torch never lights by a berth. Nothing in the frame meets the ground. That is why a departure stays in it to the gate: a hold point by a surface port is a hundred metres over the rock, and the RCS can't hold a ship up against even Ceres' pull (0.027 G against 0.02 G). Let go there, the ship falls.
 
@@ -124,8 +126,10 @@ A boarding party is chosen from the crew (`sim/boarding.js`), through a mated co
 2. **cross**: 2 minutes through the collar, or the distance at 2 m/s on suit thrusters.
 3. **breach**: a hatch nobody opens is cut: 6 minutes behind a collar, 10 by EVA.
 4. **fight**, if anyone resists, minute by minute.
-5. **secured**: orders aboard. SEARCH (20 min: the exact crew and passenger count, the hold, contraband), TAKE STORES (40: reaction mass, water, rations, med, spares, PDC rounds, torpedoes, as much as we hold), TAKE CARGO (40, docked only), TAKE PRISONERS (15: into free berths; a police cutter has a brig), SCUTTLE (10: the reactor goes in 30 minutes).
-6. **return**, and the party is aboard again.
+5. **secured**: orders aboard. SEARCH (20 min: the exact crew and passenger count, the hold, contraband), TAKE STORES (40: reaction mass, water, rations, med, spares, PDC rounds, torpedoes, as much as we hold), TAKE CARGO (40, while still mated at the collar), TAKE PRISONERS (15: into free berths; a police cutter has a brig), SCUTTLE (10: the reactor goes in 30 minutes). A hull's stores, hold and credit store are taken once: boarding it again finds them gone.
+6. **return**, and the party is aboard again: across the collar still mated, or within EVA range. Out of reach, they wait aboard and say so; a route waits for them too.
+
+An EVA crosses open space: nobody goes without a suit. Crew ashore aren't waited for at the muster.
 
 While away the party is off our ship: not on its decks, not breathing its air, not at its stations. Routes wait for them and we cannot undock.
 

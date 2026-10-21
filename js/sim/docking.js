@@ -104,6 +104,8 @@ const HELD = new Set(['approach', 'prox', 'capture', 'seal', 'docked', 'undock',
 const PROX = new Set(['prox', 'separate']);
 /** …and with the final approach, every phase flown second by second in the berth's frame. */
 const IN_FRAME = new Set(['approach', 'prox', 'separate', 'outbound']);
+/** Phases a dock at a station can be left from for somewhere else (beginDocking chains through clearOff). */
+const LEAVING_FROM = new Set(['docked', 'undock', 'separate', 'holding', 'outbound', 'approach']);
 
 export const dockHolds = (state) => !!state.dock && HELD.has(state.dock.phase);
 export const proxActive = (state) => !!state.dock && PROX.has(state.dock.phase);
@@ -153,10 +155,11 @@ export function collarFrame(state, d, minute = state.clock.minute) {
   }
   const port = theirCollar(state, d);
   if (!port) return null;
-  // (a ship's collar at another moment of the minute: carried on its velocity)
-  const k = (minute - state.clock.minute) * 60 / AU_M;
-  const fr = shipPortFrame(k ? { x: e.pos.x + e.vel.vx * k, y: e.pos.y + e.vel.vy * k } : e.pos, facingOf(e), port);
-  return { ...fr, vel: { vx: e.vel.vx, vy: e.vel.vy }, omega: 0 };
+  // (a ship's collar at another moment of the minute: where the sim would put the ship then, as the view
+  // draws the ship, so the two stay mated on the screen)
+  const p = minute !== state.clock.minute ? predictEntity(e, minute, world) : { pos: e.pos, vel: e.vel };
+  const fr = shipPortFrame(p.pos, facingOf(e), port);
+  return { ...fr, vel: { vx: p.vel.vx, vy: p.vel.vy }, omega: 0 };
 }
 
 
@@ -234,7 +237,19 @@ export function beginDocking(state, target, { mode = 'auto', route = null } = {}
   const world = getWorld(state);
   const e = world.get(target.id);
   if (!e) return { ok: false, text: 'No such target.' };
-  if (dockHolds(state) && state.dock.phase !== 'holding') return { ok: false, text: 'Already docking.' };
+  const cur = state.dock;
+  // Docking somewhere else from a station's berth (or its frame): out of the berth and through its
+  // gate first, on RCS (a hold point by a surface port is a hundred metres over its rock), then on
+  if (cur && cur.target.kind === 'station' && cur.target.id !== e.id && LEAVING_FROM.has(cur.phase)) {
+    if (cur.phase === 'docked') { const r = undock(state, emit); if (!r.ok) return r; }
+    else if (cur.phase === 'holding' || cur.phase === 'approach') clearOff(state, emit);
+    if (state.dock) {
+      state.dock.next = { target: { kind: target.kind, id: e.id }, mode, route: route || null };
+      return { ok: true, text: `Leaving ${world.get(cur.target.id)?.name || 'port'} first: out through the gate on RCS, then ${e.name}.` };
+    }
+  }
+  if (cur && cur.target.kind === 'ship' && cur.target.id !== e.id && cur.phase === 'holding') releaseDock(state);
+  if (dockHolds(state) && state.dock.phase !== 'holding') return { ok: false, text: state.dock.phase === 'docked' ? 'Docked here already.' : 'Already docking.' };
   let berth = null, port = null;
   if (target.kind === 'station') {
     const cl = clearanceFor(state, e.id).dock;
@@ -246,18 +261,25 @@ export function beginDocking(state, target, { mode = 'auto', route = null } = {}
     if (!c) return { ok: false, text: `None of our collars mate with ${e.name}'s.` };
     ({ berth, port } = c);
   }
+  // Holding off a berth here with no clearance to come back in: stay put and ask (the clearance was used docking)
+  if (target.kind === 'station' && !berth && state.dock?.phase === 'holding' && state.dock.target.id === e.id) {
+    return { ok: false, text: `Ask ${e.name} traffic control for docking clearance first (hail them).` };
+  }
   const dM = Math.hypot(e.pos.x - state.flight.pos.x, e.pos.y - state.flight.pos.y) * AU_M;
   const near = target.kind === 'ship' ? dM < 200_000 : dM < keepOutM(e.id) * 3;
-  if (state.dock?.phase === 'holding' && state.dock.target.id !== e.id) state.dock = null;
   // Holding off the berth we are cleared for: straight into proximity
   // operations from where we are. Cleared for another berth, the hold's
   // place means nothing there: the final approach starts from where we are.
   const keep = state.dock?.phase === 'holding' && state.dock.target.id === e.id && state.dock.berth === berth && state.dock.port === port;
   const cleared = target.kind === 'ship' || !!berth;
+  // (a berth held off and given back keeps its lease; another berth here lets ours go)
+  const was = state.dock;
+  if (was && !keep && was.target.kind === 'station' && was.berth) { const h = world.get(was.target.id); if (h) releaseBerth(h, was.berth, 'player'); }
   state.dock = {
     target: { kind: target.kind, id: e.id }, berth, port, mode,
     phase: keep && cleared ? 'prox' : near ? (cleared ? 'approach' : 'awaiting') : 'inbound',
-    rel: keep ? state.dock.rel : zeroRel(), t: 0, since: state.clock.minute, timer: 0, bumps: 0, fuel: 0, rate: mode === 'manual' ? 1 : 3,
+    rel: keep ? was.rel : zeroRel(), t: 0, since: state.clock.minute, timer: 0, bumps: 0, fuel: 0, rate: mode === 'manual' ? 1 : 3,
+    ...(keep && was.lease ? { lease: was.lease } : {}),
   };
   if (state.dock.phase === 'inbound') {
     const gate = target.kind === 'station' ? world.get(gateId(e.id)) : null;
@@ -294,11 +316,10 @@ export function corridorTarget(d) {
   return { kind: 'port', id: d.target.id, berth: d.berth, offsetM: d.target.kind === 'ship' ? SHIP_CORRIDOR_M : CORRIDOR_M, dockKind: d.target.kind };
 }
 
-/** Where our centre is now in a dock's berth frame, and how it moves there. */
-function centreInFrame(state, d) {
+/** Where our centre is now in a dock's berth frame, and how it moves there (`f`: our place, the flight's by default). */
+function centreInFrame(state, d, f = state.flight) {
   const fr = collarFrame(state, d);
   if (!fr) return null;
-  const f = state.flight;
   const dx = (f.pos.x - fr.pos.x) * AU_M, dy = (f.pos.y - fr.pos.y) * AU_M;
   const w = fr.omega || 0;
   // velocity relative to the frame at our place in it (its turn carries us too)
@@ -382,8 +403,8 @@ function startProx(state, emit) {
   r.yaw = gaussian() * 2.5 * RAD; r.pitch = gaussian() * 2.5 * RAD; r.roll = gaussian() * 8 * RAD;
   d.phase = 'prox';
   d.since = state.clock.minute;
-  d.t = 0;
-  emit('dock-phase', { phase: 'prox', berth: berthLabel(state), mode: d.mode });
+  // (dock.t carries on: the seconds of this minute flown on the approach stand, and prox flies the rest)
+  emit('dock-phase', { phase: 'prox', berth: berthLabel(state), mode: d.mode, kind: d.target.kind });
 }
 
 // ---- LEAVING ----
@@ -403,32 +424,56 @@ export function clearOff(state, emit = () => {}) {
   const e = world.get(d.target.id);
   const gate = d.target.kind === 'station' && e && world.get(gateId(e.id));
   if (!gate) { releaseDock(state); return { ok: true, text: 'Clear of the collar.' }; }
-  const c = centreInFrame(state, d);
+  // where we are this second: backing out, part of the minute may already be flown (dock.t), and
+  // that part stands; coming in on the final approach, we stop dead first (as an abort does)
   const fr = collarFrame(state, d);
+  const pose = d.phase === 'separate' && d.t > 0 ? dockPose(state, d, fr) : null;
+  const c = d.phase === 'approach' ? { x: d.rel.x, y: d.rel.y, vx: 0, vy: 0 } : centreInFrame(state, d, pose || state.flight);
   if (!c || !fr) { releaseDock(state); return { ok: true, text: 'Clear of the berth.' }; }
   // the point just through the gate, in the berth's frame (it turns with the station: fixed there)
   const now = state.clock.minute;
   const sp = predictEntity(e, now, world).pos, gp = predictEntity(gate, now, world).pos;
   const ox = (sp.x + OUT_PAST * (gp.x - sp.x) - fr.pos.x) * AU_M, oy = (sp.y + OUT_PAST * (gp.y - sp.y) - fr.pos.y) * AU_M;
-  const wasFacing = state.flight.facing;
+  const wasFacing = d.phase === 'approach' ? d.facing ?? state.flight.facing : pose?.facing ?? state.flight.facing;
+  const t = d.phase === 'separate' ? d.t || 0 : 0;
   d.phase = 'outbound';
   d.since = now;
   d.rel = { ...zeroRel(), ...c };
   d.goal = { x: ox * fr.normal.x + oy * fr.normal.y, y: ox * fr.up.x + oy * fr.up.y };
+  d.start = { x: c.x, y: c.y };
+  // a gate on the far side of the station: round it by a point off its side, ours, clear of the structure
+  const sx = (sp.x - fr.pos.x) * AU_M, sy = (sp.y - fr.pos.y) * AU_M;
+  const S = { x: sx * fr.normal.x + sy * fr.normal.y, y: sx * fr.up.x + sy * fr.up.y };
+  d.via = roundStation(c, d.goal, S, 0.6 * (stationModel(e.id)?.sizeM || 500) + 200);
   d.facing = wasFacing;
-  d.t = 0;
-  d.$clear = false;
+  d.t = t;
+  d.cleared = false;
   if (e) releaseBerth(e, d.berth, 'player');
   markOutbound(state, e.id);
   emit('dock-phase', { phase: 'outbound', berth: berthLabel(state), gateKm: STATIONS[e.id]?.gateKm });
   return { ok: true, text: `Climbing out of the corridor on RCS, through the gate at ${STATIONS[e.id]?.gateKm ?? 50} km.` };
 }
 
+/** A point to fly by so the line from `a` to `b` misses a station centred at `S` (radius R), or null if it already does. */
+function roundStation(a, b, S, R) {
+  const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((S.x - a.x) * dx + (S.y - a.y) * dy) / L2));
+  if (Math.hypot(a.x + t * dx - S.x, a.y + t * dy - S.y) >= R) return null;
+  // off the station across the line to the gate, on the side we're on
+  const gx = b.x - S.x, gy = b.y - S.y, g = Math.hypot(gx, gy) || 1;
+  let px = -gy / g, py = gx / g;
+  if ((a.x - S.x) * px + (a.y - S.y) * py < 0) { px = -px; py = -py; }
+  return { x: S.x + px * 1.5 * R, y: S.y + py * 1.5 * R };
+}
+
 /** One second of the climb out: straight at the point past the gate, on RCS, under the keep-out limit. */
-function outboundStep(state, dtS) {
+function outboundStep(state, dtS, emit = () => {}) {
   const d = state.dock, r = d.rel;
   const aMax = RCS_MAX_G * G0 * Math.min(1, ourRcs(state).accel / Math.max(1e-6, hullOf(state.ship.classId || PLAYER_CLASS).rcs.accel));
-  const ex = d.goal.x - r.x, ey = d.goal.y - r.y;
+  if (aMax <= 0 && !d.rcsOut) { d.rcsOut = true; emit('nav-callout', { level: 'warn', text: 'RCS out: the docking computer cannot move us. We hold here until it is repaired, or the tanks are filled.' }); }
+  else if (aMax > 0) d.rcsOut = false;
+  const aim = d.via || d.goal;
+  const ex = aim.x - r.x, ey = aim.y - r.y;
   const dist = Math.hypot(ex, ey);
   const ux = dist > 1e-6 ? ex / dist : 0, uy = dist > 1e-6 ? ey / dist : 0;
   const tau = 20;
@@ -444,15 +489,22 @@ function outboundStep(state, dtS) {
   state.$dockThrust = 0;
   state.$dockRcs = g;
   d.t += dtS;
-  // through: the dock lets go at the next minute (clearGate)
-  if (dist < 100 || ex * r.vx + ey * r.vy < 0) d.$clear = true;
+  // there (or past it, along the line we set out on): on to the gate, or through it, and the
+  // dock lets go at the next minute (clearGate)
+  const st = d.start || aim;
+  if (dist < 100 || ex * (aim.x - st.x) + ey * (aim.y - st.y) <= 0) {
+    if (d.via) { d.start = { x: d.via.x, y: d.via.y }; d.via = null; }
+    else d.cleared = true;
+  }
 }
 
 /** Through the gate: the dock lets go, and the drive is ours. With no route to fly, we hold where we are. */
 function clearGate(state, e, emit) {
+  const next = state.dock?.next;
   releaseDock(state);
   if (e) markOutbound(state, e.id);
   emit('dock-phase', { phase: 'clear', station: e?.name });
+  if (next) { beginDocking(state, next.target, { mode: next.mode, route: next.route }, emit); return; }
   if (!state.autopilot && e) holdStation(state, { kind: 'entity', id: gateId(e.id) });
 }
 
@@ -468,7 +520,11 @@ export function dockingTick(state, emit = () => {}) {
   const world = getWorld(state);
   const e = world.get(d.target.id);
   const now = state.clock.minute;
-  if (!e) { abortDocking(state, emit, 'the target is gone'); return false; }
+  if (!e) {
+    // gone (blown up, broken up): whatever phase, the dock lets go of nothing, and we fly free from where it left us
+    if (!abortDocking(state, emit, 'the target is gone') || state.dock === d) { state.dock = null; state.$dockView = null; emit('dock-aborted', { why: 'the target is gone' }); }
+    return false;
+  }
 
   // A ship we are joined to lights its drive: the collar tears
   if (d.target.kind === 'ship' && HELD.has(d.phase) && d.phase !== 'holding' && (e.thrust || 0) > 0.01) {
@@ -497,7 +553,11 @@ export function dockingTick(state, emit = () => {}) {
     case 'approach':
       return true;
     case 'outbound':
-      if (d.$clear) { clearGate(state, e, emit); return false; }
+      if (d.cleared) { clearGate(state, e, emit); return false; }
+      return true;
+    case 'separate': case 'holding':
+      // bound elsewhere (beginDocking: d.next): on out through the gate without stopping
+      if (d.next && (d.phase === 'holding' || d.rel.x >= CLEAR_M)) clearOff(state, emit);
       return true;
     case 'capture':
       if (now - d.since >= CAPTURE_MIN) { d.phase = 'seal'; d.since = now; emit('dock-phase', { phase: 'seal', berth: berthLabel(state) }); }
@@ -530,7 +590,7 @@ export function frameStep(state, dtS = 1, emit = () => {}) {
   const d = state.dock;
   if (!d) return;
   if (d.phase === 'approach') approachStep(state, dtS, emit);
-  else if (d.phase === 'outbound') outboundStep(state, dtS);
+  else if (d.phase === 'outbound') outboundStep(state, dtS, emit);
   else if (PROX.has(d.phase)) proxStep(state, dtS, emit);
 }
 
@@ -560,7 +620,9 @@ export function dockHold(state) {
 /** RCS authority of our hull: { accel (m/s² per axis), rot (rad/s) }. */
 export function ourRcs(state) {
   const h = hullOf(state.ship.classId || PLAYER_CLASS);
-  const perf = Math.max(0.15, state.systems?.units?.rcs ? systemPerf(state, 'rcs') : 1);
+  // (a damaged RCS gives less, never under 15%; a dead one, or dry tanks, nothing)
+  const p = state.systems?.units?.rcs ? systemPerf(state, 'rcs') : 1;
+  const perf = p > 0 && state.resources.fuel.current > 0 ? Math.max(0.15, p) : 0;
   return { accel: h.rcs.accel * perf, rot: h.rcs.rotDeg * RAD * perf };
 }
 
@@ -578,7 +640,7 @@ export function setDockMode(state, mode) {
 
 /** The docking computer kills our drift: relative velocity nulled over the next seconds. */
 export function killDrift(state) {
-  if (state.dock) state.dock.$kill = 8;
+  if (state.dock) state.dock.killDrift = 8;
 }
 
 /**
@@ -590,12 +652,12 @@ function autopilotStick(state, d, rcs) {
   const r = d.rel;
   const port = ourPort(state, d);
   const col = COLLARS[port.size];
-  const out = d.phase === 'separate' || d.$abort;
-  if (d.$retreat && r.x >= d.$retreat) d.$retreat = 0;
+  const out = d.phase === 'separate' || d.backingOut;
+  if (d.retreat && r.x >= d.retreat) d.retreat = 0;
   let vxWant;
-  // (backing out: slow off the collar, 1 m/s clear of it; a route waiting ($depart) goes on through the hold point)
-  if (out) vxWant = Math.min(1, 0.1 + 0.02 * r.x) * (r.x < CLEAR_M || d.$depart ? 1 : 0);
-  else if (d.$retreat) vxWant = 0.3;                 // after a bump: back off and line up again
+  // (backing out: slow off the collar, 1 m/s clear of it; a route waiting (departing) goes on through the hold point)
+  if (out) vxWant = Math.min(1, 0.1 + 0.02 * r.x) * (r.x < CLEAR_M || (d.departing && state.autopilot) || d.next ? 1 : 0);
+  else if (d.retreat) vxWant = 0.3;                 // after a bump: back off and line up again
   else {
     const lat = Math.hypot(r.y, r.z);
     const vmax = rcs.accel < 0.1 ? 1.5 : 3;
@@ -620,10 +682,10 @@ export function proxStep(state, dtS = 1, emit = () => {}) {
   const r = d.rel;
   const rcs = ourRcs(state);
   let cmd;
-  if (d.mode === 'manual' && d.phase === 'prox' && !d.$abort) {
+  if (d.mode === 'manual' && d.phase === 'prox' && !d.backingOut) {
     const i = state.$dockInput || {};
     cmd = { ax: -(i.tx || 0) * rcs.accel, ay: (i.ty || 0) * rcs.accel, az: (i.tz || 0) * rcs.accel, yawRate: (i.yaw || 0) * rcs.rot, pitchRate: (i.pitch || 0) * rcs.rot, rollRate: (i.roll || 0) * rcs.rot, manual: true };
-    if (d.$kill > 0) { cmd.ax = -r.vx / 2; cmd.ay = -r.vy / 2; cmd.az = -r.vz / 2; d.$kill -= dtS; }
+    if (d.killDrift > 0) { cmd.ax = -r.vx / 2; cmd.ay = -r.vy / 2; cmd.az = -r.vz / 2; d.killDrift -= dtS; }
   } else cmd = autopilotStick(state, d, rcs);
 
   // Translation: each axis capped at the RCS's authority
@@ -653,9 +715,9 @@ export function proxStep(state, dtS = 1, emit = () => {}) {
 
   if (d.phase === 'prox' && x0 > 0 && r.x <= 0) contact(state, emit);
   else if (d.phase === 'prox' && r.x < 25 && Math.hypot(r.y, r.z) > 25) strikeStructure(state, emit);
-  else if ((d.phase === 'separate' || d.$abort) && r.x >= CLEAR_M && Math.abs(r.vx) < 0.05) {
-    const wasAbort = d.$abort;
-    d.phase = 'holding'; d.$abort = false; d.since = state.clock.minute;
+  else if ((d.phase === 'separate' || d.backingOut) && r.x >= CLEAR_M && Math.abs(r.vx) < 0.05) {
+    const wasAbort = d.backingOut;
+    d.phase = 'holding'; d.backingOut = false; d.since = state.clock.minute;
     r.vx = r.vy = r.vz = 0;
     emit('dock-phase', { phase: 'holding', berth: berthLabel(state), aborted: !!wasAbort });
   }
@@ -705,8 +767,8 @@ function bump(state, b, emit) {
   emit('dock-bump', { berth: berthLabel(state), why, closing: b.closing, dp, damaged });
   // The docking computer backs off and tries again; after four bumps it gives up
   if (d.mode === 'auto') {
-    d.$retreat = 20;
-    if (d.bumps >= 4) { d.$abort = true; emit('dock-aborted', { why: 'the docking computer could not make a clean capture', backingOut: true }); }
+    d.retreat = 20;
+    if (d.bumps >= 4) { d.backingOut = true; emit('dock-aborted', { why: 'the docking computer could not make a clean capture', backingOut: true }); }
   }
   // A hard contact is reckless flying in controlled space
   if (b.closing > 1 && d.target.kind === 'station') {
@@ -781,12 +843,13 @@ function landSurvivors(state, st, emit) {
 // ---- LEAVING ----
 
 /** Undock: vent the lock, let go of the latches, back out. A station wants a departure clearance first. */
-export function undock(state, emit = () => {}) {
+export function undock(state, emit = () => {}, { evicted = false } = {}) {
   const d = state.dock;
   if (!d || d.phase !== 'docked') return { ok: false, text: 'Not docked.' };
   if (state.ship.crew.some(m => m.away)) return { ok: false, text: 'Crew are aboard the other side. Recall them first.' };
   const e = getWorld(state).get(d.target.id);
-  if (d.target.kind === 'station' && e && !clearanceFor(state, e.id).depart) {
+  // (thrown off the berth by the station itself, there's no clearance to have asked for)
+  if (d.target.kind === 'station' && e && !evicted && !clearanceFor(state, e.id).depart) {
     cite(state, e.faction, { station: e.id, kind: 'undocking without departure clearance', amount: 200 }, emit);
     emit('tc-warning', { station: e.id, name: e.name, key: 'undock', level: 'warn', text: `${e.name.split(' ')[0]} Dock: you are releasing without clearance. That's a citation.` });
   }
@@ -814,7 +877,7 @@ export function abortDocking(state, emit = () => {}, why = 'aborted') {
   if (!d) return false;
   if (d.phase === 'inbound' || d.phase === 'awaiting') { abortRoute(state, emit); state.dock = null; emit('dock-aborted', { why }); return true; }
   if (d.phase === 'approach') { d.phase = 'holding'; d.rel.vx = d.rel.vy = d.rel.vz = 0; emit('dock-aborted', { why, holding: true }); return true; }
-  if (d.phase === 'prox') { d.$abort = true; emit('dock-aborted', { why, backingOut: true }); return true; }
+  if (d.phase === 'prox') { d.backingOut = true; emit('dock-aborted', { why, backingOut: true }); return true; }
   if (d.phase === 'capture' || d.phase === 'seal') { d.phase = 'separate'; d.rel.vx = 0.1; d.since = state.clock.minute; emit('dock-aborted', { why, backingOut: true }); return true; }
   return false;
 }
@@ -890,7 +953,8 @@ export function dockStatus(state) {
   return {
     phase: d.phase, mode: d.mode, target: e?.name || '—', kind: d.target.kind, berth: berthLabel(state), port, collar: col,
     range: r.x, closing: -r.vx, lateral: Math.hypot(r.y, r.z), y: r.y, z: r.z, vy: r.vy, vz: r.vz,
-    toGo: d.phase === 'outbound' && d.goal ? Math.hypot(d.goal.x - r.x, d.goal.y - r.y) : null,
+    toGo: d.phase === 'outbound' && d.goal ? Math.hypot(d.goal.x - r.x, d.goal.y - r.y)
+      : d.phase === 'approach' ? Math.hypot(r.x - (d.target.kind === 'ship' ? SHIP_CORRIDOR_M : CORRIDOR_M), r.y, r.z) : null,
     yaw: r.yaw / RAD, pitch: r.pitch / RAD, roll: r.roll / RAD, fuel: d.fuel, bumps: d.bumps,
     timer: d.phase === 'capture' ? CAPTURE_MIN - (state.clock.minute - d.since) : d.phase === 'seal' ? SEAL_MIN - (state.clock.minute - d.since) : d.phase === 'undock' ? UNDOCK_MIN - (state.clock.minute - d.since) : null,
     rate: PROX_RATES[d.rate ?? 3],

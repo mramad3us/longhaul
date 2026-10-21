@@ -229,8 +229,8 @@ const HANDLERS = {
   // ---- Docking
   'dock-begun': ({ target, phase }) => logEntry(phase === 'inbound' ? `Docking: inbound to ${target}` : `Docking: ${target}`, 'nav'),
   'dock-awaiting': ({ target }) => { logEntry(`Holding at ${target}'s gate — docking clearance needed. Hail traffic control.`, 'warn'); pushTicker(`Holding at the gate: request docking clearance from ${target}.`, 'warn', 'NAV'); toast('HAIL FOR DOCKING CLEARANCE', 'warn'); },
-  'dock-phase': ({ phase, berth, aborted, gateKm }) => {
-    const text = { approach: `Final approach to ${berth}: the docking computer has it, 0.1 G and the keep-out limit`, prox: `Proximity operations: ${berth} a kilometre ahead`, seal: 'Soft capture — latches closing, collar retracting', undock: 'Venting the lock, unlatching', separate: 'Released: backing out on RCS', holding: aborted ? 'Backed out to the hold point' : 'Clear of the berth, holding', outbound: `Climbing out of the corridor on RCS: through the gate at ${gateKm ?? 50} km, then the drive`, clear: 'Through the gate: clear to light the drive' }[phase];
+  'dock-phase': ({ phase, berth, aborted, gateKm, kind }) => {
+    const text = { approach: `Final approach to ${berth}: the docking computer has it, 0.1 G and the keep-out limit`, prox: `Proximity operations: ${berth} ${kind === 'ship' ? '300 m' : 'a kilometre'} ahead`, seal: 'Soft capture — latches closing, collar retracting', undock: 'Venting the lock, unlatching', separate: 'Released: backing out on RCS', holding: aborted ? 'Backed out to the hold point' : 'Clear of the berth, holding', outbound: `Climbing out of the corridor on RCS: through the gate at ${gateKm ?? 50} km, then the drive`, clear: 'Through the gate: clear to light the drive' }[phase];
     if (text) { logEntry(`Docking: ${text}`, 'nav'); pushTicker(text, 'nav', 'DOCK'); }
   },
   'dock-capture': ({ closing, miss }) => { logEntry(`Contact — soft capture at ${closing.toFixed(2)} m/s, ${miss.toFixed(2)} m off the axis`, 'ok'); toast('SOFT CAPTURE', 'ok'); },

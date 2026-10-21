@@ -30,11 +30,17 @@ import { BODIES, SUN, bodyPos, bodyVel } from './ephemeris.js';
 
 const GM_SUN_M3 = SUN.gm * 1e9;
 
-/** Bodies with mass, each with its reach (AU): 3× its sphere of influence. */
+/**
+ * Bodies with mass, each with its reach (AU): 3× its sphere of influence,
+ * where its pull counts; and how far its ground is looked out for (`see`):
+ * that, or 20 of its radii, whichever is more (Phobos' reach ends 10 km
+ * over its ground, under the gate of the yard built on it).
+ */
 const MASSIVE = BODIES.filter(b => b !== SUN && b.gm > 0).map(b => {
   const parentGM = b.parent ? b.parent.gm : SUN.gm;
   const soi = b.a * Math.pow(b.gm / parentGM, 0.4);
-  return { b, gm: b.gm * 1e9, reach: 3 * soi, reach2: (3 * soi) ** 2, rM: b.radius * 1000 };
+  const see = Math.max(3 * soi, 20 * b.radius * 1000 / AU_M);
+  return { b, gm: b.gm * 1e9, reach: 3 * soi, reach2: (3 * soi) ** 2, see2: see * see, rM: b.radius * 1000 };
 });
 
 let epoch = 0;
@@ -107,7 +113,7 @@ export function nearestSurface(x, y, minute = epoch) {
     placeOf(i, minute, _p);
     const dx = x - _p.x, dy = y - _p.y;
     const r2 = dx * dx + dy * dy;
-    if (r2 > m.reach2) continue;
+    if (r2 > m.see2) continue;
     const r = Math.sqrt(r2) * AU_M;
     const alt = r - m.rM;
     if (alt < bestAlt) {

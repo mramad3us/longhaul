@@ -25,6 +25,7 @@ import { missionForEntity } from '../sim/missions.js';
 import { dockedStation } from '../sim/contracts.js';
 import { beginDocking, shipDockable, isDocked, dockedTo } from '../sim/docking.js';
 import { boardable } from '../sim/boarding.js';
+import { clearanceFor, requestDeparture } from '../sim/traffic-control.js';
 import { knownCrew } from '../sim/manifest.js';
 import { hullOf, portSummary } from '../sim/hulls.js';
 import { CLASSES } from '../sim/ship-classes.js';
@@ -145,6 +146,12 @@ function selectOnBoard(id) {
   ui.nav.target = id ? { kind: 'entity', id } : null;
   hideRoutePanel();
   renderSelection();
+}
+
+/** Show a contact on the tactical board, selected (a hull clicked in the exterior view). */
+export function showOnBoard(id) {
+  openNav('tactical');
+  selectOnBoard(id);
 }
 
 // ---- FINDING THINGS ON THE MAP ----
@@ -429,6 +436,7 @@ function onPanelClick(e) {
       break;
     }
     case 'confirm': confirmRoute(); break;
+    case 'depart': { const r = requestDeparture(s, s.dock.target.id); toast(r.text, r.ok ? 'ok' : 'warn'); logEntry(r.text, 'comms'); renderRoutePanel(); break; }
     case 'cancel': hideRoutePanel(); renderSelection(); break;
     case 'engage':
       if (overrideSecure(s)) { logEntry('Captain: execute — not waiting for the rest of the crew', 'warn'); }
@@ -555,7 +563,7 @@ function renderRoutePanel() {
           <span class="route-stat">MAX G <span class="route-stat-val ${o.juice ? 'route-juice-warn' : ''}">${fmtG(est.maxG || o.accelG)}</span></span>
           <span class="route-stat">PEAK V <span class="route-stat-val">${fmtSpeed(est.peakSpeed)}</span></span>
         </div>
-        <div class="route-card-desc">${esc(o.desc)}${o.departMin ? ` Leaving port first: about ${formatDuration(o.departMin)} out of the approach on RCS (in the time).` : ''}</div>
+        <div class="route-card-desc">${esc(o.desc)}${o.departMin ? ` Includes about ${formatDuration(o.departMin)} leaving port on RCS.` : ''}</div>
         <div class="route-card-feasibility ${o.feasible ? 'route-feasible' : 'route-infeasible'}">${o.feasible ? '● READY' : `● ${esc(o.reason)}`}</div>
         ${juiceNote}
       </div>`;
@@ -568,11 +576,19 @@ function renderRoutePanel() {
       <div class="route-standoff">${choice}</div>
     </div>
     ${machineryNote(s)}
+    ${departureNote(s)}
     <div class="route-options">${cards}</div>
     <div class="route-panel-actions">
       <button class="btn btn-secondary route-btn" data-act="cancel">CANCEL</button>
       <button class="btn btn-primary route-btn" data-act="confirm" ${routeUI.selected < 0 ? 'disabled' : ''}>ENGAGE</button>
     </div>`);
+}
+
+/** Docked without a departure clearance: undocking for the route will be cited (traffic-control.js). One click to ask. */
+function departureNote(s) {
+  const d = s.dock;
+  if (d?.phase !== 'docked' || d.target.kind !== 'station' || clearanceFor(s, d.target.id).depart) return '';
+  return `<div class="route-machinery route-depart-note"><span>⚠ No departure clearance: undocking for this route is a 200 MCR citation.</span><button class="btn btn-secondary route-btn" data-act="depart">REQUEST DEPARTURE</button></div>`;
 }
 
 /** What the machinery allows, shown above the plot (drive limits, manual flight). */

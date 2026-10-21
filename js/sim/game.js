@@ -212,6 +212,8 @@ export function minuteTick(state, { lite = false } = {}) {
   const breach = state.ship.decks.some(d => d.atmosphere?.breached);
   if (breach) f.maxG = Math.min(f.maxG, 1);
   if (breach !== !!state.damageControl) { state.damageControl = breach; emit('damage-control', { on: breach }); }
+  // (routes are planned on what the drive can give once out of port: nav.js)
+  state.$planG = f.maxG;
   // No torch inside a station's gate (traffic-control.js)
   if (!state.autopilot?.climbing) f.maxG = Math.min(f.maxG, keepOutDriveCap(state));   // (pulling up off a rock, the drive is the drive)
   state.$driveCap = f.maxG;
@@ -260,7 +262,7 @@ export function minuteTick(state, { lite = false } = {}) {
     finishMinute(state, emit);
     f.thrustG = state.dock?.phase === 'approach' ? (state.$dockThrust || 0) : 0;
     f.turning = 0;
-    f.rcsG = state.$dockRcs || 0;
+    f.rcsG = inFrame(state) ? state.$dockRcs || 0 : 0;      // (sealed at a berth, nothing is firing)
     out.mainG = 0; out.rcsG = 0;      // (reaction mass already spent second by second)
   } else if (f.hold && !(state.autopilot?.phase === 'active')) {
     f.thrustG = 0; f.rcsG = 0; f.turning = 0;
@@ -481,6 +483,7 @@ export class GameLoop {
     const s = this.state;
     const t0 = performance.now();
     let steps = 0;
+    let docking = false;
     try {
       if (isInertiaActive(s)) {
         const hits = updateInertia(s, dt);
@@ -491,6 +494,7 @@ export class GameLoop {
         // proximity operations a second at a time (docking.js), so a view
         // drawn between minutes shows where the ship really is (×60 included:
         // flown whole, a minute's motion would show as a jump)
+        docking = true;
         this.proxAcc = (this.proxAcc || 0) + dt * PROX_RATES[s.dock.rate ?? 3];
         this.sub = this.sub || 0;
         let n = 0;
@@ -530,8 +534,10 @@ export class GameLoop {
     }
     this.stepsLastFrame = steps;
     this.simMsLastFrame = performance.now() - t0;
-    // Fraction of the next minute elapsed — for smooth interpolation in the renderer
-    this.alpha = s.speed > 0 ? Math.min(1, this.sub ? this.sub / 60 : this.acc) : 1;
+    // Fraction of the next minute elapsed — for smooth interpolation in the renderer: in docking
+    // mode the seconds flown (and the part of one), otherwise the minutes owed; paused, where it stood
+    if (s.speed > 0) this.alpha = Math.min(1, docking ? (this.sub + Math.min(1, this.proxAcc || 0)) / 60 : this.acc);
+    else this.alpha ??= 0;
     try { this.onFrame(s, this.alpha); } catch (e) { this.onError(e); }
   }
 }

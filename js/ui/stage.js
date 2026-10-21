@@ -47,7 +47,7 @@ export function initStage(handlers = {}) {
 export function resetStage() {
   mode = null;
   swapped = false;
-  if (exterior) exterior.cam.ready = false;
+  exterior?.reset();
 }
 
 /** Which layout the ship's situation calls for. */
@@ -105,7 +105,8 @@ function place(m, force = false) {
 export function updateStage(state, alpha) {
   if (!el.viewport) return;
   const m = stageMode(state);
-  if (m !== mode) { if (m !== 'near' && mode !== 'near') swapped = false; place(m); }
+  // (a swap is for the mode it was made in: near and prox put different views in the inset)
+  if (m !== mode) { swapped = false; place(m); }
   if (!el.exterior.classList.contains('stage-hidden')) exterior.render(state, alpha, { labels: mode !== 'near' });
   updateDockingHud(state);
 }

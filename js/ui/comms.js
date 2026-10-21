@@ -115,7 +115,7 @@ function render() {
     const bars = signalBars(dAU);
     return `<div class="cm-ch ${conv?.with === e.id ? 'active' : ''}" data-act="channel" data-id="${e.id}">
       <span class="cm-ch-name" style="color:${known ? factionColor(e.faction) : '#7A8EA2'}">${e.sos ? '⚠ ' : ''}${esc(known ? e.name : 'unidentified contact')}</span>
-      <span class="cm-ch-meta"><span>${esc(e.type === 'station' ? e.shipClass : known ? (CLASSES[e.cls]?.name || 'ship') : 'no transponder')}</span><span>${fmtMeters(dAU * AU_M)} · ${'■'.repeat(bars)}${'□'.repeat(5 - bars)}${lag >= 0.1 ? ` · ${lag.toFixed(1)} s` : ''}</span></span></div>`;
+      <span class="cm-ch-meta"><span>${esc(e.type === 'station' ? e.shipClass : known ? (CLASSES[e.cls]?.name || 'ship') : 'no transponder')}</span><span>${fmtMeters(dAU * AU_M)} · <span class="cm-bars" title="Signal ${bars} of 5">${'▮'.repeat(bars)}${'▯'.repeat(5 - bars)}</span>${lag >= 0.1 ? ` · ${lag.toFixed(1)} s` : ''}</span></span></div>`;
   };
   const stations = list.filter(x => x.e.type === 'station'), ships = list.filter(x => x.e.type !== 'station');
   const left = `${stations.length ? `<div class="cm-ch-sec">STATIONS</div>${stations.map(row).join('')}` : ''}<div class="cm-ch-sec">SHIPS (${ships.length}${s.comms.radioTotal > list.length ? ` of ${s.comms.radioTotal}` : ''})</div>${ships.map(row).join('') || '<div class="cm-empty">Nothing on the radio.</div>'}`;

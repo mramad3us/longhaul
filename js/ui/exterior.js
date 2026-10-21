@@ -15,15 +15,29 @@
 // display.
 //
 // The sim moves in whole minutes; the view doesn't. Everything is drawn
-// at the moment between minutes the frame stands for (`alpha`): rails
-// things (stations, berths, berthed hulls, the rock) exactly, from their
-// orbits; things in free flight carried on their velocity. Near a
-// station the view's rotation is locked to the station's own, so the
-// ground doesn't swing.
+// at the moment between minutes the frame stands for (`alpha`), where the
+// sim itself would put it (world.predictEntity): rails things (stations,
+// berths, berthed hulls, the rock) and traffic on its transit exactly;
+// things in free flight flown on, under their thrust and the pull. Our own
+// ship the same way, or, holding station on something, at its place off
+// that thing: so a ship we hold formation with stays put on the screen
+// even under thrust (carried on velocity alone, a ship burning at half a
+// G drifts nine kilometres off its place in a minute, and snaps back).
+// Near a station the view's rotation is locked to the station's own, so
+// the ground doesn't swing.
+//
+// The camera frames what matters and keeps to it: it stays on the thing it
+// is framing until something else comes much closer; it eases there over a
+// quarter of a second, and its zoom over most of a second (by the clock, not
+// the frame rate), so small changes don't make it breathe. Kilometres from a
+// berth (the final approach, the climb out) it frames us and marks the
+// station at the screen's edge.
 // ============================================================
 
 import { AU_M, DAY_MIN } from '../core/constants.js';
-import { getWorld, orbitStateAt } from '../sim/world.js';
+import { getWorld, predictEntity, stepFree } from '../sim/world.js';
+import { targetStateAt } from '../sim/nav.js';
+import { holdOffset } from '../sim/autopilot.js';
 import { getBody, bodyPos } from '../sim/ephemeris.js';
 import { hullOf } from '../sim/hulls.js';
 import { stationModel, berthOf, stationAngle, berthFrame } from '../sim/stations.js';
@@ -38,6 +52,12 @@ import { drawHull, drawStation } from './hull-art.js';
 const _q = [];
 const IN_FRAME_PHASES = new Set(['approach', 'prox', 'separate', 'outbound']);
 const LOOK_M = 12_000;           // objects this close are candidates for the view
+const CAM_TAU_S = 0.25;          // the camera eases toward its framing over this (s)
+const ZOOM_TAU_S = 0.8;          // …and its zoom more slowly, so small changes don't make it breathe
+const LOCK_EASE_S = 0.8;         // a station come into view: the turn to its up eased over this, then locked
+const FAR_FRAME_M = 8_000;       // docking further than this from the berth: we are framed, the station marked
+const FAR_SPAN_M = 3_000;
+const FOCUS_SWITCH = 0.7;        // another thing takes the frame when it is this much closer than the one framed
 
 export class ExteriorView {
   constructor(container, { onSelect } = {}) {
@@ -47,9 +67,17 @@ export class ExteriorView {
     this._hits = [];
     this.stars = Array.from({ length: 140 }, (_, i) => ({ x: (i * 7919 % 1000) / 1000, y: (i * 104729 % 1000) / 1000, b: 0.2 + (i * 31 % 10) / 14 }));
     if (onSelect) {
-      container.addEventListener('pointerdown', (e) => onSelect(this.hit(container, e)));
+      // (a hull clicked is selected; the click goes no further: in the inset it would swap the views too)
+      container.addEventListener('click', (e) => { const id = this.hit(container, e); if (id) { e.stopPropagation(); onSelect(id); } });
       container.addEventListener('pointermove', (e) => { container.style.cursor = this.hit(container, e) ? 'pointer' : 'default'; });
     }
+  }
+
+  /** A new game, a load: nothing carried over from the last one. */
+  reset() {
+    this.cam = { x: 0, y: 0, scale: 0.2, rot: 0, ready: false };
+    this._sm = null;
+    this.focus = null;
   }
 
   hit(container, e) {
@@ -102,11 +130,18 @@ export class ExteriorView {
         const r = Math.hypot(bx, by);
         cx = bx / 2; cy = by / 2;
         span = Math.max(ourL * 3, r * 1.4 + ourL * 2);
+        // kilometres off (the final approach from the gate, the climb out to it): us, at a scale that
+        // shows a hull, and the station off the edge of the screen (drawn as a marker: edgeMarker)
+        if (r > FAR_FRAME_M) { cx = 0; cy = 0; span = FAR_SPAN_M; }
         if (d.phase === 'docked' || d.phase === 'capture' || d.phase === 'seal') span = Math.max(ourL * 5, 260);
         rot = Math.atan2(fr.normal.y, fr.normal.x) - Math.PI / 2;
       }
     } else if (objects.length) {
-      const n = objects.reduce((a, b) => (a.d < b.d ? a : b));
+      // the nearest thing, but the one framed keeps the frame until another is much closer
+      let n = objects.reduce((a, b) => (a.d < b.d ? a : b));
+      const kept = this.focus && objects.find(o => o.e.id === this.focus);
+      if (kept && n !== kept && n.d > kept.d * FOCUS_SWITCH) n = kept;
+      this.focus = n.e.id;
       cx = n.dx / 2; cy = n.dy / 2;
       span = Math.max(300, n.d * 1.5 + (n.size || 100));
     }
@@ -139,15 +174,9 @@ export class ExteriorView {
       const dd = lead ? { ...d, rel: { ...d.rel, x: d.rel.x + (d.rel.vx || 0) * lead, y: d.rel.y + (d.rel.vy || 0) * lead, yaw: (d.rel.yaw || 0) + (d.rel.wy || 0) * lead } } : d;
       ourPose = dockPose(state, dd, collarFrame(state, d, tm));
     }
-    const ax = f.$ax || 0, ay = f.$ay || 0;
-    const us = ourPose ? ourPose.pos : { x: f.pos.x + (f.vel.vx * dtS + 0.5 * ax * dtS * dtS) / AU_M, y: f.pos.y + (f.vel.vy * dtS + 0.5 * ay * dtS * dtS) / AU_M };
-    const _p = { x: 0, y: 0 }, _v = { vx: 0, vy: 0 };
-    /** Where an entity is at tm: exact on rails, carried on its velocity otherwise. */
-    const at = (e) => {
-      if (e.orbit) { orbitStateAt(e.orbit, tm, _p, _v); return { x: _p.x, y: _p.y }; }
-      const k = (tm - state.clock.minute) * 60 / AU_M;
-      return { x: e.pos.x + e.vel.vx * k, y: e.pos.y + e.vel.vy * k };
-    };
+    const us = ourPose ? ourPose.pos : ourPlace(state, tm, dtS);
+    /** Where an entity is at tm: where the sim would put it (rails and transits exactly, free flight flown on). */
+    const at = (e) => predictEntity(e, tm, world).pos;
 
     // Who is close
     _q.length = 0;
@@ -163,18 +192,34 @@ export class ExteriorView {
       const size = e.type === 'station' ? stationModel(e.id)?.sizeM || 1000 : hullOf(e.cls)?.L || 50;
       objects.push({ e, dx, dy, d, size });
     }
+    // the station a dock holds us to is always in the picture, however far (its rock, the frame's turn)
+    if (held && d.target.kind === 'station' && !objects.some(o => o.e.id === d.target.id)) {
+      const e = world.get(d.target.id);
+      if (e) { const ep = at(e); const dx = (ep.x - us.x) * AU_M, dy = (ep.y - us.y) * AU_M; objects.push({ e, dx, dy, d: Math.hypot(dx, dy), size: stationModel(e.id)?.sizeM || 1000 }); }
+    }
     this.smooth(objects, tm, us);
     const want = this.frame(state, objects, tm, us);
     const cam = this.cam;
-    const scaleWant = Math.min(W, H) / want.span;
+    const wallNow = performance.now(), wall = Math.min(0.25, (wallNow - (cam.wall ?? wallNow)) / 1000);
+    cam.wall = wallNow;
+    // the span followed slowly (a log-space low-pass): small changes don't make it breathe, a climb or an
+    // approach zooms smoothly rather than in steps
+    if (!cam.ready || opts.snap || !cam.span) cam.span = want.span;
+    else cam.span *= Math.pow(want.span / cam.span, 1 - Math.exp(-wall / ZOOM_TAU_S));
+    const scaleWant = Math.min(W, H) / cam.span;
     if (!cam.ready || opts.snap) { Object.assign(cam, { x: want.cx, y: want.cy, scale: scaleWant, rot: want.rot, ready: true }); }
     else {
-      const k = 0.12;
+      const k = 1 - Math.exp(-wall / CAM_TAU_S);
       cam.x += (want.cx - cam.x) * k; cam.y += (want.cy - cam.y) * k;
       cam.scale *= Math.pow(scaleWant / cam.scale, k);
-      // near a station the rotation is the station's own, exactly: easing it would make the ground swing
-      if (objects.some(o => o.e.type === 'station')) cam.rot = want.rot;
-      else { let dr = want.rot - cam.rot; dr = Math.atan2(Math.sin(dr), Math.cos(dr)); cam.rot += dr * k; }
+      // near a station the rotation is the station's own, exactly (easing it would make the ground swing),
+      // once the view has turned to it: a station come into the picture is eased into, not snapped to
+      const stNow = objects.find(o => o.e.type === 'station');
+      if (stNow && cam.lockId !== stNow.e.id) { cam.lockId = stNow.e.id; cam.lockEase = LOCK_EASE_S; }
+      if (!stNow) cam.lockId = null;
+      cam.lockEase = Math.max(0, (cam.lockEase || 0) - wall);
+      if (stNow && cam.lockEase <= 0) cam.rot = want.rot;
+      else { let dr = want.rot - cam.rot; dr = Math.atan2(Math.sin(dr), Math.cos(dr)); cam.rot += dr * (stNow ? 1 - Math.exp(-wall / 0.2) : k); }
     }
     const sc = cam.scale;
     const cr = Math.cos(-cam.rot), sr = Math.sin(-cam.rot);
@@ -223,6 +268,8 @@ export class ExteriorView {
       if (!pose) pose = { mx: o.dx, my: o.dy, facing: facingOf(e), view: 'top' };
       const [sx, sy] = toS(pose.mx, pose.my);
       drawHull(ctx, hull, { x: sx, y: sy, facing: screenAngle(pose.facing), scale: sc, view: pose.view, tint: factionColor(e.faction), plume: e.thrust || 0, t, ports: true });
+      // (kilometres out a hull is a few pixels: a mark in its colour, as ours has)
+      if (hull.L * sc < 8) { ctx.fillStyle = factionColor(e.faction); ctx.fillRect(sx - 1.5, sy - 1.5, 3, 3); }
       hits.push({ id: e.id, x: sx, y: sy });
       if (hull.L * sc > 6 && opts.labels !== false) label(ctx, e.transponder ? e.name : 'unidentified', sx, sy - Math.max(10, hull.W * sc), factionColor(e.faction));
     }
@@ -251,15 +298,25 @@ export class ExteriorView {
       }
     }
 
+    // The station we are docking with, off the edge of the screen while we are framed far from it
+    // (the final approach, the climb out): where it lies, and how far
+    if (held && d.target.kind === 'station' && (d.phase === 'approach' || d.phase === 'outbound')) {
+      const o = objects.find(x => x.e.id === d.target.id);
+      if (o && o.d > FAR_FRAME_M) {
+        const [sx, sy] = toS(o.dx, o.dy);
+        if (sx < 0 || sx > W || sy < 0 || sy > H) edgeMarker(ctx, sx, sy, W, H, `${o.e.name} · ${fmtKm(o.d)}`, factionColor(o.e.faction));
+      }
+    }
+
     // Our hull
     const ours = hullOf(state.ship.classId || PLAYER_CLASS);
     const mine = ourPose ? { mx: 0, my: 0, facing: ourPose.facing, view: ourPose.view } : { mx: 0, my: 0, facing: f.facing, view: 'top' };
     const [ox, oy] = toS(mine.mx, mine.my);
-    drawHull(ctx, ours, { x: ox, y: oy, facing: screenAngle(mine.facing), scale: sc, view: mine.view, tint: '#4FD1C5', plume: f.thrustG, rcs: Math.min(1, (state.$dockRcs || 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0)), t, ports: d?.port || true });
+    drawHull(ctx, ours, { x: ox, y: oy, facing: screenAngle(mine.facing), scale: sc, view: mine.view, tint: '#4FD1C5', plume: d?.phase === 'approach' ? state.$dockThrust || 0 : f.thrustG, rcs: Math.min(1, (d && IN_FRAME_PHASES.has(d.phase) ? state.$dockRcs || 0 : 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0)), t, ports: d?.port || true });
     if (ours.L * sc < 8) { ctx.fillStyle = '#4FD1C5'; ctx.fillRect(ox - 2, oy - 2, 4, 4); }
 
     // Scale bar
-    const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+    const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000];
     const want80 = 80 / sc;
     const bar = nice.find(n => n >= want80) || nice[nice.length - 1];
     ctx.strokeStyle = 'rgba(79,209,197,0.7)'; ctx.fillStyle = 'rgba(79,209,197,0.8)';
@@ -270,6 +327,45 @@ export class ExteriorView {
   }
 }
 
+
+/**
+ * Our place at tm (between the minute the sim has flown and the next):
+ * holding station, at the hold's place off what we hold on (so the two
+ * never drift apart on the screen); flying, flown on under the drive's
+ * last thrust and the pull, as the sim flies everything else.
+ */
+const _op = { x: 0, y: 0 }, _ov = { vx: 0, vy: 0 };
+function ourPlace(state, tm, dtS) {
+  const f = state.flight;
+  if (f.hold) {
+    const t = targetStateAt(state, f.hold, tm);
+    const o = t && holdOffset(state, f.hold, tm);
+    if (t) return { x: t.pos.x + o.x / AU_M, y: t.pos.y + o.y / AU_M };
+  }
+  _op.x = f.pos.x; _op.y = f.pos.y; _ov.vx = f.vel.vx; _ov.vy = f.vel.vy;
+  if (dtS > 0) stepFree(_op, _ov, dtS, f.thrustG || 0, f.facing || 0, state.clock.minute);
+  return { x: _op.x, y: _op.y };
+}
+
+/** An arrow at the screen's edge toward something off it (sx, sy: where it would be drawn), and a label. */
+function edgeMarker(ctx, sx, sy, W, H, text, color) {
+  const cx = W / 2, cy = H / 2, dx = sx - cx, dy = sy - cy;
+  const m = 18, k = Math.min((W / 2 - m) / Math.abs(dx || 1e-9), (H / 2 - m) / Math.abs(dy || 1e-9));
+  const x = cx + dx * k, y = cy + dy * k, a = Math.atan2(dy, dx);
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(a);
+  ctx.fillStyle = color; ctx.globalAlpha = 0.9;
+  ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-5, -6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.font = '10px "Share Tech Mono", monospace';
+  ctx.fillStyle = color;
+  const tw = ctx.measureText(text).width;
+  const lx = Math.max(6, Math.min(W - tw - 6, x - tw / 2 - Math.cos(a) * (tw / 2 + 14)));
+  const ly = Math.max(14, Math.min(H - 30, y - Math.sin(a) * 16 + 4));     // (clear of the scale bar)
+  ctx.fillText(text, lx, ly);
+}
+
+const fmtKm = (m) => m >= 10_000 ? `${Math.round(m / 1000).toLocaleString()} km` : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
 
 function label(ctx, text, x, y, color) {
   ctx.font = '10px "Share Tech Mono", monospace';
@@ -304,7 +400,7 @@ function drawBody(ctx, st, us, tm, toS, sc, W, H) {
     pts.push(toS(cx + R * Math.cos(a), cy + R * Math.sin(a)));
   }
   // close the shape deep below the surface
-  const deep = R - spanM;
+  const deep = Math.max(0.2 * R, R - spanM);          // (a small rock wider than the screen: the whole disc)
   pts.push(toS(cx + deep * Math.cos(toUs + half), cy + deep * Math.sin(toUs + half)));
   pts.push(toS(cx + deep * Math.cos(toUs - half), cy + deep * Math.sin(toUs - half)));
   const grad = ctx.createLinearGradient(0, 0, 0, H);

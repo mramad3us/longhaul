@@ -26,7 +26,7 @@ import { bus } from '../core/events.js';
 import {
   dockStatus, setDockMode, setDockInput, killDrift, abortDocking, undock, beginDocking, setProxRate, PROX_RATES, clearOff,
 } from '../sim/docking.js';
-import { requestDeparture, clearanceFor } from '../sim/traffic-control.js';
+import { requestDeparture, requestDocking, clearanceFor } from '../sim/traffic-control.js';
 
 const emit = (t, p) => bus.emit(t, p);
 const PHASE = {
@@ -101,9 +101,9 @@ export function updateDockingHud(state) {
       + r('DRIVE', 'COLD')
       + r('RCS / FUEL', `${state.dock.fuel.toFixed(2)} kg`)
     : approach
-    ? r('TO CORRIDOR', fmtMeters(Math.max(0, st.range - (st.kind === 'ship' ? 300 : 1000))))
+    ? r('TO CORRIDOR', fmtMeters(st.toGo))
       + r('SPEED', fmtSpeed(Math.hypot(state.dock.rel.vx, state.dock.rel.vy, state.dock.rel.vz)))
-      + r('DRIVE', `${(state.flight.thrustG || 0).toFixed(2)} G`)
+      + r('DRIVE', `${(state.$dockThrust || 0).toFixed(2)} G`)
       + r('RCS / FUEL', `${state.dock.fuel.toFixed(2)} kg`)
     : r('RANGE', st.range < 10 ? `${st.range.toFixed(2)} m` : fmtMeters(st.range))
       + r('CLOSING', `${st.closing.toFixed(2)} m/s`, st.range < 30 ? ok(st.closing, col.captureMS) : '')
@@ -125,12 +125,20 @@ function controls(state, st) {
     const cl = st.kind === 'station' ? clearanceFor(state, state.dock.target.id) : { depart: true };
     return `${st.kind === 'station' && !cl.depart ? b('depart', 'REQUEST DEPARTURE') : ''}${b('undock', 'UNDOCK', cl.depart ? 'dh-primary' : 'dh-warnbtn')}`;
   }
-  if (st.phase === 'holding') return `${b('redock', 'DOCK', 'dh-primary')}${b('release', 'CLEAR OFF')}`;
-  if (st.phase === 'capture' || st.phase === 'seal' || st.phase === 'undock') return b('abort', 'ABORT');
+  if (st.phase === 'holding') {
+    // (back in needs a docking clearance: the one we came in on was used)
+    const cleared = st.kind !== 'station' || clearanceFor(state, state.dock.target.id).dock;
+    return `${cleared ? b('redock', 'DOCK', 'dh-primary') : b('request', 'REQUEST DOCKING', 'dh-primary')}${b('release', 'CLEAR OFF')}`;
+  }
+  if (st.phase === 'capture' || st.phase === 'seal') return b('abort', 'ABORT');
+  if (st.phase === 'undock') return '';
   if (st.phase === 'outbound') return `<span class="dh-group">${PROX_RATES.map((v, i) => b('rate', `×${v}`, (state.dock.rate ?? 3) === i ? 'active' : '', `data-i="${i}" title="${v} s a second"`)).join('')}</span>`;
-  const mode = `${b('auto', 'AUTO', st.mode === 'auto' ? 'active' : '')}${b('manual', 'MANUAL', st.mode === 'manual' ? 'active' : '', st.phase === 'approach' ? 'disabled title="The final approach is flown by the docking computer"' : '')}`;
+  // (only what acts in this phase: the computer flies the final approach and the backing out; ABORT has
+  // nothing to stop while backing out; KILL DRIFT is the hand-flying pilot's)
+  const handFlyable = st.phase === 'prox' && !state.dock.backingOut;
+  const mode = handFlyable ? `${b('auto', 'AUTO', st.mode === 'auto' ? 'active' : '')}${b('manual', 'MANUAL', st.mode === 'manual' ? 'active' : '')}` : '';
   const rate = PROX_RATES.map((v, i) => b('rate', `×${v}`, (state.dock.rate ?? 3) === i ? 'active' : '', `data-i="${i}" title="${v} s a second"`)).join('');
-  return `<span class="dh-group">${mode}</span><span class="dh-group">${rate}</span>${st.phase === 'prox' ? b('kill', 'KILL DRIFT') : ''}${b('abort', 'ABORT')}`;
+  return `${mode ? `<span class="dh-group">${mode}</span>` : ''}<span class="dh-group">${rate}</span>${handFlyable && st.mode === 'manual' ? b('kill', 'KILL DRIFT') : ''}${st.phase === 'separate' || state.dock.backingOut ? '' : b('abort', 'ABORT')}`;
 }
 
 function onClick(e) {
@@ -146,6 +154,12 @@ function onClick(e) {
     case 'depart': { const r = requestDeparture(s, s.dock.target.id); toast(r.text, r.ok ? 'ok' : 'warn'); logEntry(r.text, 'comms'); break; }
     case 'undock': { const r = undock(s, emit); toast(r.text, r.ok ? 'nav' : 'warn'); break; }
     case 'redock': { const r = beginDocking(s, s.dock.target, { mode: s.dock.mode }, emit); toast(r.text, r.ok ? 'nav' : 'warn'); break; }
+    case 'request': {
+      const r = requestDocking(s, s.dock.target.id);
+      toast(r.text, r.ok ? 'ok' : 'warn'); logEntry(r.text, 'comms');
+      if (r.ok) { const d = beginDocking(s, s.dock.target, { mode: s.dock.mode }, emit); if (!d.ok) toast(d.text, 'warn'); }
+      break;
+    }
     case 'release': { const r = clearOff(s, emit); toast(r.text, r.ok ? 'nav' : 'warn'); break; }
   }
 }
@@ -166,7 +180,7 @@ function drawCamera(canvas, state, st) {
     ctx.font = '11px "Share Tech Mono", monospace';
     ctx.textAlign = 'center';
     ctx.fillText(st.phase === 'outbound' ? 'GATE AHEAD' : 'CORRIDOR AHEAD', cx, cy - 6);
-    ctx.fillText(fmtMeters(st.phase === 'outbound' ? st.toGo : st.range), cx, cy + 10);
+    ctx.fillText(fmtMeters(st.toGo), cx, cy + 10);
     ctx.textAlign = 'left';
     return;
   }

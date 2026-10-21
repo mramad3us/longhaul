@@ -147,6 +147,11 @@ export class TacView {
 
     // Contacts
     const list = nearby(state, rangeM, alpha);
+    // (labels by priority, the one picked out first, then the nearest; one that would overlap a label
+    // already drawn is left off: a crowded port reads as dots, not a smear of names)
+    const pick = opts.highlight ?? opts.selected;
+    list.sort((a, b) => (b.e.id === pick) - (a.e.id === pick) || Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y));
+    const placed = [];
     const hits = this._hits;
     hits.length = 0;
     for (const { e, x, y } of list) {
@@ -166,17 +171,24 @@ export class TacView {
         ctx.beginPath(); ctx.arc(sx, sy, 6 + ph * 16, 0, Math.PI * 2); ctx.stroke();
       }
       const label = e.transponder ? e.name : null;
+      let room = false;
       if (label && (this.zoom < 2 || big)) {
+        ctx.font = `${big ? 10 : 7}px "Share Tech Mono", monospace`;
+        const text = label.length > 22 ? label.slice(0, 21) + '…' : label;
+        const r = { x: sx + 8, y: sy - (big ? 7 : 5), w: ctx.measureText(text).width + 4, h: big ? 22 : 9 };
+        room = e.id === pick || !placed.some(p => r.x < p.x + p.w && p.x < r.x + r.w && r.y < p.y + p.h && p.y < r.y + r.h);
+        if (room) placed.push(r);
+        if (room) {
         ctx.fillStyle = color;
         ctx.globalAlpha = 0.85;
-        ctx.font = `${big ? 10 : 7}px "Share Tech Mono", monospace`;
         ctx.textAlign = 'left';
-        ctx.fillText(label.length > 22 ? label.slice(0, 21) + '…' : label, sx + 10, sy + 3);
+        ctx.fillText(text, sx + 10, sy + 3);
         if (big) {
           ctx.fillStyle = 'rgba(122,142,162,0.8)';
           ctx.fillText(`${(Math.hypot(x, y) / 1000).toFixed(2)} km`, sx + 10, sy + 14);
         }
         ctx.globalAlpha = 1;
+        }
       }
       if (opts.highlight === e.id) {
         ctx.strokeStyle = '#4FD1C5';

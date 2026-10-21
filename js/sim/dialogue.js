@@ -141,7 +141,7 @@ export function topics(state, conv = channel(state)) {
     out.push(T('hold', cl.hold ? `Renew our holding slot (${cl.hold.slot})` : 'Request a holding slot', { group: 'traffic', why: docked ? 'docked' : null }));
     out.push(T('dock', cl.dock ? `Confirm berth ${cl.dock.berth}` : 'Request docking clearance', { group: 'traffic', why: docked ? 'docked' : null }));
     if (inNeed(state)) out.push(T('emergency', 'Declare an emergency: priority berth', { group: 'traffic', why: docked ? 'docked' : null }));
-    out.push(T('depart', cl.depart ? 'Departure clearance: confirm' : 'Request departure clearance', { group: 'traffic', why: docked || state.dock?.target.id === e.id ? null : 'not at the station' }));
+    out.push(T('depart', cl.depart ? 'Confirm our departure clearance' : 'Request departure clearance', { group: 'traffic', why: docked || state.dock?.target.id === e.id ? null : 'not at the station' }));
     if (cl.approach || cl.dock) out.push(T('cancel', 'Cancel our clearance', { group: 'traffic' }));
     out.push(T('traffic', 'Ask for the traffic board', { group: 'info' }));
     out.push(T('news', 'Ask for news', { group: 'info' }));

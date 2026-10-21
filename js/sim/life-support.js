@@ -252,9 +252,13 @@ export function completeSeal(state, deck) {
  */
 export function orderSuits(state, on) {
   state.suitsOn = !!on;
-  for (const m of state.ship.crew) if (m.suit.wearing) m.suit.keep = !!on;
+  // (lifted, it leaves the suit on whoever needs it for the work in hand: a breach, a fire, a boarding)
+  for (const m of state.ship.crew) if (m.suit.wearing) m.suit.keep = !!on || needsSuitForTask(m);
   return state.suitsOn;
 }
+
+const needsSuitForTask = (m) => m.task?.type === 'board' || m.task?.type === 'suit' && m.task.thenJob != null ||
+  m.task?.type === 'work' && (m.task.kind === JobType.SEAL || m.task.kind === JobType.FIRE);
 
 export const suitedCount = (state) => state.ship.crew.filter(m => !m.dead && !m.away && m.suit.wearing).length;
 

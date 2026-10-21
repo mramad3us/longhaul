@@ -36,7 +36,7 @@
 import { groundCheck, terrainGuard, hoverCmd } from './terrain.js';
 import { AU_M, G0, MIN_S, DAY_MIN } from '../core/constants.js';
 import { randInt, chance } from '../core/rng.js';
-import { getWorld } from './world.js';
+import { getWorld, predictEntity } from './world.js';
 import { createEntity } from './entities.js';
 import { rollIdentity, CLASSES, TECH } from './ship-classes.js';
 import { FACTIONS } from './factions.js';
@@ -490,9 +490,12 @@ const BRAINS = {
   convoy(state, e) {
     const a = e.agent;
     if (a.mode !== 'travel' || !a.dest) return;
-    const st = getWorld(state).get(a.dest);
+    const world = getWorld(state);
+    const st = world.get(a.dest);
     if (!st) return;
-    if (distAU(e.pos, st.pos) * AU_M < 10_000 && Math.hypot(e.vel.vx - st.vel.vx, e.vel.vy - st.vel.vy) < 20) {
+    // (where the station is now: far from us its stored place can be an hour old)
+    const sp = predictEntity(st, state.clock.minute, world);
+    if (distAU(e.pos, sp.pos) * AU_M < 10_000 && Math.hypot(e.vel.vx - sp.vel.vx, e.vel.vy - sp.vel.vy) < 20) {
       parkAt(state, e, st);
       a.mode = 'arrived';
     }
@@ -689,6 +692,8 @@ function goTo(state, e, target, standoff, accelG, hostile = false, cruise = null
   // a fighting ship's commands jump about as it dodges and counter-burns)
   if (hostile && !g.arrived) g.cmd.lean = false;
   a.cmd = g.arrived ? holdWith(tgt) : g.cmd;
+  // (where it is flying, for its terrain guard: a target over a rock is come down to, not climbed away from)
+  a.$toward = g.arrived ? null : g.toward;
 }
 
 /** Arrived: match the target's own thrust so we stay with it. */
@@ -702,6 +707,7 @@ function fleeFrom(e, from, maxG) {
   const d = Math.hypot(dx, dy) || 1;
   const acc = maxG * G0;
   e.agent.cmd = acc > 0 ? { ax: dx / d * acc, ay: dy / d * acc, maxG } : null;
+  e.agent.$toward = null;
 }
 
 /** One minute of a fight: distance, evasion, retreat, and every weapon that bears. */

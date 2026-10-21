@@ -16,12 +16,15 @@
 //              or flying a plan filed there declared their souls aboard
 //              (a station's digest carries them: intel.js; asking traffic
 //              control for its board gives them now)
-//   HAIL       what the ship says when asked (pirates lie, or won't say)
+//   HAIL       what the ship says when asked (a ship that dislikes us may
+//              lie; pirates won't say)
 //   SCAN       a long look at close range: a thermal estimate of the
 //              living, ± a third (± a sixth with ops on watch)
 //   BOARDED    a count taken aboard: exact
 // The dossier keeps what we learned, the best source winning, bounded
-// (DOSSIER_MAX: the oldest go first). Notable learning goes in the log.
+// (DOSSIER_MAX: the oldest go first). A scan never replaces what a ship
+// declared: it checks it, and a declared number the heat inside doesn't
+// bear out is marked doubtful (and logged). Notable learning goes in the log.
 // ============================================================
 
 import { hashString } from '../core/rng.js';
@@ -33,6 +36,7 @@ export const DOSSIER_MAX = 1500;
 const SCAN_RANGE_M = 100_000;           // thermal estimate of the living inside this
 const SCAN_MIN = 90;                    // …after this long a track (REVEAL.PROFILE is 60)
 const SCAN_AT_ONCE = 4;                 // contacts given a long look per sweep
+const RESCAN_MIN = 1440;                // a ship counted (by us, or better: hailed, a manifest, aboard) isn't looked at again for a day
 const RANK = { registry: 0, scan: 1, manifest: 2, hail: 2, boarded: 3 };
 export const SOURCE_LABEL = { registry: 'REGISTRY', manifest: 'MANIFEST', hail: 'HAIL', scan: 'SCAN', boarded: 'BOARDED' };
 
@@ -98,7 +102,7 @@ export function learn(state, e, facts, src, { by = '', at = state.clock.minute }
   r.name = e.name; r.cls = e.cls; r.faction = e.faction; r.at = at;
   if (facts.crew != null) {
     const old = r.crew;
-    const better = !old || RANK[src] >= RANK[old.src] || at - old.at > 1440;
+    const better = !old || RANK[src] >= RANK[old.src];
     if (better) {
       const [lo, hi] = Array.isArray(facts.crew) ? facts.crew : [facts.crew, facts.crew];
       r.crew = { lo, hi, src, at, by };
@@ -142,7 +146,8 @@ export function knownCrew(state, e, { identified = false } = {}) {
 
 function describe(k, now) {
   const n = k.lo === k.hi ? `${k.lo}` : `${k.lo}–${k.hi}`;
-  const what = k.src === 'registry' ? `rated ${n}` : k.src === 'scan' ? `about ${n} (thermal)` : k.src === 'boarded' ? `${n} (counted)` : `${n} declared`;
+  const what = k.src === 'registry' ? `rated ${n}` : k.src === 'scan' ? `about ${n} (thermal)` : k.src === 'boarded' ? `${n} (counted)`
+    : k.doubt ? `${n} declared · thermal says ${k.doubt.lo === k.doubt.hi ? k.doubt.lo : `${k.doubt.lo}–${k.doubt.hi}`}` : `${n} declared`;
   return { ...k, ageMin: now - k.at, text: `${what}` };
 }
 
@@ -151,7 +156,11 @@ function describe(k, now) {
 /**
  * A ship held under a long, close look gives up a thermal count of the
  * living. Only the contact we're locked on or the nearest few are looked
- * at, so this is bounded by the board, not the world.
+ * at, so this is bounded by the board, not the world. A ship is looked at
+ * once a day: an estimate of our own is logged when it changes; a count the
+ * ship declared (hailed, a manifest) is checked, quietly when the heat
+ * bears it out, aloud and marked doubtful when it doesn't. A count taken
+ * aboard is exact: nothing to look at.
  */
 export function dossierTick(state, emit = () => {}) {
   const s = state.sensors;
@@ -165,15 +174,32 @@ export function dossierTick(state, emit = () => {}) {
     const e = world.get(c.id);
     if (!e || e.type !== 'ship') continue;
     const r = dossierOf(state, e.id);
-    if (r?.crew && RANK[r.crew.src] >= RANK.scan && state.clock.minute - r.crew.at < 360) continue;
+    const now = state.clock.minute;
+    // counted aboard, or looked at within the day: nothing new to learn, and nothing to say
+    if (r?.crew?.src === 'boarded' || now - (r?.scanAt ?? -Infinity) < RESCAN_MIN) continue;
     const n = crewAboard(e) + passengersAboard(e);
     // the estimate's own noise comes from the contact and the hour, not the game's dice
     const err = ops ? 1 / 6 : 1 / 3;
     const jit = unit(e.id, Math.floor(state.clock.minute / 60)) - 0.5;
     const lo = Math.max(0, Math.round(n * (1 - err * (1 + jit))));
     const hi = Math.max(lo, Math.round(n * (1 + err * (1 - jit))));
-    learn(state, e, { crew: [lo, hi] }, 'scan', { by: 'thermal' });
-    emit('dossier', { id: e.id, name: c.name || e.signature, src: 'scan', text: `Thermal count on ${c.name || 'the contact'}: ${lo === hi ? lo : `${lo}–${hi}`} aboard.` });
+    const name = c.name || 'the contact';
+    if (r?.crew && RANK[r.crew.src] > RANK.scan) {
+      // what they declared, checked against the heat inside (crew and passengers alike are warm)
+      r.scanAt = now;
+      const pax = r.pax?.n || 0;
+      const dLo = r.crew.lo + pax, dHi = r.crew.hi + pax;
+      if (dHi < lo || dLo > hi) {
+        r.crew.doubt = { lo, hi, at: now };
+        emit('dossier', { id: e.id, name, src: 'scan', text: `Thermal count on ${name}: ${lo === hi ? lo : `${lo}–${hi}`} aboard. They declared ${dLo === dHi ? dLo : `${dLo}–${dHi}`}.` });
+      } else if (r.crew.doubt) delete r.crew.doubt;
+      continue;
+    }
+    const was = r?.crew ? `${r.crew.lo}–${r.crew.hi}` : null;
+    const rec = learn(state, e, { crew: [lo, hi] }, 'scan', { by: 'thermal' });
+    rec.scanAt = now;
+    // (said once per new count: the same estimate again is not news)
+    if (`${lo}–${hi}` !== was) emit('dossier', { id: e.id, name, src: 'scan', text: `Thermal count on ${name}: ${lo === hi ? lo : `${lo}–${hi}`} aboard.` });
   }
 }
 

@@ -51,7 +51,7 @@ export function triggerManeuver(state, type, opts) {
   const isBurn = type !== Maneuver.FLIP;
   const bodies = [];
   for (const m of state.ship.crew) {
-    if (isRestraint(m.seat) || m.task?.type === 'carried') continue;
+    if (m.away || isRestraint(m.seat) || m.task?.type === 'carried') continue;     // (not aboard: not thrown about)
     if (!m.dead && isConscious(m) && isBurn) {
       if (!opts.surprise && dG <= BRACE_G) continue;   // braced for an announced burn
       if (opts.surprise && dG <= SURPRISE_G) continue;

@@ -222,14 +222,10 @@ function depart(world, e, minute) {
   e.tags.to = to.id;
   e.tags.from = from.id;
   e.tags.ends = 'gate';
-  if (inSlot) {
-    // out of the pattern straight onto the long leg
-    e.tags.legs = null;
-    if (!flyLeg(world, e, minute, slot, world.get(toGate) ? toGate : to.id, g, to.id)) e.tags.until = minute + 720;
-    return;
-  }
+  // out through the gate, from a berth or a slot (a slot's line to the gate clears the rock:
+  // holding.js; straight from the slot onto the long leg might not), then the long leg
   e.tags.legs = [[fromGate, toGate, g]];
-  if (!flyLeg(world, e, minute, null, world.get(fromGate) ? fromGate : to.id, LOCAL_G, from.id)) e.tags.until = minute + 720;
+  if (!flyLeg(world, e, minute, slot, world.get(fromGate) ? fromGate : to.id, LOCAL_G, from.id)) e.tags.until = minute + 720;
 }
 
 /** In port, time's up for what it was doing: the next step of the call. */

@@ -128,7 +128,7 @@ export function leaseTick(state, emit = () => {}) {
   const over = -left;
   if (over < GRACE_MIN) return;
   // Overstaying: a citation now and every two hours
-  if (now - (L.cited || 0) >= CITE_EVERY_MIN) {
+  if (!L.cited || now - L.cited >= CITE_EVERY_MIN) {
     L.cited = now;
     cite(state, st.faction, { station: st.id, kind: 'overstaying a berth lease', amount: Math.max(100, leaseRate(state) * 8) }, emit);
   }
@@ -145,7 +145,7 @@ export function leaseTick(state, emit = () => {}) {
   }
   if (state.ship.crew.some(m => m.away)) return;          // a party aboard another hull: not while they are out
   requestDeparture(state, st.id);
-  const r = undock(state, emit);
+  const r = undock(state, emit, { evicted: true });
   if (r.ok) say('lease-evicted', 'danger', `${dock}: releasing your clamps. Clear the berth and the gate.`);
 }
 

@@ -25,7 +25,9 @@ Passengers live aft of the crew's decks, forward of the hold: the crew's walk fr
 
 Ship coordinates count tile rows from the bow across all decks, with a one-row gap between decks; one ladder shaft runs down the spine. Tiles define fixtures (`FIXTURE_KIND`), and each fixture has an access tile where crew stand to use it. Seats are either *secure* (couches, helm, ops, weapons, engineering station, autodoc: protection under G) or *restraints* (bunks: strapped in, not juiced). Paths come from cached Dijkstra trees over the walkable tiles. Each role calls home the deck holding its work (the helm, the engineering station, the autodoc…). Changing the layout means bumping `SAVE_SCHEMA`.
 
-**Away.** Crew can be off the ship: a boarding party aboard another hull (DOCKING.md), or ashore on leave. Away, they are not on our decks, don't breathe our air or feel our G, don't eat our rations, and aren't counted for securing for maneuvers; the ship can't undock or leave without them.
+**Away.** Crew can be off the ship: a boarding party aboard another hull (DOCKING.md), or ashore on leave. Away, they are not on our decks, don't breathe our air or feel our G, don't eat our rations, and aren't counted for securing for maneuvers, for jobs or for the battle stations, nor hit when we are; the ship can't undock or leave without them.
+
+**A death** lets go of what the dead held: their job goes back on the board, anyone they were carrying is set down, and the body is lifted off its seat (an autodoc, the helm). Paying someone off closes the jobs about them; a new hand never takes an old one's number.
 
 **Signing on.** A crew can be up to the class's berthed maximum (12 at most). Past the eight who fly a ship come Security (fire control watch) and Deckhands (machine shop). Docked at a station with a hiring hall, four people look for a berth each day; we can sign them on for a fee or pay anyone off but the captain.
 
@@ -121,12 +123,14 @@ Each deck has its own atmosphere (pressure, O₂, N₂, CO₂). The plant scrubs
 - A breach vents a deck within minutes. Crew in bad air go for EVA suits (48 h of O₂); couches and station seats have a 2-hour emergency hood.
 - **Venting** any deck on its own (the compartment menu: click the deck's name, or right-click the deck) opens it to space at 10% of its pressure a minute; closing the vents repressurizes it from the tanks.
 - **The SUITS order** (the switch beside COMBAT, key U) sends every hand to a locker for a suit and keeps it on, whatever the job, until it is lifted (then suits come off where the air is good). Under 1.5 G they leave a couch for it. With everyone suited a deck can be vented, or holed in a fight, with its people on it.
-- An engineer in a suit seals the breach, then the deck repressurizes from the tanks.
+- An engineer in a suit seals the breach, then the deck repressurizes from the tanks (the deck's menu shows who is on the patch; it is the top-priority job). Lifting the SUITS order leaves suits on whoever is working a breach, a fire or a boarding.
 - Hypoxia, CO₂ poisoning and decompression act on the body.
 
 ## Fire (`fire.js`)
 
 A hit that gets inside the hull (a chance by the damage that reaches a deck), a ship coming down on a rock: any can start a fire on a deck. A fire has an intensity (0–1) that grows on the deck's oxygen and pressure (8% a minute on good air), burns the oxygen down and fills the air with smoke (breathed as CO₂, faster on a small deck), wrecks machinery on the deck (4% a minute per machine at full blaze) and burns whoever is on it (a suit keeps off most of it: BURNED). Above 70% it can reach the next deck through the shaft while the hatches are open. Nothing burns under 25 kPa or 12% oxygen.
+
+A deck on fire is bad air: the unsuited on it go for a suit, and nobody walks into it for a meal. In bad air, at a breach and at a fire, crew run (2.5× their walk).
 
 Putting it out: a firefighting job (CRITICAL; a hand suits up, then knocks it back 12% a minute at full efficiency), or vent the deck and starve it. A fire left alone burns its deck's air out in about twenty minutes, and what it wrecks meanwhile stays wrecked.
 

@@ -252,6 +252,8 @@ body.reduce-motion .sys-led, body.reduce-motion .sys-frame { animation: none !im
 .hud-systems-count.has-critical { color: var(--danger); animation: condPulse 0.9s ease-in-out infinite; }
 .hud-nav-chip.chip-danger { color: var(--danger); border-color: rgba(226, 85, 85, 0.5); animation: condPulse 0.8s ease-in-out infinite; }
 .route-status-phase.phase-unmanned { color: var(--danger); animation: condPulse 0.8s ease-in-out infinite; }
+.route-depart-note { flex-direction: row !important; align-items: center; justify-content: space-between; gap: 10px !important; }
+.route-depart-note .route-btn { flex: none; padding: 3px 10px; font-size: 0.62rem; }
 .route-machinery { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; margin: 0 0 6px; border: 1px solid var(--warm-dim); background: rgba(60, 40, 10, 0.25); font-family: var(--font-mono); font-size: 0.68rem; color: var(--warning); }
 
 /* ---- System cards ---- */
@@ -342,7 +344,7 @@ body.reduce-motion .sys-led, body.reduce-motion .sys-frame { animation: none !im
 .tac-tab-combat.active { color: #FF8C7A; border-color: rgba(226, 85, 85, 0.6); }
 .tac-screen-combat { cursor: crosshair; }
 .combat-panel {
-  width: 300px; flex: 0 0 300px; overflow-y: auto; flex-direction: column; gap: 8px; padding: 10px;
+  width: 300px; flex: 0 0 300px; overflow-y: auto; min-height: 0; max-height: 100%; flex-direction: column; gap: 8px; padding: 10px;
   background: rgba(10, 6, 8, 0.96); border-left: 1px solid rgba(226, 85, 85, 0.25);
 }
 .fc-section { border: 1px solid rgba(226, 85, 85, 0.18); padding: 6px 8px; }
@@ -464,3 +466,10 @@ body.hit-flash .ship-viewport { box-shadow: inset 0 0 120px rgba(255, 90, 60, 0.
   .library-body { flex-direction: column; }
   .library-index { width: auto; max-height: 38%; border-right: none; border-bottom: 1px solid var(--hull-primary); }
 }
+
+/* Station window tabs: a label never breaks inside its tab; the row wraps if it must */
+.station-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.station-tabs .tac-tab { white-space: nowrap; height: auto; min-height: 20px; }
+
+/* MISSIONS and JOBS read as the header's other buttons do (the counter beside them is theirs) */
+.hud-missions-label, .hud-jobs-label { font-size: 0.42rem; letter-spacing: 0.15em; color: var(--text-secondary); }

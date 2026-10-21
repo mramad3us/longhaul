@@ -40,7 +40,7 @@
   /* Text */
   --text-primary: #C8D6E5;
   --text-secondary: #7A8EA2;
-  --text-dim: #3A4E62;
+  --text-dim: #566B82;     /* (dim, but still read: ~3.5:1 on the panels) */
   --text-accent: #4FD1C5;
 
   /* Typography */
@@ -1867,7 +1867,7 @@ body.dev-mode .info-section.dev-only {
 
 .info-section-log {
   flex: 1;
-  min-height: 0;
+  min-height: 150px;   /* (a crew card above never squeezes the log out of sight) */
   display: flex;
   flex-direction: column;
 }
@@ -1892,10 +1892,9 @@ body.dev-mode .info-section.dev-only {
 
 .log-container {
   flex: 1;
-  overflow: hidden;
+  min-height: 0;
+  overflow: hidden;    /* collapsed, the latest entries fill the panel's room; the rest is in the full log */
   position: relative;
-  transition: max-height 0.3s ease;
-  max-height: 90px; /* ~3 entries collapsed */
 }
 
 .log-container.expanded {
@@ -2917,7 +2916,7 @@ body.dev-mode .info-section.dev-only {
 /* ---- STATION MISSION BOARD DIALOG ---- */
 .dialog-station {
   min-width: 480px;
-  max-width: 560px;
+  max-width: 640px;
   max-height: 85vh;
   overflow-y: auto;
   border: 1px solid var(--hull-accent);

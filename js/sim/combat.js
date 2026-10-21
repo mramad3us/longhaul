@@ -96,6 +96,8 @@ export function jinkG(state) {
   const C = state.combat;
   if (!C.evasive || !state.combatStations) return 0;
   if (!isReactorOnline(state) || state.resources.fuel.current <= 0) return 0;
+  // (held by a dock, at a berth or in its frame, there is no jinking: the collar or the docking computer has us)
+  if (state.dock && state.dock.phase !== 'inbound' && state.dock.phase !== 'awaiting') return 0;
   return Math.min(EVADE_G * TECH[playerClass(state).tl].evade, state.flight.maxG);
 }
 

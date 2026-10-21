@@ -17,7 +17,7 @@ import * as TC from '../js/sim/traffic-control.js';
 import * as D from '../js/sim/docking.js';
 import { spawnAgent, surrender, makeHostile } from '../js/sim/agents.js';
 import { ensureHull, PLAYER, profile } from '../js/sim/combatants.js';
-import { crewAboard, complementOf, knownCrew, dossierOf } from '../js/sim/manifest.js';
+import { crewAboard, complementOf, knownCrew, dossierOf, learn } from '../js/sim/manifest.js';
 import { openChannel, topics, say, closeChannel } from '../js/sim/dialogue.js';
 import { startBoarding, boardingActions, orderAboard } from '../js/sim/boarding.js';
 import { applyHit, wreckNpc } from '../js/sim/damage.js';
@@ -237,6 +237,39 @@ export default [
       assert(!(ev2.citation || []).length, 'with clearance, no citation');
       assert(s2.dock.phase === 'holding' && s2.dock.rel.x >= D.CLEAR_M - 1, 'backed out to the hold point');
       assert(TC.keepOutDriveCap(s2) <= 0.1 || s2.tc.zone !== 'keepout', 'inside the gate the drive is held to 0.1G');
+    },
+  },
+  {
+    name: 'thermal counts: a long look gives one, said once; a declared count is checked, not replaced',
+    fn: () => {
+      const s = game(11);
+      releaseHold(s);
+      s.dock = null;
+      s.flight.pos.y += 0.02;
+      const f = s.flight;
+      const e = spawnAgent(s, { role: 'civilian', cls: 'freighter', faction: 'independent', pos: { x: f.pos.x + 20_000 / AU_M, y: f.pos.y }, vel: { ...f.vel } });
+      e.agent.mode = 'dock-hold';
+      const ev = events();
+      const said = () => (ev.dossier || []).filter(d => d.src === 'scan' && d.id === e.id).length;
+      advance(s, 12 * 60);
+      const alone = said();
+      // the truth over the radio: the next look bears it out, quietly, and the count stays theirs
+      delete dossierOf(s, e.id).scanAt;
+      learn(s, e, { crew: crewAboard(e) }, 'hail');
+      const before = said();
+      advance(s, 6 * 60);
+      const r = dossierOf(s, e.id);
+      assert(said() === before && r.crew.src === 'hail' && !r.crew.doubt, 'an honest count is checked quietly and stands');
+      // a lie: three times the crew; the heat inside doesn't bear it out
+      delete r.scanAt;
+      learn(s, e, { crew: 3 * crewAboard(e) }, 'hail');
+      advance(s, 60);
+      const told = (ev.dossier || []).filter(d => d.src === 'scan' && d.id === e.id).at(-1)?.text;
+      console.log(`      12 h alongside: ${alone} thermal count logged · an honest hail: checked quietly · a lie: "${told}"`);
+      assert(alone === 1, `one count for a ship alongside, not one every few hours (${alone})`);
+      assert(r.crew.src === 'hail' && r.crew.doubt && /declared/.test(told), 'a declared count the heat does not bear out is kept, marked doubtful and logged');
+      advance(s, 12 * 60);
+      assert((ev.dossier || []).filter(d => d.id === e.id && /declared/.test(d.text)).length === 1, 'and said once, not every look');
     },
   },
   {

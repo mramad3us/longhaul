@@ -13,7 +13,7 @@ import { AU_M, G0, MIN_S, GM_SUN, DAY_MIN } from '../core/constants.js';
 import { getBody, bodyPos, bodyVel } from './ephemeris.js';
 import { getWorld, predictEntity, stepFree, propagateFree, orbitStateAt } from './world.js';
 import { slotOrbit } from './holding.js';
-import { APPROACH_M, APPROACH_SPEED_MS, KEEPOUT_SPEED_MS, keepOutM } from './traffic-control.js';
+import { APPROACH_M, APPROACH_SPEED_MS, KEEPOUT_SPEED_MS, KEEPOUT_EDGE, keepOutM } from './traffic-control.js';
 import { surfacePoint, nearestSurface } from './gravity.js';
 import { terrainGuard } from './terrain.js';
 import { createFlight, flightStep, fuelUsed, RCS_MAX_G, SLEW_RATE } from './flight.js';
@@ -188,6 +188,9 @@ function stateOfTarget(state, target, minute, live) {
     out.swings = o.period > 0 ? [swing(o.r, o.period, o.phase + 2 * Math.PI * days / o.period, o.body)] : [];
     bodySwings(b, days, out.swings);
   }
+  // a station's gate: where its keep-out zone is, so a route in goes round it, not through (keepOutVia)
+  const host = e.tags?.gate && world.get(e.tags.gate);
+  if (host) { const h = predictEntity(host, minute, world); out.keepOut = { pos: h.pos, vel: h.vel, rM: keepOutM(host.id) * KEEPOUT_CLEAR }; }
   return out;
 }
 
@@ -214,6 +217,7 @@ export function targetTracker(state, target, t0) {
         tc += step;
       }
     }
+    out.t = t;          // (guidance takes gravity at the moment of the state: gravity.js)
     return out;
   };
 }
@@ -222,6 +226,24 @@ export function targetTracker(state, target, t0) {
 
 const VIA_R = 4;            // the waypoint stands this many radii from the body's centre
 const VIA_NEAR_R = 6;       // a target this close to a body (radii) may be behind it
+const VIA_NEXT = 0.1;      // a waypoint reached (this near it, in ring radii) with the target still hidden: the next
+const VIA_CLEAR_MIN = 3;    // minutes the line must stay clear before a waypoint is let go
+const VIA_TURN = Math.PI / 3;   // the waypoint leads us round by up to this much of the way to the target's side
+const KEEPOUT_CLEAR = KEEPOUT_EDGE;   // a station's keep-out, as traffic control draws it (zoneAt), in gates
+const KEEPOUT_VIA = 2.5;    // the waypoint round it stands this far out, in keep-outs (room to turn short of the zone)
+
+/**
+ * The bearing (unit, from a centre) of a waypoint that leads us round it:
+ * ours (u) turned toward the target's (w) by at most VIA_TURN. At 1.3 radii
+ * and more, the line to such a point clears the sphere from any distance,
+ * and as we move it leads on; dead behind, round the `side` we chose first.
+ */
+function leadRound(ux, uy, wx, wy, side) {
+  let th = Math.atan2(ux * wy - uy * wx, ux * wx + uy * wy);
+  if (Math.abs(th) > 170 * Math.PI / 180) th = side * Math.PI;
+  const a = Math.sign(th) * Math.min(Math.abs(th), VIA_TURN), c = Math.cos(a), s = Math.sin(a);
+  return { x: ux * c - uy * s, y: ux * s + uy * c };
+}
 
 /** Does the segment p→q (AU) pass within `rM` of `c`, short of q? */
 function segBlocked(p, q, c, rM) {
@@ -235,35 +257,77 @@ function segBlocked(p, q, c, rM) {
 /**
  * Routes are planned through empty space; a target standing over a rock
  * (a surface port's gate, a holding slot round it) may have the rock
- * between it and us. Then the route flies first to a point VIA_R radii
- * out from the body's centre, between our side and the target's, moving
- * with the body, and on to the target from there once the line to it
- * clears. Remembered with the plan ($via) until then. Returns that
- * point's state, or null to fly at the target.
+ * between it and us. Then the route flies at a point VIA_R radii out from
+ * the body's centre, our bearing from it turned toward the target's
+ * (leadRound), moving with the body, and on to the target once the line to it
+ * clears. The point is held while we fly at it (a straight leg), and the
+ * next set from there once we are near it, so it leads us round: we never
+ * catch it and stop there, waiting on a rock that turns the target away
+ * from us for hours. Dead behind, the side we went round is kept ($via).
+ * Returns that point's state, or null to fly at the target.
  */
 function viaPoint(plan, flight, tgt, minute) {
   const s = nearestSurface(tgt.pos.x, tgt.pos.y, minute);
   if (!s || s.r > VIA_NEAR_R * s.body.radius * 1000) { plan.$via = null; return null; }
   const rM = s.body.radius * 1000;
-  if (!segBlocked(flight.pos, tgt.pos, s.center, rM)) { plan.$via = null; return null; }
-  if (!plan.$via || plan.$via.body !== s.body.name) {
-    // between where we are and where the target is, seen from the body
-    const ux = (flight.pos.x - s.center.x), uy = (flight.pos.y - s.center.y), ul = Math.hypot(ux, uy) || 1;
-    let dx = ux / ul + s.ux, dy = uy / ul + s.uy;
-    if (Math.hypot(dx, dy) < 0.2) { dx = -s.uy; dy = s.ux; }        // dead behind: go round either side
-    const l = Math.hypot(dx, dy);
-    plan.$via = { body: s.body.name, dx: dx / l, dy: dy / l };
-  }
+  // from the body: our side, turned toward the target's
+  const ox = flight.pos.x - s.center.x, oy = flight.pos.y - s.center.y, ol = Math.hypot(ox, oy) || 1;
+  const ux = ox / ol, uy = oy / ol;
+  // round far enough when the line to the target has stayed clear a few minutes (no flapping between the two)
+  if (!segBlocked(flight.pos, tgt.pos, s.center, rM)) {
+    if (!plan.$via || plan.$via.body !== s.body.name || ++plan.$via.clear >= VIA_CLEAR_MIN) { plan.$via = null; return null; }
+  } else if (plan.$via) plan.$via.clear = 0;
+  if (!plan.$via || plan.$via.body !== s.body.name) plan.$via = { body: s.body.name, side: Math.sign(ux * s.uy - uy * s.ux) || 1, clear: 0 };
   const b = getBody(plan.$via.body);
   const days = minute / DAY_MIN;
   const c = bodyPos(b, days), v = bodyVel(b, days), v1 = bodyVel(b, (minute + 1) / DAY_MIN);
-  const k = VIA_R * rM / AU_M;
+  // (and outside the keep-out of a station built on it: Phobos is 11 km across, its yard's gate 60 km out)
+  const k = Math.max(VIA_R * rM, tgt.keepOut ? KEEPOUT_VIA * tgt.keepOut.rM + rM : 0) / AU_M;
+  // the point, held while we fly at it: first halfway round between our side and the target's (dead
+  // behind, round the side chosen); reached with the target still hidden, the next from there, turned on
+  // round by VIA_TURN (else we would wait at it on a rock turning the target away for hours)
+  const P = plan.$via;
+  if (P.dx == null) {
+    let dx = ux + s.ux, dy = uy + s.uy;
+    if (Math.hypot(dx, dy) < 0.2) { dx = -uy * P.side; dy = ux * P.side; }
+    const l = Math.hypot(dx, dy); P.dx = dx / l; P.dy = dy / l;
+  } else if (Math.hypot(c.x + P.dx * k - flight.pos.x, c.y + P.dy * k - flight.pos.y) < VIA_NEXT * k) {
+    const d = leadRound(ux, uy, s.ux, s.uy, P.side);
+    P.dx = d.x; P.dy = d.y;
+  }
   return { pos: { x: c.x + plan.$via.dx * k, y: c.y + plan.$via.dy * k }, vel: v, ax: 0, ay: 0, atx: (v1.vx - v.vx) / MIN_S, aty: (v1.vy - v.vy) / MIN_S, swings: [], t: minute };
+}
+
+/**
+ * A route to a station's gate that would cut through its keep-out zone
+ * (coming in from the station's far side) flies first at a point just
+ * outside the zone, turned from our side toward the gate's (leadRound), held
+ * while we fly at it and the next set once we are near, as viaPoint does
+ * round a rock. Returns that point's state, or null to fly at the gate.
+ */
+function keepOutVia(plan, flight, tgt) {
+  const K = tgt.keepOut;
+  if (!K) { plan.$kvia = null; return null; }
+  if (!segBlocked(flight.pos, tgt.pos, K.pos, K.rM / 1.05)) {
+    if (!plan.$kvia || ++plan.$kvia.clear >= VIA_CLEAR_MIN) { plan.$kvia = null; return null; }
+  } else if (plan.$kvia) plan.$kvia.clear = 0;
+  const ox = flight.pos.x - K.pos.x, oy = flight.pos.y - K.pos.y, ol = Math.hypot(ox, oy) || 1;
+  const gx = tgt.pos.x - K.pos.x, gy = tgt.pos.y - K.pos.y, gl = Math.hypot(gx, gy) || 1;
+  const ux = ox / ol, uy = oy / ol, wx = gx / gl, wy = gy / gl;
+  if (!plan.$kvia) plan.$kvia = { side: Math.sign(ux * wy - uy * wx) || 1, clear: 0 };
+  const P = plan.$kvia, k = KEEPOUT_VIA * K.rM / AU_M;
+  // (held while we fly at it, the next set once we are near: as viaPoint)
+  if (P.dx == null || Math.hypot(K.pos.x + P.dx * k - flight.pos.x, K.pos.y + P.dy * k - flight.pos.y) < VIA_NEXT * k) {
+    const d = leadRound(ux, uy, wx, wy, P.side);
+    P.dx = d.x; P.dy = d.y;
+  }
+  return { pos: { x: K.pos.x + P.dx * k, y: K.pos.y + P.dy * k }, vel: K.vel, ax: 0, ay: 0, atx: tgt.atx, aty: tgt.aty, swings: [], t: tgt.t };
 }
 
 // ---- PORTS ----
 
-const PORT_LOOKAHEAD_S = 240;
+const PORT_LOOKAHEAD_S = 150;   // (margin on the closing law's own curve, which allows for its flip: 240 s had
+                                // the gate's 200 m/s on from 500 km out, and the last stretch crawled for an hour)
 const ROCK_R = 5, ROCK_SPEED_MS = 1000;
 
 /**
@@ -290,8 +354,12 @@ export function portOfTarget(state, target) {
   const rockMS = b ? Math.max(ROCK_SPEED_MS, 3 * Math.sqrt(b.gm * 1e9 / rM)) : Infinity;
   const near = b && rM < 6 * b.radius * 1000 && rockMS < APPROACH_SPEED_MS;
   const offM = Math.hypot(t.pos.x - sp.x, t.pos.y - sp.y) * AU_M;
+  // and the planet a moon close in goes round (Phobos turns 2.8 Mars radii out: its own 11 km limit nothing,
+  // Mars' well the danger): no faster than three times an orbit's speed there, within ROCK_R of its radii
+  const p = b?.parent, aM = p && b.a * AU_M;
+  const parent = p && aM < 6 * p.radius * 1000 ? { rockM: ROCK_R * p.radius * 1000, rockMS: Math.max(ROCK_SPEED_MS, 3 * Math.sqrt(p.gm * 1e9 / aM)) } : null;
   // (the gate's limit is for targets at the gate or inside it: a slot far out is flown to at the approach's)
-  return { id, offM, keepM: offM <= keepOutM(id) * 1.5 ? keepOutM(id) : 0, rockM: near ? ROCK_R * b.radius * 1000 : 0, rockMS };
+  return { id, offM, keepM: offM <= keepOutM(id) * 1.5 ? keepOutM(id) : 0, rockM: near ? ROCK_R * b.radius * 1000 : 0, rockMS, parent };
 }
 
 /**
@@ -369,19 +437,24 @@ export function guidanceStep(plan, flight, minute, tgtNow, arrivalTarget, dtSec 
   const slew = flight.$slew ?? SLEW_RATE;
   if (plan.kind === 'stance') return stanceStep(plan, flight, tgtNow, { aMax, slew, dtSec });
   // A target behind a rock is come at round it, by a point off the body on our side (viaPoint)
-  const via = plan.stage === 'closing' ? viaPoint(plan, flight, tgtNow, minute) : null;
+  const via = plan.stage === 'closing' ? viaPoint(plan, flight, tgtNow, minute) || keepOutVia(plan, flight, tgtNow) : null;
   // (the way still to go: by the waypoint, then on to the target)
   const beyond = via ? Math.hypot(tgtNow.pos.x - via.pos.x, tgtNow.pos.y - via.pos.y) * AU_M : 0;
-  if (via) tgtNow = via;
+  if (via) tgtNow = { ...via, keepOut0: tgtNow.keepOut };   // (the station's keep-out stays known while we fly by a waypoint)
   const rel = relativeState(flight, tgtNow, _rel);
   let cruise = plan.cruise ?? Infinity;
   // Into a port: traffic control's speed limits, met with braking in hand (portSpeedCap)
   // (looking ahead by a flip's worth at the capped speed: the cap comes on
   // while we still burn; a function of distance alone, so it doesn't move as we slow)
   if (plan.port) {
-    const P = plan.port, dS = Math.max(0, rel.d + beyond - P.offM);
-    const c1 = portSpeedCap(dS, aMax, P.keepM, P.rockM, P.rockMS);
-    cruise = Math.min(cruise, portSpeedCap(Math.max(0, dS - c1 * PORT_LOOKAHEAD_S), aMax, P.keepM, P.rockM, P.rockMS));
+    // (how far in we are: along the way still to fly, but never further than the station straight
+    // off, where the gate's target tells us that: traffic control's zones are spheres round it)
+    const K = tgtNow.keepOut && !via ? tgtNow.keepOut : (via && tgtNow.keepOut0) || null;
+    const straight = K ? Math.hypot(flight.pos.x - K.pos.x, flight.pos.y - K.pos.y) * AU_M : Infinity;
+    const P = plan.port, dS = Math.max(0, Math.min(rel.d + beyond - P.offM, straight));
+    const cap = (d) => Math.min(portSpeedCap(d, aMax, P.keepM, P.rockM, P.rockMS), P.parent ? portSpeedCap(d, aMax, 0, P.parent.rockM, P.parent.rockMS) : Infinity);
+    const c1 = cap(dS);
+    cruise = Math.min(cruise, cap(Math.max(0, dS - c1 * PORT_LOOKAHEAD_S)));
   }
   const cmd = { ax: 0, ay: 0, maxG: plan.accelG, lean: true };
   let phase = 'coast';
@@ -461,7 +534,7 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
   // (a copy: what the plan remembers, it remembers for the live flight only)
   const plan = { ...planIn, target: { ...planIn.target }, $memo: planIn.$memo && { ...planIn.$memo } };
   const f = createFlight(state.flight.pos, state.flight.vel, state.flight.facing);
-  f.maxG = state.flight.maxG;
+  f.maxG = state.$planG ?? state.flight.maxG;      // (the drive out of port: the gate's cap is for the gate)
   const rated = ratedG(playerClass(state));
   const t0 = state.clock.minute;
   let t = t0;
@@ -469,7 +542,7 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
   const raw = [];
   const arrivalTgt = plan.kind === 'transfer' ? targetStateAt(state, plan.target, plan.arriveAt) : null;
   const track = targetTracker(state, plan.target, t0);
-  let arrived = false, climbing = false;
+  let arrived = false, climbing = false, hit = null;
   let steps = 0;
 
   while (t - t0 < maxMinutes && steps < 400_000) {
@@ -494,11 +567,14 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
     if (g.relSpeed > peak) peak = g.relSpeed;
     if (steps % 10 === 1) raw.push({ x: f.pos.x, y: f.pos.y });
     t += dtMin;
+    // (a plan that comes down on a rock is no plan: in flight the guard would fight it all the way)
+    const sf = nearestSurface(f.pos.x, f.pos.y, t);
+    if (sf && sf.alt < 0) { hit = sf.body.name; break; }
   }
   raw.push({ x: f.pos.x, y: f.pos.y });
   const stride = Math.max(1, Math.ceil(raw.length / pathPoints));
   const path = raw.filter((_, i) => i % stride === 0 || i === raw.length - 1);
-  return { arrived, minutes: t - t0, fuel, dv, peakSpeed: peak, maxG, path, end: { x: f.pos.x, y: f.pos.y } };
+  return { arrived, hit, minutes: t - t0, fuel, dv, peakSpeed: peak, maxG, path, end: { x: f.pos.x, y: f.pos.y } };
 }
 
 // ---- TRANSFER WINDOW SEARCH ----
@@ -563,7 +639,7 @@ export function planRoutes(state, target, opts = {}) {
   // A thrusting target can only be caught by out-accelerating it
   const minG = opts.minG ?? 0;
   const defs = [...OPTION_DEFS, ...(opts.combat ? COMBAT_DEFS : [])]
-    .filter(d => d.accelG <= state.flight.maxG && d.accelG > minG);
+    .filter(d => d.accelG <= (state.$planG ?? state.flight.maxG) && d.accelG > minG);
 
   const options = [];
   for (const d of defs) {
@@ -602,7 +678,7 @@ function finishOption(state, plan, desc, fuelAvail) {
     departMin: departMinutes(state, plan),
     fuel: est.fuel,
     feasible: est.arrived && est.fuel <= fuelAvail * 0.95,
-    reason: !est.arrived ? 'No convergent trajectory' : est.fuel > fuelAvail * 0.95 ? 'Insufficient reaction mass' : '',
+    reason: est.hit ? `Would come down on ${est.hit}` : !est.arrived ? 'No convergent trajectory' : est.fuel > fuelAvail * 0.95 ? 'Insufficient reaction mass' : '',
     juice: plan.accelG > 1.5,
   };
 }
@@ -632,7 +708,8 @@ export const DEPART_OUT = 1.05;
 export function departingFrom(state, plan) {
   if (plan.kind === 'stance') return null;
   const d = state.dock;
-  const id = d?.target.kind === 'station' ? d.target.id
+  // (a dock that holds us at a station; one inbound elsewhere doesn't say where we are)
+  const id = d?.target.kind === 'station' && d.phase !== 'inbound' && d.phase !== 'awaiting' ? d.target.id
     : state.tc?.station && (state.tc.zone === 'keepout' || state.tc.zone === 'approach') ? state.tc.station : null;
   if (!id || plan.port?.id === id) return null;
   return { station: id, ux: null, uy: null };
@@ -650,7 +727,7 @@ export function departMinutes(state, plan) {
   if (!st) return 0;
   const p = predictEntity(st, state.clock.minute, world).pos;
   const rM = Math.hypot(state.flight.pos.x - p.x, state.flight.pos.y - p.y) * AU_M;
-  const a = 0.6 * RCS_LIMIT;                       // (near a rock much of it holds us against the pull)
+  const a = 0.85 * RCS_LIMIT;                      // (near a rock some of it holds us against the pull)
   const leg = Math.sqrt(2 * Math.max(0, APPROACH_M * DEPART_OUT - rM) / a) / MIN_S;
   const out = state.dock?.target.id === id ? 6 + Math.sqrt(2 * keepOutM(id) / a) / MIN_S : 0;   // unlatch, back out, climb to the gate
   return Math.round(leg + out);

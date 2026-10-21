@@ -22,9 +22,12 @@
 // Routes are planned as if space were empty, so the nav computer (and an
 // NPC's) flies a guard over them near a body (terrainGuard): when the line
 // to where it is going passes through the rock, or the ground would come
-// up within five minutes on the present command, it climbs off the local
-// vertical and out round the limb toward the target's side, the body's
-// pull covered, until the line is clear; then the route flies on.
+// up on the present command within five minutes and what saving the ship
+// would take (the time its braking needs to stop the fall; coasting, the
+// drive's; passing the rock, a half turn as well), it climbs off the local
+// vertical (straight up when low) and out round the limb toward the
+// target's side, the body's pull covered, until the line is clear; then
+// the route flies on.
 // ============================================================
 
 import { AU_M, MIN_S, TWO_PI } from '../core/constants.js';
@@ -71,6 +74,7 @@ const GUARD_RANGE_R = 20;            // radii from a body's centre the guard loo
 const CLEAR_R = 1.05;               // a line to the target passing nearer than this is blocked
 const CLIMB_S = 300;                // climb and round at the speed five minutes of the drive gives…
 const CLIMB_MAX_MS = 1200;           // …held under a port's speed limit (traffic-control.js: 3,000 m/s on the approach, both together)
+const SAVE_MAX_S = 2 * 3600;        // the guard looks no further than this beyond its margin
 const LOW_M = 20_000;               // below this, straight up first: a turn to lean costs height a ship this low hasn't got
 
 /**
@@ -104,15 +108,21 @@ export function terrainGuard(pos, vel, cmd, toward, aMax, minute, climbing = fal
   if (tm > aMax) { thrust.ax *= aMax / tm; thrust.ay *= aMax / tm; }
   const losBlocked = toward && blocked(pos, toward, s.center, rM);
   // (a climb under way goes on until the ground is well away: no flapping between two commands)
-  // Looking far enough ahead to save the ship: the margin, and, on a route
-  // that only passes this rock (its target is elsewhere: a transfer burn may
-  // point at the ground) with nothing holding us up against the pull, a half
-  // turn and the time the drive takes to stop the fall. (A route coming down
-  // to a target here brakes for it; held up, the path flown out brakes too.)
-  const passing = !toward || Math.hypot(toward.x - s.center.x, toward.y - s.center.y) * AU_M > GUARD_RANGE_R * rM;
+  // Looking far enough ahead to save the ship: the margin, and
+  // - on a route only passing this rock (a transfer burn may point at the
+  //   ground) with nothing holding us up against the pull, a half turn and
+  //   the time the drive takes to stop the fall; coasting in to a target
+  //   here, only that time (the route brakes for it later, its nose already
+  //   round: flown out unbraked further, a normal approach looks like a fall);
+  // - braking against it, as long as that braking takes to stop the fall:
+  //   the path flown out shows whether it stops short of the ground (a slow
+  //   ship coming down into a big well braking all it can is marginal, and
+  //   it is an hour before it knows). At most SAVE_MAX_S.
   const vDown = Math.max(0, -((vel.vx - s.vel.vx) * s.ux + (vel.vy - s.vel.vy) * s.uy));
-  const up = thrust.ax * s.ux + thrust.ay * s.uy;
-  const save = passing && up < pullAt(s.body, s.r) ? Math.PI / SLEW_RATE * MIN_S + vDown / Math.max(1e-3, aMax) : 0;
+  const up = thrust.ax * s.ux + thrust.ay * s.uy, pullHere = pullAt(s.body, s.r);
+  const passing = !toward || Math.hypot(toward.x - s.center.x, toward.y - s.center.y) * AU_M > GUARD_RANGE_R * rM;
+  const save = Math.min(SAVE_MAX_S, up < pullHere ? (passing ? Math.PI / SLEW_RATE * MIN_S : 0) + vDown / Math.max(1e-3, aMax)
+    : 1.2 * vDown / Math.max(1e-3, up - pullHere));
   const horizon = (climbing ? 15 : 5) * MIN_S + save;
   const tti = pathToImpact(s, vel, thrust, horizon);
   let soon = tti < horizon;
@@ -240,6 +250,9 @@ export function land(state, s) {
   f.pos.x = s.center.x + s.ux * rM / AU_M;
   f.pos.y = s.center.y + s.uy * rM / AU_M;
   f.vel.vx = s.vel.vx - s.spin * s.uy * rM; f.vel.vy = s.vel.vy + s.spin * s.ux * rM;
+  // (down, a ship stands on its tail, the drive under it: it lifts straight off, no turn to make first)
+  f.facing = Math.atan2(s.uy, s.ux);
+  f.turning = 0;
 }
 
 /**

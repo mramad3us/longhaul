@@ -22,9 +22,9 @@
 //   be brought exactly up to date on demand (refresh).
 // ============================================================
 
-import { AU_M, G0, MIN_S, TWO_PI, DAY_MIN } from '../core/constants.js';
+import { AU_M, AU_KM, G0, MIN_S, TWO_PI, DAY_MIN } from '../core/constants.js';
 import { getBody, bodyPos, bodyVel } from './ephemeris.js';
-import { gravityAt, gravityEpoch } from './gravity.js';
+import { gravityAt, gravityEpoch, nearestSurface } from './gravity.js';
 import { SpatialHash } from './spatial-hash.js';
 
 export const NEAR_RANGE_AU = 0.12;   // a bit past long sensor range
@@ -34,7 +34,8 @@ export const WORLD_VISITORS = [
   // Retire entities whose story is over (rescued ships, spent contract targets)
   (e, minute, world) => {
     const at = e.tags?.despawnAt;
-    if (at != null && minute >= at && world.state.flight?.hold?.id !== e.id) world.remove(e);
+    // (not while we hold on it or are docking with it: it goes once we let go)
+    if (at != null && minute >= at && world.state.flight?.hold?.id !== e.id && world.state.dock?.target.id !== e.id) world.remove(e);
   },
 ];
 
@@ -259,6 +260,15 @@ export class World {
       if (!transitStateAt(this, e, minute, e.pos, e.vel)) e.transit = null;   // endpoint vanished: drift
     } else if (minute > e.t) {
       propagateFree(e.pos, e.vel, e.t, minute, e.thrust || 0, e.heading || 0, e.thrust > 0 ? 1 : 15);
+      // (a hull adrift, a wreck, that comes down on a rock rests there, turning with it: terrain.js
+      // groundCheck does the same, with the blow, for what is flown)
+      const s = nearestSurface(e.pos.x, e.pos.y, minute);
+      if (s && s.alt < 0) {
+        const spinDays = s.body.rotH / 24, days = minute / DAY_MIN;
+        e.orbit = { body: s.body.name, r: s.body.radius / AU_KM, phase: Math.atan2(s.uy, s.ux) - (spinDays ? 2 * Math.PI * days / spinDays : 0), period: spinDays };
+        e.thrust = 0;
+        orbitStateAt(e.orbit, minute, e.pos, e.vel);
+      }
     }
     e.t = minute;
   }

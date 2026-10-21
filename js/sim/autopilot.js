@@ -32,6 +32,9 @@
 // ============================================================
 
 import { gravityAt, nearestSurface } from './gravity.js';
+import { getBody, bodyPos } from './ephemeris.js';
+import { slotOrbit } from './holding.js';
+import { rcsAvailable } from './systems.js';
 import { terrainGuard, hoverCmd } from './terrain.js';
 import { AU_M, G0, DAY_MIN, MIN_S } from '../core/constants.js';
 import { getWorld, predictEntity } from './world.js';
@@ -89,10 +92,22 @@ export function abortRoute(state, emit = () => {}) {
   if (!state.autopilot) return false;
   const name = targetName(state, state.autopilot.plan.target);
   const stance = state.autopilot.plan.kind === 'stance';
+  holdInPort(state, state.autopilot);
   state.autopilot = null;
   state.flight.thrustG = 0;
   emit('route-aborted', { target: name, stance });
   return true;
+}
+
+/**
+ * A route given up in a station's approach (leaving it, or near it): hold
+ * where we are off the station rather than fall free (a port is often on, or
+ * over, a rock).
+ */
+function holdInPort(state, ap) {
+  const z = state.tc?.zone;
+  const id = ap?.depart?.station || (z === 'keepout' || z === 'approach' ? state.tc.station : null);
+  if (id && !state.flight.hold && !dockHolds(state) && getWorld(state).get(id)) holdStation(state, { kind: 'entity', id });
 }
 
 export function overrideSecure(state) {
@@ -141,13 +156,34 @@ export function holdStation(state, target) {
   const tgt = targetStateAt(state, target, state.clock.minute, true);
   if (!tgt) return false;
   const f = state.flight;
-  state.flight.hold = {
-    ...target,
-    ox: (f.pos.x - tgt.pos.x) * AU_M,
-    oy: (f.pos.y - tgt.pos.y) * AU_M,
-  };
+  const ox = (f.pos.x - tgt.pos.x) * AU_M, oy = (f.pos.y - tgt.pos.y) * AU_M;
+  state.flight.hold = { ...target, ox, oy };
+  // something going round a body (a station, its gate, a slot) turns: the offset is kept in its frame
+  // (up from the body, and along), so a place outside a gate stays outside it as the rock turns
+  const u = turningUp(state, target, state.clock.minute);
+  if (u) Object.assign(state.flight.hold, { up: ox * u.x + oy * u.y, along: -ox * u.y + oy * u.x });
   f.vel.vx = tgt.vel.vx; f.vel.vy = tgt.vel.vy;
   return true;
+}
+
+/** Up from the body a held target goes round (unit, solar frame), or null for something that doesn't. */
+function turningUp(state, target, minute) {
+  const body = target.kind === 'slot' ? slotOrbit(target.id, target.slot)?.body
+    : target.kind === 'entity' ? getWorld(state).get(target.id)?.orbit?.body : null;
+  const b = body && getBody(body);
+  const tgt = b && targetStateAt(state, target, minute);
+  if (!tgt) return null;
+  const c = bodyPos(b, minute / DAY_MIN);
+  const ux = tgt.pos.x - c.x, uy = tgt.pos.y - c.y, n = Math.hypot(ux, uy);
+  return n > 0 ? { x: ux / n, y: uy / n } : null;
+}
+
+/** A hold's offset from its target at `minute` (m, solar frame): turned with the target's frame where it has one. */
+export function holdOffset(state, h, minute) {
+  if (h.up == null) return { x: h.ox || 0, y: h.oy || 0 };
+  const u = turningUp(state, h, minute);
+  if (!u) return { x: h.ox || 0, y: h.oy || 0 };
+  return { x: h.up * u.x - h.along * u.y, y: h.up * u.y + h.along * u.x };
 }
 
 /** Let go of whatever holds us: station-keeping, or a dock's hold point. (Dev tools also tear a hard dock loose.) */
@@ -168,6 +204,7 @@ export function holdStep(state) {
   const tgt = targetStateAt(state, h, state.clock.minute, true);
   if (!tgt) { state.flight.hold = null; return 0; }
   const f = state.flight;
+  if (h.up != null) { const o = holdOffset(state, h, state.clock.minute); h.ox = o.x; h.oy = o.y; }
   f.pos.x = tgt.pos.x + h.ox / AU_M;
   f.pos.y = tgt.pos.y + h.oy / AU_M;
   f.vel.vx = tgt.vel.vx; f.vel.vy = tgt.vel.vy;
@@ -201,6 +238,7 @@ export function autopilotTick(state, emit = () => {}) {
   const plan = ap.plan;
   const tgt = targetStateAt(state, plan.target, now, true);
   if (!tgt) {
+    holdInPort(state, ap);
     state.autopilot = null;
     emit('route-target-lost', {});
     return null;
@@ -219,7 +257,7 @@ export function autopilotTick(state, emit = () => {}) {
     else {
       // out through the gate in the berth's frame, on RCS, before the route has the ship (docking.js clearOff)
       if (d.phase === 'holding' || d.phase === 'approach' || d.phase === 'separate' && d.rel.x >= CLEAR_M) clearOff(state, emit);
-      else if (d.phase === 'separate') d.$depart = true;
+      else if (d.phase === 'separate') d.departing = true;
       if (state.dock) { ap.display = state.dock.phase === 'outbound' ? 'outbound' : 'undock'; return null; }
     }
   }
@@ -229,18 +267,24 @@ export function autopilotTick(state, emit = () => {}) {
     ap.display = 'prepare';
     ap.secure = { secured: st.secured, total: st.total, pilotReady: st.pilotReady, pilot: st.pilot?.name || null, helpless: st.helpless.length };
     const allIn = st.unsecured.length === 0;
-    if ((st.pilotReady || !st.pilot) && (allIn || ap.override) || (ap.override && !st.pilot)) {
+    // (not with a boarding party aboard another hull: they would be left there)
+    const partyOut = state.ship.crew.some(m => m.away?.op && !m.away.captured);
+    if (partyOut && !ap.partyNoted) { ap.partyNoted = true; emit('nav-callout', { level: 'warn', text: 'A boarding party is aboard the other ship: the route waits for them.' }); }
+    if (!partyOut && ((st.pilotReady || !st.pilot) && (allIn || ap.override) || (ap.override && !st.pilot))) {
       ap.phase = 'active';
       ap.engagedAt = now;
+      // (lifting off a rock: stood on its tail, nose up, so the drive lifts at once; a turn first would
+      // be a minute's fall back onto the ground)
+      if (state.flight.hold?.kind === 'surface') { const sf = nearestSurface(state.flight.pos.x, state.flight.pos.y, now); if (sf) { state.flight.facing = Math.atan2(sf.uy, sf.ux); state.flight.turning = 0; } }
       state.flight.hold = null;
       emit('route-engaged', { target: targetName(state, plan.target), unsecured: st.unsecured.map(m => m.name), override: ap.override && !allIn, stance: plan.kind === 'stance' ? STANCE_MODES[plan.mode].label : null, departing: ap.depart ? getWorld(state).get(ap.depart.station)?.name || null : null });
     } else {
       // while the crew strap in (RCS is safe on their feet): out of port on the departure leg, or a ship not held by anything keeps its height over a rock (terrain.js)
-      if (ap.depart && !state.dock) { const c = departLeg(state, ap, now, emit); if (c) return c; }
+      if (ap.depart && !dockHolds(state)) { const c = departLeg(state, ap, now, emit); if (c) return c; }
       return !state.flight.hold && !state.dock ? hoverCmd(state.flight.pos, state.flight.vel, now, { keepClimb: true }) : null;
     }
   }
-  if (ap.depart && !state.dock) {
+  if (ap.depart && !dockHolds(state)) {
     const c = departLeg(state, ap, now, emit);
     if (c) {
       // (the route's readouts while guidance waits: range and speed to the target)
@@ -300,6 +344,12 @@ function departLeg(state, ap, now, emit) {
     if (st) emit('route-departed', { station: st.name, target: targetName(state, ap.plan.target) });
     return null;
   }
+  // no RCS (out, or dry tanks): the leg can't be flown; the route goes on the drive
+  if (!rcsAvailable(state) || state.resources.fuel.current <= 0) {
+    ap.depart = null;
+    emit('nav-callout', { level: 'warn', text: `RCS out: leaving ${st?.name || 'port'} on the drive.` });
+    return null;
+  }
   f.hold = null;
   if (dep.ux == null) Object.assign(dep, departDirection(state, ap, now, s0));
   // the way out, climbing off a rock close by
@@ -325,25 +375,63 @@ function departLeg(state, ap, now, emit) {
 }
 const _pull = { ax: 0, ay: 0 };
 
-/** Would the route's burn from here head back toward the station (s0: its place now)? */
+/** Would the route's burn from here cross back through the station's approach (s0: its place now)? */
 function burnsBack(state, ap, now, s0) {
   const f = state.flight;
-  const { ux, uy } = departDirection(state, ap, now, s0);
-  const rx = f.pos.x - s0.pos.x, ry = f.pos.y - s0.pos.y, r = Math.hypot(rx, ry) || 1;
-  return (ux * rx + uy * ry) / r < -0.2;
+  const { ux, uy } = routeDirection(state, ap, now);
+  const sx = (s0.pos.x - f.pos.x) * AU_M, sy = (s0.pos.y - f.pos.y) * AU_M;
+  const t = sx * ux + sy * uy;                     // how far along the burn the station comes abeam
+  return t > 0 && Math.hypot(sx - t * ux, sy - t * uy) < APPROACH_M;
 }
 
-/** Which way the route will burn from here (asked of guidance on a copy of the plan), else toward the target: away from the station. */
-function departDirection(state, ap, now, s0) {
+/** Which way the route will burn from here (asked of guidance on a copy of the plan), else toward the target. */
+function routeDirection(state, ap, now) {
   const f = state.flight;
   const tgt = targetStateAt(state, ap.plan.target, now);
   const probe = { ...ap.plan, target: { ...ap.plan.target }, $memo: undefined, $keep: undefined, $coastUntil: undefined, $want: undefined };
   const g = tgt ? guidanceStep(probe, f, now, tgt, ap.plan.kind === 'transfer' ? targetStateAt(state, ap.plan.target, ap.plan.arriveAt) : null) : null;
   let ux = g ? g.cmd.ax : 0, uy = g ? g.cmd.ay : 0;
   if (Math.hypot(ux, uy) < 1e-6 && tgt) { ux = tgt.pos.x - f.pos.x; uy = tgt.pos.y - f.pos.y; }
-  if (Math.hypot(ux, uy) < 1e-12) { ux = f.pos.x - s0.pos.x; uy = f.pos.y - s0.pos.y; }
-  const n = Math.hypot(ux, uy) || 1;
-  return { ux: ux / n, uy: uy / n };
+  const n = Math.hypot(ux, uy);
+  return n > 1e-12 ? { ux: ux / n, uy: uy / n } : { ux: 0, uy: 0 };
+}
+
+/**
+ * The way out of port: toward where the route will burn, if that leads away
+ * from the station; a route that will head back past it goes out to the
+ * side it will pass on, to come round the approach rather than through it;
+ * and either way the line must miss the rocks (the station's own, and what
+ * that circles), else straight out from the station (from its gate, up).
+ */
+function departDirection(state, ap, now, s0) {
+  const f = state.flight;
+  const { ux: rx, uy: ry } = routeDirection(state, ap, now);
+  const ox = f.pos.x - s0.pos.x, oy = f.pos.y - s0.pos.y, o = Math.hypot(ox, oy) || 1;
+  const ex = ox / o, ey = oy / o;                  // out from the station
+  let ux = rx, uy = ry;
+  const along = rx * ex + ry * ey;
+  if (along < 0.2) {
+    // sideways (the route's own sideways part), leaning out
+    let px = rx - along * ex, py = ry - along * ey;
+    const p = Math.hypot(px, py);
+    if (p < 1e-6) { px = -ey; py = ex; } else { px /= p; py /= p; }
+    ux = px + 0.6 * ex; uy = py + 0.6 * ey;
+    const n = Math.hypot(ux, uy); ux /= n; uy /= n;
+  }
+  const st = getWorld(state).get(ap.depart.station);
+  if (!clearOfBodies(st, f.pos, ux, uy, APPROACH_M * DEPART_OUT, now)) return { ux: ex, uy: ey };
+  return { ux, uy };
+}
+
+/** Does the line `lenM` from `from` along (ux, uy) miss the body a station is built on or circles, and that body's own primary? */
+function clearOfBodies(st, from, ux, uy, lenM, now) {
+  for (let b = getBody(st?.orbit?.body); b && b.type !== 'star'; b = b.parent) {
+    const c = bodyPos(b, now / DAY_MIN);
+    const cx = (c.x - from.x) * AU_M, cy = (c.y - from.y) * AU_M;
+    const t = Math.max(0, Math.min(lenM, cx * ux + cy * uy));
+    if (Math.hypot(cx - t * ux, cy - t * uy) < 1.2 * b.radius * 1000) return false;
+  }
+  return true;
 }
 
 /** The terrain guard over the route's command (terrain.js): climb out round a rock in the way. */

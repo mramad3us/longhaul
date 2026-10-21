@@ -97,7 +97,7 @@ export default [
   {
     name: 'the yard decides upkeep: Belt kit breaks often and mends cheap; Martian kit rarely breaks and costs dearly',
     fn: () => {
-      const days = 45, seeds = [11, 12];
+      const days = 45, seeds = [11, 12, 13, 14];          // (fault counts are a few per hull: averaged over four runs)
       const rows = {};
       for (const cls of ['tramp', 'meridian', 'ares', 'mcrn-corvette']) {
         let faults = 0, parts = 0;

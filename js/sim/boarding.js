@@ -165,8 +165,9 @@ export function boardingTick(state, emit = () => {}) {
   }
   switch (b.phase) {
     case 'muster': {
-      const ready = party.filter(m => m.task?.type === 'board' && m.task.phase === 'ready');
-      const able = party.filter(m => isAble(m));
+      // (an EVA crosses open space: nobody goes without a suit; and nobody ashore is waited for)
+      const ready = party.filter(m => m.task?.type === 'board' && m.task.phase === 'ready' && (b.via !== 'eva' || m.suit.wearing));
+      const able = party.filter(m => isAble(m) && !m.away);
       if ((ready.length && ready.length === able.length) || now - b.since > MUSTER_LIMIT_MIN && ready.length) {
         b.party = ready.map(m => m.id);
         for (const m of ready) { m.away = { op: b.id, aboard: e.id }; m.task = null; m.seat = null; m.path = []; m.activity = 'away'; }
@@ -193,9 +194,21 @@ export function boardingTick(state, emit = () => {}) {
     case 'fight': fightMinute(state, b, e, party, emit); return;
     case 'secured': actionMinute(state, b, e, party, emit); return;
     case 'return':
+      // (they can only come back across what they can cross: our collar still on theirs, or suit range)
+      if (!withinReach(state, b, e)) {
+        b.since = now;
+        if (!b.waitNoted) { b.waitNoted = true; note(state, `Party ready to come back: bring us within ${EVA_RANGE_M / 1000} km of ${e.name}.`, emit, 'warn'); }
+        return;
+      }
       if (now - b.since >= b.crossMin) comeHome(state, b, emit);
       return;
   }
+}
+
+/** Can the party cross between the hulls now: still mated at the collar, or within suit range? */
+function withinReach(state, b, e) {
+  if (b.via === 'dock' && state.dock?.target.id === e.id && state.dock.phase === 'docked') return true;
+  return Math.hypot(e.pos.x - state.flight.pos.x, e.pos.y - state.flight.pos.y) * AU_M <= EVA_RANGE_M;
 }
 
 function arrive(state, b, e, emit) {
@@ -286,15 +299,18 @@ export function boardingActions(state) {
   if (!b || b.phase !== 'secured') return [];
   const e = getWorld(state).get(b.target);
   return Object.entries(BOARDING_ACTIONS).map(([id, a]) => {
-    let why = b.done[id] && !a.repeat ? 'done' : null;
+    let why = (b.done[id] || ONCE_PER_HULL.has(id) && e.tags?.taken?.[id]) && !a.repeat ? 'done' : null;
     if (!why && id === 'salvage' && ensureHull(e).status !== 'wreck') why = 'not a wreck: take stores';
     if (!why && id === 'salvage' && (e.tags.salvageLeft ?? 1) < 0.05) why = 'stripped bare';
-    if (!why && id === 'cargo' && b.via !== 'dock') why = 'dock first';
+    if (!why && id === 'cargo' && !(b.via === 'dock' && state.dock?.target.id === b.target && state.dock.phase === 'docked')) why = 'dock first';
     if (!why && id === 'prisoners' && freeBerths(state) <= 0) why = 'no free berths';
     if (!why && id === 'prisoners' && crewAboard(e) <= 0) why = 'nobody left aboard';
     return { id, ...a, why, running: b.action?.id === id };
   });
 }
+
+/** Orders that empty a hull once, whoever boards it after (its stores, its hold, its credit store). */
+const ONCE_PER_HULL = new Set(['strip', 'cargo', 'accounts']);
 
 const freeBerths = (state) => state.berths - state.passengers.reduce((s, p) => s + p.count, 0);
 
@@ -316,6 +332,8 @@ function actionMinute(state, b, e, party, emit) {
   if (!a || state.clock.minute < a.until) return;
   b.action = null;
   b.done[a.id] = true;
+  // (the hull remembers what was taken from it, or wiped: boarding it again finds it gone)
+  if (ONCE_PER_HULL.has(a.id)) (e.tags.taken ||= {})[a.id] = true;
   const R = state.resources;
   const c = classOf(e);
   switch (a.id) {
@@ -339,7 +357,7 @@ function actionMinute(state, b, e, party, emit) {
       const M = state.magazine;
       let torps = 0;
       for (const w of ['he', 'nuke']) while (h.magazine[w] > 0 && M.he + M.nuke < M.capacity) { h.magazine[w]--; M[w]++; torps++; }
-      const words = Object.entries(got).filter(([, v]) => v > 0).map(([k, v]) => `${Math.round(v).toLocaleString()} ${k === 'pdcRounds' ? 'PDC rounds' : k === 'medSupplies' ? 'med units' : k}`);
+      const words = Object.entries(got).filter(([, v]) => Math.round(v) > 0).map(([k, v]) => `${Math.round(v).toLocaleString()} ${k === 'pdcRounds' ? 'PDC rounds' : k === 'medSupplies' ? 'med units' : k}`);
       if (torps) words.push(`${torps} torpedo${torps > 1 ? 'es' : ''}`);
       note(state, words.length ? `Stores carried over: ${words.join(', ')}.` : 'Nothing worth carrying, or nowhere to put it.', emit, 'ok');
       return;

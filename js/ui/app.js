@@ -10,7 +10,7 @@ import { toast } from './toast.js';
 import { initLog, logEntry, renderLog, resetLogView } from './log.js';
 import { initHud, updateHud, updatePerf, setResourceAlertHandler, resetResourceAlerts, setHailHandler, setRouteHandler, setDockHandler } from './hud.js';
 import { buildShipView, updateShipView, setShipAnimationsPaused } from './ship-view.js';
-import { initNav, updateNav, openNav, closeNav, toggleNav, openRoutePanel, resetNavForGame } from './nav.js';
+import { initNav, updateNav, openNav, closeNav, toggleNav, openRoutePanel, resetNavForGame, showOnBoard } from './nav.js';
 import { resetTacCache } from './tac.js';
 import { initSelection, selectCrew, selectTile, clearSelection, renderSelection, showDeckMenu } from './selection.js';
 import { initDialogs, openDialog, closeDialog, closeTopDialog, openMissions, openJobs, openStation } from './dialogs.js';
@@ -118,7 +118,7 @@ export async function boot() {
   setDockHandler((id) => dockWith({ kind: 'station', id }));
   initBoarding();
   setHailHandler((id) => openComms(id));
-  initStage({ select: (id) => { openNav('tactical'); } });
+  initStage({ select: (id) => showOnBoard(id) });
   initPresenter();
   initLibrary();
   initKeyboard({

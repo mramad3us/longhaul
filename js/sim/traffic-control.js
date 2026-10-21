@@ -9,11 +9,15 @@
 //     then a citation.
 //   THE APPROACH (2,000 km). Nobody comes inside without approach
 //     clearance (hail the station and ask). Loiter here uncleared and
-//     you are warned, cited, and in the end reported to the police.
-//   KEEP-OUT (the approach gate: 50–100 km). Only ships cleared to dock,
-//     and leaving on a departure clearance, come inside it, below the
-//     speed limit. A trespasser gets a final warning, then it is a
-//     crime, and the station's guns lock on: a naval yard fires.
+//     you are warned, cited, and in the end reported to the police (a
+//     ship flying a route in is told to hail, not cited; one sat off a
+//     berth at its hold point is leaving for an hour, then loitering).
+//   KEEP-OUT (inside the approach gate: 50–100 km, the gate itself just
+//     outside it). Only ships cleared to dock, and leaving on a departure
+//     clearance, come inside it, below the speed limit. A trespasser gets
+//     a final warning, then (after 5 minutes; 20 for a ship inbound to the
+//     gate, given time to correct) it is a crime, and the station's guns
+//     lock on: a naval yard fires.
 //   THE BERTH CORRIDOR (the last kilometre), flown in docking mode
 //     (docking.js).
 //
@@ -55,6 +59,9 @@ export const DEPART_CLEARANCE_MIN = 30;
 export const HOLD_CLEARANCE_MIN = 24 * 60;
 export const KEEPOUT_SPEED_MS = 200;       // the speed limit inside the gate, coming in
 export const APPROACH_SPEED_MS = 3_000;    // …and on the approach
+export const INBOUND_GRACE_MIN = 20;      // minutes a ship inbound to the gate may stray over the keep-out line
+export const KEEPOUT_EDGE = 0.92;         // the keep-out ends this far out, in gates
+export const HOLD_OFF_MIN = 60;           // off a berth at its hold point, with no route and no lease, this long is loitering
 export const KEEPOUT_DRIVE_G = 0.1;        // no torch inside the gate: the nav computer holds the drive to this
 
 const CONTROL_AU = CONTROL_M / AU_M;
@@ -64,8 +71,9 @@ const CALLOUTS_KM = [1000, 500, 200, 100, 50, 20, 10, 5, 2];
 /** How deep inside a station's managed space a distance is. */
 export function zoneAt(st, dM) {
   const keep = (STATIONS[st.id]?.gateKm || 50) * 1000;
-  // (the gate itself, where routes end and ships hold, is just outside)
-  return dM < keep * 0.97 ? 'keepout' : dM <= APPROACH_M ? 'approach' : dM <= CONTROL_M ? 'control' : 'none';
+  // (the gate itself, where routes end and ships hold, is outside it, with room for a ship holding there
+  // to drift a few kilometres: a gate on a small tumbling moon moves under it)
+  return dM < keep * KEEPOUT_EDGE ? 'keepout' : dM <= APPROACH_M ? 'approach' : dM <= CONTROL_M ? 'control' : 'none';
 }
 
 export const keepOutM = (stationId) => (STATIONS[stationId]?.gateKm || 50) * 1000;
@@ -139,12 +147,15 @@ export function requestDocking(state, stationId, { emergency = false } = {}) {
   const ports = ourPorts(state);
   const sizes = [...new Set(ports.map(p => p.size))];
   const held = clearanceFor(state, stationId).dock;
-  const berth = held ? stationModel(stationId).berths.find(b => b.id === held.berth) : freeBerth(state, st, sizes);
+  // a berth still ours (backed off it, holding) is given back: the dock can go straight in from where it holds
+  const d = state.dock;
+  const ours = d?.target.id === stationId && d.berth && ['undock', 'separate', 'holding'].includes(d.phase) ? stationModel(stationId).berths.find(b => b.id === d.berth) : null;
+  const berth = held ? stationModel(stationId).berths.find(b => b.id === held.berth) : ours || freeBerth(state, st, sizes);
   if (!berth) {
     const eta = nextFreeing(state, st);
     return { ok: false, full: true, text: `All berths that take your collars are full.${eta != null ? ` One should clear in about ${Math.max(10, Math.round(eta / 10) * 10)} minutes.` : ''} Hold at the anchorage and call again.` };
   }
-  const port = ports.find(p => p.use === 'crew' && p.face !== 'x+' && berthFits(berth, p.size)) || ports.find(p => berthFits(berth, p.size));
+  const port = (berth === ours && ports.find(p => p.id === d.port)) || ports.find(p => p.use === 'crew' && p.face !== 'x+' && berthFits(berth, p.size)) || ports.find(p => berthFits(berth, p.size));
   const c = clear(state, stationId);
   c.dock = { berth: berth.id, port: port.id, until: state.clock.minute + DOCK_CLEARANCE_MIN };
   c.approach = Math.max(c.approach ?? 0, c.dock.until);
@@ -260,6 +271,7 @@ export function trafficControlTick(state, emit = () => {}) {
     tc.zone = zone;
     tc.since = now;
     tc.warned = {};
+    tc.loiter = 0;
     if (tc.outbound && (zone === 'none' || st?.id !== tc.outbound)) tc.outbound = null;
     if (st) emit('tc-zone', { station: st.id, name: st.name, zone, was: wasSt === st.id ? was : 'none', voice: voice(st), text: zoneLine(state, st, zone, was) });
     else if (wasSt) emit('tc-zone', { station: wasSt, name: getWorld(state).get(wasSt)?.name, zone: 'none', was, text: 'Leaving traffic control space.' });
@@ -298,7 +310,13 @@ function enforce(state, st, dM, zone, emit) {
   const cl = clearanceFor(state, st.id);
   // (out of a berth and holding at its gate is leaving too: a hold there turning with a fast rock drifts a few m/s)
   const outbound = tc.outbound === st.id;
-  const leaving = cl.depart || outbound && (closingOn(state, st) <= 1 || state.flight.hold?.id === gateId(st.id)) || state.dock?.phase === 'undock' || state.dock?.phase === 'separate' || state.dock?.phase === 'holding' || state.dock?.phase === 'outbound' || state.autopilot?.depart?.station === st.id;
+  // (our dock here, backing out or climbing: leaving; sat at the hold point off a berth, only for a while)
+  const ourDock = state.dock?.target.id === st.id ? state.dock : null;
+  const lingering = ourDock?.phase === 'holding' && now - ourDock.since > HOLD_OFF_MIN;
+  const leaving = cl.depart || outbound && !ourDock && (closingOn(state, st) <= 1 || state.flight.hold?.id === gateId(st.id)) ||
+    (ourDock && (ourDock.phase === 'undock' || ourDock.phase === 'separate' || ourDock.phase === 'outbound' || ourDock.phase === 'holding' && !lingering)) || state.autopilot?.depart?.station === st.id;
+  // a ship flying a route in to us (inbound to the gate)
+  const inbound = state.autopilot?.phase === 'active' && state.autopilot.plan?.port?.id === st.id;
   const warn = (key, text, level = 'warn') => {
     if (tc.warned[key]) return false;
     tc.warned[key] = now;
@@ -317,13 +335,16 @@ function enforce(state, st, dM, zone, emit) {
   }
 
   // Loitering on the approach without clearance
-  if ((zone === 'approach' || zone === 'keepout') && !cl.approach && !leaving && !state.dock) {
-    warn('approach', `Ship on our approach, you have no clearance. State your intentions or clear to ${Math.round(APPROACH_M / 1e6) * 1000} km.`);
-    if (since('approach') >= 15 && !tc.warned.loiterCited) {
+  if ((zone === 'approach' || zone === 'keepout') && !cl.approach && !leaving && (!state.dock || lingering)) {
+    // (a ship flying a route in to us is told to hail; the clock for citing it runs only while it isn't:
+    // round a rock on the way in, it may be opening on us for a while)
+    warn('approach', inbound ? `Inbound ship, you are on our approach without clearance. Hail us for approach clearance.` : `Ship on our approach, you have no clearance. State your intentions or clear to ${Math.round(APPROACH_M / 1e6) * 1000} km.`);
+    if (!inbound) tc.loiter = (tc.loiter || 0) + 1;
+    if (tc.loiter >= 15 && !tc.warned.loiterCited) {
       tc.warned.loiterCited = now;
       cite(state, st.faction, { station: st.id, kind: 'loitering on the approach', amount: 300 }, emit);
     }
-    if (since('approach') >= 45 && !tc.warned.reported) {
+    if (tc.loiter >= 45 && !tc.warned.reported) {
       tc.warned.reported = now;
       if ((state.law.wanted[st.faction] ?? 0) < 1) state.law.wanted[st.faction] = 1;
       emit('tc-warning', { station: st.id, name: st.name, voice: voice(st), key: 'reported', level: 'danger', text: 'You have been reported to station security. Expect to be stopped.' });
@@ -333,7 +354,8 @@ function enforce(state, st, dM, zone, emit) {
   // Inside the gate without a berth
   if (zone === 'keepout' && !cl.dock && !leaving && !(state.dock && state.dock.target.id === st.id)) {
     warn('keepout', `FINAL WARNING. You are inside ${st.name}'s keep-out zone without docking clearance. Turn back now.`, 'danger');
-    if (since('keepout') >= 5 && !tc.warned.trespass) {
+    // (one inbound, coming in to the gate and over the line, is given time to correct: a gate on a small moon swings)
+    if (since('keepout') >= (inbound ? INBOUND_GRACE_MIN : 5) && !tc.warned.trespass) {
       tc.warned.trespass = now;
       recordOffense(state, st.faction, 'trespass', STATIONS[st.id]?.military ? 2 : 1, emit, `inside the keep-out zone of ${st.name}`);
       emit('station-alert', { id: st.id, name: st.name, level: STATIONS[st.id]?.military ? 'hostile' : 'alert' });

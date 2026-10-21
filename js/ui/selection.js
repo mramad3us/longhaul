@@ -16,6 +16,7 @@ import { orderHeal, orderStandDown } from '../sim/crew-ai.js';
 import { shipGeometry, FIXTURE_KIND, seatKind } from '../sim/ship-layout.js';
 import { atmoStatus, setVented, setBreach, suitsOnDeck } from '../sim/life-support.js';
 import { FIRE } from '../sim/fire.js';
+import { JobType } from '../sim/jobs.js';
 import { SYSTEM_BY_FIXTURE, systemPerf, waterRecovery, sensorRangeFactor, flightComputerState } from '../sim/systems.js';
 import { STATIONS, SHIFTS, scheduleBlock, minutesLeftInBlock } from '../sim/duty.js';
 import { NEEDS, NEED_LABEL, efficiency } from '../sim/needs.js';
@@ -360,7 +361,13 @@ export function showDeckMenu(deck, x, y) {
   if (a.fire) items.push(`<div class="ctx-info ctx-fire">FIRE · ${Math.round(a.fire.intensity * 100)}% — fight it, or vent the deck: nothing burns under ${FIRE.OUT_KPA} kPa</div>`);
   if (a.vented) items.push('<div class="ctx-item" data-ctx="repress">Close vents — repressurize</div>');
   else if (!a.breached) items.push(`<div class="ctx-item ctx-danger" data-ctx="vent">${a.fire ? 'Vent to space to put the fire out' : 'Vent compartment to space'}${bare ? ` (${bare} on deck without a suit!)` : ''}</div>`);
-  if (a.breached) items.push('<div class="ctx-info ctx-breach">HULL BREACH</div>', '<div class="ctx-item" data-ctx="seal">Seal breach (patch kit)</div>');
+  if (a.breached) {
+    // the patch is an engineer's job in a suit (life-support.js breachJobs, top priority): who is on it
+    const job = s.jobs.list.find(j => j.type === JobType.SEAL && j.data.deck === deck);
+    const by = job?.assignee != null ? s.ship.crew.find(m => m.id === job.assignee) : null;
+    items.push('<div class="ctx-info ctx-breach">HULL BREACH</div>', `<div class="ctx-info">${by ? `${esc(by.name)} is on the patch` : 'Patch job waiting for an engineer with a suit'}</div>`);
+    if (ui.settings.devMode) items.push('<div class="ctx-item" data-ctx="seal">DEV: seal it now</div>');
+  }
   if (ui.settings.devMode && !a.breached) items.push('<div class="ctx-item ctx-danger" data-ctx="breach">DEV: hull breach</div>');
   menu.innerHTML = items.join('');
   document.body.appendChild(menu);

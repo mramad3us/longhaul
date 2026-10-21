@@ -217,7 +217,8 @@ export function renderFireControl(state, box) {
   const hostiles = hostilesOfPlayer(state);
   const threatRows = inbound.map(th => `<div class="fc-threat"><span>${th.kind === 'slug' ? 'SLUG' : th.warhead === 'nuke' ? 'NUKE' : 'TORPEDO'}</span><b>${isFinite(th.etaS) ? formatDuration(th.etaS / 60) : 'opening'}</b></div>`).join('')
     + hostiles.map(h => `<div class="fc-threat fc-hostile"><span>${esc(h.transponder ? h.name : 'hostile contact')}</span><b>${fmtKm(Math.hypot(h.pos.x - state.flight.pos.x, h.pos.y - state.flight.pos.y) * AU_KM)}</b></div>`).join('');
-  const record = ['UN', 'MCR', 'OPA'].map(f => `<span class="fc-law ${state.law.wanted[f] ? 'fc-warn' : ''}">${f} ${Math.round(state.law.standing[f])} · ${WANTED_LABEL[state.law.wanted[f]]}</span>`).join('');
+  // (MARS, not MCR: beside the credits, MCR reads as money)
+  const record = ['UN', 'MCR', 'OPA'].map(f => `<span class="fc-law ${state.law.wanted[f] ? 'fc-warn' : ''}">${{ MCR: 'MARS' }[f] || f} ${Math.round(state.law.standing[f])} · ${WANTED_LABEL[state.law.wanted[f]]}</span>`).join('');
 
   const stance = tgt ? sec('STANCE', stanceControls(state, tgt, btn)) : '';
 

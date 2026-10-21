@@ -163,7 +163,7 @@ function hitPlayer(state, hit, emit) {
     }
     const geo = shipGeometry(state.ship);
     for (const m of state.ship.crew) {
-      if (m.dead || geo.deckOfRow(m.pos.sy) !== di) continue;
+      if (m.dead || m.away || geo.deckOfRow(m.pos.sy) !== di) continue;      // (ashore, or across with a boarding party: not here to be hit)
       if (random() >= Math.min(0.9, local / 90)) continue;
       const r = applyImpact(m, 2 + local / 7);
       if (!r) continue;

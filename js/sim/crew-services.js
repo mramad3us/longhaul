@@ -23,6 +23,7 @@ import { dockedStationEntity } from './docking.js';
 import { STATIONS } from './stations.js';
 import { shipGeometry, airlockFor } from './ship-layout.js';
 import { abandonTask } from './crew-ai.js';
+import { closeJob } from './jobs.js';
 import { leaseShortfall, extendLease } from './leases.js';
 
 export const LEAVE_MIN = 8 * 60;
@@ -60,7 +61,9 @@ export function hire(state, index) {
   if (crew.filter(m => !m.dead).length >= maxCrew(state.ship.classId || PLAYER_CLASS)) return { ok: false, text: 'No berth aboard for another hand.' };
   if (state.resources.credits.current < p.fee) return { ok: false, text: `${p.name} wants ${p.fee.toLocaleString()} MCR to sign.` };
   state.resources.credits.current -= p.fee;
-  const id = Math.max(...crew.map(m => m.id)) + 1;
+  // (ids are never reused: a job or a record about someone paid off must not land on a new hand)
+  const id = Math.max(state.ship.nextCrewId ?? 0, ...crew.map(m => m.id + 1));
+  state.ship.nextCrewId = id + 1;
   const m = createMember(id, p.role, [p.name], state.ship);
   m.skills = { ...p.skills };
   m.morale = p.morale;
@@ -80,8 +83,13 @@ export function dismiss(state, crewId) {
   if (!m || m.id === crew[0].id) return { ok: false, text: 'The captain stays.' };
   if (m.away) return { ok: false, text: `${m.name} isn't aboard.` };
   abandonTask(state, m);
+  // anyone busy with them (carrying them to the autodoc) puts it down
+  for (const o of crew) if (o !== m && o.task?.patient === m.id) abandonTask(state, o);
   state.ship.crew = crew.filter(x => x !== m);
+  if (!(state.ship.nextCrewId > m.id)) state.ship.nextCrewId = Math.max(...crew.map(x => x.id)) + 1;
   for (const j of state.jobs.list) if (j.assignee === m.id) { j.assignee = null; j.status = 'open'; }
+  // and jobs about them go: a rescue of someone ashore, work set aside for them
+  for (const j of state.jobs.list.filter(j => j.data.patient === m.id || j.data.engineer === m.id)) closeJob(state, j);
   return { ok: true, text: `${m.name} is paid off and goes ashore.` };
 }
 

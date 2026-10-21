@@ -100,10 +100,13 @@ export default [
           // (routes don't steer round bodies yet: one that grazes a planet is
           // thrown about by it, and the guidance takes a turn or two more)
           // (nor does a target behind a rock come straight: the route goes
-          // by a point off it on our side first, a leg and its turns more,
-          // and the line of sight swings round when it turns for the target)
-          const turnsOK = r.via ? 6 : r.flyby < 2000 ? 5 : 3;
-          if (!r.arrived || r.turns > turnsOK || r.wobbles > (r.via ? 2 : 1) || (!r.via && r.back > 30)) bad.push(`${id} ${G}G: ${JSON.stringify(r)}`);
+          // by points round it, each a leg and its turns more, and the line
+          // of sight swings round when it turns for the target. A slow ship
+          // round Vesta, or a fast one round Ganymede past Jupiter, takes up
+          // to a dozen turns: the old single waypoint was tidier, but waited
+          // at it for hours while the rock turned the gate away)
+          const turnsOK = r.via ? 12 : r.flyby < 2000 ? 5 : 3;
+          if (!r.arrived || r.turns > turnsOK || r.wobbles > (r.via ? 4 : 1) || (!r.via && r.back > 30)) bad.push(`${id} ${G}G: ${JSON.stringify(r)}`);
           if (G === 0.3 || G === 10) line(`${id} ${G}G`, r);
         }
       }
@@ -118,7 +121,8 @@ export default [
         const plan = planRoutes(miniState(), { kind: 'entity', id }, { includeBallistic: false }).find(o => o.name === 'ECONOMY').plan;
         const r = fly(miniState(), plan);
         line(`${id} economy`, r);
-        if (!r.arrived || r.turns > (r.via ? 6 : 3) || r.wobbles > 0 || (!r.via && r.back > 5)) bad.push(`${id} economy: ${JSON.stringify(r)}`);
+        // (round a rock, or a station's keep-out, by waypoints: a wobble or two as the line of sight swings, as above)
+        if (!r.arrived || r.turns > (r.via ? 8 : 3) || r.wobbles > (r.via ? 2 : 0) || (!r.via && r.back > 5)) bad.push(`${id} economy: ${JSON.stringify(r)}`);
       }
       assert(bad.length === 0, `untidy approaches:\n        ${bad.join('\n        ')}`);
     },
@@ -137,7 +141,8 @@ export default [
       line('Vesta 1G, hand-flown', vesta);
       assert(capped.arrived && capped.turns <= 3, 'capped drive');
       assert(slow.arrived && slow.turns <= (slow.via ? 3 : 2) && (slow.via || slow.back < 5), `slow slew: ${JSON.stringify(slow)}`);
-      for (const r of [luna, vesta]) assert(r.arrived && r.turns <= 3 && r.back < 30, 'hand-flown');
+      // (round a rock or a station's keep-out by waypoints, a leg and its turns more)
+      for (const r of [luna, vesta]) assert(r.arrived && r.turns <= (r.via ? 5 : 3) && r.back < 30, `hand-flown: ${JSON.stringify(r)}`);
     },
   },
   {

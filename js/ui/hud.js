@@ -112,7 +112,7 @@ export function navStatus(state) {
   if (d && DOCK_CHIP[d.phase]) {
     const e = getWorld(state).get(d.target.id);
     const [label, cls] = DOCK_CHIP[d.phase];
-    const r = d.phase === 'prox' || d.phase === 'separate' ? ` · ${d.rel.x < 10 ? d.rel.x.toFixed(1) : Math.round(d.rel.x)} m${d.mode === 'manual' ? ' · BY HAND' : ''}` : d.phase === 'approach' ? ` · ${fmtMeters(d.rel.x)}` : d.phase === 'outbound' && d.goal ? ` · ${fmtMeters(Math.hypot(d.goal.x - d.rel.x, d.goal.y - d.rel.y))} TO THE GATE` : '';
+    const r = d.phase === 'prox' || d.phase === 'separate' ? ` · ${d.rel.x < 10 ? d.rel.x.toFixed(1) : Math.round(d.rel.x)} m${d.mode === 'manual' ? ' · BY HAND' : ''}` : d.phase === 'approach' ? ` · ${fmtMeters(Math.hypot(d.rel.x - (d.target.kind === 'ship' ? 300 : 1000), d.rel.y, d.rel.z || 0))}` : d.phase === 'outbound' && d.goal ? ` · ${fmtMeters(Math.hypot(d.goal.x - d.rel.x, d.goal.y - d.rel.y))} TO THE GATE` : '';
     return { chip: `${label} · ${e?.name || ''}${r}`, cls };
   }
   if (ap) {
@@ -290,10 +290,11 @@ function updateSystemsStrip(state) {
 
 const RES = [
   { key: 'fuel', name: 'Fuel', icon: iconFuel, bar: 'bar-fuel', fmt: (r) => `${fmtNum(r.current)} / ${fmtNum(r.max)} kg` },
-  { key: 'o2Tank', name: 'O₂', icon: iconOxygen, bar: 'bar-oxygen', fmt: (r, s) => `${fmtNum(r.current)} kg · ${hours(s.lifeSupport.oxygenHours)}` },
-  { key: 'n2Tank', name: 'N₂', icon: iconN2, bar: 'bar-n2', fmt: (r) => `${fmtNum(r.current)} / ${fmtNum(r.max)} kg` },
+  // (O2, N2: the panel's pixel font has no subscript ₂)
+  { key: 'o2Tank', name: 'O2', icon: iconOxygen, bar: 'bar-oxygen', fmt: (r, s) => `${fmtNum(r.current)} kg · ${hours(s.lifeSupport.oxygenHours)}` },
+  { key: 'n2Tank', name: 'N2', icon: iconN2, bar: 'bar-n2', fmt: (r) => `${fmtNum(r.current)} / ${fmtNum(r.max)} kg` },
   { key: 'water', name: 'Water', icon: iconWater, bar: 'bar-water', fmt: (r, s) => `${fmtNum(r.current)} L · ${days(r.current, s, WATER_GROSS * (1 - waterRecovery(s)))}` },
-  { key: 'food', name: 'Food', icon: iconFood, bar: 'bar-food', fmt: (r, s) => `${fmtNum(r.current)} · ${days(r.current, s, 0.001)}` },
+  { key: 'food', name: 'Food', icon: iconFood, bar: 'bar-food', fmt: (r, s) => `${fmtNum(r.current)} rations · ${days(r.current, s, 0.001)}` },
   { key: 'power', name: 'Power', icon: iconPower, bar: 'bar-power', fmt: (r) => `${Math.round(r.current)}%` },
   { key: 'medSupplies', name: 'Medical', icon: iconMedical, bar: 'bar-medical', fmt: (r) => `${r.current.toFixed(1)} / ${r.max}` },
   { key: 'parts', name: 'Spare parts', icon: iconParts, bar: 'bar-parts', fmt: (r, s) => `${r.current.toFixed(1)} · scrap ${s.resources.scrap.current.toFixed(1)}`,
