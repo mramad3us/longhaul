@@ -231,6 +231,22 @@
 .stage-col .dock-hud { width: auto; }
 .stage-col .comms-ticker { align-items: stretch; }
 .stage-col .hold-indicator { min-width: 0; }
+/* The route panel in the column: its one-line summary (made for the nav map's
+   full width) on three lines — where to, what the drive is doing and how far
+   along, then range, speed and ETA beside the buttons — each cut short with an
+   ellipsis rather than spilling out of the box */
+.stage-col .route-status-summary {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center;
+  grid-template-areas: "dest dest dest dest" "phase prog prog prog" "eta eta map abort";
+  gap: 6px 8px; padding: 8px 12px;
+}
+.stage-col .route-status-dest { grid-area: dest; }
+.stage-col .route-status-phase { grid-area: phase; }
+.stage-col .route-status-progress { grid-area: prog; min-width: 0; }
+.stage-col .route-status-eta { grid-area: eta; }
+.stage-col .route-status-summary .route-zoom-btn { grid-area: map; margin-left: 0; padding: 3px 10px; font-size: 0.7rem; }
+.stage-col .route-status-summary .route-abort-btn { grid-area: abort; }
+.stage-col .route-status-dest, .stage-col .route-status-phase, .stage-col .route-status-eta { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* the inset takes its place in the column: the exterior camera (near), or
    the interior while the exterior has the view (prox) */
 .stage-col .stage-pip { position: relative; left: auto; right: auto; top: auto; bottom: auto; width: auto; height: 220px; flex: none; }

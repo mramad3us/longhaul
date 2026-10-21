@@ -127,7 +127,7 @@ export function navStatus(state) {
         : ['ready', 'guard', 'flip', 'orient'].includes(ap.display) ? 'chip-warn' : 'chip-nav';
       return { chip: `${STANCE_PHASE[ap.display] || ap.display.toUpperCase()} · ${name}${hand}`, cls };
     }
-    const label = { burn: 'BURN', brake: 'BRAKE', coast: 'COAST', approach: 'APPROACH', flip: 'FLIP', orient: 'ORIENT', 'transfer-burn': 'BURN' }[ap.display] || ap.display.toUpperCase();
+    const label = { burn: 'BURN', brake: 'BRAKE', coast: 'COAST', approach: 'APPROACH', flip: 'FLIP', orient: 'ORIENT', 'transfer-burn': 'BURN', depart: 'DEPARTING ON RCS' }[ap.display] || ap.display.toUpperCase();
     const hand = ap.helm === 'manual' ? ` · HAND-FLOWN (${ap.helmBy})` : '';
     return { chip: `${label} → ${name}${hand}`, cls: ap.display === 'flip' || ap.helm === 'manual' ? 'chip-warn' : 'chip-nav' };
   }
@@ -178,6 +178,7 @@ export function updateHud(state) {
   setText(el.ship, state.ship.name);
   const ns = navStatus(state);
   setText(el.chip, ns.chip);
+  if (el.chip.title !== ns.chip) el.chip.title = ns.chip;     // (the whole of it, when the bar cuts it short)
   if (el.chip.dataset.cls !== ns.cls) { el.chip.className = `hud-nav-chip ${ns.cls}`; el.chip.dataset.cls = ns.cls; }
 
   const max = maxSpeed(state);

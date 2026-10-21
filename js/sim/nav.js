@@ -598,7 +598,8 @@ function finishOption(state, plan, desc, fuelAvail) {
     desc,
     accelG: plan.accelG,
     estimate: est,
-    minutes: est.minutes + PREP_MINUTES,
+    minutes: est.minutes + PREP_MINUTES + departMinutes(state, plan),
+    departMin: departMinutes(state, plan),
     fuel: est.fuel,
     feasible: est.arrived && est.fuel <= fuelAvail * 0.95,
     reason: !est.arrived ? 'No convergent trajectory' : est.fuel > fuelAvail * 0.95 ? 'Insufficient reaction mass' : '',
@@ -621,3 +622,36 @@ export function routeTarget(state, target) {
 
 /** Rough allowance for securing crew before the first burn. */
 export const PREP_MINUTES = 10;
+
+// ---- LEAVING A PORT ----
+
+/** A route leaving a port flies on the RCS until this far out, in approaches (autopilot.js departLeg). */
+export const DEPART_OUT = 1.05;
+
+/** The station a route leaves (it starts at a berth, or in its approach, bound elsewhere), or null. */
+export function departingFrom(state, plan) {
+  if (plan.kind === 'stance') return null;
+  const d = state.dock;
+  const id = d?.target.kind === 'station' ? d.target.id
+    : state.tc?.station && (state.tc.zone === 'keepout' || state.tc.zone === 'approach') ? state.tc.station : null;
+  if (!id || plan.port?.id === id) return null;
+  return { station: id, ux: null, uy: null };
+}
+
+/**
+ * Roughly how long leaving takes before the route proper (the estimate
+ * flies from where we are as if the drive were free to light): out of a
+ * berth and up to the gate (docking.js), then the RCS out of the approach.
+ */
+export function departMinutes(state, plan) {
+  const id = departingFrom(state, plan)?.station;
+  const world = getWorld(state);
+  const st = id && world.get(id);
+  if (!st) return 0;
+  const p = predictEntity(st, state.clock.minute, world).pos;
+  const rM = Math.hypot(state.flight.pos.x - p.x, state.flight.pos.y - p.y) * AU_M;
+  const a = 0.6 * RCS_LIMIT;                       // (near a rock much of it holds us against the pull)
+  const leg = Math.sqrt(2 * Math.max(0, APPROACH_M * DEPART_OUT - rM) / a) / MIN_S;
+  const out = state.dock?.target.id === id ? 6 + Math.sqrt(2 * keepOutM(id) / a) / MIN_S : 0;   // unlatch, back out, climb to the gate
+  return Math.round(leg + out);
+}

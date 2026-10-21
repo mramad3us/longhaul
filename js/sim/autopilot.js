@@ -6,8 +6,10 @@
 //             automatically when everyone able is strapped in, or on
 //             the captain's override (unsecured crew may get hurt).
 //             Leaving a port, the docking computer climbs out of its
-//             gate on RCS meanwhile (docking.js outbound), so the
-//             drive can light when they are in.
+//             gate on RCS meanwhile (docking.js outbound).
+//   depart  — leaving a port, the route's first leg: on the RCS out of
+//             the station's approach before the drive lights (no
+//             fines for a burn across the port).
 //   active  — guidance flies the plan (burn / flip / brake / coast /
 //             RCS approach), re-planning every minute.
 //   arrive  — co-moving within the standoff: hold station on target.
@@ -29,14 +31,13 @@
 // body). If the target is under thrust, holding means burning with it.
 // ============================================================
 
-import { gravityAt } from './gravity.js';
+import { gravityAt, nearestSurface } from './gravity.js';
 import { terrainGuard, hoverCmd } from './terrain.js';
-import { AU_M, G0, DAY_MIN } from '../core/constants.js';
+import { AU_M, G0, DAY_MIN, MIN_S } from '../core/constants.js';
 import { getWorld, predictEntity } from './world.js';
-import { targetStateAt, targetName, guidanceStep, portOfTarget } from './nav.js';
+import { targetStateAt, targetName, guidanceStep, portOfTarget, departingFrom, DEPART_OUT } from './nav.js';
 import { turnAhead, FLIP_TURN, SLEW_RATE, RCS_MAX_G } from './flight.js';
-import { gateId } from './stations.js';
-import { KEEPOUT_SPEED_MS } from './traffic-control.js';
+import { KEEPOUT_SPEED_MS, APPROACH_SPEED_MS, APPROACH_M, keepOutM } from './traffic-control.js';
 import { crewSecureStatus } from './crew-ai.js';
 import { stanceDoctrine, STANCE_MODES } from './stance.js';
 import { isTracked, setSensorRange, SENSOR_RANGES } from './sensors.js';
@@ -62,6 +63,7 @@ export function engageRoute(state, plan, opts = {}) {
     peakG: 0,
     flipIn: Infinity,
     d: null, vClose: 0, relSpeed: 0,
+    depart: departingFrom(state, plan),
   };
   return state.autopilot;
 }
@@ -231,10 +233,22 @@ export function autopilotTick(state, emit = () => {}) {
       ap.phase = 'active';
       ap.engagedAt = now;
       state.flight.hold = null;
-      emit('route-engaged', { target: targetName(state, plan.target), unsecured: st.unsecured.map(m => m.name), override: ap.override && !allIn, stance: plan.kind === 'stance' ? STANCE_MODES[plan.mode].label : null });
+      emit('route-engaged', { target: targetName(state, plan.target), unsecured: st.unsecured.map(m => m.name), override: ap.override && !allIn, stance: plan.kind === 'stance' ? STANCE_MODES[plan.mode].label : null, departing: ap.depart ? getWorld(state).get(ap.depart.station)?.name || null : null });
     } else {
-      // while the crew strap in, a ship not held by anything is carried out of a gate on the RCS, or keeps its height over a rock (terrain.js)
-      return !state.flight.hold && !state.dock ? departCmd(state, now) || hoverCmd(state.flight.pos, state.flight.vel, now, { keepClimb: true }) : null;
+      // while the crew strap in (RCS is safe on their feet): out of port on the departure leg, or a ship not held by anything keeps its height over a rock (terrain.js)
+      if (ap.depart && !state.dock) { const c = departLeg(state, ap, now, emit); if (c) return c; }
+      return !state.flight.hold && !state.dock ? hoverCmd(state.flight.pos, state.flight.vel, now, { keepClimb: true }) : null;
+    }
+  }
+  if (ap.depart && !state.dock) {
+    const c = departLeg(state, ap, now, emit);
+    if (c) {
+      // (the route's readouts while guidance waits: range and speed to the target)
+      const f = state.flight;
+      ap.d = Math.hypot(tgt.pos.x - f.pos.x, tgt.pos.y - f.pos.y) * AU_M;
+      ap.relSpeed = Math.hypot(f.vel.vx - tgt.vel.vx, f.vel.vy - tgt.vel.vy);
+      ap.display = 'depart';
+      return guarded(state, ap, c, { pos: f.pos }, emit);
     }
   }
   if (plan.kind === 'stance') return guarded(state, ap, stanceTick(state, ap, tgt, emit), tgt, emit);
@@ -255,35 +269,82 @@ export function autopilotTick(state, emit = () => {}) {
   return guarded(state, ap, g.cmd, { pos: g.toward }, emit);
 }
 
+// ---- LEAVING A PORT ----
+
 /**
- * Leaving a port: inside its gate the torch is not allowed (traffic-control.js),
- * so while the crew strap in the nav computer carries us out up the corridor
- * (straight up from the station, toward its gate) on the RCS, to the keep-out
- * speed limit, on top of whatever holds us against the rock's pull. A walk to
- * the couches takes about as long as the RCS takes to cross a gate of 100 km,
- * so the route can light its drive as soon as everyone is in.
+ * Leaving a port, a route doesn't light its drive until we are out of the
+ * station's approach (traffic-control.js: the speed limits, and nobody
+ * loitering there uncleared): a burn from the gate would cross the port at
+ * speed, and the station cites it. So the route begins with a departure leg
+ * flown on the RCS alone (no plume), from the gate (docking.js has brought
+ * us out through it) to just past the approach's edge: the rock's pull held
+ * first, the rest of the RCS pushing out toward the side the route will
+ * burn for (never down into the rock), to the speed limit. Then the drive
+ * lights, already outbound. The crew may still be strapping in: RCS is safe
+ * on their feet.
  */
-function departCmd(state, now) {
-  if (state.tc?.zone !== 'keepout' || state.combatStations) return null;
+const DEPART_FAR = 3;                 // …or this far, if the route's burn from there would come back at the station
+const DEPART_UP = 0.5;                // within a radius of a rock's ground, the way out climbs at least this much (cosine off the vertical)
+
+/** The departure leg's command this minute, or null when it is over (we are out). */
+function departLeg(state, ap, now, emit) {
+  const dep = ap.depart;
   const world = getWorld(state);
-  const st = world.get(state.tc.station), gate = st && world.get(gateId(st.id));
-  if (!gate) return null;
-  const s0 = predictEntity(st, now, world), s1 = predictEntity(st, now + 1, world), g = predictEntity(gate, now, world);
-  const ux0 = g.pos.x - s0.pos.x, uy0 = g.pos.y - s0.pos.y, n = Math.hypot(ux0, uy0);
-  if (!n) return null;
-  const ux = ux0 / n, uy = uy0 / n;
+  const st = world.get(dep.station);
   const f = state.flight;
-  // the station's frame accelerates (a surface port turns with its rock): that, less the pull here, is the hold
+  const s0 = st && predictEntity(st, now, world);
+  const rM = s0 ? Math.hypot(f.pos.x - s0.pos.x, f.pos.y - s0.pos.y) * AU_M : Infinity;
+  // Out of the approach: done, unless the route would burn straight back across it (then on, a little further)
+  if (rM > APPROACH_M * DEPART_OUT && (rM > APPROACH_M * DEPART_FAR || !burnsBack(state, ap, now, s0))) {
+    ap.depart = null;
+    if (st) emit('route-departed', { station: st.name, target: targetName(state, ap.plan.target) });
+    return null;
+  }
+  f.hold = null;
+  if (dep.ux == null) Object.assign(dep, departDirection(state, ap, now, s0));
+  // the way out, climbing off a rock close by
+  let ux = dep.ux, uy = dep.uy;
+  const sf = nearestSurface(f.pos.x, f.pos.y, now);
+  if (sf && sf.alt < sf.body.radius * 1000) {
+    const up = ux * sf.ux + uy * sf.uy;
+    if (up < DEPART_UP) { ux += (DEPART_UP - up) * sf.ux; uy += (DEPART_UP - up) * sf.uy; const n = Math.hypot(ux, uy); ux /= n; uy /= n; }
+  }
+  const want = 0.9 * (rM < keepOutM(st.id) ? KEEPOUT_SPEED_MS : APPROACH_SPEED_MS);
+  // what holds us against the pull, in the station's frame (a surface port turns with its rock)…
+  const s1 = predictEntity(st, now + 1, world);
   const pull = gravityAt(f.pos.x, f.pos.y, now, _pull);
-  const hx = (s1.vel.vx - s0.vel.vx) / 60 - pull.ax, hy = (s1.vel.vy - s0.vel.vy) / 60 - pull.ay;
-  // out along the corridor at the limit, the drift across it nulled, on the RCS
-  const want = 0.9 * KEEPOUT_SPEED_MS;
-  let ax = (want * ux - (f.vel.vx - s0.vel.vx)) / 60, ay = (want * uy - (f.vel.vy - s0.vel.vy)) / 60;
-  const a = Math.hypot(ax, ay), rcs = RCS_MAX_G * G0;
-  if (a > rcs) { ax *= rcs / a; ay *= rcs / a; }
-  return { ax: hx + ax, ay: hy + ay, hover: true, depart: true };
+  const hx = (s1.vel.vx - s0.vel.vx) / MIN_S - pull.ax, hy = (s1.vel.vy - s0.vel.vy) / MIN_S - pull.ay;
+  // …and the push out, what the RCS has left after it
+  const cx = (want * ux - (f.vel.vx - s0.vel.vx)) / MIN_S, cy = (want * uy - (f.vel.vy - s0.vel.vy)) / MIN_S;
+  const rcs = RCS_MAX_G * G0 * 0.999;
+  const h2 = hx * hx + hy * hy;
+  if (h2 >= rcs * rcs) { const h = Math.sqrt(h2); return { ax: hx * rcs / h, ay: hy * rcs / h, depart: true }; }
+  const c2 = cx * cx + cy * cy, hc = hx * cx + hy * cy;
+  const k = c2 > 0 ? Math.min(1, (-hc + Math.sqrt(hc * hc - c2 * (h2 - rcs * rcs))) / c2) : 0;
+  return { ax: hx + k * cx, ay: hy + k * cy, depart: true };
 }
 const _pull = { ax: 0, ay: 0 };
+
+/** Would the route's burn from here head back toward the station (s0: its place now)? */
+function burnsBack(state, ap, now, s0) {
+  const f = state.flight;
+  const { ux, uy } = departDirection(state, ap, now, s0);
+  const rx = f.pos.x - s0.pos.x, ry = f.pos.y - s0.pos.y, r = Math.hypot(rx, ry) || 1;
+  return (ux * rx + uy * ry) / r < -0.2;
+}
+
+/** Which way the route will burn from here (asked of guidance on a copy of the plan), else toward the target: away from the station. */
+function departDirection(state, ap, now, s0) {
+  const f = state.flight;
+  const tgt = targetStateAt(state, ap.plan.target, now);
+  const probe = { ...ap.plan, target: { ...ap.plan.target }, $memo: undefined, $keep: undefined, $coastUntil: undefined, $want: undefined };
+  const g = tgt ? guidanceStep(probe, f, now, tgt, ap.plan.kind === 'transfer' ? targetStateAt(state, ap.plan.target, ap.plan.arriveAt) : null) : null;
+  let ux = g ? g.cmd.ax : 0, uy = g ? g.cmd.ay : 0;
+  if (Math.hypot(ux, uy) < 1e-6 && tgt) { ux = tgt.pos.x - f.pos.x; uy = tgt.pos.y - f.pos.y; }
+  if (Math.hypot(ux, uy) < 1e-12) { ux = f.pos.x - s0.pos.x; uy = f.pos.y - s0.pos.y; }
+  const n = Math.hypot(ux, uy) || 1;
+  return { ux: ux / n, uy: uy / n };
+}
 
 /** The terrain guard over the route's command (terrain.js): climb out round a rock in the way. */
 function guarded(state, ap, cmd, tgt, emit) {

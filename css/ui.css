@@ -17,28 +17,31 @@
    is two compact rows that fit the bar (--hud-height) whatever is showing */
 .hud-left, .hud-right { flex: 1 1 0; min-width: max-content; }
 .hud-right { justify-content: flex-end; }
-/* Narrower screens: tighter buttons, then the counters lose their words */
-@media (max-width: 1360px) {
+/* Narrower screens (the button rows alone fill 1,300 px): tighter buttons and
+   counters without their words, leaving the centre room for the status chip;
+   then the centre loses its top row */
+@media (max-width: 1600px) {
   .hud-bar .hud-left, .hud-bar .hud-right { gap: 6px; }
   .hud-text-btn { padding: 0 6px; letter-spacing: 0.08em; }
   .hud-missions-btn, .hud-jobs-btn { padding: 0 6px; }
-}
-@media (max-width: 1220px) {
-  .hud-missions-label, .hud-jobs-label, .hud-time-sep, .hud-center .hud-center-sub { display: none; }
-  .hud-center .hud-center-row { min-width: 0; max-width: 100%; }
-  .hud-nav-chip { min-width: 0; }
+  .hud-missions-label, .hud-jobs-label { display: none; }
   .hud-missions-btn::before { content: 'MSN'; } .hud-jobs-btn::before { content: 'JOB'; }
   .hud-missions-btn::before, .hud-jobs-btn::before { font-family: var(--font-pixel); font-size: 0.42rem; letter-spacing: 0.08em; color: var(--text-secondary); margin-right: 4px; }
 }
-.hud-center { position: static; transform: none; flex: 0 1 auto; min-width: 0; margin: 0 12px;
+@media (max-width: 1220px) {
+  .hud-time-sep, .hud-center .hud-center-sub { display: none; }
+}
+.hud-center { position: static; transform: none; flex: 0 1 auto; min-width: 0; margin: 0 12px; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; gap: 2px; max-height: var(--hud-height); }
-.hud-center-row { display: flex; align-items: center; gap: 8px; line-height: 1; }
-.hud-center-sub .hud-ship-name { padding: 1px 6px; }
+/* (each row held to the centre's width: a long status chip is cut short with an ellipsis, the full text
+   on hover, rather than spilling over the buttons beside it) */
+.hud-center-row { display: flex; align-items: center; gap: 8px; line-height: 1; min-width: 0; max-width: 100%; }
+.hud-center-sub .hud-ship-name { padding: 1px 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hud-center-sub .hud-space-chip:empty { display: none; }
 .hud-nav-chip {
   font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.08em;
   padding: 1px 10px; border: 1px solid var(--hull-primary); color: var(--text-secondary);
-  white-space: nowrap; max-width: 46vw; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto;
 }
 .hud-nav-chip.chip-ok { color: var(--ok); border-color: rgba(107, 203, 119, 0.35); }
 .hud-nav-chip.chip-nav { color: var(--accent); border-color: var(--accent-dim); box-shadow: 0 0 8px var(--accent-glow); }

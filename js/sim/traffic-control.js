@@ -296,7 +296,9 @@ function enforce(state, st, dM, zone, emit) {
   const now = state.clock.minute;
   const inZone = now - tc.since;
   const cl = clearanceFor(state, st.id);
-  const leaving = cl.depart || tc.outbound === st.id && closingOn(state, st) <= 1 || state.dock?.phase === 'undock' || state.dock?.phase === 'separate' || state.dock?.phase === 'holding' || state.dock?.phase === 'outbound';
+  // (out of a berth and holding at its gate is leaving too: a hold there turning with a fast rock drifts a few m/s)
+  const outbound = tc.outbound === st.id;
+  const leaving = cl.depart || outbound && (closingOn(state, st) <= 1 || state.flight.hold?.id === gateId(st.id)) || state.dock?.phase === 'undock' || state.dock?.phase === 'separate' || state.dock?.phase === 'holding' || state.dock?.phase === 'outbound' || state.autopilot?.depart?.station === st.id;
   const warn = (key, text, level = 'warn') => {
     if (tc.warned[key]) return false;
     tc.warned[key] = now;

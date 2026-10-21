@@ -18,8 +18,11 @@ import { pushTicker } from './ticker.js';
 let noFoodAt = null;
 
 const HANDLERS = {
-  'route-engaged': ({ target, unsecured, override, stance }) => {
-    if (override && unsecured.length) {
+  'route-departed': ({ station, target }) => { logEntry(`Helm: clear of ${station}'s approach — burning for ${target}`, 'nav'); toast(`MANEUVER → ${target}`, 'nav'); },
+  'route-engaged': ({ target, unsecured, override, stance, departing }) => {
+    if (departing && !(override && unsecured.length)) {
+      logEntry(`Helm: all hands secured — out of ${departing}'s approach on RCS, then burning for ${target}`, 'nav');
+    } else if (override && unsecured.length) {
       logEntry(`Helm: executing with ${unsecured.length} crew unsecured (${unsecured.join(', ')})`, 'danger');
       toast(`BURN — ${unsecured.length} CREW UNSECURED`, 'danger');
     } else if (stance) {

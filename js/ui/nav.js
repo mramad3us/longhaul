@@ -555,7 +555,7 @@ function renderRoutePanel() {
           <span class="route-stat">MAX G <span class="route-stat-val ${o.juice ? 'route-juice-warn' : ''}">${fmtG(est.maxG || o.accelG)}</span></span>
           <span class="route-stat">PEAK V <span class="route-stat-val">${fmtSpeed(est.peakSpeed)}</span></span>
         </div>
-        <div class="route-card-desc">${esc(o.desc)}</div>
+        <div class="route-card-desc">${esc(o.desc)}${o.departMin ? ` Leaving port first: about ${formatDuration(o.departMin)} out of the approach on RCS (in the time).` : ''}</div>
         <div class="route-card-feasibility ${o.feasible ? 'route-feasible' : 'route-infeasible'}">${o.feasible ? '● READY' : `● ${esc(o.reason)}`}</div>
         ${juiceNote}
       </div>`;
@@ -705,7 +705,7 @@ function renderNavInfo(state, rel) {
   setHTML($('#nav-info'), parts.map(p => `<span>${p}</span>`).join('<span class="tac-info-sep">·</span>'));
 }
 
-const PHASE_LABEL = { prepare: 'SECURING', held: 'FLIP HELD', burn: 'BURN', brake: 'BRAKE', coast: 'COAST', approach: 'RCS APPROACH', flip: 'FLIP', orient: 'ORIENT', 'transfer-burn': 'TRANSFER BURN' };
+const PHASE_LABEL = { depart: 'DEPARTING · RCS', prepare: 'SECURING', held: 'FLIP HELD', burn: 'BURN', brake: 'BRAKE', coast: 'COAST', approach: 'RCS APPROACH', flip: 'FLIP', orient: 'ORIENT', 'transfer-burn': 'TRANSFER BURN' };
 
 function renderRouteStatus(state, eta, box, full) {
   const ap = state.autopilot;
