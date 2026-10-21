@@ -13,7 +13,7 @@ import { bus } from '../core/events.js';
 import { VERSION } from '../version.js';
 import { getWorld, backgroundBudget } from './world.js';
 import { createDefaultEntities } from './entities.js';
-import { createDefaultLayout, computeShipMass, isSecureSeat } from './ship-layout.js';
+import { createLayout, computeShipMass, isSecureSeat } from './ship-layout.js';
 import { createCrew, gStateFor, protectedG, physiologyTick, endJuice, juiceLapsed, mourn } from './crew.js';
 import { crewTick, placeCrew, helmsman, crewSecureStatus } from './crew-ai.js';
 import { createJobs } from './jobs.js';
@@ -41,8 +41,18 @@ import { createLaw, lawTick } from './law.js';
 import { createPolitics, politicsTick } from './conflict.js';
 import { destroyPlayer } from './damage.js';
 import { snapshot, PDC_ROUNDS_PER_MOUNT } from './combatants.js';
+import { dockingTick, finishMinute, dockHold, dockHolds, inFrame, frameStep, dockInstant, PROX_RATES, hoverG, hoverOnRcs } from './docking.js';
+import { terrainTick } from './terrain.js';
+import { createTrafficControl, trafficControlTick, keepOutDriveCap } from './traffic-control.js';
+import { stationsTick } from './station-defense.js';
+import { createDossier, dossierTick } from './manifest.js';
+import { boardingTick } from './boarding.js';
+import { leaveTick } from './crew-services.js';
+import { leaseTick } from './leases.js';
+import { setGravityEpoch } from './gravity.js';
+import { fireTick } from './fire.js';
 
-export const SAVE_SCHEMA = 5;
+export const SAVE_SCHEMA = 6;
 
 // Consumption per person per minute. Crew eat meals (crew-ai); passengers
 // are fed from stores continuously. Water figures are gross — the
@@ -64,12 +74,12 @@ const emit = (type, payload) => bus.emit(type, payload);
  * navies and pirates in the background (forces.js) — on whenever there is
  * traffic, off for test suites that leave both out.
  */
-export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = DEFAULT_TRAFFIC, forces = traffic > 0, classId = PLAYER_CLASS } = {}) {
-  const crew = createCrew(crewCount);
-  crew[0].name = captainName;
+export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = DEFAULT_TRAFFIC, forces = traffic > 0, classId = PLAYER_CLASS, home = 'ceres-station', docked = true } = {}) {
   if (!CLASSES[classId]) classId = PLAYER_CLASS;
   const cls = CLASSES[classId];
-  const ship = { name: shipName, classId, tl: cls.tl, decks: createDefaultLayout(classId), crew };
+  const ship = { name: shipName, classId, tl: cls.tl, decks: createLayout(classId), crew: [] };
+  ship.crew = createCrew(crewCount, ship);
+  ship.crew[0].name = captainName;
 
   const state = {
     schema: SAVE_SCHEMA,
@@ -111,6 +121,10 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
     missions: createMissions(),
     contracts: createContracts(),
     traffic: createTraffic(traffic),
+    tc: createTrafficControl(),
+    dock: null,
+    boarding: null,
+    dossier: createDossier(),
     entities: createDefaultEntities(),
     nextEntityId: 1,
     combatStations: false,
@@ -122,9 +136,12 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
   state.shipMass = computeShipMass(ship);
 
   const world = getWorld(state);
-  const home = world.get('ceres-station');
-  state.flight = createFlight({ x: home.pos.x + 3000 / AU_M, y: home.pos.y }, home.vel, Math.PI / 2);
-  holdStation(state, { kind: 'entity', id: home.id });
+  const port = world.get(home) || world.get('ceres-station');
+  // Start in a berth, sealed (taken before the traffic arrives), or (docked:
+  // false, for test suites) holding at the station's approach gate
+  const gate = world.get(`${port.id}-gate`) || port;
+  state.flight = createFlight({ x: gate.pos.x, y: gate.pos.y }, gate.vel, Math.PI / 2);
+  if (!docked || !dockInstant(state, port.id)) holdStation(state, { kind: 'entity', id: gate.id });
   placeCrew(state);
   seedTraffic(state);
   if (forces) seedForces(state);
@@ -137,7 +154,12 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
  * already has changes.
  */
 export function upgradeState(state) {
+  setGravityEpoch(state.clock.minute);
   ensureIntel(state);
+  state.tc ??= createTrafficControl();
+  state.dossier ??= createDossier();
+  if (state.dock === undefined) state.dock = null;
+  if (state.boarding === undefined) state.boarding = null;
   const fresh = state.traffic && !state.traffic.v;
   ensurePopulation(state);
   if (fresh && state.traffic.population > 0) seedForces(state);
@@ -173,6 +195,7 @@ function handFlown(cmd, pilot, ap) {
  * systems → sensors → combat decisions, politics, missions.
  */
 export function minuteTick(state, { lite = false } = {}) {
+  setGravityEpoch(state.clock.minute);          // everything flown this minute falls from here
   const f = state.flight;
   const res = state.resources;
   const prevG = f.thrustG;
@@ -189,14 +212,22 @@ export function minuteTick(state, { lite = false } = {}) {
   const breach = state.ship.decks.some(d => d.atmosphere?.breached);
   if (breach) f.maxG = Math.min(f.maxG, 1);
   if (breach !== !!state.damageControl) { state.damageControl = breach; emit('damage-control', { on: breach }); }
+  // No torch inside a station's gate (traffic-control.js)
+  if (!state.autopilot?.climbing) f.maxG = Math.min(f.maxG, keepOutDriveCap(state));   // (pulling up off a rock, the drive is the drive)
   state.$driveCap = f.maxG;
   // Standing order: never push past 1.5G with anyone still on their feet (unless the captain overrides)
   if (state.autopilot?.phase === 'active' && !state.autopilot.override && f.maxG > 1.5 && f.thrustG <= 1.5 + 1e-6 &&
       state.ship.crew.some(m => !m.dead && !isSecureSeat(m.seat))) f.maxG = 1.5;
   f.$slew = SLEW_RATE * slewFactor(state);
 
-  // ---- Flight
+  // ---- Docking: phases move on; while the dock holds us we fly in the berth's frame
+  let held = dockingTick(state, emit);
+
+  // ---- Flight (a route plotted at a berth undocks first: autopilot.js)
   let cmd = autopilotTick(state, emit);
+  // (a route leaving the hold point lets the dock go: this minute is flown, or we'd fall a minute behind the world)
+  if (held && !dockHolds(state)) held = false;
+  if (held) cmd = null;
   const ap = state.autopilot;
   if (ap) ap.helm = null;
   if (cmd && ap?.phase === 'active') {
@@ -213,7 +244,7 @@ export function minuteTick(state, { lite = false } = {}) {
     if (ap.helm !== (ap.helmWas ?? null)) emit('helm-status', { status: ap.helm, was: ap.helmWas ?? null, by: ap.helmBy });
     ap.helmWas = ap.helm;
     // No flip with the crew on their feet
-    if (cmd) cmd = flipInterlock(state, cmd, emit);
+    if (cmd && !cmd.climb) cmd = flipInterlock(state, cmd, emit);   // (pulling up off a rock overrides it: terrain.js)
   }
   if (!cmd && f.manual && f.manual.throttleG > 0) {
     cmd = { ax: Math.cos(f.facing) * f.manual.throttleG * G0, ay: Math.sin(f.facing) * f.manual.throttleG * G0, maxG: f.manual.throttleG };
@@ -224,7 +255,14 @@ export function minuteTick(state, { lite = false } = {}) {
   }
   const driveOK = isReactorOnline(state) && res.fuel.current > 0 && f.maxG > 0;
   let out = { mainG: 0, rcsG: 0, turned: 0 };
-  if (f.hold && !(state.autopilot?.phase === 'active')) {
+  if (held) {
+    // Proximity operations fly the rest of the minute second by second (docking.js)
+    finishMinute(state, emit);
+    f.thrustG = state.dock?.phase === 'approach' ? (state.$dockThrust || 0) : 0;
+    f.turning = 0;
+    f.rcsG = state.$dockRcs || 0;
+    out.mainG = 0; out.rcsG = 0;      // (reaction mass already spent second by second)
+  } else if (f.hold && !(state.autopilot?.phase === 'active')) {
     f.thrustG = 0; f.rcsG = 0; f.turning = 0;
   } else {
     if (cmd && !driveOK) {
@@ -245,17 +283,28 @@ export function minuteTick(state, { lite = false } = {}) {
   // Lite minutes (intermediate minutes of a heavy time-warp frame) skip the
   // observation work; the frame's final minute brings everything up to date.
   if (!lite) world.tick(state.clock.minute, f.pos);
-  moveAgents(state);
+  moveAgents(state, emit);
 
   let holdG = 0;
-  if (f.hold) {
+  if (dockHolds(state)) {
+    dockHold(state);
+    // hovering off a berth beside a rock costs thrust (docking.js hoverG): the RCS's, but on the final approach
+    const hov = hoverG(state);
+    if (hov > 1e-5 && hoverOnRcs(state)) { out.rcsG = Math.hypot(out.rcsG, hov); f.rcsG = Math.hypot(f.rcsG || 0, hov); }
+    else if (hov > 1e-5 && driveOK) { out.mainG = Math.hypot(out.mainG, hov); f.thrustG = Math.hypot(f.thrustG, hov); }
+  } else if (f.hold) {
     holdG = holdStep(state);
     if (holdG > 0) {
-      if (!driveOK) { f.hold = null; emit('hold-lost', { reason: 'no drive power' }); }
-      else { f.thrustG = holdG; out.mainG = holdG; }
+      // a light hold (hovering at a small rock's gate) is kept on the RCS when the drive is down
+      const onRcs = holdG <= RCS_MAX_G && res.fuel.current > 0 && rcsAvailable(state);
+      if (driveOK) { f.thrustG = holdG; out.mainG = holdG; }
+      else if (onRcs) { f.rcsG = holdG; out.rcsG = holdG; }
+      else { f.hold = null; emit('hold-lost', { reason: 'no drive power' }); }
     }
   }
   combatMove(state, emit);
+  // Flying free near a body: the ground (terrain.js)
+  terrainTick(state, emit, { free: !held && !f.hold && !dockHolds(state) });
 
   // Overdriven drive: each minute past the rated limit risks the magnetic bottle
   const rated = ratedG(cls);
@@ -287,7 +336,7 @@ export function minuteTick(state, { lite = false } = {}) {
   state.crewPolicy = state.clock.minute < (state.secureUntil ?? -1) ? 'secure' : 'free';
   // The maneuvering lights: the nav computer has called the crew in, and someone able is still up
   state.$maneuverAlert = !!state.autopilot && state.crewPolicy === 'secure' && !state.combatStations && crewSecureStatus(state).unsecured.length > 0;
-  const living = state.ship.crew.filter(m => !m.dead).length;
+  const living = state.ship.crew.filter(m => !m.dead && !m.away).length;
 
   // ---- Machinery: wear, faults, and the work they make
   systemsTick(state, {
@@ -299,12 +348,13 @@ export function minuteTick(state, { lite = false } = {}) {
 
   for (const m of state.ship.crew) {
     if (m.dead) continue;
+    const gHere = m.away ? 0 : g;          // a boarding party feels the other hull, not ours
     const secured = isSecureSeat(m.seat);
-    m.gState = gStateFor(m, g, secured);
-    const eff = protectedG(m, g, secured, res);
+    m.gState = gStateFor(m, gHere, secured);
+    const eff = protectedG(m, gHere, secured, res);
     m.$effG = eff;                       // what the body feels (couch + juice)
     const wasCritical = m.conditions.includes('critical');
-    for (const ev of physiologyTick(m, eff, g)) {
+    for (const ev of physiologyTick(m, eff, gHere)) {
       if (ev === 'died') { mourn(state.ship.crew, m); emit('crew-died', { member: m }); }
       else if (ev === 'critical' && !wasCritical) emit('crew-critical', { member: m });
       else if (ev === 'brain-damage') emit('crew-brain-damage', { member: m });
@@ -328,13 +378,14 @@ export function minuteTick(state, { lite = false } = {}) {
   res.food.current = Math.max(0, res.food.current - pax * FOOD_PER_MIN);
   const water = res.water.current > 0;
   for (const m of state.ship.crew) {
-    if (m.dead) continue;
+    if (m.dead || m.away) continue;
     const asleep = m.activity === 'sleeping' ? 'bunk' : m.activity === 'sleeping-couch' ? 'couch' : null;
     const strapped = isSecureSeat(m.seat) && !m.seat.startsWith('medbay') && (state.crewPolicy === 'secure' || m.task?.type === 'helm');
     needsTick(m, { asleep, secured: strapped, onDuty: m.task?.type === 'watch' || m.task?.type === 'helm' || m.task?.type === 'work', gForce: m.$effG ?? g, res, water });
   }
 
   // ---- Plant
+  fireTick(state, emit);
   lifeSupportTick(state, { emit });
   reactorTick(state, emit);
   if (state.reactor.supercritical && !state.lost) destroyPlayer(state, 'reactor', emit);
@@ -344,9 +395,15 @@ export function minuteTick(state, { lite = false } = {}) {
     if (!state.reactor.blackout) { sensorsTick(state); recordContacts(state); }
     commsTick(state, emit);
   }
+  trafficControlTick(state, emit);
+  dossierTick(state, emit);
 
   // ---- The wider world
   combatTick(state, emit);
+  stationsTick(state, emit);
+  boardingTick(state, emit);
+  leaveTick(state, emit);
+  leaseTick(state, emit);
   lawTick(state);
   politicsTick(state, emit);
   missionsTick(state, emit);
@@ -429,7 +486,28 @@ export class GameLoop {
         const hits = updateInertia(s, dt);
         for (const h of hits) emit('inertia-impact', h);
         if (!isInertiaActive(s)) emit('inertia-end', {});
+      } else if (s.speed === 1 && dockHolds(s)) {
+        // Docking mode: the minute is flown in game seconds at the dock's rate,
+        // proximity operations a second at a time (docking.js), so a view
+        // drawn between minutes shows where the ship really is (×60 included:
+        // flown whole, a minute's motion would show as a jump)
+        this.proxAcc = (this.proxAcc || 0) + dt * PROX_RATES[s.dock.rate ?? 3];
+        this.sub = this.sub || 0;
+        let n = 0;
+        while (this.proxAcc >= 1 && n < 600) {
+          this.proxAcc -= 1; n++;
+          if (inFrame(s)) frameStep(s, 1, emit);
+          if (++this.sub >= 60) {
+            this.sub = 0;
+            minuteTick(s);
+            steps++;
+            const world = getWorld(s);
+            world.background(s.clock.minute, backgroundBudget(world.count, 1));
+            if (isInertiaActive(s) || !dockHolds(s)) { this.proxAcc = 0; break; }
+          }
+        }
       } else if (s.speed > 0) {
+        this.sub = 0;
         this.acc += dt * SPEED_MIN_PER_SEC[s.speed];
         const cap = 3000;                  // never stall a frame: drop excess at extreme rates
         while (this.acc >= 1 && steps < cap) {
@@ -453,7 +531,7 @@ export class GameLoop {
     this.stepsLastFrame = steps;
     this.simMsLastFrame = performance.now() - t0;
     // Fraction of the next minute elapsed — for smooth interpolation in the renderer
-    this.alpha = s.speed > 0 ? Math.min(1, this.acc) : 1;
+    this.alpha = s.speed > 0 ? Math.min(1, this.sub ? this.sub / 60 : this.acc) : 1;
     try { this.onFrame(s, this.alpha); } catch (e) { this.onError(e); }
   }
 }

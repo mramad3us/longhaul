@@ -33,6 +33,7 @@
 // the director's patrol encounter is the one that comes to look at us.
 // ============================================================
 
+import { groundCheck, terrainGuard, hoverCmd } from './terrain.js';
 import { AU_M, G0, MIN_S, DAY_MIN } from '../core/constants.js';
 import { randInt, chance } from '../core/rng.js';
 import { getWorld } from './world.js';
@@ -51,6 +52,7 @@ import { hullTick } from './damage.js';
 import { wantedBy, settleInspection, adjustStanding } from './law.js';
 import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from './weapons.js';
 import { putToSleep } from './forces.js';
+import { releaseHull, parkHull } from './stations.js';
 
 /**
  * How each role fights. launchAU: torpedo launch range · standoffM: distance
@@ -128,6 +130,8 @@ export function wake(state, e, role, opts = {}) {
   if (e.agent) return e;
   world.refresh(e, state.clock.minute);
   if (e.tags.traffic) { e.tags.traffic = false; e.tags.woke = 'traffic'; if (state.traffic) state.traffic.spawned = Math.max(0, state.traffic.spawned - 1); }
+  releaseHull(world, e);
+  e.tags.at = null;
   world.setDriven(e, true);
   e.t = state.clock.minute;
   if (!e.cls) { e.cls = 'freighter'; e.tl = CLASSES.freighter.tl; }
@@ -139,8 +143,7 @@ export function wake(state, e, role, opts = {}) {
 export function parkAt(state, e, station) {
   const world = getWorld(state);
   world.setDriven(e, false);
-  const o = station.orbit;
-  e.orbit = { body: o.body, r: o.r * 1.01, phase: o.phase + 0.001, period: o.period };
+  parkHull(state, e, station, { reserve: false });
   e.thrust = 0;
   e.agent.mode = 'docked';
   e.agent.cmd = null;
@@ -294,7 +297,7 @@ export function surrender(state, e, emit = () => {}, { accepted = false } = {}) 
 // ---- PER MINUTE: FLY ----
 
 /** Advance every agent one minute on the command it chose last minute. */
-export function moveAgents(state) {
+export function moveAgents(state, emit = () => {}) {
   const world = getWorld(state);
   const now = state.clock.minute;
   for (const e of world.driven) {
@@ -302,13 +305,17 @@ export function moveAgents(state) {
     e.$prev = snapshot(e.pos, e.vel);
     const p = profile(state, e.id);
     const f = { pos: e.pos, vel: e.vel, facing: e.nav.facing, maxG: p.maxG, $slew: SLEW_RATE, thrustG: 0, rcsG: 0, turning: e.nav.turning || 0 };
-    flightStep(f, p.maxG > 0 ? e.agent.cmd : null, 1);
+    let cmd = p.maxG > 0 ? e.agent.cmd : null;
+    // its pilot keeps it off the rocks too (terrain.js); a dead drive can't
+    if (p.maxG > 0) cmd = terrainGuard(e.pos, e.vel, cmd, e.agent.$toward || null, p.maxG * G0, now - 1) || cmd || hoverCmd(e.pos, e.vel, now - 1);
+    flightStep(f, cmd, 1);
     e.nav.facing = f.facing;
     e.nav.turning = f.turning;
     e.thrust = f.thrustG;
     e.heading = f.facing;
     e.t = now;
     world.hash.update(e);
+    groundCheck(state, e, emit);                    // come down on a rock (terrain.js)
   }
 }
 

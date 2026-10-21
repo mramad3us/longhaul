@@ -53,13 +53,14 @@
 // ============================================================
 
 import { AU_M, G0, MIN_S } from '../core/constants.js';
-import { solarGravity } from './ephemeris.js';
+import { gravityAt, gravityEpoch, pullOf } from './gravity.js';
 import { solveLambert } from './lambert.js';
 import { RCS_MAX_G, SLEW_RATE, ALIGN_TOL, LEAN_MAX, angleDiff } from './flight.js';
 
 export const BRAKE_MARGIN = 0.85;     // plan braking at 85% of available thrust
 export const ARRIVE_SPEED = 3;        // m/s relative — "stopped"
 
+const _pull = { ax: 0, ay: 0 };
 const _gs = { ax: 0, ay: 0 };
 const _gt = { ax: 0, ay: 0 };
 
@@ -78,8 +79,9 @@ export function relativeState(flight, target, out = {}) {
   const d = Math.hypot(dx, dy);
   const dvx = flight.vel.vx - target.vel.vx;   // ship relative to target
   const dvy = flight.vel.vy - target.vel.vy;
-  solarGravity(flight.pos.x, flight.pos.y, _gs);
-  solarGravity(target.pos.x, target.pos.y, _gt);
+  const t = target.t ?? gravityEpoch();
+  gravityAt(flight.pos.x, flight.pos.y, t, _gs);
+  gravityAt(target.pos.x, target.pos.y, t, _gt);
   out.dx = dx; out.dy = dy; out.d = d;
   out.ux = d > 0 ? dx / d : 0;
   out.uy = d > 0 ? dy / d : 0;
@@ -95,7 +97,15 @@ export function relativeState(flight, target, out = {}) {
     out.ffx = (_gt.ax - _gs.ax) + (target.ax || 0);
     out.ffy = (_gt.ay - _gs.ay) + (target.ay || 0);
   }
-  out.swings = target.swings || NO_SWINGS;
+  // A swing's pull is the pull of the body it circles; what of it we feel
+  // too (inside that body's reach) is not ours to thrust for: rax/ray is
+  // the rest, what following the swing will take of the drive
+  const sw = target.swings || NO_SWINGS;
+  for (const s of sw) {
+    const p = s.about ? pullOf(s.about, flight.pos.x, flight.pos.y, t, _pull) : null;
+    s.rax = s.ax - (p ? p.ax : 0); s.ray = s.ay - (p ? p.ay : 0);
+  }
+  out.swings = sw;
   return out;
 }
 
@@ -104,7 +114,7 @@ export function relativeState(flight, target, out = {}) {
  * route's stop point (the standoff on the line of sight, m < 0 toward us).
  */
 export function pointFrom(tgt, ux, uy, m) {
-  const P = { pos: { x: tgt.pos.x + ux * m / AU_M, y: tgt.pos.y + uy * m / AU_M }, vel: tgt.vel, ax: tgt.ax || 0, ay: tgt.ay || 0, swings: tgt.swings };
+  const P = { pos: { x: tgt.pos.x + ux * m / AU_M, y: tgt.pos.y + uy * m / AU_M }, vel: tgt.vel, ax: tgt.ax || 0, ay: tgt.ay || 0, atx: tgt.atx, aty: tgt.aty, t: tgt.t, swings: tgt.swings };   // (a rails target's whole acceleration: a gate over a rock hovers, it doesn't fall)
   if (tgt.atx != null) { P.atx = tgt.atx; P.aty = tgt.aty; }
   return P;
 }
@@ -353,13 +363,14 @@ export function closingLaw(rel, p, out = {}) {
   for (const sw of rel.swings) {
     const follow = swingShare(sw.period, ttg), ignore = 1 - follow;
     const r = 2 * Math.PI * MIN_S / sw.period, cr = Math.cos(r) - 1, sr = Math.sin(r);
-    dHx += follow * (sw.ax * cr - sw.ay * sr); dHy += follow * (sw.ax * sr + sw.ay * cr);
-    const a = Math.hypot(sw.ax, sw.ay);
+    const rax = sw.rax ?? sw.ax, ray = sw.ray ?? sw.ay;
+    dHx += follow * (rax * cr - ray * sr); dHy += follow * (rax * sr + ray * cr);
+    const a = Math.hypot(rax, ray);
     // a swing followed is steady only over the last twelfth of its period
     // (30° of turn); before that its pull will come round, so the braking
     // plan takes it at its worst, not at what it happens to be now
     const unsteady = follow * Math.max(0, Math.min(1, 12 * ttg / sw.period));
-    reserve += ignore * a + unsteady * (sw.ax * ux + sw.ay * uy + a);
+    reserve += ignore * a + unsteady * (rax * ux + ray * uy + a);
     if (ignore <= 0) continue;
     dvx += ignore * sw.vx; dvy += ignore * sw.vy;
     Hx -= ignore * sw.ax; Hy -= ignore * sw.ay;

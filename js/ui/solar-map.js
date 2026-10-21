@@ -5,6 +5,10 @@
 // (intel.js): live contacts and charted orbits where they are, and the
 // reports on the plot (lost contacts, traffic digests) where they should
 // be by now, faded with age. Big plots fall back to a point cloud.
+//
+// Layers can be filtered (stations, ships, the plot's reports), stations
+// are drawn over the traffic crowding them, and a click on a crowd offers
+// the list of what is under the pointer (onPickList) rather than guessing.
 // ============================================================
 
 import { AU_KM, DAY_MIN } from '../core/constants.js';
@@ -45,7 +49,7 @@ const DUST = Array.from({ length: 900 }, (_, i) => {
 });
 
 export class SolarMap {
-  constructor(container, { onSelect, onHover } = {}) {
+  constructor(container, { onSelect, onHover, onPickList } = {}) {
     this.fc = new FitCanvas(container, { className: 'map-canvas' });
     this.cx = 0; this.cy = 0;           // view center, AU
     this.scale = 60;                    // px per AU
@@ -58,6 +62,8 @@ export class SolarMap {
     this.showIntel = true;              // reported tracks on the plot, light-time rings
     this.onSelect = onSelect || (() => {});
     this.onHover = onHover || (() => {});
+    this.onPickList = onPickList || null;
+    this.filter = { stations: true, ships: true };   // layers drawn (reports: showIntel)
     this._pickables = [];
     this._bind(container);
   }
@@ -127,9 +133,13 @@ export class SolarMap {
       if (!drag) return;
       const r = el.getBoundingClientRect();
       if (drag.moved <= 4) {
-        const hit = this.pick(e.clientX - r.left, e.clientY - r.top);
-        this.selected = hit;
-        this.onSelect(hit);
+        const all = this.pickAll(e.clientX - r.left, e.clientY - r.top);
+        if (all.length > 1 && this.onPickList) this.onPickList(all, e.clientX - r.left, e.clientY - r.top);
+        else {
+          const hit = all[0] || null;
+          this.selected = hit;
+          this.onSelect(hit);
+        }
       }
       drag = null;
       el.style.cursor = 'grab';
@@ -145,12 +155,19 @@ export class SolarMap {
   }
 
   pick(sx, sy) {
-    let best = null, bd = 14 * 14;
+    return this.pickAll(sx, sy)[0] || null;
+  }
+
+  /** Everything under the pointer (within 14 px): stations and bodies first, then the nearest. */
+  pickAll(sx, sy) {
+    const out = [], seen = new Set();
     for (const p of this._pickables) {
       const d = (p.sx - sx) ** 2 + (p.sy - sy) ** 2;
-      if (d < bd) { bd = d; best = p; }
+      if (d > 14 * 14 || seen.has(p.id)) continue;
+      seen.add(p.id);
+      out.push({ kind: p.kind, id: p.id, d: d - (p.kind === 'body' ? 60 : p.station ? 80 : 0), report: !!p.report });
     }
-    return best ? { kind: best.kind, id: best.id } : null;
+    return out.sort((a, b) => a.d - b.d).map(({ kind, id, report }) => ({ kind, id, report }));
   }
 
   _cloudLayer(W, H) {
@@ -377,11 +394,16 @@ export class SolarMap {
     for (const e of world.driven) if (e.type === 'ordnance' && e.ord.owner === 'player') add(e);
     const tracks = state.intel?.tracks || {};
     for (const id in tracks) if (tracks[id].kind === 'chart') add(world.get(id));    // wrecks in the news: charted
-    if (this.showIntel) this._drawReports(ctx, state, view, sp, drawn, opts);
+    if (this.showIntel && this.filter.ships) this._drawReports(ctx, state, view, sp, drawn, opts);
 
+    // stations drawn last, over the traffic crowding them; filtered layers left out (but never what is picked)
+    live.sort((a, b) => (a.type === 'station') - (b.type === 'station'));
     for (const e of live) {
       if (e.pos.x < view.x0 - 0.01 || e.pos.x > view.x1 + 0.01 || e.pos.y < view.y0 - 0.01 || e.pos.y > view.y1 + 0.01) continue;
       if (e.type === 'nav' && !opts.showNav?.has(e.id)) continue;
+      const keep = e.id === opts.targetId || e.id === this.selected?.id;
+      if (!keep && e.type === 'station' && !this.filter.stations) continue;
+      if (!keep && e.type === 'ship' && !this.filter.ships) continue;
       const [x, y] = sp(e.pos.x, e.pos.y);
       const color = e.sos ? '#FF5555' : e.tags?.wreck ? '#5A5A5A' : factionColor(e.faction);
       if (e.type === 'ordnance') {
@@ -420,7 +442,7 @@ export class SolarMap {
         ctx.strokeStyle = `rgba(255,68,68,${0.7 * (1 - ph)})`;
         ctx.beginPath(); ctx.arc(x, y, 6 + ph * 10, 0, Math.PI * 2); ctx.stroke();
       }
-      pick.push({ kind: 'entity', id: e.id, sx: x, sy: y });
+      pick.push({ kind: 'entity', id: e.id, sx: x, sy: y, station: e.type === 'station' });
       const label = e.type === 'station' || e.sos || e.tags?.missionId || e.tags?.contract || S > 3e4 || e.id === opts.targetId;
       const named = e.type === 'station' || e.type === 'nav' || e.tags?.contract || contactName(state, e.id);
       if (label && named) {

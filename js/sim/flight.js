@@ -21,7 +21,7 @@
 // ============================================================
 
 import { AU_M, G0, MIN_S } from '../core/constants.js';
-import { solarGravity } from './ephemeris.js';
+import { gravityAt, gravityEpoch } from './gravity.js';
 
 export const SLEW_RATE = Math.PI / 6;            // rad per game-minute → full flip in 6 min
 export const FLIP_MINUTES = Math.PI / SLEW_RATE;
@@ -78,12 +78,12 @@ const _g0 = { ax: 0, ay: 0 };
 const _g1 = { ax: 0, ay: 0 };
 
 /** Integrate pos/vel over dtSec with constant non-gravitational accel (tax, tay). Velocity-Verlet. */
-export function integrate(pos, vel, tax, tay, dtSec) {
-  solarGravity(pos.x, pos.y, _g0);
+export function integrate(pos, vel, tax, tay, dtSec, t0 = gravityEpoch()) {
+  gravityAt(pos.x, pos.y, t0, _g0);
   const ax0 = _g0.ax + tax, ay0 = _g0.ay + tay;
   pos.x += (vel.vx * dtSec + 0.5 * ax0 * dtSec * dtSec) / AU_M;
   pos.y += (vel.vy * dtSec + 0.5 * ay0 * dtSec * dtSec) / AU_M;
-  solarGravity(pos.x, pos.y, _g1);
+  gravityAt(pos.x, pos.y, t0 + dtSec / 60, _g1);
   vel.vx += 0.5 * (ax0 + _g1.ax + tax) * dtSec;
   vel.vy += 0.5 * (ay0 + _g1.ay + tay) * dtSec;
 }
@@ -179,7 +179,8 @@ export function flightStep(f, cmd, dtMin = 1) {
     }
   }
 
-  integrate(f.pos, f.vel, tax, tay, dt);
+  integrate(f.pos, f.vel, tax, tay, dt, f.t ?? gravityEpoch());     // (a planner's flight carries its own clock)
+  f.$ax = tax; f.$ay = tay;            // (for views drawing between minutes)
   f.thrustG = mainA / G0;
   f.rcsG = rcsA / G0;
   f.turning = turned;

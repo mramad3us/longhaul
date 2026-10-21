@@ -6,12 +6,13 @@
 
 import { random } from '../core/rng.js';
 import { CLASSES } from './ship-classes.js';
+import { STATIONS, stationOrbit, gateOrbit, gateId, stationModel } from './stations.js';
 
 export const EntityType = {
   STATION: 'station',
   SHIP: 'ship',
   ORDNANCE: 'ordnance',  // torpedo or railgun slug in flight
-  NAV: 'nav',            // navigation marker (survey zone, rendezvous point) — not a sensor contact
+  NAV: 'nav',            // navigation marker (survey zone, rendezvous point, approach gate) — not a sensor contact
 };
 
 function signature() {
@@ -65,23 +66,19 @@ export const STATION_NOTES = {
 };
 
 // r in AU, period in days around the anchor body
+// Stations: where and what they are lives in stations.js
+const STATION_DEFAULTS = [
+  { id: 'ceres-station', name: 'Ceres Station', faction: 'OPA', mass: 1_200_000 },
+  { id: 'pallas-station', name: 'Pallas Station', faction: 'OPA', mass: 850_000 },
+  { id: 'vesta-depot', name: 'Vesta Depot', faction: 'independent', mass: 450_000 },
+  { id: 'hygiea-ring', name: 'Hygiea Ring', faction: 'OPA', mass: 320_000 },
+  { id: 'tycho-station', name: 'Tycho Station', faction: 'OPA', mass: 2_400_000 },
+  { id: 'luna-yards', name: 'Luna Shipyards', faction: 'UN', mass: 3_100_000 },
+  { id: 'phobos-yard', name: 'Phobos Naval Yard', faction: 'MCR', mass: 1_900_000 },
+  { id: 'ganymede-station', name: 'Ganymede Station', faction: 'independent', mass: 2_700_000 },
+];
+
 const DEFAULTS = [
-  { id: 'ceres-station', name: 'Ceres Station', type: 'station', faction: 'OPA', shipClass: 'Ceres-class station', mass: 1_200_000,
-    orbit: { body: 'Ceres', r: 0.0001, phase: 0.6, period: 17 } },
-  { id: 'pallas-station', name: 'Pallas Station', type: 'station', faction: 'OPA', shipClass: 'Tycho-class station', mass: 850_000,
-    orbit: { body: 'Pallas', r: 0.0002, phase: 0.4, period: 30 } },
-  { id: 'vesta-depot', name: 'Vesta Depot', type: 'station', faction: 'independent', shipClass: 'Mining depot', mass: 450_000,
-    orbit: { body: 'Vesta', r: 0.0002, phase: 2.6, period: 25 } },
-  { id: 'hygiea-ring', name: 'Hygiea Ring', type: 'station', faction: 'OPA', shipClass: 'Ring station', mass: 320_000,
-    orbit: { body: 'Hygiea', r: 0.00018, phase: 5.7, period: 28 } },
-  { id: 'tycho-station', name: 'Tycho Station', type: 'station', faction: 'OPA', shipClass: 'Construction platform', mass: 2_400_000,
-    orbit: { body: 'Juno', r: 0.0004, phase: 1.1, period: 40 } },
-  { id: 'luna-yards', name: 'Luna Shipyards', type: 'station', faction: 'UN', shipClass: 'Orbital shipyard', mass: 3_100_000,
-    orbit: { body: 'Luna', r: 0.00002, phase: 0.2, period: 0.2 } },
-  { id: 'phobos-yard', name: 'Phobos Naval Yard', type: 'station', faction: 'MCR', shipClass: 'Naval yard', mass: 1_900_000,
-    orbit: { body: 'Phobos', r: 0.000005, phase: 3.0, period: 0.1 } },
-  { id: 'ganymede-station', name: 'Ganymede Station', type: 'station', faction: 'independent', shipClass: 'Agricultural hub', mass: 2_700_000,
-    orbit: { body: 'Ganymede', r: 0.00002, phase: 4.2, period: 0.15 } },
 
   { id: 'mcrn-scirocco', name: 'MCRN Scirocco', type: 'ship', faction: 'MCR', cls: 'mcrn-battleship', tl: 4, shipClass: 'Olympus-class battleship', mass: 250_000,
     orbit: { body: 'Mars', r: 0.001, phase: 5.2, period: 6 } },
@@ -94,5 +91,20 @@ const DEFAULTS = [
 ];
 
 export function createDefaultEntities() {
-  return DEFAULTS.map(d => createEntity(d));
+  const out = [];
+  for (const d of STATION_DEFAULTS) {
+    out.push(createStation(d));
+    out.push(createEntity({ id: gateId(d.id), name: `${d.name} approach gate`, type: EntityType.NAV, faction: d.faction, orbit: gateOrbit(d.id), signature: 'GATE', tags: { gate: d.id } }));
+  }
+  for (const d of DEFAULTS) out.push(createEntity(d));
+  return out;
 }
+
+/** A station entity on the orbit its model puts it on (stations.js). */
+export function createStation(d) {
+  const spec = STATIONS[d.id];
+  return createEntity({ ...d, type: EntityType.STATION, shipClass: spec.kind, orbit: stationOrbit(d.id), transponder: true });
+}
+
+/** The station a ship-sized size label is quoted for (library, scanner). */
+export const stationSizeM = (id) => stationModel(id)?.sizeM || 0;

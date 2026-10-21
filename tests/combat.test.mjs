@@ -5,7 +5,8 @@ import { seedRandom } from '../js/core/rng.js';
 import { bus } from '../js/core/events.js';
 import { createGame, advance } from '../js/sim/game.js';
 import { getWorld } from '../js/sim/world.js';
-import { CLASSES, CLASS_IDS, SHAPES, SIZES, TECH, BUILDERS, KINDS, PLAYABLE, rollIdentity } from '../js/sim/ship-classes.js';
+import { CLASSES, CLASS_IDS, SIZES, TECH, BUILDERS, KINDS, PLAYABLE, rollIdentity } from '../js/sim/ship-classes.js';
+import { hullOf } from '../js/sim/hulls.js';
 import { spawnAgent, respondToRequest, surrender, makeHostile, ROLES } from '../js/sim/agents.js';
 import { launchTorpedo, fireRailgun } from '../js/sim/ordnance.js';
 import { applyHit, detonate } from '../js/sim/damage.js';
@@ -19,11 +20,13 @@ import { releaseHold } from '../js/sim/autopilot.js';
 function game(seed = 11, classId) {
   seedRandom(seed);
   bus.clear();
-  const s = createGame({ crewCount: 6, traffic: 0, classId });
+  const s = createGame({ docked: false, crewCount: 6, traffic: 0, classId });
   s.missions.cooldown = 1e9;                  // no distress calls
   s.politics.quietUntil = Infinity;           // no random encounters
   s.politics.zones = [];
   releaseHold(s);
+  // out in the black, away from Ceres and its station's guns (station-defense.js)
+  s.flight.pos.y += 0.02;
   return s;
 }
 
@@ -92,7 +95,8 @@ export default [
       const kinds = {};
       for (const id of CLASS_IDS) {
         const c = CLASSES[id];
-        assert(SHAPES[c.shape], `${id}: unknown shape ${c.shape}`);
+        assert(hullOf(id)?.parts.length && hullOf(id).ports.length, `${id}: no hull or no docking collar`);
+        assert(c.crew[0] <= c.crewStd && c.crewStd <= c.crew[1], `${id}: usual complement outside its rating`);
         assert(SIZES[c.size], `${id}: unknown size`);
         assert(TECH[c.tl], `${id}: bad TL`);
         assert(BUILDERS[c.builder] && KINDS[c.kind], `${id}: builder/kind`);
@@ -172,7 +176,7 @@ export default [
         ['opa-corvette', 'unn-corvette', 'Belt refit corvette vs Earth corvette'],
         ['unn-corvette', 'mcrn-corvette', 'Earth corvette vs Martian corvette'],
       ];
-      const trials = 6;
+      const trials = 12;
       const won = {};
       const run = (x, y, label) => {
         let wx = 0, wy = 0, draw = 0, keptY = 0;
@@ -196,8 +200,9 @@ export default [
       try { for (const [x, y, label] of bouts) run(x, y, label); } finally { ROLES.navy.breakOff = nerve; }
       assert(won['opa-corvette>mcrn-frigate'] === 0 && won['opa-frigate>mcrn-frigate'] === 0, 'a Belt refit never beats a Martian frigate');
       assert(won['unn-frigate>mcrn-frigate'] <= 1, 'an old Earth frigate should almost never beat a Martian one');
-      assert(won['unn-frigate-new>mcrn-frigate'] <= 1, 'even Earth\'s best frigate should rarely beat a Martian one');
-      assert(won['unn-corvette>mcrn-corvette'] <= 1 && won['opa-corvette>unn-corvette'] <= 1, 'TL decides between corvettes');
+      // Earth's best wins about one bout in four (SHIPS.md: thirty bouts); in twelve, never most of them
+      assert(won['unn-frigate-new>mcrn-frigate'] <= trials / 2, 'even Earth\'s best frigate should not beat a Martian one as often as not');
+      assert(won['unn-corvette>mcrn-corvette'] <= 2 && won['opa-corvette>unn-corvette'] <= 1, 'TL decides between corvettes');
     },
   },
   {

@@ -1,111 +1,224 @@
 // ============================================================
 // LONGHAUL — Ship layout, geometry & crew pathfinding
 //
+// Our ship's interior is generated from its class's deck program: the
+// decks a hull of that kind has, bow to stern, each drawn from a deck
+// template and fitted to the class. The hull model (hulls.js) is built
+// from the same program, so a docking collar on the outside opens onto
+// an airlock on the right deck inside.
+//
 // Ship coordinates: x = tile column, y = tile row counted from the bow
 // across ALL decks, with a one-row gap between decks (the deck
 // plating / ladder shaft). Crew positions are continuous ship coords.
 // ============================================================
 
 import { TileType, WALKABLE, TILE_MASS } from './tiles.js';
-import { CLASSES, PLAYER_CLASS, isArmed } from './ship-classes.js';
+import { CLASSES, PLAYER_CLASS, PLAYER_MAX_CREW, isArmed } from './ship-classes.js';
 
 export const DECK_GAP = 1;
 
 const T = TileType;
-const E = T.EMPTY, HW = T.HULL_WALL, F = T.FLOOR, L = T.LADDER, CC = T.CRASH_COUCH;
-const EV = T.EVA_LOCKER, BK = T.BUNK, TB = T.TABLE, ST = T.STORAGE;
+
+// ---- DECK ART ----
+// Decks are drawn as strings, one character per tile, bow at the top of
+// each deck. Hull walls are the outer columns; the ladder runs down the
+// middle column.
+
+const LEGEND = {
+  ' ': T.EMPTY, '#': T.HULL_WALL, '.': T.FLOOR, '|': T.LADDER, '+': T.DOOR,
+  c: T.CRASH_COUCH, e: T.EVA_LOCKER, b: T.BUNK, t: T.TABLE, s: T.STORAGE, p: T.PAX_BERTH,
+  R: T.RADIO, O: T.OPS_CONSOLE, H: T.NAV_CONSOLE, W: T.WEAPONS_CONSOLE, X: T.TRANSPONDER,
+  h: T.HEAD, g: T.GALLEY, r: T.REC, M: T.MEDBAY, L: T.LIFE_SUPPORT, w: T.WATER_RECYCLER, B: T.WORKBENCH,
+  A: T.AIRLOCK, C: T.CARGO_DOOR, E: T.ENG_CONSOLE, D: T.ENGINE, P: T.PDC_MOUNT, T: T.TORPEDO_LAUNCHER, N: T.REACTOR,
+};
 
 /**
- * Our ship's interior: seven decks stacked on the torch, one ladder shaft
- * down the spine. Bow first: command (with fire control), living, working,
- * cargo (with the torpedo magazine), then the machinery — two PDC turrets
- * sit in the engine-deck hull, port and starboard.
- *
- * Every class a small crew can fly shares this plan; the fit follows the
- * class. Without point defense the turret wells are plated over, without
- * tubes the launcher bay is hold space, and a ship with nothing to fire has
- * a couch where fire control would be.
+ * Deck templates by width (7 tiles for small craft, 9 for the rest). In a
+ * template, 'A' marks where an airlock may be cut through the hull and 'C'
+ * a cargo door: the deck program decides whether they are (otherwise
+ * they are hull wall). 'P' (a PDC turret well) and 'T' (the launcher bay)
+ * follow the class's fit, as 'W' (fire control) does.
  */
-export function createDefaultLayout(classId = PLAYER_CLASS) {
-  const c = CLASSES[classId];
-  const swap = {
-    [T.PDC_MOUNT]: c.pdc > 0 ? null : HW,
-    [T.TORPEDO_LAUNCHER]: c.tubes > 0 ? null : ST,
-    [T.WEAPONS_CONSOLE]: isArmed(c) ? null : CC,
-  };
-  const decks = baseLayout();
-  for (const d of decks) d.tiles = d.tiles.map(row => row.map(t => swap[t] ?? t));
+const TEMPLATES = {
+  7: {
+    command: [' ##^## ', '#RH.OX#', 'A.....#', '#eW|ce#'],
+    quarters: ['#bb|bb#', '#.....#', '#gt|rh#'],
+    passengers: ['#pp|pp#', '#.....#', '#c.|.e#'],
+    utility: ['#L.|.w#', 'A.....#', '#Bc|cM#'],
+    cargo: ['#Ts|ss#', 'A.....C', '#e.|.e#'],
+    engineering: ['#Ec|ce#', 'P.....P', '#D.|.D#'],
+    reactor: [' #.|.# ', ' #eNe# ', '  ###  '],
+  },
+  9: {
+    command: [' ###^### ', '#ROH.WcX#', 'A.......#', '#ec.|.ce#'],
+    quarters: ['#bb.|.bb#', '#.......#', '#hc.|.ce#'],
+    'quarters-6': ['#bbb|bbb#', '#.......#', '#he.|.ce#'],
+    'crew-mess': ['#bb.|.gt#', '#.......#', '#hM.|.cr#'],
+    passengers: ['#pp.|.pp#', '#.......#', '#h..|..e#'],
+    'passengers-8': ['#ppp|ppp#', '#.......#', '#pph|.pe#'],
+    brig: ['#ppp|ppp#', '#+.....+#', '#e..|..e#'],
+    mess: ['#g.t|t.r#', '#.......#', '#ec.|.cM#'],
+    utility: ['#L..|..w#', 'A.......#', '#Bc.|.ce#'],
+    cargo: ['#Ts.|.ss#', 'A.......C', '#ee.|.ss#'],
+    'cargo-tall': ['#Ts.|.ss#', '#.......#', 'A.......C', '#ss.|.ss#'],
+    engineering: ['#E.c|c.e#', 'P.......P', '#eD.|.D.#'],
+    reactor: [' ##.|.## ', ' #e.N.e# ', '  #####  '],
+  },
+};
+
+/** How each deck looks and what zone of the ship it is. */
+const DECK_INFO = {
+  bridge: { name: 'Bridge', zone: 'command', glow: { color: 'rgba(91, 192, 235, 0.06)', accent: '#5BC0EB' } },
+  quarters: { name: 'Quarters', zone: 'crew', glow: { color: 'rgba(192, 132, 252, 0.04)', accent: '#C084FC' } },
+  passengers: { name: 'Passengers', zone: 'pax', glow: { color: 'rgba(217, 178, 106, 0.05)', accent: '#D9B26A' } },
+  passengers2: { name: 'Passengers', zone: 'pax', glow: { color: 'rgba(217, 178, 106, 0.05)', accent: '#D9B26A' } },
+  brig: { name: 'Brig', zone: 'pax', glow: { color: 'rgba(226, 85, 85, 0.04)', accent: '#C05050' } },
+  mess: { name: 'Mess', zone: 'crew', glow: { color: 'rgba(107, 203, 119, 0.04)', accent: '#6BCB77' } },
+  utility: { name: 'Utility', zone: 'crew', glow: { color: 'rgba(91, 192, 235, 0.03)', accent: '#7EC8E3' } },
+  cargo: { name: 'Cargo', zone: 'cargo', glow: { color: 'rgba(79, 209, 197, 0.03)', accent: '#4FD1C5' } },
+  cargo2: { name: 'Cargo', zone: 'cargo', glow: { color: 'rgba(79, 209, 197, 0.03)', accent: '#4FD1C5' } },
+  engineering: { name: 'Engine', zone: 'machinery', glow: { color: 'rgba(226, 163, 85, 0.06)', accent: '#E2A355' } },
+  reactor: { name: 'Reactor', zone: 'reactor', glow: { color: 'rgba(226, 85, 85, 0.06)', accent: '#E25555' } },
+};
+
+// ---- DECK PROGRAMS ----
+// Every class a small crew can fly has its own deck program: which decks,
+// in what order from the bow, the template each uses, and where the hull
+// is cut for airlocks (a port: the face, the collar size, what it is
+// for) and cargo doors. The hull model (hulls.js) is built from the same
+// program, so the collars on the hull open onto these airlocks.
+//
+// Crew live forward (command, quarters, mess, utility); passengers have a
+// deck of their own between the crew and the hold, with their own head;
+// police cutters carry a brig there instead. Bunks are shared between
+// watches (two to a rack); couches seat the whole crew, passengers ride
+// out burns in their own acceleration berths.
+
+const port = (face, size, use = 'crew', label) => ({ id: face === 'x+' ? 'nose' : use === 'cargo' ? 'cargo' : 'crew', face, size, use, label });
+
+function program(c) {
+  const k = c.kind;
+  const small = c.size === 'S' && k !== 'shuttle';
+  const w = small ? 7 : 9;
+  const pax = c.berths || 0;
+  const bunks = Math.ceil(c.crew[1] / 2);
+  const decks = [];
+  const add = (id, template, o = {}) => decks.push({ id, template, ...o });
+  const nose = (k === 'courier' || k === 'raider') ? port('x+', 'S') : (k === 'light-freighter' || k === 'gunship') ? port('x+', 'M')
+    : (k === 'cutter' || k === 'corvette') ? port('x+', 'M', 'crew', 'Boarding collar') : null;
+  add('bridge', 'command', { ports: [nose, k === 'prospector' ? port('y-', 'S') : k === 'shuttle' ? port('y-', 'M') : null] });
+  if (small || k === 'shuttle') add('quarters', small ? 'quarters' : 'crew-mess');
+  else add('quarters', bunks > 4 ? 'quarters-6' : 'quarters');
+  if (!small && k !== 'shuttle') add('mess', 'mess');
+  const flankS = small && k !== 'prospector';
+  add('utility', 'utility', { ports: [flankS && k !== 'raider' ? port('y-', 'S') : null] });
+  // Passengers (or a cutter's brig) aft of the crew's decks, forward of the hold
+  if (k === 'cutter') add('brig', 'brig');
+  else if (pax > 8 && !small) { add('passengers', 'passengers-8'); add('passengers2', pax - 8 > 4 ? 'passengers-8' : 'passengers'); }
+  else if (pax > 4 && !small) add('passengers', 'passengers-8');
+  else if (pax > 0) add('passengers', 'passengers');
+  const holdPort = k === 'shuttle' ? port('y+', 'L', 'cargo') : null;
+  const crewPort = (k === 'light-freighter' || k === 'gunship' || k === 'corvette') ? port('y-', 'M') : k === 'cutter' || k === 'raider' ? port('y-', 'S') : null;
+  add('cargo', k === 'shuttle' ? 'cargo-tall' : 'cargo', { ports: [crewPort, holdPort], cargoDoor: k === 'shuttle' ? null : 'y+' });
+  if (k === 'gunship') add('cargo2', 'cargo-tall', { cargoDoor: 'y+' });
+  add('engineering', 'engineering');
+  add('reactor', 'reactor');
+  for (const d of decks) d.ports = (d.ports || []).filter(Boolean);
+  return { width: w, decks };
+}
+
+/** Classes with an interior (the ones a small crew can fly): classId → program. */
+export const DECK_PROGRAMS = {};
+for (const [id, c] of Object.entries(CLASSES)) {
+  if (c.crew[0] <= 8 && (c.size === 'S' || c.size === 'M')) DECK_PROGRAMS[id] = program(c);
+}
+
+/** The drive bell takes the last stretch of the hull; the decks fill the rest. */
+const TOWER_FRAC = 0.9;
+
+/**
+ * Where each deck sits along the hull, as bow fractions (0 bow, 1 stern),
+ * its width as a fraction of the beam, its zone, and its ports.
+ */
+export function deckSpans(classId) {
+  const prog = DECK_PROGRAMS[classId];
+  if (!prog) return [];
+  const rows = prog.decks.map(d => TEMPLATES[prog.width][d.template].length);
+  const total = rows.reduce((a, b) => a + b, 0) + DECK_GAP * (rows.length - 1);
+  let y = 0;
+  return prog.decks.map((d, i) => {
+    const art = TEMPLATES[prog.width][d.template];
+    const span = Math.max(...art.map(r => r.trimEnd().length - (r.length - r.trimStart().length)));
+    const out = { id: d.id, f0: y / total * TOWER_FRAC, f1: (y + rows[i]) / total * TOWER_FRAC, width: span / prog.width, zone: DECK_INFO[d.id]?.zone || 'crew', ports: d.ports, cargoDoor: d.cargoDoor || null };
+    y += rows[i] + DECK_GAP;
+    return out;
+  });
+}
+
+/**
+ * Our ship's interior: the class's deck program, drawn tile by tile and
+ * fitted to the class. Without point defense the turret wells are plated
+ * over, without tubes the launcher bay is hold space, a ship with nothing
+ * to fire has a couch where fire control would be, and the hull is cut
+ * for airlocks and cargo doors only where the program puts them.
+ */
+export function createLayout(classId = PLAYER_CLASS) {
+  const c = CLASSES[classId] || CLASSES[PLAYER_CLASS];
+  const prog = DECK_PROGRAMS[classId] || DECK_PROGRAMS[PLAYER_CLASS];
+  const decks = prog.decks.map(d => {
+    const art = TEMPLATES[prog.width][d.template];
+    const info = DECK_INFO[d.id] || DECK_INFO.utility;
+    const flank = { 'y-': 0, 'y+': art[0].length - 1 };
+    const portCols = new Set(d.ports.filter(p => p.face[0] === 'y').map(p => flank[p.face]));
+    const doorCol = d.cargoDoor ? flank[d.cargoDoor] : null;
+    const nose = d.ports.some(p => p.face === 'x+');
+    const tiles = art.map(row => [...row].map((ch, x) => {
+      if (ch === '^') return nose ? T.AIRLOCK : T.HULL_WALL;
+      if (ch === 'A') return portCols.has(x) ? T.AIRLOCK : T.HULL_WALL;
+      if (ch === 'C') return portCols.has(x) ? T.AIRLOCK : doorCol === x ? T.CARGO_DOOR : T.HULL_WALL;
+      if (ch === 'P') return c.pdc > 0 ? T.PDC_MOUNT : T.HULL_WALL;
+      if (ch === 'T') return c.tubes > 0 ? T.TORPEDO_LAUNCHER : T.STORAGE;
+      if (ch === 'W') return isArmed(c) ? T.WEAPONS_CONSOLE : T.CRASH_COUCH;
+      return LEGEND[ch];
+    }));
+    const deck = { name: info.name, id: d.id, zone: info.zone, glow: info.glow, tiles };
+    const ports = d.ports.map(p => p.id);
+    if (ports.length) deck.ports = ports;
+    return deck;
+  });
+  // As many passenger berths as the class is licensed for, and a rack for
+  // every two of the crew: the rest of the template's racks are lockers
+  trimTiles(decks, T.PAX_BERTH, c.berths || 0);
+  trimTiles(decks, T.BUNK, Math.max(2, Math.ceil(c.crew[1] / 2)));
+  // A couch for every hand but the pilot (who has the helm), whatever the
+  // watch: a full crew's couches come out of storage space, on the crew's
+  // own decks first (near the racks, where the off watch is), then the hold
+  const want = Math.min(PLAYER_MAX_CREW, c.crew[1]) - 1;
+  let have = decks.reduce((n, d) => n + d.tiles.flat().filter(t => t === T.CRASH_COUCH).length, 0);
+  const order = [...decks].sort((a, b) => COUCH_ROOM.indexOf(a.zone) - COUCH_ROOM.indexOf(b.zone));
+  for (const d of order) {
+    if (!COUCH_ROOM.includes(d.zone)) continue;
+    for (const row of d.tiles) for (let x = 0; x < row.length && have < want; x++) {
+      if (row[x] === T.STORAGE) { row[x] = T.CRASH_COUCH; have++; }
+    }
+  }
   return decks;
 }
 
-function baseLayout() {
-  return [
-    {
-      name: 'Bridge', id: 'bridge',
-      glow: { color: 'rgba(91, 192, 235, 0.06)', accent: '#5BC0EB' },
-      tiles: [
-        [E, HW, HW, HW, HW, HW, HW, HW, E],
-        [HW, T.RADIO, T.OPS_CONSOLE, F, T.NAV_CONSOLE, T.WEAPONS_CONSOLE, CC, T.TRANSPONDER, HW],
-        [HW, F, F, F, F, F, F, F, HW],
-        [HW, EV, CC, F, L, F, CC, EV, HW],
-      ],
-    },
-    {
-      name: 'Quarters', id: 'quarters',
-      glow: { color: 'rgba(192, 132, 252, 0.04)', accent: '#C084FC' },
-      tiles: [
-        [HW, BK, BK, F, L, F, BK, BK, HW],
-        [HW, F, F, F, F, F, F, F, HW],
-        [HW, T.HEAD, CC, F, L, F, CC, EV, HW],
-      ],
-    },
-    {
-      name: 'Mess', id: 'mess',
-      glow: { color: 'rgba(107, 203, 119, 0.04)', accent: '#6BCB77' },
-      tiles: [
-        [HW, T.GALLEY, F, TB, L, TB, F, T.REC, HW],
-        [HW, F, F, F, F, F, F, F, HW],
-        [HW, EV, CC, F, L, F, CC, T.MEDBAY, HW],
-      ],
-    },
-    {
-      name: 'Utility', id: 'utility',
-      glow: { color: 'rgba(91, 192, 235, 0.03)', accent: '#7EC8E3' },
-      tiles: [
-        [HW, T.LIFE_SUPPORT, F, F, L, F, F, T.WATER_RECYCLER, HW],
-        [HW, F, F, F, F, F, F, F, HW],
-        [HW, T.WORKBENCH, CC, F, L, F, CC, EV, HW],
-      ],
-    },
-    {
-      name: 'Cargo', id: 'cargo',
-      glow: { color: 'rgba(79, 209, 197, 0.03)', accent: '#4FD1C5' },
-      tiles: [
-        [HW, T.TORPEDO_LAUNCHER, ST, F, L, F, ST, ST, HW],
-        [HW, F, F, F, F, F, F, ST, HW],
-        [HW, T.AIRLOCK, EV, F, L, F, EV, ST, HW],
-      ],
-    },
-    {
-      name: 'Engine', id: 'engineering',
-      glow: { color: 'rgba(226, 163, 85, 0.06)', accent: '#E2A355' },
-      tiles: [
-        [HW, T.ENG_CONSOLE, F, CC, L, CC, F, EV, HW],
-        [T.PDC_MOUNT, F, F, F, F, F, F, F, T.PDC_MOUNT],
-        [HW, EV, T.ENGINE, F, L, F, T.ENGINE, F, HW],
-      ],
-    },
-    {
-      name: 'Reactor', id: 'reactor',
-      glow: { color: 'rgba(226, 85, 85, 0.06)', accent: '#E25555' },
-      tiles: [
-        [E, HW, HW, F, L, F, HW, HW, E],
-        [E, HW, EV, F, T.REACTOR, F, EV, HW, E],
-        [E, E, HW, HW, HW, HW, HW, E, E],
-      ],
-    },
-  ];
+/** Where extra couches may go, best first (not the reactor deck). */
+const COUCH_ROOM = ['crew', 'command', 'cargo', 'machinery'];
+
+/** Keep the first `keep` tiles of a type (bow first), the rest become storage. */
+function trimTiles(decks, type, keep) {
+  let n = 0;
+  for (const d of decks) for (const row of d.tiles) for (let x = 0; x < row.length; x++) {
+    if (row[x] !== type) continue;
+    if (++n > keep) row[x] = T.STORAGE;
+  }
 }
+
+/** (kept for older callers) */
+export const createDefaultLayout = createLayout;
 
 /** Deck index by layout id (decks can be reordered without breaking callers). */
 export function deckIndex(ship, id) {
@@ -117,7 +230,7 @@ export function deckIndex(ship, id) {
 // against sustained G (couch gel, juice); restraints only against being
 // thrown around (a sleeper in a bunk is strapped in, but not juiced).
 
-export const SEAT_KINDS = new Set(['couch', 'helm', 'ops', 'weapons', 'engStation', 'medbay', 'bunk', 'head', 'rec']);
+export const SEAT_KINDS = new Set(['couch', 'helm', 'ops', 'weapons', 'engStation', 'medbay', 'bunk', 'head', 'rec', 'paxBerth']);
 const SECURE_SEATS = new Set(['couch', 'helm', 'ops', 'weapons', 'engStation', 'medbay']);
 const RESTRAINTS = new Set([...SECURE_SEATS, 'bunk']);
 
@@ -227,7 +340,33 @@ export const FIXTURE_KIND = {
   [T.WATER_RECYCLER]: 'recycler', [T.WORKBENCH]: 'workbench', [T.OPS_CONSOLE]: 'ops',
   [T.ENG_CONSOLE]: 'engStation', [T.REC]: 'rec',
   [T.PDC_MOUNT]: 'pdc', [T.TORPEDO_LAUNCHER]: 'launcher', [T.WEAPONS_CONSOLE]: 'weapons',
+  [T.PAX_BERTH]: 'paxBerth', [T.CARGO_DOOR]: 'cargoDoor',
 };
+
+/** Deck index of the deck that holds a fixture kind (first found), or -1. */
+export function deckWith(ship, kind) {
+  const f = shipGeometry(ship).fixtures[kind]?.[0];
+  return f ? f.deck : -1;
+}
+
+/** Decks of a zone ('command', 'crew', 'pax', 'cargo', 'machinery', 'reactor'). */
+export const decksOfZone = (ship, zone) => ship.decks.map((d, i) => d.zone === zone ? i : -1).filter(i => i >= 0);
+
+/** The airlock fixture that opens onto a port (by port id), or the nearest airlock. */
+export function airlockFor(ship, portId = null) {
+  const geo = shipGeometry(ship);
+  const locks = geo.fixtures.airlock || [];
+  if (portId) {
+    const di = ship.decks.findIndex(d => d.ports?.includes(portId));
+    const onDeck = locks.filter(f => f.deck === di);
+    if (onDeck.length) {
+      // the nose collar is the hatch in the bow plating; flank collars are cut in the side walls
+      if (portId === 'nose') return onDeck.find(f => f.y === 0) || onDeck[0];
+      return onDeck.find(f => f.y !== 0) || onDeck[0];
+    }
+  }
+  return locks[0] || null;
+}
 
 /** Node index nearest to a ship-coord point (same deck preferred). */
 export function nearestNode(geo, sx, sy) {

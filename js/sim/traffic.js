@@ -1,29 +1,72 @@
 // ============================================================
 // LONGHAUL — Ambient traffic
-// NPC ships live at stations and fly between them. Docked ships ride
-// on rails beside their station; ships in transit follow the analytic
-// transit model (world.js). Neither needs numerical integration, and
-// schedules are serviced by the world's budgeted background pass, so
-// the population can scale to hundreds of thousands. A game starts
-// with DEFAULT_TRAFFIC ships: the thousands a settled system would
-// have, most of them out of sight and known only from the traffic
-// digests (intel.js).
+// NPC ships live at stations and fly between them. Ships in port ride on
+// rails (a berth turns with its station; a holding slot is an orbit);
+// ships under way follow the analytic transit model (world.js). Neither
+// needs numerical integration, and schedules are serviced by the world's
+// budgeted background pass, so the population can scale to hundreds of
+// thousands. A game starts with DEFAULT_TRAFFIC ships: the thousands a
+// settled system would have, most of them out of sight and known only
+// from the traffic digests (intel.js).
 //
-// Trade runs along lanes: a ship picks its next port by distance and
-// by flag (its own power's ports first, independents next), so the
-// Belt trades mostly with itself and Earth–Mars is a busy lane.
+// Trade runs along lanes: a ship picks its next port by distance and by
+// flag (its own power's ports first, independents next), so the Belt
+// trades mostly with itself and Earth–Mars is a busy lane.
+//
+// A PORT CALL is decided on arrival, by what the ship is (CALLS): the work
+// that needs a berth (cargo across the collar, passengers through the
+// lock, ore sold to the smelter) and how long it takes, and the layover
+// after (a crew's rest, waiting on a charter). A berth costs and there are
+// ships waiting for it, so a ship holds one only for the work, then moves
+// out to the holding pattern (holding.js) for its layover, or leaves:
+//
+//   arrive at the gate ─┬─ work needs a berth, one free ── BERTH (work) ─┬─ layover ── SLOT ── depart
+//                       │                                                └─ depart
+//                       ├─ no berth free ── SLOT (waiting; asks again) ── berth, or the work by tender
+//                       └─ nothing to do in a berth ── SLOT (layover) ── depart
+//
+// A ship too big for any berth (the ice haulers) works by tender from its
+// slot. A pattern that is full sends the overflow to the anchorage, a
+// parking orbit further out. Every move inside a port is a short leg
+// through the station's approach gate, so nothing climbs out of a port
+// through the rock it is built on.
 // ============================================================
 
 import { AU_M, G0, MIN_S } from '../core/constants.js';
-import { random, randRange, randInt, pick, weightedPick } from '../core/rng.js';
-import { getWorld, WORLD_VISITORS } from './world.js';
+import { random, randInt, pick, weightedPick } from '../core/rng.js';
+import { getWorld, WORLD_VISITORS, orbitStateAt } from './world.js';
 import { createEntity } from './entities.js';
 import { rollIdentity, CLASSES } from './ship-classes.js';
+import { berthInto, releaseHull, gateId, berthSizesFor, freeBerth, anchorageOrbit } from './stations.js';
+import { freeSlot, claimSlot, slotOrbit } from './holding.js';
 
 export const DEFAULT_TRAFFIC = 3000;
 
+const H = 60;
+/**
+ * What a ship comes into port for, by its kind: berth work in minutes
+ * ([min, max]: null when it never needs a berth), the chance a call has
+ * berth work at all, and the layover after ([min, max], in a slot).
+ */
+export const CALLS = {
+  prospector: { work: [1 * H, 3 * H], p: 0.7, lay: [6 * H, 48 * H] },     // sell the haul and the claim data; rest the crew
+  courier: { work: [0.5 * H, 1.5 * H], p: 0.95, lay: [0, 4 * H] },        // mail and a few passengers: in and out
+  shuttle: { work: [1 * H, 3 * H], p: 0.9, lay: [0, 3 * H] },             // a lighter: load, go
+  'light-freighter': { work: [2 * H, 6 * H], p: 0.85, lay: [0, 24 * H] }, // cargo and passengers; waits on the next charter
+  freighter: { work: [6 * H, 16 * H], p: 0.5, lay: [0, 12 * H] },         // bulk across a cargo cradle (else by lighters from the slot)
+  tanker: { work: [4 * H, 10 * H], p: 0.5, lay: [0, 6 * H] },             // reaction mass into the port's tanks (else by tender)
+  liner: { work: [3 * H, 8 * H], p: 0.5, lay: [0, 0] },                   // passengers off and on, then away on schedule (else by shuttle)
+  miner: { work: [6 * H, 12 * H], p: 0.5, lay: [12 * H, 72 * H] },        // ore to the smelter; a long rest between claims
+  hauler: { work: null, tender: [12 * H, 36 * H], p: 1, lay: [0, 6 * H] },// too big for any berth: ice by tender from the slot
+  default: { work: [1 * H, 4 * H], p: 0.5, lay: [2 * H, 24 * H] },
+};
+const RETRY_MIN = [30, 90];          // a ship waiting for a berth asks again
+const GIVE_UP_MIN = 4 * H;           // …and after this does the work by tender, slowly
+const TENDER_SLOWER = 1.6;
+const IN_FLIGHT = 0.9;               // share of a new game's traffic under way (about the steady state)
+
 export function createTraffic(population = DEFAULT_TRAFFIC) {
-  return { population, spawned: 0, v: 2 };
+  return { population, spawned: 0, v: 3 };
 }
 
 /** A port for the next leg: near and friendly ports are likelier. */
@@ -35,47 +78,219 @@ function nextPort(all, from, faction) {
   });
 }
 
-function dockBeside(e, station, minute, stayMin) {
-  e.transit = null;
-  e.thrust = 0;
-  const o = station.orbit;
-  e.orbit = { body: o.body, r: o.r * (1 + randRange(-0.01, 0.01)), phase: o.phase + randRange(-0.002, 0.002), period: o.period };
-  e.tags.at = station.id;
-  e.tags.until = minute + stayMin;
+const span = ([a, b]) => randInt(Math.round(a), Math.round(b));
+
+/** Decide what this call is: { work (min in a berth, 0 if none), lay (min in a slot), tender (min, work from the slot) }. */
+export function planCall(e) {
+  const c = CALLS[CLASSES[e.cls]?.kind] || CALLS.default;
+  const canBerth = berthSizesFor(e.cls).length > 0;
+  const lay = span(c.lay);
+  if (c.work && canBerth && random() < c.p) return { work: span(c.work), lay, tender: 0 };
+  if (c.tender || c.work) return { work: 0, lay, tender: Math.round(span(c.tender || c.work) * (c.tender ? 1 : TENDER_SLOWER)) };
+  return { work: 0, lay: Math.max(lay, 60), tender: 0 };
 }
 
+/** Local legs (berth, gate, slot) are flown gently. */
+const LOCAL_G = 0.2;
+
+/** Where a leg ends: an entity id, or { orbit } (a holding slot). */
+const endOf = (world, spec) => typeof spec === 'string' ? world.get(spec) : spec;
+
+/**
+ * Start one leg of a passage: from where the ship is (a fix, when
+ * `from` is null), from a rails entity, or from a slot's orbit; to an
+ * entity or an orbit. `port` names the station the leg belongs to.
+ */
+function flyLeg(world, e, minute, from, to, g, port = e.tags.to || e.tags.at) {
+  const A = from ? endOf(world, from) : null, B = endOf(world, to);
+  if (!B || (from && !A)) return false;
+  world.refresh(e, minute);
+  const posOf = (x) => {
+    if (!x.id) { const p = { x: 0, y: 0 }; orbitStateAt(x.orbit, minute, p, { vx: 0, vy: 0 }); return p; }
+    world.refresh(x, minute); return x.pos;
+  };
+  const origin = A ? posOf(A) : e.pos, dest = posOf(B);
+  const L = Math.hypot(dest.x - origin.x, dest.y - origin.y) * AU_M;
+  const T = Math.max(10, Math.round(2 * Math.sqrt(L / (g * G0)) / MIN_S));
+  e.orbit = null;
+  const tr = { t0: minute, t1: minute + T, g, port };
+  if (!A) tr.fix = { x: e.pos.x, y: e.pos.y, vx: e.vel.vx, vy: e.vel.vy, t: minute };
+  else if (A.id) tr.from = A.id; else tr.fromOrbit = A.orbit;
+  if (B.id) tr.to = B.id; else tr.toOrbit = B.orbit;
+  e.transit = tr;
+  e.tags.until = minute + T;
+  return true;
+}
+
+// ---- IN PORT ----
+
+/** Into a berth for the work (stations.js berthInto); false if none is free. */
+function takeBerth(world, e, st, minute, work) {
+  if (!berthInto(world.state, e, st)) return false;
+  e.tags.call.phase = 'work';
+  e.tags.until = minute + work;
+  return true;
+}
+
+/** Into a holding slot (or the anchorage when the pattern is full), on rails, until `until`. */
+function takeSlot(world, e, st, minute, phase, until) {
+  releaseHull(world, e);
+  e.transit = null; e.thrust = 0;
+  e.tags.at = st.id;
+  const s = freeSlot(world.state, st);
+  if (s) {
+    claimSlot(st, s.id, e.id);
+    e.tags.slot = s.id;
+    e.orbit = slotOrbit(st.id, s.id);
+  } else {
+    e.tags.slot = null;
+    e.orbit = anchorageOrbit(st.id, random() * 2 * Math.PI);
+  }
+  e.tags.call.phase = phase;
+  e.tags.until = until;
+}
+
+/** Leave a slot or a berth: free it (the ship is under way after this). */
+function leavePort(world, e) {
+  releaseHull(world, e);
+  e.tags.at = null;
+}
+
+/** A ship at the gate of its destination: decide the call and go in. */
+function arrive(world, e, st, minute) {
+  const call = e.tags.call = { ...planCall(e), since: minute, port: st.id };
+  if (call.work > 0) {
+    const sizes = berthSizesFor(e.cls);
+    if (freeBerth(world.state, st, sizes, { reserve: true })) { e.tags.ends = 'berth'; return flyLeg(world, e, minute, gateId(st.id), st.id, LOCAL_G, st.id); }
+    call.giveUp = minute + GIVE_UP_MIN;
+    return toSlot(world, e, st, minute, 'wait');
+  }
+  return toSlot(world, e, st, minute, call.tender ? 'tender' : 'lay');
+}
+
+/** Down from the gate to a slot: a short leg, then the slot. */
+function toSlot(world, e, st, minute, phase) {
+  const s = freeSlot(world.state, st);
+  e.tags.ends = phase;
+  if (!s) return flyLeg(world, e, minute, gateId(st.id), st.id, LOCAL_G, st.id);   // (no slot: the anchorage, from the station)
+  claimSlot(st, s.id, e.id);                                     // (held for it while it comes in)
+  e.tags.slot = s.id;
+  e.tags.at = st.id;
+  return flyLeg(world, e, minute, world.get(gateId(st.id)) ? gateId(st.id) : null, { orbit: slotOrbit(st.id, s.id) }, LOCAL_G, st.id);
+}
+
+/** A leg is over: what the ship does where it has come to. */
+function landed(world, e, minute) {
+  const ends = e.tags.ends;
+  e.tags.ends = null;
+  const st = world.get(e.tags.to || e.tags.at || e.transit?.port);
+  if (st && ends === 'gate') { arrive(world, e, st, minute); return; }
+  const call = e.tags.call;
+  if (!st || !call) { e.transit = null; return; }
+  if (ends === 'berth') {
+    if (takeBerth(world, e, st, minute, call.work)) return;
+    // the berth went while we came down: wait in the pattern
+    call.giveUp = minute + GIVE_UP_MIN;
+    takeSlot(world, e, st, minute, 'wait', minute + span(RETRY_MIN));
+    return;
+  }
+  const until = ends === 'wait' ? minute + span(RETRY_MIN) : ends === 'tender' ? minute + call.tender + call.lay : minute + call.lay;
+  const slotId = e.tags.slot;
+  if (slotId && slotOrbit(st.id, slotId)) {
+    // into the slot held for it on the way in
+    claimSlot(st, slotId, e.id);
+    e.tags.at = st.id;
+    e.transit = null; e.thrust = 0;
+    e.orbit = slotOrbit(st.id, slotId);
+    call.phase = ends;
+    e.tags.until = until;
+  } else takeSlot(world, e, st, minute, ends, until);
+}
+
+/** Leave port: up to the gate (from a berth), then the long leg to the next port's gate. */
 function depart(world, e, minute) {
   const all = world.stations;
   const from = world.get(e.tags.at);
   if (!from || all.length < 2) { e.tags.until = minute + 720; return; }
   const to = nextPort(all, from, e.faction);
-  world.refresh(from, minute); world.refresh(to, minute);
-  const L = Math.hypot(to.pos.x - from.pos.x, to.pos.y - from.pos.y) * AU_M;
   const g = e.tags.g;
-  const T = Math.max(30, Math.round(2 * Math.sqrt(L / (g * G0)) / MIN_S));
-  e.orbit = null;
-  e.transit = { from: from.id, to: to.id, t0: minute, t1: minute + T, g };
-  e.tags.at = null;
+  const fromGate = gateId(from.id), toGate = gateId(to.id);
+  const inSlot = !!e.tags.slot;
+  const slot = inSlot ? { orbit: e.orbit } : null;
+  leavePort(world, e);
+  e.tags.call = null;
   e.tags.to = to.id;
-  e.tags.until = minute + T;
+  e.tags.from = from.id;
+  e.tags.ends = 'gate';
+  if (inSlot) {
+    // out of the pattern straight onto the long leg
+    e.tags.legs = null;
+    if (!flyLeg(world, e, minute, slot, world.get(toGate) ? toGate : to.id, g, to.id)) e.tags.until = minute + 720;
+    return;
+  }
+  e.tags.legs = [[fromGate, toGate, g]];
+  if (!flyLeg(world, e, minute, null, world.get(fromGate) ? fromGate : to.id, LOCAL_G, from.id)) e.tags.until = minute + 720;
 }
 
-/** Background visitor: dock arrivals, launch departures. */
+/** In port, time's up for what it was doing: the next step of the call. */
+function nextInPort(world, e, minute) {
+  const st = world.get(e.tags.at);
+  const call = e.tags.call;
+  if (!st || !call) { depart(world, e, minute); return; }
+  if (call.phase === 'work') {
+    // the work is done: out of the berth, a layover in the pattern or away
+    if (call.lay > 0) {
+      releaseHull(world, e);
+      const s = freeSlot(world.state, st);
+      e.tags.ends = 'lay';
+      if (s) { claimSlot(st, s.id, e.id); e.tags.slot = s.id; }
+      flyLeg(world, e, minute, null, world.get(gateId(st.id)) ? gateId(st.id) : st.id, LOCAL_G, st.id);
+      e.tags.legs = s ? [[gateId(st.id), { orbit: slotOrbit(st.id, s.id) }, LOCAL_G]] : null;
+      return;
+    }
+    depart(world, e, minute);
+    return;
+  }
+  if (call.phase === 'wait') {
+    const sizes = berthSizesFor(e.cls);
+    if (freeBerth(world.state, st, sizes, { reserve: true })) {
+      // a berth: out of the slot to the gate, down to it
+      const slot = { orbit: e.orbit };
+      leavePort(world, e);
+      e.tags.at = st.id;
+      e.tags.ends = 'berth';
+      flyLeg(world, e, minute, slot, world.get(gateId(st.id)) ? gateId(st.id) : st.id, LOCAL_G, st.id);
+      e.tags.legs = [[gateId(st.id), st.id, LOCAL_G]];
+      return;
+    }
+    if (minute >= (call.giveUp ?? 0)) {
+      // no berth today: the work by tender from here, slowly, then the layover
+      call.phase = 'tender';
+      e.tags.until = minute + Math.round(call.work * TENDER_SLOWER) + call.lay;
+      return;
+    }
+    e.tags.until = minute + span(RETRY_MIN);
+    return;
+  }
+  depart(world, e, minute);
+}
+
+/** Background visitor: the next step of a ship's passage or its port call. */
 function serviceShip(e, minute, world) {
   if (!e.tags?.traffic || minute < e.tags.until) return;
   if (e.transit) {
-    const dest = world.get(e.transit.to);
-    if (dest) dockBeside(e, dest, minute, randInt(4 * 60, 4 * 1440));
-    else e.transit = null;
+    const next = e.tags.legs?.shift();
+    if (next && endOf(world, next[1]) && (!next[0] || endOf(world, next[0]))) flyLeg(world, e, minute, next[0], next[1], next[2]);
+    else { e.tags.legs = null; landed(world, e, minute); }
   } else if (e.orbit && e.tags.at) {
-    depart(world, e, minute);
+    nextInPort(world, e, minute);
   } else return;
   world.refresh(e, minute);
   world.hash.update(e);
 }
 WORLD_VISITORS.push(serviceShip);
 
-/** Create one NPC ship docked at a random station. */
+/** Create one NPC ship in port at a random station, somewhere in a call. */
 export function spawnTrafficShip(state, minute = state.clock.minute) {
   const world = getWorld(state);
   const all = world.stations;
@@ -87,9 +302,17 @@ export function spawnTrafficShip(state, minute = state.clock.minute) {
     orbit: { ...home.orbit }, t: minute, tags: { traffic: true, g: Math.min(CLASSES[id.cls].drive.maxG, pick([0.3, 0.3, 0.5, 1, 1, 1.5])) },
   });
   e.transponder = random() > 0.1;
-  dockBeside(e, home, minute, randInt(60, 3 * 1440));
+  world.add(e);
+  // part-way through a call: at work in a berth if it has work and one is free, else in the pattern
+  const call = e.tags.call = { ...planCall(e), since: minute, port: home.id };
+  const left = (n) => Math.max(1, Math.round(n * random()));
+  if (call.work > 0 && takeBerth(world, e, home, minute, left(call.work))) { /* working */ }
+  else if (call.tender) takeSlot(world, e, home, minute, 'tender', minute + left(call.tender + call.lay));
+  else takeSlot(world, e, home, minute, 'lay', minute + left(Math.max(60, call.lay)));
+  world.refresh(e, minute);
+  world.hash.update(e);
   if (state.traffic) state.traffic.spawned++;
-  return world.add(e);
+  return e;
 }
 
 /** Hourly: keep the population topped up. */
@@ -106,7 +329,7 @@ export function trafficTick(state) {
 export function ensurePopulation(state) {
   const T = state.traffic;
   if (!T || T.v >= 2) return 0;
-  T.v = 2;
+  T.v = 3;
   if (T.population <= 0 || T.population >= DEFAULT_TRAFFIC) return 0;
   const add = DEFAULT_TRAFFIC - T.spawned;
   T.population = DEFAULT_TRAFFIC;
@@ -120,11 +343,17 @@ export function seedTraffic(state, count = state.traffic.population) {
   for (let i = 0; i < count; i++) {
     const e = spawnTrafficShip(state);
     if (!e) break;
-    if (random() < 0.5) {
-      // half are mid-flight at game start
+    if (random() < IN_FLIGHT) {
+      // most are under way at game start, on the long leg (passages take days, calls hours)
+      const from = e.tags.at;
+      e.tags.slot ||= null;
       depart(world, e, state.clock.minute);
+      const leg = e.tags.legs?.shift();
+      if (leg) flyLeg(world, e, state.clock.minute, leg[0], leg[1], leg[2]);
+      if (!e.transit) continue;
       const shift = Math.floor(random() * (e.transit.t1 - e.transit.t0) * 0.9);
       e.transit.t0 -= shift; e.transit.t1 -= shift; e.tags.until -= shift;
+      e.tags.from = from;
       world.refresh(e, state.clock.minute);
       world.hash.update(e);
     }

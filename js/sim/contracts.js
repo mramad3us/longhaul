@@ -18,12 +18,18 @@
 //              space; an inspection that finds it ends the job
 //   RECON    — get a navy picket inside radar range and hold a lock on it
 //              without being identified, return
-// "Docked" = holding station within 50 km of a station.
+// "Docked" = hard-docked at one of the station's berths (docking.js). The
+// board can be read from anywhere in radio range; signing for work takes
+// being in port (inside its port space, holding.js PORT_M: the approach,
+// where its holding pattern is); loading, unloading, people and fuel across
+// the collar take a hard seal. Work that ends in a report (a survey, an
+// investigation, a bounty, recon, an escort brought in) is turned in from port.
 // ============================================================
 
 import { AU_M, AU_KM, RANGE, DAY_MIN, G0, MIN_S } from '../core/constants.js';
 import { random, randInt, randRange, pick, weightedPick, chance } from '../core/rng.js';
 import { getWorld } from './world.js';
+import { inPortSpace, PORT_M } from './holding.js';
 import { createEntity } from './entities.js';
 import { rollIdentity, CLASSES, TECH, hullPoints, PLAYER_CLASS } from './ship-classes.js';
 import { restockSuits } from './life-support.js';
@@ -34,6 +40,7 @@ import { spawnAgent, wake, makeHostile } from './agents.js';
 import { PLAYER } from './combatants.js';
 import { WARHEADS, AMMO_PRICES } from './weapons.js';
 import { adjustStanding } from './law.js';
+import { dockedStationEntity } from './docking.js';
 
 export const ContractType = {
   CARGO: 'CARGO', PASSENGERS: 'PASSENGERS', FUEL: 'FUEL',
@@ -71,13 +78,9 @@ export function createContracts() {
 
 // ---- DOCKING ----
 
-/** The station we're docked at (holding within 50 km), or null. */
+/** The station we're hard-docked at, or null. */
 export function dockedStation(state) {
-  const h = state.flight.hold;
-  if (!h || h.kind !== 'entity') return null;
-  const e = getWorld(state).get(h.id);
-  if (!e || e.type !== 'station') return null;
-  return Math.hypot(h.ox, h.oy) <= RANGE.DOCK_M ? e : null;
+  return dockedStationEntity(state);
 }
 
 // ---- GENERATION ----
@@ -430,6 +433,7 @@ export function acceptContract(state, stationId, contractId) {
   const c = st.board.missions[i];
   const now = state.clock.minute;
   if (POWERS.includes(st.faction) && state.law.standing[st.faction] < STANDING_TO_TRADE) return { ok: false, text: `${st.name} won't give work to a ship with your record.` };
+  if (!inPort(state, st)) return { ok: false, text: `Come into ${st.name}'s port space (inside ${Math.round(PORT_M / 1e6) * 1000} km) to sign for it.` };
   if (c.cargo) {
     const load = state.cargo.reduce((s, x) => s + x.mass, 0);
     if (load + c.cargo.mass > state.cargoCapacity) return { ok: false, text: `Not enough hold space (${(state.cargoCapacity - load).toLocaleString()} kg free).` };
@@ -515,12 +519,21 @@ export function deliverable(state, station) {
     (c.phase === 'return' && c.station === station.id));
 }
 
-/** Turn in a contract at the docked station. */
-export function completeContract(state, contractId) {
+/** Work that is turned in across the collar (goods, people, fuel), not over the radio. */
+export const needsBerth = (c) => !!(c.cargo || c.passengers || c.type === ContractType.FUEL || c.type === ContractType.SALVAGE || c.type === ContractType.MEDEVAC || c.type === ContractType.SMUGGLE);
+
+/** Are we in port at a station: docked there, or inside its port space? */
+export function inPort(state, st) {
+  return dockedStation(state)?.id === st.id || inPortSpace(st, state.flight.pos);
+}
+
+/** Turn in a contract: at the docked station, or (a report) from port at `stationId`. */
+export function completeContract(state, contractId, stationId = null) {
   const c = state.contracts.active.find(x => x.id === contractId);
-  const st = dockedStation(state);
+  const st = dockedStation(state) || (stationId ? getWorld(state).get(stationId) : null);
   if (!c || !st) return { ok: false, text: 'Dock at the right station first.' };
   if (!deliverable(state, st).includes(c)) return { ok: false, text: 'This contract is not complete here.' };
+  if (dockedStation(state)?.id !== st.id && (needsBerth(c) || !inPort(state, st))) return { ok: false, text: needsBerth(c) ? `Dock at ${st.name} to hand it over.` : `Come into ${st.name}'s port space to turn it in.` };
   if (c.type === ContractType.FUEL) {
     if (state.resources.fuel.current < c.fuelKg + 50) return { ok: false, text: `Need ${c.fuelKg} kg of reaction mass to spare.` };
     state.resources.fuel.current -= c.fuelKg;

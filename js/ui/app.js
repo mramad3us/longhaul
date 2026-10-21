@@ -3,23 +3,32 @@
 // Screens, game lifecycle, frame loop wiring.
 // ============================================================
 
+import { orderSuits } from '../sim/life-support.js';
 import { ui } from './context.js';
 import { $, $$, esc, show, toggleClass, setText } from './dom.js';
 import { toast } from './toast.js';
 import { initLog, logEntry, renderLog, resetLogView } from './log.js';
-import { initHud, updateHud, updatePerf, setResourceAlertHandler, resetResourceAlerts } from './hud.js';
+import { initHud, updateHud, updatePerf, setResourceAlertHandler, resetResourceAlerts, setHailHandler, setRouteHandler, setDockHandler } from './hud.js';
 import { buildShipView, updateShipView, setShipAnimationsPaused } from './ship-view.js';
 import { initNav, updateNav, openNav, closeNav, toggleNav, openRoutePanel, resetNavForGame } from './nav.js';
 import { resetTacCache } from './tac.js';
 import { initSelection, selectCrew, selectTile, clearSelection, renderSelection, showDeckMenu } from './selection.js';
-import { initDialogs, openDialog, closeDialog, closeTopDialog, openMissions, openJobs, openStation, hail } from './dialogs.js';
+import { initDialogs, openDialog, closeDialog, closeTopDialog, openMissions, openJobs, openStation } from './dialogs.js';
 import { initPresenter, resourceAlert } from './presenter.js';
 import { openSystems, openRoster } from './shipboard.js';
 import { initSettings, renderSettings } from './settings.js';
 import { saveCurrent, loadSave, latestSave, renderSaveList, scheduleAutosave, stopAutosave } from './persistence.js';
 import { startParticles, stopParticles, updateParticleMotion } from './particles.js';
 import { initKeyboard } from './keyboard.js';
-import { initLibrary, toggleLibrary, closeLibrary } from './library.js';
+import { initLibrary, toggleLibrary, closeLibrary, openLibrary } from './library.js';
+import { initStage, updateStage, resetStage } from './stage.js';
+import { initComms, openComms, closeComms, updateComms, commsOpen } from './comms.js';
+import { initBoarding, openBoarding, closeBoarding, updateBoarding } from './boarding.js';
+import { clearTicker } from './ticker.js';
+import { beginDocking } from '../sim/docking.js';
+import { keepOutM } from '../sim/traffic-control.js';
+import { getWorld } from '../sim/world.js';
+import { AU_M } from '../core/constants.js';
 import { initStorage } from '../storage.js';
 import { VERSION } from '../version.js';
 import { bus } from '../core/events.js';
@@ -34,7 +43,7 @@ import { spawnEncounter } from '../sim/conflict.js';
 import { controlAt } from '../sim/factions.js';
 import { initFx, resetFx } from './fx.js';
 import { renderShipPicker, crewRange } from './ship-picker.js';
-import { CLASSES, TECH, PLAYER_CLASS, PLAYER_MAX_CREW } from '../sim/ship-classes.js';
+import { CLASSES, TECH, PLAYER_CLASS, maxCrew } from '../sim/ship-classes.js';
 import {
   iconNewGame, iconLoadGame, iconSettings, iconPause, iconHudSettings, iconHudSave, iconHudExit,
   iconMinus, iconPlus, logoShip, createStarfield,
@@ -91,31 +100,38 @@ export async function boot() {
   }));
   $$('[data-action="back"]').forEach(b => b.addEventListener('click', () => { refreshContinue(); showScreen('landing'); }));
   $('#crew-minus').addEventListener('click', () => { crewCount = Math.max(1, crewCount - 1); updateCrewHint(); });
-  $('#crew-plus').addEventListener('click', () => { crewCount = Math.min(PLAYER_MAX_CREW, crewCount + 1); updateCrewHint(); });
+  $('#crew-plus').addEventListener('click', () => { crewCount = Math.min(maxCrew(shipClass), crewCount + 1); updateCrewHint(); });
   $('[data-action="start-game"]').addEventListener('click', newGame);
   refreshContinue();
 
   // In-game UI
-  initHud(requestSpeed, toggleCombat, openSystems, () => openNav('combat'));
+  initHud(requestSpeed, toggleCombat, openSystems, () => openNav('combat'), toggleSuits);
   initFx();
   ui.toggleCombat = toggleCombat;
   initLog();
   setResourceAlertHandler(resourceAlert);
-  initNav({ hail, openStation: () => openStation() });
-  initSelection({ hail, openNav });
-  initDialogs({ plotRoute: (t) => openRoutePanel(t), setPaused });
+  initNav({ hail: (id) => openComms(id), openStation: () => openStation(), board: (id) => openBoarding(id), dock: (target) => dockWith(target) });
+  initSelection({ hail: (id) => openComms(id), openNav });
+  initDialogs({ plotRoute: (t) => openRoutePanel(t), setPaused, openComms: (id) => openComms(id), crewChanged: rebuildShipView, beginDocking: (id) => dockWith({ kind: 'station', id }) });
+  initComms({ openStation: (e, tab) => openStation(e, tab), openBoarding: (id) => openBoarding(id), openDialog, openLibrary: (id) => openLibrary(id), plotRoute: (t) => openRoutePanel(t), dock: (id) => dockWith({ kind: 'station', id }) });
+  setRouteHandler((t) => openRoutePanel(t));
+  setDockHandler((id) => dockWith({ kind: 'station', id }));
+  initBoarding();
+  setHailHandler((id) => openComms(id));
+  initStage({ select: (id) => { openNav('tactical'); } });
   initPresenter();
   initLibrary();
   initKeyboard({
     speed: requestSpeed, togglePause, nav: (tab) => toggleNav(tab), missions: openMissions, jobs: openJobs,
     systems: openSystems, roster: openRoster,
     station: () => dockedStation(ui.state) ? openStation() : toast('Not docked', 'warn'),
-    combat: toggleCombat, weapons: () => toggleNav('combat'), library: toggleLibrary, escape: onEscape, save: () => quickSave(), devFlip, devCut,
+    combat: toggleCombat, suits: toggleSuits, weapons: () => toggleNav('combat'), library: toggleLibrary, escape: onEscape, save: () => quickSave(), devFlip, devCut,
+    comms: () => commsOpen() ? closeComms() : openComms(),
   });
   $$('[data-action]').forEach(b => {
     const a = b.dataset.action;
     const fn = {
-      'open-map': () => openNav('solar'), 'open-station': () => openStation(), 'open-missions': openMissions,
+      'open-map': () => openNav('solar'), 'open-station': () => openStation(), 'open-missions': openMissions, 'open-comms': () => openComms(),
       'open-jobs': openJobs, 'open-systems': openSystems, 'open-roster': openRoster, 'open-library': () => toggleLibrary(), 'game-settings': openSettingsDialog, 'save-game': openSaveDialog, 'exit-game': openExitDialog,
     }[a];
     if (fn) b.addEventListener('click', fn);
@@ -144,7 +160,7 @@ function updateCrewHint() {
 function openShipPicker() {
   renderShipPicker($('#ship-picker'), shipClass, (id) => {
     shipClass = id;
-    crewCount = Math.max(crewCount, Math.min(PLAYER_MAX_CREW, CLASSES[id].crew[0]));
+    crewCount = Math.min(maxCrew(id), Math.max(crewCount, CLASSES[id].crew[0]));
     updateCrewHint();
   });
 }
@@ -163,7 +179,7 @@ function newGame() {
   const state = createGame({ shipName, captainName, crewCount, classId: shipClass });
   startGame(state, true);
   logEntry(`Mission start — ${state.ship.name}, ${CLASSES[shipClass].name} (${TECH[state.ship.tl].label}), Captain ${captainName}`, 'system');
-  logEntry(`Docked at Ceres Station. Crew of ${state.ship.crew.length}. Hail the station for contracts.`, 'nav');
+  logEntry(`Docked at Ceres Station, berth ${state.dock?.berth}. Crew of ${state.ship.crew.length}. Hail the station (H) for contracts, clearances and the hiring hall.`, 'nav');
   toast('Good luck, Captain.', 'ok');
 }
 
@@ -190,11 +206,10 @@ function startGame(state, fresh) {
   resetFx();
   resetLogView();
   resetResourceAlerts();
-  buildShipView($('#ship-container'), state, {
-    crew: (id) => selectCrew(id),
-    tile: (t, d, x, y) => selectTile(t, d, x, y),
-    deckMenu: (d, x, y) => showDeckMenu(d, x, y),
-  });
+  resetStage();
+  clearTicker();
+  closeComms(); closeBoarding();
+  rebuildShipView();
   $('#ship-container').onclick = () => clearSelection();
   clearSelection();
   if (fresh) state.speed = 1;
@@ -204,6 +219,35 @@ function startGame(state, fresh) {
   startParticles();
   if (storageOK) scheduleAutosave();
   renderLog();
+}
+
+/** (Re)build the interior view: a new game, a hand signed on or paid off. */
+function rebuildShipView() {
+  const state = ui.state;
+  if (!state) return;
+  buildShipView($('#ship-container'), state, {
+    crew: (id) => selectCrew(id),
+    tile: (t, d, x, y) => selectTile(t, d, x, y),
+    deckMenu: (d, x, y) => showDeckMenu(d, x, y),
+  });
+}
+
+/**
+ * Dock with a station or a ship: close in, the docking computer flies the
+ * final approach; far off, the route planner plots the way to the gate
+ * (or to the ship) first.
+ */
+function dockWith(target) {
+  const s = ui.state;
+  if (!s) return;
+  const e = getWorld(s).get(target.id);
+  if (!e) return;
+  const dM = Math.hypot(e.pos.x - s.flight.pos.x, e.pos.y - s.flight.pos.y) * AU_M;
+  const near = target.kind === 'ship' ? dM < 200_000 : dM < keepOutM(e.id) * 3;
+  if (!near) { openRoutePanel({ kind: 'entity', id: e.id }, { dock: true }); return; }
+  const r = beginDocking(s, target, { mode: 'auto' }, (t, p) => bus.emit(t, p));
+  toast(r.text, r.ok ? 'nav' : 'warn');
+  logEntry(r.text, r.ok ? 'nav' : 'warn');
 }
 
 function endGame(why) {
@@ -239,7 +283,10 @@ function frame(state, alpha) {
   ui.alpha = alpha;
   updateHud(state);
   updateShipView(state, alpha);
+  updateStage(state, alpha);
   updateNav(state, alpha);
+  updateComms();
+  updateBoarding();
   renderSelection();
   renderLog();
   updateParticleMotion(state);
@@ -299,7 +346,17 @@ function toggleCombat() {
   else { toast('Battle stations secured', 'ok'); logEntry('Battle stations secured', 'system'); }
 }
 
+function toggleSuits() {
+  const s = ui.state;
+  if (!s) return;
+  const on = orderSuits(s, !s.suitsOn);
+  if (on) { toast('ALL HANDS: SUIT UP', 'warn'); logEntry('All hands into EVA suits, and keep them on', 'warn'); }
+  else { toast('Suits off when the air is good', 'ok'); logEntry('Suit order lifted: suits off where the air is good', 'system'); }
+}
+
 function onEscape() {
+  if (closeComms()) return;
+  if (closeBoarding()) return;
   if (closeTopDialog()) return;
   if (closeLibrary()) return;
   if (ui.nav.open) { closeNav(); return; }

@@ -16,7 +16,7 @@ import { DEFAULT_TRAFFIC } from '../js/sim/traffic.js';
 function game(seed = 11, opts = {}) {
   seedRandom(seed);
   bus.clear();
-  const s = createGame({ crewCount: 4, ...opts });
+  const s = createGame({ docked: false, crewCount: 4, ...opts });
   s.politics.quietUntil = Infinity;
   s.missions.cooldown = 1e9;
   return s;

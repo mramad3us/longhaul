@@ -5,6 +5,9 @@
 //   prepare — all hands to crash couches, pilot at the helm. Engages
 //             automatically when everyone able is strapped in, or on
 //             the captain's override (unsecured crew may get hurt).
+//             Leaving a port, the docking computer climbs out of its
+//             gate on RCS meanwhile (docking.js outbound), so the
+//             drive can light when they are in.
 //   active  — guidance flies the plan (burn / flip / brake / coast /
 //             RCS approach), re-planning every minute.
 //   arrive  — co-moving within the standoff: hold station on target.
@@ -26,16 +29,22 @@
 // body). If the target is under thrust, holding means burning with it.
 // ============================================================
 
+import { gravityAt } from './gravity.js';
+import { terrainGuard, hoverCmd } from './terrain.js';
 import { AU_M, G0, DAY_MIN } from '../core/constants.js';
-import { getWorld } from './world.js';
-import { targetStateAt, targetName, guidanceStep } from './nav.js';
-import { turnAhead, FLIP_TURN, SLEW_RATE } from './flight.js';
+import { getWorld, predictEntity } from './world.js';
+import { targetStateAt, targetName, guidanceStep, portOfTarget } from './nav.js';
+import { turnAhead, FLIP_TURN, SLEW_RATE, RCS_MAX_G } from './flight.js';
+import { gateId } from './stations.js';
+import { KEEPOUT_SPEED_MS } from './traffic-control.js';
 import { crewSecureStatus } from './crew-ai.js';
 import { stanceDoctrine, STANCE_MODES } from './stance.js';
 import { isTracked, setSensorRange, SENSOR_RANGES } from './sensors.js';
+import { undock, clearOff, releaseDock, dockHolds, proxActive, CLEAR_M } from './docking.js';
 
 /** Begin flying a plan. opts: { missionId, intercept, estimate } */
 export function engageRoute(state, plan, opts = {}) {
+  if (plan.port === undefined && plan.kind !== 'stance') plan.port = portOfTarget(state, plan.target);
   const f = state.flight;
   state.autopilot = {
     plan: { ...plan, target: { ...plan.target } },
@@ -131,7 +140,7 @@ export function holdStation(state, target) {
   if (!tgt) return false;
   const f = state.flight;
   state.flight.hold = {
-    kind: target.kind, id: target.id,
+    ...target,
     ox: (f.pos.x - tgt.pos.x) * AU_M,
     oy: (f.pos.y - tgt.pos.y) * AU_M,
   };
@@ -139,14 +148,18 @@ export function holdStation(state, target) {
   return true;
 }
 
+/** Let go of whatever holds us: station-keeping, or a dock's hold point. (Dev tools also tear a hard dock loose.) */
 export function releaseHold(state) {
   state.flight.hold = null;
+  if (state.dock) releaseDock(state);
 }
 
 /**
  * Keep the ship on its held offset for the current minute (after the
  * world has advanced). Returns the G the ship must burn to keep up.
  */
+const _hg = { ax: 0, ay: 0 }, _ht = { ax: 0, ay: 0 };
+
 export function holdStep(state) {
   const h = state.flight.hold;
   if (!h) return 0;
@@ -156,9 +169,18 @@ export function holdStep(state) {
   f.pos.x = tgt.pos.x + h.ox / AU_M;
   f.pos.y = tgt.pos.y + h.oy / AU_M;
   f.vel.vx = tgt.vel.vx; f.vel.vy = tgt.vel.vy;
-  const g = Math.hypot(tgt.ax, tgt.ay) / G0;
-  if (g > 0) f.facing = Math.atan2(tgt.ay, tgt.ax);
-  return g;
+  if (tgt.ground) return 0;                       // resting on the surface: the ground holds us
+  // Keeping the place takes the thrust between how the place moves and how
+  // we would fall there (gravity.js): nothing on a Keplerian orbit, the
+  // body's pull hovering over a surface port's gate
+  const now = state.clock.minute;
+  const g = gravityAt(f.pos.x, f.pos.y, now, _hg);
+  let ax, ay;
+  if (tgt.atx != null) { ax = tgt.atx - g.ax; ay = tgt.aty - g.ay; }
+  else { const gt = gravityAt(tgt.pos.x, tgt.pos.y, now, _ht); ax = tgt.ax + gt.ax - g.ax; ay = tgt.ay + gt.ay - g.ay; }
+  const need = Math.hypot(ax, ay) / G0;
+  if (need > 1e-5) f.facing = Math.atan2(ay, ax);
+  return need < 1e-5 ? 0 : need;
 }
 
 export function holdTargetName(state) {
@@ -182,6 +204,24 @@ export function autopilotTick(state, emit = () => {}) {
     return null;
   }
 
+  // A route from a berth: undock first (the departure clearance is ours to ask
+  // for: traffic-control.js), back out to the hold point, then go
+  const d = state.dock;
+  if (d && ap.phase === 'prepare' && !isDockRoute(d, plan)) {
+    if (d.phase === 'docked') {
+      if (!ap.undockAsked) { ap.undockAsked = true; const r = undock(state, emit); if (!r.ok) { state.autopilot = null; emit('route-aborted', { target: targetName(state, plan.target), why: r.text }); return null; } }
+      ap.display = 'undock';
+      return null;
+    }
+    if (d.phase === 'inbound' || d.phase === 'awaiting') state.dock = null;     // a new route replaces the docking
+    else {
+      // out through the gate in the berth's frame, on RCS, before the route has the ship (docking.js clearOff)
+      if (d.phase === 'holding' || d.phase === 'approach' || d.phase === 'separate' && d.rel.x >= CLEAR_M) clearOff(state, emit);
+      else if (d.phase === 'separate') d.$depart = true;
+      if (state.dock) { ap.display = state.dock.phase === 'outbound' ? 'outbound' : 'undock'; return null; }
+    }
+  }
+
   if (ap.phase === 'prepare') {
     const st = crewSecureStatus(state);
     ap.display = 'prepare';
@@ -193,10 +233,11 @@ export function autopilotTick(state, emit = () => {}) {
       state.flight.hold = null;
       emit('route-engaged', { target: targetName(state, plan.target), unsecured: st.unsecured.map(m => m.name), override: ap.override && !allIn, stance: plan.kind === 'stance' ? STANCE_MODES[plan.mode].label : null });
     } else {
-      return null;
+      // while the crew strap in, a ship not held by anything is carried out of a gate on the RCS, or keeps its height over a rock (terrain.js)
+      return !state.flight.hold && !state.dock ? departCmd(state, now) || hoverCmd(state.flight.pos, state.flight.vel, now, { keepClimb: true }) : null;
     }
   }
-  if (plan.kind === 'stance') return stanceTick(state, ap, tgt, emit);
+  if (plan.kind === 'stance') return guarded(state, ap, stanceTick(state, ap, tgt, emit), tgt, emit);
 
   const arrival = plan.kind === 'transfer' ? arrivalTarget(state, ap) : null;
   const g = guidanceStep(plan, state.flight, now, tgt, arrival);
@@ -210,7 +251,55 @@ export function autopilotTick(state, emit = () => {}) {
     emit('route-arrived', { target: name, targetSpec: plan.target, minutes: now - (ap.engagedAt ?? now), fuelUsed, peakG: ap.peakG, missionId: ap.missionId, intercept: ap.intercept });
     return null;
   }
-  return g.cmd;
+  ap.via = g.via;
+  return guarded(state, ap, g.cmd, { pos: g.toward }, emit);
+}
+
+/**
+ * Leaving a port: inside its gate the torch is not allowed (traffic-control.js),
+ * so while the crew strap in the nav computer carries us out up the corridor
+ * (straight up from the station, toward its gate) on the RCS, to the keep-out
+ * speed limit, on top of whatever holds us against the rock's pull. A walk to
+ * the couches takes about as long as the RCS takes to cross a gate of 100 km,
+ * so the route can light its drive as soon as everyone is in.
+ */
+function departCmd(state, now) {
+  if (state.tc?.zone !== 'keepout' || state.combatStations) return null;
+  const world = getWorld(state);
+  const st = world.get(state.tc.station), gate = st && world.get(gateId(st.id));
+  if (!gate) return null;
+  const s0 = predictEntity(st, now, world), s1 = predictEntity(st, now + 1, world), g = predictEntity(gate, now, world);
+  const ux0 = g.pos.x - s0.pos.x, uy0 = g.pos.y - s0.pos.y, n = Math.hypot(ux0, uy0);
+  if (!n) return null;
+  const ux = ux0 / n, uy = uy0 / n;
+  const f = state.flight;
+  // the station's frame accelerates (a surface port turns with its rock): that, less the pull here, is the hold
+  const pull = gravityAt(f.pos.x, f.pos.y, now, _pull);
+  const hx = (s1.vel.vx - s0.vel.vx) / 60 - pull.ax, hy = (s1.vel.vy - s0.vel.vy) / 60 - pull.ay;
+  // out along the corridor at the limit, the drift across it nulled, on the RCS
+  const want = 0.9 * KEEPOUT_SPEED_MS;
+  let ax = (want * ux - (f.vel.vx - s0.vel.vx)) / 60, ay = (want * uy - (f.vel.vy - s0.vel.vy)) / 60;
+  const a = Math.hypot(ax, ay), rcs = RCS_MAX_G * G0;
+  if (a > rcs) { ax *= rcs / a; ay *= rcs / a; }
+  return { ax: hx + ax, ay: hy + ay, hover: true, depart: true };
+}
+const _pull = { ax: 0, ay: 0 };
+
+/** The terrain guard over the route's command (terrain.js): climb out round a rock in the way. */
+function guarded(state, ap, cmd, tgt, emit) {
+  if (!state.autopilot) return cmd;
+  const f = state.flight;
+  const aMax = Math.min(ap.plan.accelG, f.maxG) * G0;
+  const g = terrainGuard(f.pos, f.vel, cmd, tgt?.pos, aMax, state.clock.minute, !!ap.climbing);
+  if (!g) { if (ap.climbing) { ap.climbing = false; emit('nav-callout', { level: 'info', key: 'terrain', text: 'Clear of the ground. Resuming the route.' }); } return cmd; }
+  if (!ap.climbing) { ap.climbing = true; emit('nav-callout', { level: 'warn', key: 'terrain', text: `${g.body} is in the way: climbing out round it.` }); }
+  ap.display = 'climb';
+  return g;
+}
+
+/** Is this route the one a dock is flying (to the gate, or the final approach)? */
+function isDockRoute(d, plan) {
+  return d.phase === 'inbound' && (plan.name === 'DOCKING' || plan.target.id === `${d.target.id}-gate` || plan.target.id === d.target.id);
 }
 
 const STANCE_TRACK_GRACE_MIN = 10;   // minutes a stance flies on without a sensor track
@@ -336,6 +425,9 @@ export function maxSpeed(state) {
 
 function flightSpeedLimit(state) {
   if (state.combatStations) return 1;
+  // Docking: hand-flown proximity operations are flown in real time
+  if (state.dock && proxActive(state) && state.dock.mode === 'manual') return 1;
+  if (state.dock && dockHolds(state) && state.dock.phase !== 'docked' && state.dock.phase !== 'holding') return 2;
   const ap = state.autopilot;
   const f = state.flight;
   if (f.manual && f.manual.throttleG > 0) return 1;

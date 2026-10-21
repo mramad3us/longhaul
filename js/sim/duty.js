@@ -49,6 +49,7 @@ export const SHIFTS = [
 const DEFAULT_DUTY = {
   Captain: ['helm', 2], Pilot: ['helm', 1], Engineer: ['engineering', 1], Medic: ['medbay', 1],
   Gunner: ['ops', 0], Mechanic: ['workshop', 2], Scientist: ['ops', 2], Cook: ['galley', 1],
+  Security: ['weapons', 0], Deckhand: ['workshop', 0],
 };
 
 export function defaultDuty(role) {

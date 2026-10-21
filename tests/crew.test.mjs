@@ -23,7 +23,7 @@ import { createPlan, STANDOFF } from '../js/sim/nav.js';
 function game(seed = 1, crewCount = 6) {
   seedRandom(seed);
   bus.clear();
-  const s = createGame({ crewCount });
+  const s = createGame({ docked: false, crewCount });
   s.politics.quietUntil = Infinity;     // no patrols or pirates turning up mid-test
   return s;
 }
@@ -157,8 +157,9 @@ export default [
       const setup = (seed) => {
         const s = game(seed, 5);
         const world = getWorld(s);
-        const { x, y } = s.flight.pos;
         s.flight.hold = null;
+        s.flight.pos.x += 0.02;              // (open space, away from Ceres' pull and ground)
+        const { x, y } = s.flight.pos;
         const e = spawnAgent(s, { role: 'civilian', cls: 'mule', pos: { x: x + 30_000 / AU_M, y }, vel: { ...s.flight.vel }, transponder: true });
         s.flight.facing = Math.PI;
         s.flight.vel.vx -= 200;
@@ -225,6 +226,8 @@ export default [
       while (s.autopilot && t < 3000) { minuteTick(s); while (isInertiaActive(s)) updateInertia(s, 0.05); t++; }
       const arrived = !s.autopilot;
       const used = 50 - s.resources.medSupplies.current;
+      // (the ship in distress may be a runaway torch: let go of it, so the juice can wear off)
+      s.flight.hold = null;
       for (let k = 0; k < 90; k++) minuteTick(s);
       const hung = s.ship.crew.filter(m => m.juiceHangover > 4320 && m.juiceCrash).length;
       const eff = Math.max(...s.ship.crew.filter(m => !m.dead).map(efficiency));
@@ -247,7 +250,7 @@ export default [
         engageRoute(s, r.plan);
         let t = 0;
         while (s.autopilot && t < r.estimate.minutes + 3000) { minuteTick(s); t++; }
-        assert(!s.autopilot && s.flight.hold?.id === id, `${id}: not holding after ${t} min`);
+        assert(!s.autopilot && s.flight.hold?.id === `${id}-gate`, `${id}: not holding at its gate after ${t} min`);
         console.log(`      ${id}: ${fmt(t / 1440, 2)} days`);
       }
     },

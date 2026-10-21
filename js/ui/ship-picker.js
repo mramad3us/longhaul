@@ -7,8 +7,10 @@
 // ============================================================
 
 import { esc } from './dom.js';
-import { traceShape, drawShapeFeatures } from './tac.js';
-import { CLASSES, PLAYABLE, BUILDERS, KINDS, TECH, SHAPES, SIZES, PLAYER_MAX_CREW, hullPoints } from '../sim/ship-classes.js';
+import { CLASSES, PLAYABLE, BUILDERS, KINDS, TECH, SIZES, maxCrew, hullPoints } from '../sim/ship-classes.js';
+import { hullOf, portSummary } from '../sim/hulls.js';
+import { createLayout } from '../sim/ship-layout.js';
+import { drawHullPortrait } from './hull-art.js';
 import { MINING_GEAR } from '../sim/weapons.js';
 import { classStrength } from '../sim/combatants.js';
 
@@ -19,8 +21,8 @@ const YARD_COLOR = { MCR: '#C1553B', UN: '#4A90D9', independent: '#8A8A6A', Belt
 const STRENGTHS = Object.fromEntries(PLAYABLE.map(id => [id, classStrength(id)]));
 const MAX_LOG = Math.log10(Math.max(...Object.values(STRENGTHS)));
 
-/** Recommended crew for a class (the interior holds eight). */
-export const crewRange = (id) => [CLASSES[id].crew[0], Math.min(PLAYER_MAX_CREW, CLASSES[id].crew[1])];
+/** Crew a class wants, from the fewest who can keep its watches to all it berths. */
+export const crewRange = (id) => [CLASSES[id].crew[0], maxCrew(id)];
 
 function armament(c) {
   const parts = [];
@@ -42,7 +44,8 @@ function detailHTML(id) {
   const row = (k, v, cls = '') => `<div class="sp-row"><span>${k}</span><b class="${cls}">${v}</b></div>`;
   return `
     <div class="sp-head">
-      <canvas class="sp-hull" width="360" height="90" data-hull="${id}"></canvas>
+      <canvas class="sp-hull" width="360" height="80" data-hull="${id}" data-view="top"></canvas>
+      <canvas class="sp-hull" width="360" height="60" data-hull="${id}" data-view="side"></canvas>
       <div class="sp-title">${esc(c.name)}</div>
       <div class="sp-sub"><span style="color:${YARD_COLOR[c.builder]}">${esc(BUILDERS[c.builder].name)}</span> · ${esc(KINDS[c.kind])} · <span class="sp-tl sp-tl-${c.tl}">${T.label} ${esc(T.name)}</span></div>
       <p class="sp-desc">${esc(c.desc)}</p>
@@ -53,8 +56,12 @@ function detailHTML(id) {
         ${row('Size', `${SIZES[c.size].label} · ${c.lengthM} m · ${c.massT.toLocaleString()} t`)}
         ${row('Structure', `${hullPoints(c)} DP · armor ${c.armor + T.armor}`)}
         ${row('Drive', `${c.drive.cruiseG} G cruise · ${c.drive.maxG} G max`)}
-        ${row('Hold', `${c.cargoT.toLocaleString()} t · ${c.berths} berths`)}
-        ${row('Crew', `${lo}–${hi}`)}
+        ${row('Hold', `${c.cargoT.toLocaleString()} t`)}
+        ${row('Crew', `${lo}–${hi} (usually ${c.crewStd})`)}
+        ${row('Passengers', c.berths ? `${c.berths} berths on a deck of their own${c.kind === 'cutter' ? ' (the brig)' : ''}` : '—', c.berths ? '' : 'sp-dim')}
+        ${row('Collars', esc(portSummary(id)))}
+        ${row('Atmosphere', c.atmo ? `rated · ${c.atmo.entry === 'belly' ? 'lifting body, ceramic belly' : 'tail-first, shield ring'} · ${c.atmo.landing}` : 'not rated', c.atmo ? '' : 'sp-dim')}
+        ${row('Decks', esc(createLayout(id).map(d => d.name).join(' · ')))}
       </div>
       <div class="sp-col">
         <div class="sp-sec">FIGHTING</div>
@@ -74,26 +81,10 @@ function detailHTML(id) {
     </div>`;
 }
 
+/** The hull from above and from the side, nose right, in the yard's colour (hull-art.js). */
 function drawHull(canvas) {
   const c = CLASSES[canvas.dataset.hull];
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  ctx.clearRect(0, 0, W, H);
-  const shape = SHAPES[c.shape];
-  const h = Math.min(W * 0.8, 120 + 40 * Math.log10(c.lengthM / 30));
-  ctx.save();
-  ctx.translate(W / 2, H / 2);
-  ctx.rotate(Math.PI / 2);                        // the art is nose-up; show it nose-right
-  ctx.strokeStyle = YARD_COLOR[c.builder];
-  ctx.fillStyle = YARD_COLOR[c.builder];
-  ctx.lineWidth = 1.5;
-  traceShape(ctx, shape, h);
-  ctx.globalAlpha = 0.12;
-  ctx.fill();
-  ctx.globalAlpha = 0.9;
-  ctx.stroke();
-  drawShapeFeatures(ctx, shape, h);
-  ctx.restore();
+  drawHullPortrait(canvas, hullOf(canvas.dataset.hull), { view: canvas.dataset.view || 'top', tint: YARD_COLOR[c.builder] });
 }
 
 /**
@@ -116,7 +107,7 @@ export function renderShipPicker(box, selected, onSelect) {
     current = id;
     box.querySelectorAll('.sp-item').forEach(b => b.classList.toggle('active', b.dataset.ship === id));
     detail.innerHTML = detailHTML(id);
-    drawHull(detail.querySelector('canvas'));
+    detail.querySelectorAll('canvas[data-hull]').forEach(drawHull);
   };
   box.querySelector('.sp-list').addEventListener('click', (e) => {
     const b = e.target.closest('[data-ship]');

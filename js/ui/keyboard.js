@@ -20,8 +20,8 @@ export function initKeyboard(actions) {
       ' ': actions.togglePause,
       '1': () => actions.speed(1), '2': () => actions.speed(2), '3': () => actions.speed(3),
       m: () => actions.nav('solar'), r: () => actions.nav('scanner'), t: () => ui.settings.devMode ? actions.devCut() : actions.nav('tactical'),
-      l: actions.missions, j: actions.jobs, b: actions.station, c: actions.combat,
-      e: actions.systems, d: actions.roster, w: actions.weapons, i: actions.library,
+      l: actions.missions, j: actions.jobs, b: actions.station, c: actions.combat, u: actions.suits,
+      e: actions.systems, d: actions.roster, w: actions.weapons, i: actions.library, h: actions.comms,
       f: () => ui.settings.devMode && actions.devFlip(),
       Escape: actions.escape,
     };

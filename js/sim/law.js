@@ -14,6 +14,13 @@
 // who shot first is not a crime. Contraband (smuggled cargo, nuclear
 // warheads in UN or Martian space) is what inspections look for.
 // Wanted levels fade after a quiet stretch; standing drifts home.
+//
+// Lesser offenses are citations: fines owed to a power (loitering on a
+// station's approach, running dark in its control space, speeding inside
+// the gate). They are paid at a station of that power, or settled by an
+// inspection; a week unpaid makes us SUSPECT there. Offenses that are
+// not attacks (trespass in a keep-out zone, undocking without leave,
+// boarding a lawful ship) are recorded like crimes, with a severity.
 // ============================================================
 
 import { DAY_MIN } from '../core/constants.js';
@@ -23,6 +30,8 @@ import { classOf } from './ship-classes.js';
 export const WANTED_LABEL = ['CLEAN', 'SUSPECT', 'WANTED', 'HOSTILE'];
 const SEVERITY = { fired: 1, hit: 1, disabled: 2, destroyed: 3 };
 const WANTED_FADE_DAYS = 10;
+const FINE_GRACE_DAYS = 7;          // unpaid this long, a citation makes us SUSPECT
+const FINES_MAX = 30;
 /** Where nuclear torpedoes are contraband. */
 export const NUKES_ILLEGAL_IN = ['UN', 'MCR'];
 
@@ -32,11 +41,63 @@ export function createLaw() {
     wanted: { UN: 0, MCR: 0, OPA: 0 },
     lastCrime: { UN: -Infinity, MCR: -Infinity, OPA: -Infinity },
     record: [],                 // recent crimes (for the log)
+    fines: [],                  // citations owed: { id, faction, station, kind, amount, at }
+    nextFine: 1,
   };
+}
+
+// ---- CITATIONS ----
+
+/** A citation: a fine owed to `faction`. Independent stations fine too, but nobody chases it. */
+export function cite(state, faction, { station = null, kind, amount }, emit = () => {}) {
+  const L = state.law;
+  L.fines ??= [];
+  const f = { id: `fine-${L.nextFine = (L.nextFine || 1) + 1}`, faction, station, kind, amount, at: state.clock.minute };
+  L.fines.push(f);
+  if (L.fines.length > FINES_MAX) L.fines.shift();
+  if (faction in L.standing) adjustStanding(state, faction, -2);
+  emit('citation', f);
+  return f;
+}
+
+/** Fines owed to a power (all of them, or one station's). */
+export const finesOwed = (state, faction) => (state.law.fines || []).filter(f => f.faction === faction);
+
+/** Pay what we owe a power. Returns { paid, owed, text }. */
+export function payFines(state, faction) {
+  const owed = finesOwed(state, faction);
+  const total = owed.reduce((s, f) => s + f.amount, 0);
+  const cr = state.resources.credits;
+  if (!total) return { paid: 0, owed: 0, text: 'You owe nothing here.' };
+  if (cr.current < total) return { paid: 0, owed: total, text: `You owe ${total.toLocaleString()} MCR and can't cover it.` };
+  cr.current -= total;
+  state.law.fines = state.law.fines.filter(f => !owed.includes(f));
+  const L = state.law;
+  if (faction in L.wanted && L.wanted[faction] === 1) L.wanted[faction] = 0;
+  return { paid: total, owed: 0, text: `${total.toLocaleString()} MCR paid. Your record with ${faction} is clear of citations.` };
+}
+
+/**
+ * An offense that isn't an attack on a ship: trespass, undocking without
+ * leave, boarding a lawful hull. Severity 1–3, recorded like a crime.
+ */
+export function recordOffense(state, faction, kind, severity, emit = () => {}, where = '') {
+  const L = state.law;
+  if (faction in L.standing) {
+    adjustStanding(state, faction, -8 * severity);
+    L.wanted[faction] = Math.max(L.wanted[faction], Math.min(3, severity));
+    L.lastCrime[faction] = state.clock.minute;
+  }
+  const crime = { kind, victim: where, factions: faction in L.standing ? [faction] : [], at: state.clock.minute };
+  L.record.push(crime);
+  if (L.record.length > 20) L.record.shift();
+  emit('crime', crime);
+  return crime;
 }
 
 /** Is shooting at this ship a crime? */
 export function lawfulTarget(e) {
+  if (e?.type === 'station') return e.faction !== 'pirate' && e.combat?.status !== 'wreck';
   if (!e || e.type !== 'ship') return false;
   if (e.faction === 'pirate' || e.tags?.wanted) return false;
   if (e.agent?.aggressor) return false;              // they fired on us first
@@ -58,7 +119,7 @@ export function recordAttack(state, e, kind, emit = () => {}) {
     return null;
   }
   const cat = classOf(e)?.category;
-  const sev = Math.min(3, SEVERITY[kind] + (cat === 'military' || cat === 'authority' ? 1 : 0));
+  const sev = Math.min(3, SEVERITY[kind] + (cat === 'military' || cat === 'authority' || e.type === 'station' ? 1 : 0));
   e.tags.crime ??= 0;
   if (sev <= e.tags.crime) return null;
   e.tags.crime = sev;
@@ -103,13 +164,15 @@ export function settleInspection(state, faction) {
   const L = state.law;
   const { cargo, nukes } = contrabandFor(state, faction);
   const found = cargo.length + (nukes > 0 ? 1 : 0);
-  const fine = (found ? 1000 + 1500 * cargo.length + 1000 * nukes : 0) + 1500 * L.wanted[faction];
+  const owed = finesOwed(state, faction);
+  const fine = (found ? 1000 + 1500 * cargo.length + 1000 * nukes : 0) + 1500 * L.wanted[faction] + owed.reduce((s, f) => s + f.amount, 0);
   const credits = state.resources.credits;
   const paid = Math.min(credits.current, fine);
   credits.current -= paid;
   state.cargo = state.cargo.filter(c => !cargo.includes(c));
   if (nukes) state.magazine.nuke = 0;
   const settled = paid >= fine;
+  if (settled) L.fines = (L.fines || []).filter(f => !owed.includes(f));
   L.wanted[faction] = settled ? 0 : Math.max(1, L.wanted[faction]);
   adjustStanding(state, faction, found ? -10 : 2);
   const what = [cargo.length ? `${cargo.length} contraband consignment${cargo.length > 1 ? 's' : ''}` : '', nukes ? `${nukes} nuclear torpedo${nukes > 1 ? 'es' : ''}` : ''].filter(Boolean).join(' and ');
@@ -130,5 +193,6 @@ export function lawTick(state) {
       L.lastCrime[f] = state.clock.minute;
     }
     L.standing[f] += L.standing[f] > 0 ? -0.2 : L.standing[f] < 0 ? 0.5 : 0;
+    if (finesOwed(state, f).some(x => state.clock.minute - x.at > FINE_GRACE_DAYS * DAY_MIN) && L.wanted[f] < 1) L.wanted[f] = 1;
   }
 }

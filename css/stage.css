@@ -1,0 +1,238 @@
+/* ============================================================
+   LONGHAUL — The stage, the exterior, docking, comms, boarding
+   (js/ui/stage.js and the modules it hosts)
+   ============================================================ */
+
+/* ---- STAGE SLOTS ---- */
+.ship-viewport { overflow: hidden; }
+.stage-main {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  z-index: 1;
+}
+.stage-hidden { display: none !important; }
+.stage-exterior { position: absolute; inset: 0; background: #03060B; }
+.stage-main > .stage-exterior { position: absolute; inset: 0; }
+.exterior-canvas { display: block; width: 100%; height: 100%; }
+
+.stage-pip {
+  position: absolute;
+  z-index: 6;
+  width: 340px;
+  height: 230px;
+  left: 14px;
+  bottom: 14px;
+  background: #03060B;
+  border: 1px solid var(--hull-accent);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 6px 24px rgba(0,0,0,0.5);
+  overflow: hidden;
+  cursor: pointer;
+}
+.stage-near .stage-pip { left: auto; right: 14px; top: 14px; bottom: auto; width: 360px; height: 220px; }
+.stage-pip > .ship-container { width: 100%; height: 100%; box-sizing: border-box; padding-top: 18px; display: flex; align-items: center; justify-content: center; }
+.stage-pip > .stage-exterior { position: absolute; inset: 0; }
+.stage-pip-label {
+  position: absolute; z-index: 2; left: 6px; top: 4px;
+  font: 9px var(--font-pixel); color: var(--text-dim); letter-spacing: 1px; pointer-events: none;
+}
+
+.stage-side {
+  position: absolute;
+  z-index: 2;
+  top: 0; right: 0; bottom: 0;
+  width: 40%;
+  border-left: 2px solid var(--hull-primary);
+  background: #03060B;
+}
+.stage-docked .stage-main { right: 40%; }
+.stage-side > .stage-exterior { position: absolute; inset: 0; }
+
+/* ---- DOCKING DISPLAY ---- */
+.dock-hud {
+  position: absolute;
+  z-index: 7;
+  top: 12px;
+  right: 12px;
+  width: 300px;
+  padding: 10px 12px;
+  background: rgba(6, 12, 20, 0.92);
+  border: 1px solid var(--hull-accent);
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+.dock-hud.dh-docked { width: auto; min-width: 260px; }
+.stage-docked .dock-hud { right: 12px; top: 12px; width: calc(40% - 24px); }
+.dh-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.dh-phase { font: 10px var(--font-pixel); color: var(--accent-bright); letter-spacing: 1px; }
+.dh-berth { font-size: 11px; color: var(--text-secondary); }
+.dh-body { display: flex; gap: 10px; }
+.dh-cam canvas { width: 150px; height: 150px; border: 1px solid #16303a; display: block; image-rendering: auto; }
+.dh-read { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+.dh-r { display: flex; justify-content: space-between; gap: 6px; }
+.dh-r span { color: var(--text-dim); font-size: 10px; }
+.dh-r b { font-weight: normal; color: var(--text-primary); }
+.dh-ok { color: var(--ok) !important; }
+.dh-warn { color: var(--warning) !important; }
+.dh-bad { color: var(--danger) !important; }
+.dh-env { margin: 8px 0 6px; font-size: 10px; color: var(--text-secondary); }
+.dh-env span { color: var(--text-dim); margin-right: 4px; }
+.dh-ctl { display: flex; flex-wrap: wrap; gap: 4px; }
+.dh-group { display: inline-flex; gap: 2px; margin-right: 4px; }
+.dh-btn {
+  font: 9px var(--font-pixel); padding: 5px 7px; background: var(--bg-raised); color: var(--text-secondary);
+  border: 1px solid var(--hull-accent); cursor: pointer;
+}
+.dh-btn:hover { color: var(--accent-bright); border-color: var(--accent); }
+.dh-btn.active { color: var(--bg-void); background: var(--accent); border-color: var(--accent); }
+.dh-btn[disabled] { opacity: 0.35; cursor: not-allowed; }
+.dh-primary { color: var(--accent-bright); border-color: var(--accent); }
+.dh-warnbtn { color: var(--warning); border-color: var(--warm-dim); }
+.dh-keys { margin-top: 8px; font-size: 10px; color: var(--text-dim); line-height: 1.5; }
+
+/* ---- TRAFFIC CONTROL CHIP & THE RADIO TICKER ---- */
+.tc-chip {
+  position: absolute; z-index: 5; left: 50%; top: 10px; transform: translateX(-50%);
+  font: 9px var(--font-pixel); letter-spacing: 1px; padding: 6px 10px;
+  background: rgba(6, 12, 20, 0.88); border: 1px solid var(--hull-accent); color: var(--text-secondary);
+  display: flex; gap: 10px; align-items: center;
+  white-space: nowrap; max-width: calc(100% - 28px); overflow: hidden;
+}
+/* beside the exterior inset (top right), not under it */
+.stage-near .tc-chip { left: 14px; transform: none; max-width: calc(100% - 402px); }
+.tc-chip > span { overflow: hidden; text-overflow: ellipsis; }
+.tc-chip .tc-zone { color: var(--info); }
+.tc-chip .tc-ok { color: var(--ok); }
+.tc-chip .tc-warn { color: var(--warning); }
+.tc-chip .tc-bad { color: var(--danger); }
+.tc-chip button { font: 8px var(--font-pixel); padding: 4px 6px; background: var(--bg-raised); color: var(--accent-bright); border: 1px solid var(--accent-dim); cursor: pointer; }
+.stage-prox .tc-chip, .stage-docked .tc-chip { left: 14px; transform: none; }
+
+.comms-ticker {
+  position: absolute; z-index: 5; left: 14px; bottom: 14px;
+  width: min(640px, 55%); pointer-events: none;
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+}
+.stage-prox .comms-ticker { left: 370px; right: 330px; width: auto; }
+.stage-near .comms-ticker { width: min(640px, 50%); }
+.stage-docked .comms-ticker { width: 56%; }
+.stage-docked .tc-chip { left: 14px; transform: none; }
+.comms-ticker .ct-line {
+  font: 11px var(--font-mono); color: var(--text-secondary); background: rgba(4, 8, 14, 0.78);
+  padding: 2px 8px; border-left: 2px solid var(--info); max-width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  animation: ctIn 0.3s ease;
+}
+.comms-ticker .ct-line.ct-nav { border-left-color: var(--accent); color: var(--accent); }
+.comms-ticker .ct-line.ct-warn { border-left-color: var(--warning); color: var(--warning); }
+.comms-ticker .ct-line.ct-danger { border-left-color: var(--danger); color: var(--danger); }
+.comms-ticker .ct-from { color: var(--text-dim); margin-right: 6px; }
+@keyframes ctIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* ---- COMMS WINDOW ---- */
+.dialog.dialog-comms { width: min(1080px, 94vw); height: min(680px, 88vh); max-width: none; padding: 0; display: flex; flex-direction: column; }
+.cm-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--hull-primary); }
+.cm-title { font: 11px var(--font-pixel); color: var(--accent); letter-spacing: 2px; }
+.cm-cols { flex: 1; display: grid; grid-template-columns: 230px 1fr 260px; min-height: 0; }
+.cm-channels { border-right: 1px solid var(--hull-primary); overflow-y: auto; }
+.cm-ch { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-bottom: 1px solid rgba(22,32,48,0.7); cursor: pointer; }
+.cm-ch:hover { background: var(--bg-raised); }
+.cm-ch.active { background: var(--bg-elevated); border-left: 2px solid var(--accent); }
+.cm-ch-name { font: 12px var(--font-mono); color: var(--text-primary); }
+.cm-ch-meta { font: 10px var(--font-mono); color: var(--text-dim); display: flex; justify-content: space-between; }
+.cm-ch-sec { font: 8px var(--font-pixel); color: var(--text-dim); padding: 8px 10px 4px; letter-spacing: 1px; }
+.cm-talk { display: flex; flex-direction: column; min-height: 0; }
+.cm-lines { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.cm-line { font: 13px/1.45 var(--font-mono); max-width: 92%; }
+.cm-line.cm-them { color: var(--text-primary); }
+.cm-line.cm-us { color: var(--accent); align-self: flex-end; text-align: right; }
+.cm-line.cm-sys { color: var(--text-dim); font-size: 11px; align-self: center; }
+.cm-line .cm-who { display: block; font: 8px var(--font-pixel); color: var(--text-dim); margin-bottom: 2px; letter-spacing: 1px; }
+.cm-topics { border-top: 1px solid var(--hull-primary); padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 6px; max-height: 40%; overflow-y: auto; }
+.cm-topic { font: 12px var(--font-mono); padding: 6px 10px; background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--hull-accent); cursor: pointer; text-align: left; }
+.cm-topic:hover { border-color: var(--accent); color: var(--accent-bright); }
+.cm-topic[disabled] { opacity: 0.4; cursor: not-allowed; }
+.cm-topic.cm-threat { border-color: var(--warm-dim); color: var(--warning); }
+.cm-topic .cm-why { color: var(--text-dim); font-size: 10px; margin-left: 6px; }
+.cm-sub { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+.cm-card { border-left: 1px solid var(--hull-primary); padding: 12px; overflow-y: auto; font: 11px var(--font-mono); color: var(--text-secondary); display: flex; flex-direction: column; gap: 6px; }
+.cm-card canvas { width: 100%; height: 70px; background: #03060B; border: 1px solid #13232c; }
+.cm-card .cm-k { color: var(--text-dim); font-size: 10px; }
+.cm-card b { color: var(--text-primary); font-weight: normal; }
+.cm-empty { color: var(--text-dim); padding: 30px; text-align: center; font: 12px var(--font-mono); }
+
+/* ---- BOARDING ---- */
+.dialog.dialog-boarding { width: min(760px, 94vw); max-width: none; }
+.bd-party { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; margin: 8px 0 12px; }
+.bd-member { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--bg-raised); border: 1px solid var(--hull-primary); font: 11px var(--font-mono); cursor: pointer; }
+.bd-member.on { border-color: var(--accent); }
+.bd-member small { color: var(--text-dim); display: block; }
+.bd-log { max-height: 220px; overflow-y: auto; font: 11px var(--font-mono); color: var(--text-secondary); border-top: 1px solid var(--hull-primary); padding-top: 8px; margin-top: 8px; }
+.bd-log div { padding: 1px 0; }
+.bd-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.bd-phase { font: 10px var(--font-pixel); color: var(--accent-bright); letter-spacing: 1px; }
+
+/* ---- CONTACT PANEL ADDITIONS ---- */
+.scanner-detail-hull { width: 100%; height: 60px; background: #03060B; border: 1px solid #13232c; margin: 4px 0 6px; display: block; }
+
+/* ---- LOG: the radio's chatter ---- */
+.log-entry.log-chatter .log-entry-msg { color: var(--text-dim); }
+.log-entry.log-chatter .log-entry-icon { color: var(--text-dim); }
+
+/* ---- INTERIOR: the lit airlock of the collar we are docked by ---- */
+.tile-interactive.airlock-lit { filter: drop-shadow(0 0 3px #6EEAE0) drop-shadow(0 0 6px rgba(110,234,224,0.6)); }
+
+/* ---- SOLAR MAP: search, filters, the pick list ---- */
+.solar-search-box { position: relative; margin-left: 8px; }
+.solar-search { width: 200px; font: 11px var(--font-mono); padding: 4px 8px; background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--hull-accent); }
+.solar-search:focus { outline: none; border-color: var(--accent); }
+.solar-search-results, .map-picklist {
+  position: absolute; z-index: 20; min-width: 260px; max-height: 320px; overflow-y: auto;
+  background: rgba(6, 12, 20, 0.97); border: 1px solid var(--hull-accent);
+}
+.solar-search-results { top: 28px; right: 0; }
+.ss-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 10px; font: 11px var(--font-mono); color: var(--text-primary); cursor: pointer; border-bottom: 1px solid rgba(22,32,48,0.7); }
+.ss-row:hover, .ss-row.active { background: var(--bg-elevated); color: var(--accent-bright); }
+.ss-row small { color: var(--text-dim); }
+.map-picklist .ss-head { padding: 5px 10px; font: 8px var(--font-pixel); color: var(--text-dim); letter-spacing: 1px; }
+
+/* ---- FIRE ABOARD (fire.js) & THE SUITS SWITCH ---- */
+.deck-fire { fill: #FF6A1A; opacity: var(--fire, 0.3); mix-blend-mode: screen; animation: deck-fire 0.9s steps(3) infinite alternate; }
+@keyframes deck-fire { from { opacity: calc(var(--fire, 0.3) * 0.6); } to { opacity: var(--fire, 0.3); } }
+.deck-label[data-deck-menu] { cursor: pointer; }
+.deck-label[data-deck-menu]:hover { fill: var(--accent-bright); }
+.suits-btn.active { border-color: var(--warning); color: var(--warning); box-shadow: 0 0 8px rgba(226, 163, 85, 0.35); }
+.suits-btn.active .combat-btn-status { color: var(--warning); }
+.ctx-fire { color: #FF8C1A; }
+
+/* ---- THE OVERLAY COLUMN ----
+   The ship (or, close in, the exterior) has the view; everything laid over
+   it stacks in this column on the right, in order, so no two windows sit
+   on each other. The interior keeps the rest of the width to itself. */
+.ship-viewport { --col: 400px; }
+.stage-docked { --col: 40%; }
+.stage-col {
+  position: absolute; z-index: 8; top: 0; right: 0; bottom: 0; width: var(--col);
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; box-sizing: border-box;
+  pointer-events: none;
+}
+.stage-col > * { pointer-events: auto; }
+.stage-col > .stage-col-fill { flex: 1; pointer-events: none; }
+.stage-cruise .stage-main, .stage-near .stage-main { right: var(--col); }
+.stage-col .route-mini, .stage-col .tc-chip, .stage-col .dock-hud, .stage-col .nav-prompt,
+.stage-col .hold-indicator, .stage-col .comms-ticker {
+  position: static; inset: auto; transform: none; margin: 0; width: auto; max-width: none; left: auto; right: auto; top: auto; bottom: auto;
+}
+.stage-col .tc-chip { flex-wrap: wrap; white-space: normal; row-gap: 4px; }
+.stage-col .tc-chip > span { white-space: nowrap; }
+.stage-col .dock-hud { width: auto; }
+.stage-col .comms-ticker { align-items: stretch; }
+.stage-col .hold-indicator { min-width: 0; }
+/* the inset takes its place in the column: the exterior camera (near), or
+   the interior while the exterior has the view (prox) */
+.stage-col .stage-pip { position: relative; left: auto; right: auto; top: auto; bottom: auto; width: auto; height: 220px; flex: none; }
+.stage-prox .stage-col .stage-pip { height: 300px; }
+.stage-prox .stage-main { right: var(--col); }

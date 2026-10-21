@@ -11,46 +11,74 @@
 
 import { AU_M, G0, MIN_S, GM_SUN, DAY_MIN } from '../core/constants.js';
 import { getBody, bodyPos, bodyVel } from './ephemeris.js';
-import { getWorld, predictEntity, stepFree, propagateFree } from './world.js';
+import { getWorld, predictEntity, stepFree, propagateFree, orbitStateAt } from './world.js';
+import { slotOrbit } from './holding.js';
+import { APPROACH_M, APPROACH_SPEED_MS, KEEPOUT_SPEED_MS, keepOutM } from './traffic-control.js';
+import { surfacePoint, nearestSurface } from './gravity.js';
+import { terrainGuard } from './terrain.js';
 import { createFlight, flightStep, fuelUsed, RCS_MAX_G, SLEW_RATE } from './flight.js';
 import { playerClass, ratedG } from './ship-classes.js';
 
 const RCS_LIMIT = RCS_MAX_G * G0;
-import { relativeState, pointFrom, closingLaw, keepLaw, hasArrived, transferLaw, brakingSpeed, flipSeconds, minutesToFlip } from './guidance.js';
+import { relativeState, pointFrom, closingLaw, keepLaw, hasArrived, transferLaw, brakingSpeed, flipSeconds, minutesToFlip, BRAKE_MARGIN } from './guidance.js';
 import { stanceStep } from './stance.js';
 import { solveLambert } from './lambert.js';
+import { collarFrame } from './docking.js';
 
 // Standoff distances (m)
 export const STANDOFF = {
-  STATION: 3_000,        // parking slot off a station
+  STATION: 3_000,        // a ship holding off a station (not a berth: that is docking.js)
+  GATE: 1_000,           // a station's approach gate (where routes to a station end)
   SHIP: 2_000,           // formation distance
   SCANNER: 0.1 * AU_M,   // long sensor range
   CLOSE: 100_000_000,    // 100,000 km — full sensor lock, comms
   TACTICAL: 2_000,       // formation: boarding, tow, EVA
+  SLOT: 200,             // our slot in a port's holding pattern (holding.js)
 };
 
 // ---- TARGETS ----
 // target spec: { kind:'body', id:'Mars' } | { kind:'entity', id:'ceres-station' }
 //              | { kind:'player' } (NPC guidance flying to our ship)
+//              | { kind:'slot', id: stationId, slot } (a place in a port's holding
+//                pattern: an orbit, holding.js)
+//              | { kind:'surface', id: bodyName, ang } (a place on a body's ground: terrain.js)
+//              | { kind:'port', id, berth, offsetM, dockKind } (the mouth of a
+//                berth's corridor: a point out along a collar's axis, moving and
+//                turning with the station or ship it belongs to: docking.js)
 
 export function targetName(state, target) {
   if (target.kind === 'body') return target.id;
+  if (target.kind === 'surface') return `the surface of ${target.id}`;
+  if (target.kind === 'slot') return `${getWorld(state).get(target.id)?.name || 'port'} holding ${target.slot}`;
   if (target.kind === 'player') return state.ship.name;
-  return getWorld(state).get(target.id)?.name || 'Unknown';
+  const name = getWorld(state).get(target.id)?.name || 'Unknown';
+  return target.kind === 'port' ? `${name} · ${target.berth}` : name;
 }
 
 export function targetExists(state, target) {
   if (target.kind === 'player') return !state.lost;
-  return target.kind === 'body' ? !!getBody(target.id) : !!getWorld(state).get(target.id);
+  if (target.kind === 'slot') return !!getWorld(state).get(target.id) && !!slotOrbit(target.id, target.slot);
+  return target.kind === 'body' || target.kind === 'surface' ? !!getBody(target.id) : !!getWorld(state).get(target.id);
+}
+
+/** A corridor mouth at `minute`: the collar's frame, out along its normal. */
+function portPoint(state, target, minute) {
+  const fr = collarFrame(state, { target: { kind: target.dockKind || 'station', id: target.id }, berth: target.berth }, minute);
+  if (!fr) return null;
+  const k = target.offsetM || 0, w = fr.omega || 0;
+  const ox = fr.normal.x * k, oy = fr.normal.y * k;
+  return { pos: { x: fr.pos.x + ox / AU_M, y: fr.pos.y + oy / AU_M }, vel: { vx: fr.vel.vx - w * oy, vy: fr.vel.vy + w * ox } };
 }
 
 /** Default stop distance for a target. Bodies: a parking orbit well clear of the surface. */
 export function defaultStandoff(state, target) {
+  if (target.kind === 'slot') return STANDOFF.SLOT;
   if (target.kind === 'body') {
     const b = getBody(target.id);
     return Math.max(2_000_000, (b?.radius || 0) * 1000 * 3);
   }
   const e = getWorld(state).get(target.id);
+  if (e?.tags?.gate) return STANDOFF.GATE;
   return e?.type === 'station' ? STANDOFF.STATION : STANDOFF.SHIP;
 }
 
@@ -59,16 +87,16 @@ export function defaultStandoff(state, target) {
  * the orbiter's velocity and acceleration that comes round every period.
  * r in AU, period in days, angle in rad.
  */
-function swing(r, period, angle) {
+function swing(r, period, angle, about) {
   const w = 2 * Math.PI / (period * 86400);
   const c = Math.cos(angle), s = Math.sin(angle);
   const v = w * r * AU_M, a = w * v;
-  return { vx: -v * s, vy: v * c, ax: -a * c, ay: -a * s, period: period * 86400 };
+  return { vx: -v * s, vy: v * c, ax: -a * c, ay: -a * s, period: period * 86400, about };
 }
 
 /** A moon's swing around its planet (none for planets and asteroids). */
 function bodySwings(b, days, out) {
-  if (b.parent && b.period > 0) out.push(swing(b.a, b.period, b.initAngle + 2 * Math.PI * days / b.period));
+  if (b.parent && b.period > 0) out.push(swing(b.a, b.period, b.initAngle + 2 * Math.PI * days / b.period, b.parent.name));
   return out;
 }
 
@@ -80,6 +108,12 @@ function bodySwings(b, days, out) {
  * circling its planet), which guidance follows only near arrival.
  */
 export function targetStateAt(state, target, minute, live = false) {
+  const out = stateOfTarget(state, target, minute, live);
+  if (out) out.t = minute;           // (guidance takes gravity at this moment: gravity.js)
+  return out;
+}
+
+function stateOfTarget(state, target, minute, live) {
   if (target.kind === 'body') {
     const b = getBody(target.id);
     if (!b) return null;
@@ -92,6 +126,25 @@ export function targetStateAt(state, target, minute, live = false) {
     out.swings = bodySwings(b, days, []);
     return out;
   }
+  if (target.kind === 'slot') {
+    // a slot in a holding pattern: an orbit with no one on it (holding.js)
+    const o = slotOrbit(target.id, target.slot);
+    if (!o) return null;
+    const pos = { x: 0, y: 0 }, vel = { vx: 0, vy: 0 }, p1 = { x: 0, y: 0 }, v1 = { vx: 0, vy: 0 };
+    orbitStateAt(o, minute, pos, vel); orbitStateAt(o, minute + 1, p1, v1);
+    const days = minute / DAY_MIN;
+    const swings = o.period > 0 ? [swing(o.r, o.period, o.phase + 2 * Math.PI * days / o.period, o.body)] : [];
+    const b = getBody(o.body);
+    if (b) bodySwings(b, days, swings);
+    return { pos, vel, ax: 0, ay: 0, atx: (v1.vx - vel.vx) / MIN_S, aty: (v1.vy - vel.vy) / MIN_S, swings };
+  }
+  if (target.kind === 'surface') {
+    // a place on a body's ground, turning with it (where we came down: terrain.js)
+    const b = getBody(target.id);
+    if (!b) return null;
+    const p0 = surfacePoint(b, target.ang, minute), p1 = surfacePoint(b, target.ang, minute + 1);
+    return { pos: p0.pos, vel: p0.vel, ax: 0, ay: 0, atx: (p1.vel.vx - p0.vel.vx) / MIN_S, aty: (p1.vel.vy - p0.vel.vy) / MIN_S, swings: [], ground: true };
+  }
   if (target.kind === 'player') {
     // NPCs flying to us: our state now, or coasted forward under our current thrust
     const f = state.flight;
@@ -99,6 +152,16 @@ export function targetStateAt(state, target, minute, live = false) {
     const pos = { x: f.pos.x, y: f.pos.y }, vel = { vx: f.vel.vx, vy: f.vel.vy };
     if (minute > state.clock.minute) propagateFree(pos, vel, state.clock.minute, minute, f.thrustG, f.facing, f.thrustG > 0 ? 1 : 10);
     return { pos, vel, ax: a * Math.cos(f.facing), ay: a * Math.sin(f.facing) };
+  }
+  if (target.kind === 'port') {
+    if (live) { const e = getWorld(state).get(target.id); if (e) { getWorld(state).refresh(e, minute); getWorld(state).hash.update(e); } }
+    const p0 = portPoint(state, target, minute);
+    if (!p0) return null;
+    const p1 = portPoint(state, target, minute + 1);
+    const out = { pos: p0.pos, vel: p0.vel, ax: 0, ay: 0 };
+    if (p1) { out.atx = (p1.vel.vx - p0.vel.vx) / MIN_S; out.aty = (p1.vel.vy - p0.vel.vy) / MIN_S; }
+    out.swings = [];
+    return out;
   }
   const world = getWorld(state);
   const e = world.get(target.id);
@@ -122,7 +185,7 @@ export function targetStateAt(state, target, minute, live = false) {
   const b = e.orbit && getBody(e.orbit.body);
   if (b) {
     const days = minute / DAY_MIN, o = e.orbit;
-    out.swings = o.period > 0 ? [swing(o.r, o.period, o.phase + 2 * Math.PI * days / o.period)] : [];
+    out.swings = o.period > 0 ? [swing(o.r, o.period, o.phase + 2 * Math.PI * days / o.period, o.body)] : [];
     bodySwings(b, days, out.swings);
   }
   return out;
@@ -134,7 +197,7 @@ export function targetStateAt(state, target, minute, live = false) {
  * incrementally from a private copy (O(1) per step, never mutates the world).
  */
 export function targetTracker(state, target, t0) {
-  if (target.kind === 'body') return (t) => targetStateAt(state, target, t);
+  if (target.kind === 'body' || target.kind === 'port' || target.kind === 'surface' || target.kind === 'slot') return (t) => targetStateAt(state, target, t);
   const e = getWorld(state).get(target.id);
   if (!e) return () => null;
   if (e.orbit || e.transit) return (t) => targetStateAt(state, target, t);
@@ -147,12 +210,104 @@ export function targetTracker(state, target, t0) {
     if (t > tc) {
       while (tc < t) {
         const step = Math.min(t - tc, thrust > 0 ? 1 : 30);
-        stepFree(pos, vel, step * MIN_S, thrust, heading);
+        stepFree(pos, vel, step * MIN_S, thrust, heading, tc);
         tc += step;
       }
     }
     return out;
   };
+}
+
+// ---- ROUND A ROCK ----
+
+const VIA_R = 4;            // the waypoint stands this many radii from the body's centre
+const VIA_NEAR_R = 6;       // a target this close to a body (radii) may be behind it
+
+/** Does the segment p→q (AU) pass within `rM` of `c`, short of q? */
+function segBlocked(p, q, c, rM) {
+  const dx = (q.x - p.x) * AU_M, dy = (q.y - p.y) * AU_M, cx = (c.x - p.x) * AU_M, cy = (c.y - p.y) * AU_M;
+  const L2 = dx * dx + dy * dy;
+  if (L2 <= 0) return false;
+  const t = (cx * dx + cy * dy) / L2;
+  return t > 0 && t < 0.98 && Math.hypot(cx - t * dx, cy - t * dy) < 1.05 * rM;
+}
+
+/**
+ * Routes are planned through empty space; a target standing over a rock
+ * (a surface port's gate, a holding slot round it) may have the rock
+ * between it and us. Then the route flies first to a point VIA_R radii
+ * out from the body's centre, between our side and the target's, moving
+ * with the body, and on to the target from there once the line to it
+ * clears. Remembered with the plan ($via) until then. Returns that
+ * point's state, or null to fly at the target.
+ */
+function viaPoint(plan, flight, tgt, minute) {
+  const s = nearestSurface(tgt.pos.x, tgt.pos.y, minute);
+  if (!s || s.r > VIA_NEAR_R * s.body.radius * 1000) { plan.$via = null; return null; }
+  const rM = s.body.radius * 1000;
+  if (!segBlocked(flight.pos, tgt.pos, s.center, rM)) { plan.$via = null; return null; }
+  if (!plan.$via || plan.$via.body !== s.body.name) {
+    // between where we are and where the target is, seen from the body
+    const ux = (flight.pos.x - s.center.x), uy = (flight.pos.y - s.center.y), ul = Math.hypot(ux, uy) || 1;
+    let dx = ux / ul + s.ux, dy = uy / ul + s.uy;
+    if (Math.hypot(dx, dy) < 0.2) { dx = -s.uy; dy = s.ux; }        // dead behind: go round either side
+    const l = Math.hypot(dx, dy);
+    plan.$via = { body: s.body.name, dx: dx / l, dy: dy / l };
+  }
+  const b = getBody(plan.$via.body);
+  const days = minute / DAY_MIN;
+  const c = bodyPos(b, days), v = bodyVel(b, days), v1 = bodyVel(b, (minute + 1) / DAY_MIN);
+  const k = VIA_R * rM / AU_M;
+  return { pos: { x: c.x + plan.$via.dx * k, y: c.y + plan.$via.dy * k }, vel: v, ax: 0, ay: 0, atx: (v1.vx - v.vx) / MIN_S, aty: (v1.vy - v.vy) / MIN_S, swings: [], t: minute };
+}
+
+// ---- PORTS ----
+
+const PORT_LOOKAHEAD_S = 240;
+const ROCK_R = 5, ROCK_SPEED_MS = 1000;
+
+/**
+ * The station a target belongs to (a station, its gate, a berth's
+ * corridor, a holding slot) and how far the target lies from it:
+ * { id, offM, keepM }, or null. Plans into a port carry it, and keep to the
+ * port's speed limits on the way in.
+ */
+export function portOfTarget(state, target) {
+  const world = getWorld(state);
+  let id = null;
+  if (target.kind === 'slot' || target.kind === 'port') id = target.id;
+  else if (target.kind === 'entity') { const e = world.get(target.id); id = e?.type === 'station' ? e.id : e?.tags?.gate || null; }
+  const st = id && world.get(id);
+  if (!st || st.type !== 'station') return null;
+  const t = targetStateAt(state, target, state.clock.minute);
+  if (!t) return null;
+  const sp = predictEntity(st, state.clock.minute, world).pos;     // (a far station's stored place can be hours old)
+  // a port on (or close round) a small rock: slower still near it, where a
+  // fast ship can't turn (no slower than three times an orbit's speed there:
+  // round a moon the size of Luna, that is faster than the approach's limit)
+  const b = getBody(st.orbit?.body);
+  const rM = st.orbit?.r * AU_M;
+  const rockMS = b ? Math.max(ROCK_SPEED_MS, 3 * Math.sqrt(b.gm * 1e9 / rM)) : Infinity;
+  const near = b && rM < 6 * b.radius * 1000 && rockMS < APPROACH_SPEED_MS;
+  const offM = Math.hypot(t.pos.x - sp.x, t.pos.y - sp.y) * AU_M;
+  // (the gate's limit is for targets at the gate or inside it: a slot far out is flown to at the approach's)
+  return { id, offM, keepM: offM <= keepOutM(id) * 1.5 ? keepOutM(id) : 0, rockM: near ? ROCK_R * b.radius * 1000 : 0, rockMS };
+}
+
+/**
+ * The closing speed allowed `dM` from a station (m/s): traffic control's
+ * limits (3,000 m/s on the approach, 200 m/s inside the gate, each kept 10%
+ * under), and further out what still brakes down to them in time, braking
+ * as the closing law does (BRAKE_MARGIN of `aMax`): far out the cap is the
+ * law's own braking curve, and it only bites near the port.
+ */
+export function portSpeedCap(dM, aMax, keepM, rockM = 0, rockMS = ROCK_SPEED_MS) {
+  const a = BRAKE_MARGIN * aMax;
+  const approach = Math.sqrt((0.9 * APPROACH_SPEED_MS) ** 2 + 2 * a * Math.max(0, dM - APPROACH_M));
+  const gate = keepM ? Math.sqrt((0.9 * KEEPOUT_SPEED_MS) ** 2 + 2 * a * Math.max(0, dM - keepM)) : Infinity;
+  // (round a rock, no more than ROCK_SPEED_MS within ROCK_R radii of it: a fast ship there can't turn in time)
+  const rock = rockM ? Math.sqrt(rockMS ** 2 + 2 * a * Math.max(0, dM - rockM)) : Infinity;
+  return Math.min(approach, gate, rock);
 }
 
 // ---- PLANS ----
@@ -164,7 +319,7 @@ export function targetTracker(state, target, t0) {
 export function createPlan(kind, target, opts) {
   return {
     kind,
-    target: { kind: target.kind, id: target.id },
+    target: { ...target },
     accelG: opts.accelG,
     cruise: opts.cruise ?? null,           // m/s cap on closing speed (economy)
     arriveAt: opts.arriveAt ?? null,       // transfer: planned arrival minute
@@ -213,8 +368,21 @@ export function guidanceStep(plan, flight, minute, tgtNow, arrivalTarget, dtSec 
   const aMax = Math.min(plan.accelG, flight.maxG ?? Infinity) * G0;
   const slew = flight.$slew ?? SLEW_RATE;
   if (plan.kind === 'stance') return stanceStep(plan, flight, tgtNow, { aMax, slew, dtSec });
+  // A target behind a rock is come at round it, by a point off the body on our side (viaPoint)
+  const via = plan.stage === 'closing' ? viaPoint(plan, flight, tgtNow, minute) : null;
+  // (the way still to go: by the waypoint, then on to the target)
+  const beyond = via ? Math.hypot(tgtNow.pos.x - via.pos.x, tgtNow.pos.y - via.pos.y) * AU_M : 0;
+  if (via) tgtNow = via;
   const rel = relativeState(flight, tgtNow, _rel);
-  const cruise = plan.cruise ?? Infinity;
+  let cruise = plan.cruise ?? Infinity;
+  // Into a port: traffic control's speed limits, met with braking in hand (portSpeedCap)
+  // (looking ahead by a flip's worth at the capped speed: the cap comes on
+  // while we still burn; a function of distance alone, so it doesn't move as we slow)
+  if (plan.port) {
+    const P = plan.port, dS = Math.max(0, rel.d + beyond - P.offM);
+    const c1 = portSpeedCap(dS, aMax, P.keepM, P.rockM, P.rockMS);
+    cruise = Math.min(cruise, portSpeedCap(Math.max(0, dS - c1 * PORT_LOOKAHEAD_S), aMax, P.keepM, P.rockM, P.rockMS));
+  }
   const cmd = { ax: 0, ay: 0, maxG: plan.accelG, lean: true };
   let phase = 'coast';
   let flipIn = Infinity;
@@ -271,7 +439,9 @@ export function guidanceStep(plan, flight, minute, tgtNow, arrivalTarget, dtSec 
 
   return {
     cmd,
-    arrived: plan.stage === 'closing' && hasArrived(rel, plan.standoff),
+    toward: tgtNow.pos,
+    via: !!via,
+    arrived: !via && plan.stage === 'closing' && hasArrived(rel, plan.standoff),
     phase,
     flipIn,
     d: rel.d,
@@ -299,7 +469,7 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
   const raw = [];
   const arrivalTgt = plan.kind === 'transfer' ? targetStateAt(state, plan.target, plan.arriveAt) : null;
   const track = targetTracker(state, plan.target, t0);
-  let arrived = false;
+  let arrived = false, climbing = false;
   let steps = 0;
 
   while (t - t0 < maxMinutes && steps < 400_000) {
@@ -312,7 +482,12 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
     if (plan.stage === 'transfer' && f.thrustG === 0 && rd > 0.05 && plan.arriveAt - t > 2 * DAY_MIN) dtMin = 30;
     const g = guidanceStep(plan, f, t, tgt, arrivalTgt, dtMin * MIN_S);
     if (g.arrived) { arrived = true; break; }
-    const out = flightStep(f, g.cmd, dtMin);
+    f.t = t;
+    // the terrain guard flies over the plan here as it will in flight (terrain.js)
+    const guard = terrainGuard(f.pos, f.vel, g.cmd, g.toward, Math.min(plan.accelG, f.maxG) * G0, t, climbing);
+    climbing = !!guard;
+    if (guard) dtMin = 1;
+    const out = flightStep(f, guard || g.cmd, dtMin);
     fuel += fuelUsed(out.mainG, out.rcsG, dtMin, rated);
     dv += (out.mainG + out.rcsG) * G0 * dtMin * MIN_S;
     if (out.mainG > maxG) maxG = out.mainG;
@@ -378,6 +553,7 @@ export const ROUTE_PROFILES = [...OPTION_DEFS, ...COMBAT_DEFS,
  * @param opts { standoff, combat (bool), includeBallistic (bool) }
  */
 export function planRoutes(state, target, opts = {}) {
+  target = routeTarget(state, target);
   const standoff = opts.standoff ?? defaultStandoff(state, target);
   const t0 = state.clock.minute;
   const tgt = targetStateAt(state, target, t0);
@@ -393,6 +569,7 @@ export function planRoutes(state, target, opts = {}) {
   for (const d of defs) {
     const cruise = d.cruiseFrac ? Math.max(500, d.cruiseFrac * Math.sqrt(Math.max(0, distM - standoff) * d.accelG * G0)) : null;
     const plan = createPlan('closing', target, { accelG: d.accelG, cruise, standoff, name: d.name, label: d.label });
+    plan.port = portOfTarget(state, target);
     const opt = finishOption(state, plan, d.desc, fuelAvail);
     opt.flank = !!d.flank;
     options.push(opt);
@@ -405,6 +582,7 @@ export function planRoutes(state, target, opts = {}) {
     const tr = findTransfer(state, target);
     if (tr) {
       const plan = createPlan('transfer', target, { accelG: 0.3, arriveAt: tr.arriveAt, standoff, name: 'BALLISTIC', label: `Lambert transfer · ${Math.round(tr.days)}d` });
+      plan.port = portOfTarget(state, target);
       options.push(finishOption(state, plan, 'Burn onto a free-fall arc and coast. Minimum fuel, very long transit.', fuelAvail));
     }
   }
@@ -426,6 +604,19 @@ function finishOption(state, plan, desc, fuelAvail) {
     reason: !est.arrived ? 'No convergent trajectory' : est.fuel > fuelAvail * 0.95 ? 'Insufficient reaction mass' : '',
     juice: plan.accelG > 1.5,
   };
+}
+
+/**
+ * Where a route to a target really ends: a station's approach gate (the
+ * last stretch, down to a berth, is docking: docking.js); anything else
+ * is its own target.
+ */
+export function routeTarget(state, target) {
+  if (target.kind !== 'entity') return target;
+  const e = getWorld(state).get(target.id);
+  if (e?.type !== 'station') return target;
+  const gate = getWorld(state).get(`${e.id}-gate`);
+  return gate ? { kind: 'entity', id: gate.id } : target;
 }
 
 /** Rough allowance for securing crew before the first burn. */

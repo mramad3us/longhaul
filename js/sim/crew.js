@@ -6,6 +6,7 @@
 import { random, randInt, pick } from '../core/rng.js';
 import { createNeeds } from './needs.js';
 import { defaultDuty } from './duty.js';
+import { deckWith } from './ship-layout.js';
 
 export const G_THRESHOLDS = {
   MICRO_G: 0.01,     // below: floating
@@ -24,13 +25,26 @@ export const GState = {
   SECURED: 'secured',  // couch or medbay bed
 };
 
-export const ROLES = ['Captain', 'Pilot', 'Engineer', 'Medic', 'Gunner', 'Mechanic', 'Scientist', 'Cook'];
-const ROLE_SKILL = {
+// The order a crew is signed on: the first eight fly the ship, then
+// security and deck hands (boarding parties, a second watch on the guns).
+export const ROLES = ['Captain', 'Pilot', 'Engineer', 'Medic', 'Gunner', 'Mechanic', 'Scientist', 'Cook', 'Security', 'Deckhand', 'Security', 'Deckhand'];
+export const ROLE_SKILL = {
   Captain: 'piloting', Pilot: 'piloting', Engineer: 'engineering', Medic: 'medical',
   Gunner: 'security', Mechanic: 'engineering', Scientist: 'medical', Cook: 'medical',
+  Security: 'security', Deckhand: 'engineering',
 };
-// Where each role spends its watch
-export const ROLE_HOME_DECK = { Captain: 0, Pilot: 0, Engineer: 5, Medic: 2, Gunner: 4, Mechanic: 3, Scientist: 0, Cook: 2 };
+// Where each role spends its watch: the deck holding this fixture (ship-layout.js)
+const ROLE_HOME = {
+  Captain: 'helm', Pilot: 'helm', Engineer: 'engStation', Medic: 'medbay', Gunner: 'launcher', Mechanic: 'workbench',
+  Scientist: 'ops', Cook: 'galley', Security: 'airlock', Deckhand: 'storage',
+};
+
+/** The deck a role calls home on this ship (by what is on it). */
+export function homeDeckFor(ship, role) {
+  const kind = ROLE_HOME[role] || 'helm';
+  const di = deckWith(ship, kind);
+  return di >= 0 ? di : Math.max(0, deckWith(ship, 'couch'));
+}
 
 const SURNAMES = ['Chen', 'Nakamura', 'Okafor', 'Petrov', 'Morales', 'Kim', 'Al-Rashid', 'Johansson',
   'Mbeki', 'Kowalski', 'Tanaka', 'Adeyemi', 'Novak', 'Vasquez', 'Singh', 'Dawes', 'Ashford', 'Mao'];
@@ -40,56 +54,66 @@ export const CONDITION_LABELS = {
   'cardiac-stress': 'CARDIAC STRESS', injured: 'INJURED', unconscious: 'UNCONSCIOUS',
   starving: 'STARVING', dehydrated: 'DEHYDRATED', hypoxic: 'HYPOXIC', hypercapnia: 'HYPERCAPNIA',
   decompression: 'DECOMPRESSION', 'juice-hangover': 'JUICE HANGOVER', fracture: 'FRACTURE',
-  'internal-bleeding': 'INTERNAL BLEEDING',
+  'internal-bleeding': 'INTERNAL BLEEDING', burned: 'BURNED',
 };
 
-export function createCrew(count, homeFixtures = null) {
+/**
+ * Sign on a crew of `count` in ROLES order. `ship` (its decks) sets where
+ * each of them spends the watch.
+ */
+export function createCrew(count, ship = null) {
   const names = [...SURNAMES];
   const crew = [];
   for (let i = 0; i < Math.min(count, ROLES.length); i++) {
-    const role = ROLES[i];
-    const name = names.splice(randInt(0, names.length - 1), 1)[0];
-    const base = () => 20 + randInt(0, 39);
-    const skills = { piloting: base(), security: base(), engineering: base(), medical: base() };
-    skills[ROLE_SKILL[role]] = Math.min(100, skills[ROLE_SKILL[role]] + 25 + randInt(0, 14));
-    crew.push({
-      id: i,
-      name,
-      role,
-      skills,
-      body: { head: 100, torso: 100, leftArm: 100, rightArm: 100, leftLeg: 100, rightLeg: 100 },
-      heart: { health: 100, bpm: 68 + randInt(0, 11), stress: 0, stressMinutes: 0, bpSystolic: 120, bpDiastolic: 80 },
-      consciousness: 100,
-      morale: 70 + randInt(0, 29),
-      dead: false,
-      deathTimer: -1,
-      conditions: [],
-      juiced: false,
-      juiceDose: null,    // 'standard' | 'high' while the drug is in the blood
-      juiceMin: 0,        // minutes on the high dose this burn
-      juiceIdleMin: 0,    // minutes since the couch last dosed (the drug lingers)
-      juicePeakG: 0,      // hardest G felt on this dose
-      juiceHangover: 0,
-      juiceCrash: false,  // the hangover is a high-dose crash (much worse)
-      suit: { wearing: false, o2: 0, lockerId: null },
-      hunger: 0,          // minutes spent with nothing in the stomach
-      thirst: 0,          // minutes without water aboard
-      needs: createNeeds(),
-      duty: defaultDuty(role),
-      moraleMod: 0,       // lingering events (a crewmate's death, a good run ashore)
-      // interior state (crew-ai)
-      homeDeck: ROLE_HOME_DECK[role] ?? 0,
-      pos: { sx: 3 + (i % 3), sy: 0 },
-      path: [],
-      activity: 'idle',
-      task: null,
-      seat: null,
-      gState: GState.FLOATING,
-      pause: 0,
-    });
+    crew.push(createMember(i, ROLES[i], names, ship));
   }
   return crew;
 }
+
+/** One person: a role, a name not already taken, skills that lean to the role. */
+export function createMember(id, role, names = [...SURNAMES], ship = null) {
+  const name = names.length ? names.splice(randInt(0, names.length - 1), 1)[0] : pick(SURNAMES);
+  const base = () => 20 + randInt(0, 39);
+  const skills = { piloting: base(), security: base(), engineering: base(), medical: base() };
+  skills[ROLE_SKILL[role]] = Math.min(100, skills[ROLE_SKILL[role]] + 25 + randInt(0, 14));
+  return {
+    id,
+    name,
+    role,
+    skills,
+    body: { head: 100, torso: 100, leftArm: 100, rightArm: 100, leftLeg: 100, rightLeg: 100 },
+    heart: { health: 100, bpm: 68 + randInt(0, 11), stress: 0, stressMinutes: 0, bpSystolic: 120, bpDiastolic: 80 },
+    consciousness: 100,
+    morale: 70 + randInt(0, 29),
+    dead: false,
+    deathTimer: -1,
+    conditions: [],
+    juiced: false,
+    juiceDose: null,    // 'standard' | 'high' while the drug is in the blood
+    juiceMin: 0,        // minutes on the high dose this burn
+    juiceIdleMin: 0,    // minutes since the couch last dosed (the drug lingers)
+    juicePeakG: 0,      // hardest G felt on this dose
+    juiceHangover: 0,
+    juiceCrash: false,  // the hangover is a high-dose crash (much worse)
+    suit: { wearing: false, o2: 0, lockerId: null },
+    hunger: 0,          // minutes spent with nothing in the stomach
+    thirst: 0,          // minutes without water aboard
+    needs: createNeeds(),
+    duty: defaultDuty(role),
+    moraleMod: 0,       // lingering events (a crewmate's death, a good run ashore)
+    // interior state (crew-ai)
+    homeDeck: ship ? homeDeckFor(ship, role) : 0,
+    pos: { sx: 3 + (id % 3), sy: 0 },
+    path: [],
+    activity: 'idle',
+    task: null,
+    seat: null,
+    gState: GState.FLOATING,
+    pause: 0,
+  };
+}
+
+export const SURNAME_POOL = SURNAMES;
 
 export const randomCaptainName = () =>
   `${pick('AKRMDSLJPFTNE'.split(''))}. ${pick(SURNAMES)}`;

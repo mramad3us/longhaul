@@ -10,7 +10,7 @@
 //           time, O(1), no drift (stations, parked ships, nav marks)
 //   transit — NPC traffic between two rails entities, analytic (a ship
 //           put back on rails out in space starts from a coasting fix)
-//   free  — integrated under solar gravity + own thrust
+//   free  — integrated under gravity (the Sun, bodies near: gravity.js) + own thrust
 //   driven — stepped every minute by its controller (an NPC at the
 //           helm, a torpedo's guidance): the world never moves it,
 //           only indexes it. Driven entities are few and bounded.
@@ -23,7 +23,8 @@
 // ============================================================
 
 import { AU_M, G0, MIN_S, TWO_PI, DAY_MIN } from '../core/constants.js';
-import { getBody, bodyPos, bodyVel, solarGravity } from './ephemeris.js';
+import { getBody, bodyPos, bodyVel } from './ephemeris.js';
+import { gravityAt, gravityEpoch } from './gravity.js';
 import { SpatialHash } from './spatial-hash.js';
 
 export const NEAR_RANGE_AU = 0.12;   // a bit past long sensor range
@@ -85,7 +86,9 @@ const _d = { pos: { x: 0, y: 0 }, vel: { vx: 0, vy: 0 } };
  * chord between the moving endpoints. Exact at any time, O(1).
  * A transit can instead start from `fix` ({x, y, vx, vy, t}: where a ship
  * was when it went back on rails out in space), coasted on in a straight
- * line; its weight fades to nothing by arrival, so the error does too.
+ * line; its weight fades to nothing by arrival, so the error does too. An
+ * end can also be a bare orbit (fromOrbit / toOrbit: a holding slot,
+ * holding.js) instead of an entity.
  * Also sets e.thrust / e.heading so sensors see the drive plume.
  */
 export function transitStateAt(world, e, minute, pos, vel) {
@@ -94,8 +97,10 @@ export function transitStateAt(world, e, minute, pos, vel) {
     const k = (minute - tr.fix.t) * MIN_S / AU_M;
     _o.pos.x = tr.fix.x + tr.fix.vx * k; _o.pos.y = tr.fix.y + tr.fix.vy * k;
     _o.vel.vx = tr.fix.vx; _o.vel.vy = tr.fix.vy;
-  } else if (!world.anchorState(tr.from, minute, _o)) return false;
-  if (!world.anchorState(tr.to, minute, _d)) return false;
+  } else if (tr.fromOrbit) orbitStateAt(tr.fromOrbit, minute, _o.pos, _o.vel);
+  else if (!world.anchorState(tr.from, minute, _o)) return false;
+  if (tr.toOrbit) orbitStateAt(tr.toOrbit, minute, _d.pos, _d.vel);
+  else if (!world.anchorState(tr.to, minute, _d)) return false;
   const span = Math.max(1, tr.t1 - tr.t0);
   const tau = Math.max(0, Math.min(1, (minute - tr.t0) / span));
   const frac = tau < 0.5 ? 2 * tau * tau : 1 - 2 * (1 - tau) * (1 - tau);
@@ -113,17 +118,18 @@ export function transitStateAt(world, e, minute, pos, vel) {
 }
 
 /**
- * Advance a free body by dtSec under solar gravity + constant thrust
- * (thrustG along `heading`). Velocity-Verlet: symplectic, 2nd order.
+ * Advance a free body by dtSec from minute t0 under gravity (gravity.js:
+ * the Sun and the bodies near) + constant thrust (thrustG along
+ * `heading`). Velocity-Verlet: symplectic, 2nd order.
  */
-export function stepFree(pos, vel, dtSec, thrustG = 0, heading = 0) {
+export function stepFree(pos, vel, dtSec, thrustG = 0, heading = 0, t0 = gravityEpoch()) {
   const tax = thrustG > 0 ? thrustG * G0 * Math.cos(heading) : 0;
   const tay = thrustG > 0 ? thrustG * G0 * Math.sin(heading) : 0;
-  solarGravity(pos.x, pos.y, _g);
+  gravityAt(pos.x, pos.y, t0, _g);
   const ax0 = _g.ax + tax, ay0 = _g.ay + tay;
   pos.x += (vel.vx * dtSec + 0.5 * ax0 * dtSec * dtSec) / AU_M;
   pos.y += (vel.vy * dtSec + 0.5 * ay0 * dtSec * dtSec) / AU_M;
-  solarGravity(pos.x, pos.y, _g);
+  gravityAt(pos.x, pos.y, t0 + dtSec / MIN_S, _g);
   vel.vx += 0.5 * (ax0 + _g.ax + tax) * dtSec;
   vel.vy += 0.5 * (ay0 + _g.ay + tay) * dtSec;
 }
@@ -133,7 +139,7 @@ export function propagateFree(pos, vel, t0, t1, thrustG, heading, maxStepMin) {
   let t = t0;
   while (t < t1) {
     const step = Math.min(maxStepMin, t1 - t);
-    stepFree(pos, vel, step * MIN_S, thrustG, heading);
+    stepFree(pos, vel, step * MIN_S, thrustG, heading, t);
     t += step;
   }
 }

@@ -2,13 +2,15 @@
 // LONGHAUL — HUD bar, ship status, resources
 // ============================================================
 
+import { suitedCount } from '../sim/life-support.js';
 import { ui } from './context.js';
-import { $, $$, setText, setHTML, show, toggleClass, fmtSpeed, fmtMeters, fmtNum, fmtG, fmtMass } from './dom.js';
+import { $, $$, esc, setText, setHTML, show, toggleClass, fmtSpeed, fmtMeters, fmtNum, fmtG, fmtMass } from './dom.js';
 import { formatDate, formatTime, formatDuration } from '../core/clock.js';
 import { AU_M } from '../core/constants.js';
 import { maxSpeed } from '../sim/autopilot.js';
 import { targetStateAt, targetName } from '../sim/nav.js';
 import { dockedStation } from '../sim/contracts.js';
+import { leaseFor } from '../sim/leases.js';
 import { activeMissions } from '../sim/missions.js';
 import { iconFuel, iconOxygen, iconN2, iconWater, iconFood, iconPower, iconMedical, iconCrew, iconParts } from '../svg-icons.js';
 import { shipSystems, Status, waterRecovery } from '../sim/systems.js';
@@ -16,26 +18,46 @@ import { systemsStripHTML } from './shipboard.js';
 import { controlAt, spaceLabel } from '../sim/factions.js';
 import { zonesAt, ZONE_KINDS } from '../sim/conflict.js';
 import { hostilesOfPlayer } from '../sim/agents.js';
+import { getWorld } from '../sim/world.js';
+import { clearanceFor } from '../sim/traffic-control.js';
+import { finesOwed } from '../sim/law.js';
 import { threatSummary } from './combat.js';
 
 let el = {};
 let onThreat = null;
+let onHail = null;
 
-export function initHud(onSpeed, onCombat, onSystems, openCombatTab) {
+/** The traffic-control chip's HAIL button opens the comms window on the station. */
+export function setHailHandler(fn) { onHail = fn; }
+let onRoute = null, onDock = null;
+export function setRouteHandler(fn) { onRoute = fn; }
+export function setDockHandler(fn) { onDock = fn; }
+
+export function initHud(onSpeed, onCombat, onSystems, openCombatTab, onSuits = null) {
   onThreat = openCombatTab;
   el = {
     date: $('#hud-date'), time: $('#hud-time'), ship: $('#hud-ship-name'), chip: $('#hud-nav-chip'),
-    perf: $('#hud-perf'), combat: $('#combat-toggle'), combatStatus: $('#combat-status'),
+    perf: $('#hud-perf'), combat: $('#combat-toggle'), combatStatus: $('#combat-status'), suits: $('#suits-toggle'), suitsStatus: $('#suits-status'),
     station: $('#hud-station-btn'), missions: $('#hud-missions-count'), jobs: $('#hud-jobs-count'),
     drive: $('#info-drive'), attitude: $('#info-attitude'), vel: $('#info-velocity'), ref: $('#info-vel-ref'),
     orbit: $('#info-orbit'), mass: $('#info-mass'), cargo: $('#info-cargo'), alert: $('#alert-border'),
     speedBtns: $$('.speed-btn'), strip: $('#systems-strip'), sysCount: $('#hud-systems-count'),
     space: $('#hud-space'), threat: $('#hud-threat'), hull: $('#info-hull'),
+    tc: $('#tc-chip'), comms: $('#hud-comms-btn'),
   };
+  el.tc.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-hail]');
+    if (b) onHail?.(b.dataset.hail);
+    const r = e.target.closest('[data-slot]');
+    if (r) onRoute?.({ kind: 'slot', id: r.dataset.station, slot: r.dataset.slot });
+    const d = e.target.closest('[data-dock]');
+    if (d) onDock?.(d.dataset.dock);
+  });
   el.threat.addEventListener('click', () => onThreat?.());
   el.strip.addEventListener('click', (e) => { if (e.target.closest('[data-act="open-systems"]')) onSystems(); });
   el.speedBtns.forEach(b => b.addEventListener('click', () => onSpeed(+b.dataset.speed)));
   el.combat.addEventListener('click', onCombat);
+  el.suits?.addEventListener('click', () => onSuits?.());
   initResources();
 }
 
@@ -70,8 +92,29 @@ export const STANCE_PHASE = {
   flip: 'MOVING · FLIP', orient: 'ORIENT',
 };
 
+const DOCK_CHIP = {
+  awaiting: ['AWAITING DOCKING CLEARANCE', 'chip-warn'], approach: ['FINAL APPROACH', 'chip-nav'], prox: ['DOCKING', 'chip-nav'],
+  capture: ['SOFT CAPTURE', 'chip-ok'], seal: ['HARD DOCK', 'chip-ok'], undock: ['UNDOCKING', 'chip-warn'], separate: ['SEPARATING', 'chip-warn'],
+  holding: ['HOLDING OFF', 'chip-ok'], outbound: ['CLIMBING OUT ON RCS', 'chip-nav'],
+};
+
+const fmtLeft = (min) => min >= 48 * 60 ? `${Math.floor(min / 1440)}D ${Math.floor(min % 1440 / 60)}H` : `${Math.floor(min / 60)}H${String(min % 60).padStart(2, '0')}`;
+
 export function navStatus(state) {
   const ap = state.autopilot;
+  const d = state.dock;
+  if (d && d.phase === 'docked') {
+    const e = getWorld(state).get(d.target.id);
+    const L = d.target.kind === 'station' ? leaseFor(state) : null;
+    const lease = L ? ` · ${L.left >= 0 ? `LEASE ${fmtLeft(L.left)}` : `${fmtLeft(-L.left)} OVER LEASE`}` : '';
+    return { chip: `DOCKED · ${e?.name || ''} · ${d.target.kind === 'station' ? d.berth : 'collar to collar'}${lease}`, cls: L && L.left < 0 ? 'chip-warn' : 'chip-ok' };
+  }
+  if (d && DOCK_CHIP[d.phase]) {
+    const e = getWorld(state).get(d.target.id);
+    const [label, cls] = DOCK_CHIP[d.phase];
+    const r = d.phase === 'prox' || d.phase === 'separate' ? ` · ${d.rel.x < 10 ? d.rel.x.toFixed(1) : Math.round(d.rel.x)} m${d.mode === 'manual' ? ' · BY HAND' : ''}` : d.phase === 'approach' ? ` · ${fmtMeters(d.rel.x)}` : d.phase === 'outbound' && d.goal ? ` · ${fmtMeters(Math.hypot(d.goal.x - d.rel.x, d.goal.y - d.rel.y))} TO THE GATE` : '';
+    return { chip: `${label} · ${e?.name || ''}${r}`, cls };
+  }
   if (ap) {
     const name = targetName(state, ap.plan.target);
     if (ap.phase === 'prepare') return { chip: `PREPARING → ${name}`, cls: 'chip-warn' };
@@ -95,6 +138,31 @@ export function navStatus(state) {
     return { chip: `HOLDING · ${targetName(state, h)} · ${fmtMeters(Math.hypot(h.ox, h.oy))}`, cls: 'chip-ok' };
   }
   return { chip: state.flight.thrustG > 0.01 ? `MANUAL BURN ${fmtG(state.flight.thrustG)}` : 'DRIFTING', cls: 'chip-dim' };
+}
+
+const ZONE_LABEL = { control: 'CONTROL SPACE', approach: 'ON THE APPROACH', keepout: 'INSIDE THE GATE', docked: 'IN A BERTH' };
+
+/** Near a station: which of its zones we are in, our clearance, and a HAIL button when we need one. */
+function updateTcChip(state) {
+  const tc = state.tc;
+  const st = tc?.station ? getWorld(state).get(tc.station) : null;
+  if (!st || tc.zone === 'none') { show(el.tc, false); return; }
+  const cl = clearanceFor(state, st.id);
+  const now = state.clock.minute;
+  const leaving = tc.outbound === st.id;
+  const status = tc.zone === 'docked' ? (cl.depart ? ['tc-ok', 'CLEARED TO DEPART'] : ['tc-warn', 'NO DEPARTURE CLEARANCE'])
+    : cl.dock ? ['tc-ok', `CLEARED TO DOCK · ${cl.dock.berth} · ${cl.dock.until - now} MIN`]
+    : cl.hold ? ['tc-ok', `HOLDING ${cl.hold.slot} · ${Math.round((cl.hold.until - now) / 60)} H`]
+    : cl.approach ? ['tc-ok', 'CLEARED TO APPROACH']
+    : leaving ? ['tc-ok', 'OUTBOUND']
+    : tc.zone === 'control' ? ['', 'NO CLEARANCE'] : ['tc-bad', 'NO CLEARANCE'];
+  const owed = finesOwed(state, st.faction).reduce((a, f) => a + f.amount, 0);
+  const holdingThere = state.flight.hold?.kind === 'slot' && state.flight.hold.id === st.id;
+  const toSlot = cl.hold && !holdingThere && !state.autopilot && !state.dock;
+  const needHail = !leaving && !holdingThere && (tc.zone !== 'docked' ? !cl.dock && !cl.hold : !cl.depart);
+  const html = `<span class="tc-zone">${st.name.toUpperCase()} · ${ZONE_LABEL[tc.zone] || ''}</span><span class="${status[0]}">${status[1]}</span>${owed ? `<span class="tc-warn">${owed.toLocaleString()} MCR OWED</span>` : ''}${cl.dock && !state.dock ? `<button data-dock="${st.id}" title="The docking computer takes us down to our berth">DOCK ${esc(cl.dock.berth)}</button>` : ''}${toSlot ? `<button data-slot="${esc(cl.hold.slot)}" data-station="${st.id}" title="Plot a route into our holding slot">TO SLOT ${esc(cl.hold.slot)}</button>` : ''}${needHail ? `<button data-hail="${st.id}">HAIL</button>` : ''}`;
+  setHTML(el.tc, html);
+  show(el.tc, true, 'flex');
 }
 
 function turningLabel(state) {
@@ -121,7 +189,14 @@ export function updateHud(state) {
   }
   toggleClass(el.combat, 'active', state.combatStations);
   setText(el.combatStatus, state.combatStations ? 'ON' : 'OFF');
+  if (el.suits) {
+    const aboard = state.ship.crew.filter(m => !m.dead && !m.away).length;
+    toggleClass(el.suits, 'active', !!state.suitsOn);
+    setText(el.suitsStatus, state.suitsOn ? `${suitedCount(state)}/${aboard}` : 'OFF');
+  }
   show(el.station, !!dockedStation(state));
+  updateTcChip(state);
+  toggleClass(el.comms, 'has-requests', state.comms.requests.length > 0);
 
   const missions = activeMissions(state).length + state.contracts.active.length;
   setText(el.missions, missions);

@@ -13,6 +13,7 @@ import { fmtNum } from './dom.js';
 import { openDistress, openRequest } from './dialogs.js';
 import { RANGE } from '../core/constants.js';
 import { getWorld } from '../sim/world.js';
+import { pushTicker } from './ticker.js';
 
 let noFoodAt = null;
 
@@ -73,6 +74,11 @@ const HANDLERS = {
   'crew-delivered': ({ member, medic }) => logEntry(`${medic.name} carried ${member.name} to the autodoc`, 'crew'),
   'crew-healed': ({ member }) => logEntry(`${member.name} discharged from the autodoc`, 'ok'),
   'crew-suited': ({ member }) => logEntry(`${member.name} donned an EVA suit`, 'crew'),
+  fire: ({ text }) => { logEntry(`${text} Crew to fight it, or vent the deck (click its name).`, 'danger'); toast(text.replace(/\.$/, '').toUpperCase(), 'danger'); },
+  'fire-out': ({ text }) => logEntry(text, 'ok'),
+  'ground-impact': ({ text }) => { logEntry(text, 'danger'); toast(text, 'danger'); },
+  landed: ({ text }) => logEntry(text, 'warn'),
+  'ship-crashed': ({ text }) => logEntry(text, 'warn'),
   'crew-work-done': ({ member, kind, result }) => {
     if (kind === 'maintain') logEntry(`${member.name}: ${result.message}`, 'system');
     else if (kind === 'fabricate') logEntry(`${member.name}: ${result.message}`, 'system');
@@ -192,6 +198,52 @@ const HANDLERS = {
   'zone-news': ({ text, lagMin }) => logEntry(`Newsfeed${aged(lagMin)}: ${text}`, 'comms'),
   'zone-incident': ({ text, lagMin }) => logEntry(`Newsfeed${aged(lagMin)}: ${text}`, 'comms'),
   'intel-digest': () => {},
+
+  // ---- Traffic control and our nav computer near a hub
+  'tc-zone': ({ name, text }) => { if (text) { logEntry(`[${name}] ${text}`, 'comms'); pushTicker(text, 'comms', name); } },
+  'tc-chatter': ({ name, text }) => { logEntry(`[${name}] ${text}`, 'chatter'); pushTicker(text, 'comms', name); },
+  'tc-warning': ({ name, text, level }) => {
+    logEntry(`[${name}] ${text}`, level === 'danger' ? 'danger' : 'warn');
+    pushTicker(text, level === 'danger' ? 'danger' : 'warn', name);
+    if (level === 'danger') toast(text, 'danger');
+  },
+  'nav-callout': ({ text, level, key }) => {
+    logEntry(`Nav: ${text}`, level === 'danger' ? 'danger' : 'nav');
+    pushTicker(text, level === 'warn' || level === 'danger' ? 'warn' : 'nav', 'NAV');
+    if (key === 'terrain' && level === 'danger') toast(text, 'danger');
+  },
+  'citation': ({ kind, amount, faction }) => { logEntry(`Citation (${faction}): ${kind} — ${fmtNum(amount)} MCR owed`, 'warn'); toast(`CITATION — ${fmtNum(amount)} MCR`, 'warn'); },
+  'station-alert': ({ name, level, text }) => {
+    if (level === 'normal') { logEntry(`${name} has stood down its defenses`, 'comms'); return; }
+    logEntry(text || `${name}: defenses ${level === 'hostile' ? 'weapons free' : 'on alert'}`, 'danger');
+    if (level === 'hostile') toast(`${name.toUpperCase()} — WEAPONS FREE`, 'danger');
+  },
+  'station-hit': ({ by, name, section, dp }) => { if (by === 'player') logEntry(`Hit on ${name} — ${section === 'all' ? 'blast damage' : section} (${Math.round(dp)} DP)`, 'ok'); },
+  'station-blackout': ({ name }) => { logEntry(`${name} has gone dark: its power plant is out`, 'danger'); toast(`${name.toUpperCase()} BLACKED OUT`, 'danger'); },
+  'station-destroyed': ({ name }) => { logEntry(`${name} is broken. Its people are in the dark.`, 'danger'); toast(`${name.toUpperCase()} DESTROYED`, 'danger'); },
+  'berth-damaged': ({ station, berth }) => logEntry(`${station}: berth ${berth} damaged — out of service`, 'warn'),
+
+  // ---- Docking
+  'dock-begun': ({ target, phase }) => logEntry(phase === 'inbound' ? `Docking: inbound to ${target}` : `Docking: ${target}`, 'nav'),
+  'dock-awaiting': ({ target }) => { logEntry(`Holding at ${target}'s gate — docking clearance needed. Hail traffic control.`, 'warn'); pushTicker(`Holding at the gate: request docking clearance from ${target}.`, 'warn', 'NAV'); toast('HAIL FOR DOCKING CLEARANCE', 'warn'); },
+  'dock-phase': ({ phase, berth, aborted, gateKm }) => {
+    const text = { approach: `Final approach to ${berth}: the docking computer has it, 0.1 G and the keep-out limit`, prox: `Proximity operations: ${berth} a kilometre ahead`, seal: 'Soft capture — latches closing, collar retracting', undock: 'Venting the lock, unlatching', separate: 'Released: backing out on RCS', holding: aborted ? 'Backed out to the hold point' : 'Clear of the berth, holding', outbound: `Climbing out of the corridor on RCS: through the gate at ${gateKm ?? 50} km, then the drive`, clear: 'Through the gate: clear to light the drive' }[phase];
+    if (text) { logEntry(`Docking: ${text}`, 'nav'); pushTicker(text, 'nav', 'DOCK'); }
+  },
+  'dock-capture': ({ closing, miss }) => { logEntry(`Contact — soft capture at ${closing.toFixed(2)} m/s, ${miss.toFixed(2)} m off the axis`, 'ok'); toast('SOFT CAPTURE', 'ok'); },
+  'docked': ({ target, berth, bumps }) => { logEntry(`Hard seal: docked at ${target}, ${berth}${bumps ? ` (${bumps} contact${bumps > 1 ? 's' : ''} before capture)` : ''}`, 'ok'); toast(`DOCKED · ${target}`, 'ok'); },
+  'dock-bump': ({ why, dp, damaged }) => { logEntry(`Collar contact, no capture: ${why}${dp > 0.5 ? ` — hull damage ${Math.round(dp)} DP` : ''}${damaged ? ', the berth collar damaged' : ''}`, dp > 0.5 ? 'danger' : 'warn'); toast(dp > 0.5 ? 'HARD CONTACT' : 'NO CAPTURE — BOUNCED', dp > 0.5 ? 'danger' : 'warn'); },
+  'dock-aborted': ({ why, holding, backingOut }) => logEntry(`Docking aborted: ${why}${backingOut ? ' — backing out' : holding ? ' — holding' : ''}`, 'warn'),
+  'dock-torn': ({ target }) => { logEntry(`${target} lit its drive while we were joined — the collar tore free`, 'danger'); toast('COLLAR TORN FREE', 'danger'); },
+  'survivors-aboard': ({ text }) => { logEntry(text, 'ok'); toast(text, 'ok'); },
+  'survivors-landed': ({ text }) => { logEntry(text, 'ok'); toast(text, 'ok'); },
+  'crew-back': ({ text }) => logEntry(text, 'crew'),
+
+  // ---- Boarding and manifests
+  'boarding-log': ({ text, level }) => { logEntry(`Boarding: ${text}`, level === 'danger' ? 'danger' : level === 'ok' ? 'ok' : 'crew'); pushTicker(text, level === 'danger' ? 'danger' : 'comms', 'BOARDING'); },
+  'boarding': ({ phase, target }) => { if (phase === 'secured') toast(`${target} SECURED`, 'ok'); },
+  'dossier': ({ text }) => logEntry(text, 'comms'),
+  'hail-said': () => {},
 };
 
 /** News is as old as the light that brought it. */

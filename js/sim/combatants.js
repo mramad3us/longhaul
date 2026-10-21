@@ -20,6 +20,7 @@ import { systemPerf } from './systems.js';
 import { isConscious } from './crew.js';
 import { seatKind } from './ship-layout.js';
 import { sizeForMass, signatureRange, playerSignatureRange, playerSensorQuality, canSee } from './sensors.js';
+import { STATIONS, stationModel } from './stations.js';
 
 export const PLAYER = 'player';
 
@@ -74,9 +75,30 @@ export function sees(state, observerId, targetId) {
 
 // ---- NPC HULLS ----
 
+/**
+ * A station's combat state: structure, its docks, defenses (the weapons
+ * section), sensors and power plant, an alert level and who it is fighting.
+ */
+function stationHull(e) {
+  const d = STATIONS[e.id]?.defense || { tl: 2, pdc: 4, tubes: 0, magazine: null, railgun: 0, armor: 2, hp: 5000 };
+  e.combat = {
+    station: true,
+    hp: d.hp, hpMax: d.hp,
+    drive: 0, reactor: 1, weapons: 1, sensors: 1, docks: 1,
+    crew: 1, status: 'ok', alert: 'normal', hostile: [],
+    containment: null, scrammed: true,
+    rounds: d.pdc * PDC_ROUNDS_PER_MOUNT * 4,
+    magazine: { he: d.magazine?.he || 0, nuke: d.magazine?.nuke || 0 },
+    tubes: new Array(d.tubes).fill(0),
+    rail: new Array(d.railgun).fill(0),
+  };
+  return e.combat;
+}
+
 /** The combat state of an NPC hull (created on first use). */
 export function ensureHull(e) {
   if (e.combat) return e.combat;
+  if (e.type === 'station') return stationHull(e);
   const c = classOf(e);
   const hp = c ? hullPoints(c) : SIZES[sizeForMass(e.mass)].hp;
   const tubes = c?.tubes || 0;
@@ -152,8 +174,32 @@ function playerProfile(state) {
 
 const CREW_FACTOR = { military: 1.1, authority: 1, irregular: 0.85, civilian: 0.8 };
 
+function stationProfile(state, e) {
+  const d = STATIONS[e.id]?.defense || { tl: 2, pdc: 4, tubes: 0, railgun: 0, armor: 2 };
+  const h = ensureHull(e);
+  const tl = d.tl;
+  const armed = h.weapons >= DISABLED_BELOW && h.reactor > 0.1 && h.status === 'ok';
+  const factor = 1.1 * TECH[tl].fireControl * (0.5 + 0.5 * h.sensors);
+  return {
+    id: e.id, isPlayer: false, isStation: true, cls: null, tl, faction: e.faction,
+    hp: h.hp,
+    radiusM: Math.max(200, (stationModel(e.id)?.sizeM || 1000) * 0.2),
+    armor: d.armor + TECH[tl].armor,
+    maxG: 0, evadeG: 0,
+    pdc: { mounts: armed ? d.pdc * h.weapons : 0, ...PDC[tl], factor, ammo: h.rounds },
+    gear: null,
+    tubes: armed ? h.tubes.length : 0,
+    torps: h.magazine.he + h.magazine.nuke,
+    torpedo: TORPEDO_MOTOR[tl],
+    railgun: armed && d.railgun ? RAILGUN[Math.max(2, tl)] : null,
+    railMounts: armed ? d.railgun : 0,
+    alive: h.status !== 'wreck',
+  };
+}
+
 function npcProfile(state, e) {
   if (!e) return null;
+  if (e.type === 'station') return stationProfile(state, e);
   const c = classOf(e);
   const h = ensureHull(e);
   const tl = c?.tl || e.tl || 2;

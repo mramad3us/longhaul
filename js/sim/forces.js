@@ -41,6 +41,7 @@ import { rollIdentity } from './ship-classes.js';
 import { FACTIONS, controlAt } from './factions.js';
 import { ensureHull } from './combatants.js';
 import { wake } from './agents.js';
+import { parkHull, releaseHull } from './stations.js';
 
 export const WAKE_AU = 0.1;            // hulls this close come alive (≈ long sensor reach)
 export const SLEEP_AU = 0.25;          // …and go back on rails past this (agents.js DESPAWN_AU)
@@ -85,12 +86,9 @@ function newHull(state, role, faction) {
   return e;
 }
 
-/** Berthed beside a station (navies between deployments). */
-function berthAt(e, st) {
-  const o = st.orbit;
-  e.transit = null;
-  e.orbit = { body: o.body, r: o.r * (1 + randRange(-0.01, 0.01)), phase: o.phase + randRange(-0.002, 0.002), period: o.period };
-  e.thrust = 0;
+/** Berthed at a yard between deployments (in a berth if one is free, else at the fleet anchorage). */
+function berthAt(world, e, st) {
+  parkHull(world.state, e, st);
   e.tags.force.state = 'berth';
 }
 
@@ -147,6 +145,8 @@ function sendTo(state, e, dest) {
   const world = getWorld(state);
   const now = state.clock.minute;
   const f = e.tags.force;
+  releaseHull(world, e);
+  if (e.tags.at) e.tags.at = null;
   const T = railTo(world, e, dest, now);
   f.state = 'transit';
   f.dest = dest.id;
@@ -161,7 +161,7 @@ function serviceForce(e, minute, world) {
   if (!f || e.agent || e.driven || f.state !== 'transit' || minute < f.until) return;
   const dest = world.get(f.dest);
   if (!dest) { world.refresh(e, minute); lieUp(e, minute); f.state = 'post'; }
-  else if (dest.type === 'station') { if (f.role === 'police') onBeat(e, dest); else berthAt(e, dest); }
+  else if (dest.type === 'station') { if (f.role === 'police') onBeat(e, dest); else berthAt(world, e, dest); }
   else onPost(e, dest);
   world.refresh(e, minute);
   world.hash.update(e);
@@ -186,8 +186,11 @@ function addNavy(state, faction) {
   const yard = pick(yards);
   const e = newHull(state, 'navy', faction);
   e.tags.force.home = yard.id;
-  berthAt(e, yard);
-  return world.add(e);
+  world.add(e);
+  berthAt(world, e, yard);
+  world.refresh(e, state.clock.minute);
+  world.hash.update(e);
+  return e;
 }
 
 /** Bodies where nobody's writ runs: in the Belt or beyond, held by no one firmly. */

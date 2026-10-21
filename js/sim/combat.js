@@ -70,7 +70,7 @@ export function createMagazine(classId = PLAYER_CLASS) {
 export function setFireTarget(state, id) {
   if (id == null) { state.combat.target = null; return { ok: true, text: 'Fire control cleared' }; }
   const e = getWorld(state).get(id);
-  if (!e || e.type !== 'ship') return { ok: false, text: 'Fire control needs a ship to target' };
+  if (!e || (e.type !== 'ship' && e.type !== 'station')) return { ok: false, text: 'Fire control needs a ship or a station to target' };
   if (!isTracked(state, id)) return { ok: false, text: 'No sensor track on that contact' };
   state.combat.target = id;
   return { ok: true, text: `Fire control: target ${e.transponder ? e.name : 'contact ' + e.signature}` };

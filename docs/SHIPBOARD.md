@@ -8,19 +8,26 @@ Modules:
 
 ## The ship's interior
 
-Seven decks stacked on the torch, bow first:
+Each class a small crew can fly has a **deck program** (`DECK_PROGRAMS`, sim/ship-layout.js): which decks it has, bow to stern, each drawn from a deck template (7 tiles wide for small craft, 9 for the rest) and fitted to the class. The hull model (SHIPS.md) is built from the same program, so a collar on the outside opens onto an airlock on the right deck inside.
 
-| Deck | What's there |
-|---|---|
-| Bridge | radio, ops, helm, weapons console, couch, transponder |
-| Quarters | bunks, head |
-| Mess | galley, tables, exercise rig, autodoc |
-| Utility | life support, water reclamation, machine shop |
-| Cargo | torpedo launcher, storage |
-| Engine | engineering station, drives, PDC turrets set in the hull |
-| Reactor | reactor |
+| Deck | What's there | Zone |
+|---|---|---|
+| Bridge | helm, ops, the weapons console (a couch on an unarmed hull), radio, transponder, couches; a nose collar's airlock in the bow plating | command |
+| Quarters | racks (one for every two of the crew: bunks are shared between watches), a head; on small craft the galley too | crew |
+| Mess | galley, tables, exercise rig, autodoc | crew |
+| Utility | life support, water reclamation, machine shop | crew |
+| Passengers | passenger acceleration berths (as many as the class is licensed for) and their own head, behind the deck's hatch; a police cutter's brig | pax |
+| Cargo | the launcher bay, storage, the crew airlock, a cargo door | cargo |
+| Engine | engineering station, drives, PDC turrets set in the hull | machinery |
+| Reactor | reactor | reactor |
 
-One ladder shaft runs down the spine. Ship coordinates count tile rows from the bow across all decks, with a one-row gap between decks. Tiles define fixtures (`FIXTURE_KIND`), and each fixture has an access tile where crew stand to use it. Seats are either *secure* (couches, helm, ops, weapons, engineering station, autodoc: protection under G) or *restraints* (bunks: strapped in, not juiced). Paths come from cached Dijkstra trees over the walkable tiles. Every playable class shares this plan, fitted to the class (SHIPS.md): turret wells plated over without PDCs, hold space for the launcher bay without tubes, a couch for fire control on an unarmed hull. Changing the layout means bumping `SAVE_SCHEMA`.
+Passengers live aft of the crew's decks, forward of the hold: the crew's walk from the mess to the bridge is never through the passenger decks. Every ship has a secure seat for each of the crew it berths (the pilot's is the helm; extra couches go into storage space on the crew's decks first, then the hold) and a suit locker for each of them. Securing for a maneuver, the crew still on their feet are matched to free couches so that the longest walk is the shortest it can be (a ship is secure when the last one sits); station seats are couches too, for anyone left over.
+
+Ship coordinates count tile rows from the bow across all decks, with a one-row gap between decks; one ladder shaft runs down the spine. Tiles define fixtures (`FIXTURE_KIND`), and each fixture has an access tile where crew stand to use it. Seats are either *secure* (couches, helm, ops, weapons, engineering station, autodoc: protection under G) or *restraints* (bunks: strapped in, not juiced). Paths come from cached Dijkstra trees over the walkable tiles. Each role calls home the deck holding its work (the helm, the engineering station, the autodoc…). Changing the layout means bumping `SAVE_SCHEMA`.
+
+**Away.** Crew can be off the ship: a boarding party aboard another hull (DOCKING.md), or ashore on leave. Away, they are not on our decks, don't breathe our air or feel our G, don't eat our rations, and aren't counted for securing for maneuvers; the ship can't undock or leave without them.
+
+**Signing on.** A crew can be up to the class's berthed maximum (12 at most). Past the eight who fly a ship come Security (fire control watch) and Deckhands (machine shop). Docked at a station with a hiring hall, four people look for a berth each day; we can sign them on for a fee or pay anyone off but the captain.
 
 ## People (`crew.js`, `needs.js`)
 
@@ -91,6 +98,7 @@ Subsystems post jobs; crew-ai assigns them by skill, distance and watch. Each jo
 | reactor procedure | engineering 15 |
 | helm | piloting 15 |
 | seal a breach | engineering 10, in a suit |
+| fight a fire | anyone, in a suit, with an extinguisher |
 
 Priorities are CRITICAL, HIGH and NORMAL.
 
@@ -111,8 +119,16 @@ Each system's effects are listed in `SYSTEMS[id].effects` and applied through sm
 
 Each deck has its own atmosphere (pressure, O₂, N₂, CO₂). The plant scrubs CO₂ and injects O₂ and N₂ from tanks. Gas exchanges through the ladder shaft, and pressure doors hold across a big difference.
 - A breach vents a deck within minutes. Crew in bad air go for EVA suits (48 h of O₂); couches and station seats have a 2-hour emergency hood.
+- **Venting** any deck on its own (the compartment menu: click the deck's name, or right-click the deck) opens it to space at 10% of its pressure a minute; closing the vents repressurizes it from the tanks.
+- **The SUITS order** (the switch beside COMBAT, key U) sends every hand to a locker for a suit and keeps it on, whatever the job, until it is lifted (then suits come off where the air is good). Under 1.5 G they leave a couch for it. With everyone suited a deck can be vented, or holed in a fight, with its people on it.
 - An engineer in a suit seals the breach, then the deck repressurizes from the tanks.
 - Hypoxia, CO₂ poisoning and decompression act on the body.
+
+## Fire (`fire.js`)
+
+A hit that gets inside the hull (a chance by the damage that reaches a deck), a ship coming down on a rock: any can start a fire on a deck. A fire has an intensity (0–1) that grows on the deck's oxygen and pressure (8% a minute on good air), burns the oxygen down and fills the air with smoke (breathed as CO₂, faster on a small deck), wrecks machinery on the deck (4% a minute per machine at full blaze) and burns whoever is on it (a suit keeps off most of it: BURNED). Above 70% it can reach the next deck through the shaft while the hatches are open. Nothing burns under 25 kPa or 12% oxygen.
+
+Putting it out: a firefighting job (CRITICAL; a hand suits up, then knocks it back 12% a minute at full efficiency), or vent the deck and starve it. A fire left alone burns its deck's air out in about twenty minutes, and what it wrecks meanwhile stays wrecked.
 
 ## Power (`reactor.js`)
 

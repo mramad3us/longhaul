@@ -10,7 +10,13 @@ No build step, no dependencies: vanilla ES modules, IndexedDB saves.
 ./play.sh          # serves the folder on :8090 and opens the browser
 ```
 
-Keys: `Space` pause · `1/2/3` time warp · `M` solar map · `R` scanner · `T` tactical · `W` combat · `C` battle stations · `E` systems · `D` duty roster · `L` missions · `J` jobs · `B` station · `I` ship's library · `Ctrl+S` quicksave.
+Keys: `Space` pause · `1/2/3` time warp · `M` solar map · `R` scanner · `T` tactical · `W` combat · `C` battle stations · `U` all hands into suits · `E` systems · `D` duty roster · `L` missions · `J` jobs · `H` comms · `B` station · `I` ship's library · `Ctrl+S` quicksave. Hand-flying a docking: `W/S` close/open, `A/D` left/right, `R/F` up/down, arrows yaw/pitch, `Q/E` roll, `X` kill drift.
+
+**Stations are places, and their space is managed.** Ports stand on Ceres, Pallas, Vesta and Phobos at their true radius and turn with them; Hygiea, Tycho, Luna's yards and Ganymede's station orbit their bodies. Every ship and station has a physical hull, built square and practical, with docking collars where its airlocks are. Near a hub the radio is busy: traffic control clears real traffic and warns, cites or shoots at whoever comes in without clearance. Hail it (`H`) to approach, dock and depart. Docking is flown: a final approach down the corridor, then proximity operations second by second on the RCS, by the docking computer or by hand. You can dock with ships that will hold still, trade over the collar, and board ships by collar or EVA. Every hull out there has its crew aboard; what you know of them comes from registries, manifests, hails, scans and boarding, and is logged. The main view follows what the ship is doing: the interior in cruise, the exterior and the docking display close in, both side by side in a berth; everything laid over it stacks in a column to the right of the ship.
+
+**Gravity, the ground, and port space.** The rocks pull: hovering at Ceres' gate costs thrust, a ship that stops thrusting falls, and the nav computer calls the ground out and climbs round a rock that is in the way. Every port has a holding pattern of 300 slots on a free orbit (over a surface port, the synchronous orbit), where traffic lays over and you can hold for free; inside port space you sign for work and turn in reports without docking. Traffic takes a berth only for the work that needs one. Berths are leased. The nav computer keeps to the ports' speed limits.
+
+**Fire and salvage.** Hits can start fires; the crew fight them, or you vent the deck (click its name). The SUITS switch puts everyone in a suit first. A wreck can be salvaged run after run for scrap, spares and stores, and any secured hull's computer cracked for its credits.
 
 **Light is the speed limit on what you know.** Your sensors show what is within about a light-minute, live. The rest of the system is on the solar map as a plot of reports, each with an age: traffic-control digests from every station (berths and filed flight plans, reaching you after the light time from that station), the last fix of every contact that dropped off your board, and news of hot zones and losses. Thousands of ships trade, patrol, blockade and fight out there. Within reach of your sensors they come alive and act for themselves; far away, what happens to them is settled by outcomes, with real wrecks. The `INTEL` button on the solar map shows or hides the plot.
 
@@ -28,9 +34,10 @@ The tests are integration tests of the simulation (no DOM). They print the numbe
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): module layout, the per-minute tick, motion models, level of detail, saves, UI modules, tests
-- [docs/FLIGHT.md](docs/FLIGHT.md): solar system, flight dynamics, guidance, routes, stances, autopilot, time warp, inertial events
-- [docs/SHIPBOARD.md](docs/SHIPBOARD.md): decks, crew physiology and needs, watches, crew behaviour, jobs, machinery, air, power
-- [docs/SHIPS.md](docs/SHIPS.md): ship classes and the yards that build them, tech levels, upkeep, sizes, shapes, and the ship we start in
+- [docs/FLIGHT.md](docs/FLIGHT.md): solar system, gravity and the ground, flight dynamics, guidance, routes and ports' speed limits, stances, autopilot, time warp, inertial events
+- [docs/SHIPBOARD.md](docs/SHIPBOARD.md): decks, crew physiology and needs, watches, crew behaviour, jobs, machinery, air, suits and venting, fire, power
+- [docs/SHIPS.md](docs/SHIPS.md): ship classes and the yards that build them, tech levels, upkeep, sizes, hulls, collars, crews, atmospheric ratings, and the ship we start in
 - [docs/COMBAT.md](docs/COMBAT.md): sensors, weapons, ordnance flight, point defense, damage, fire control and stances
-- [docs/WORLD.md](docs/WORLD.md): factions and influence, the background population, light lag and the plot, hot zones, encounters, NPC behaviour, law, stations, contracts, distress calls
+- [docs/WORLD.md](docs/WORLD.md): factions and influence, the background population, light lag and the plot, hot zones, encounters, NPC behaviour, law, stations, contracts, distress calls, hailing, who is aboard
+- [docs/DOCKING.md](docs/DOCKING.md): stations, their berths and holding patterns, traffic's port calls, collars, traffic control, docking, berth leases, ship to ship, boarding and salvage, station defenses, crew ashore
 - [CLAUDE.md](CLAUDE.md): working conventions for this repository

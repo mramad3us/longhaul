@@ -11,21 +11,25 @@ import { AU_M, AU_KM } from '../core/constants.js';
 import { formatDuration } from '../core/clock.js';
 import { getWorld } from '../sim/world.js';
 import { hailDialogue, signalBars } from '../sim/comms.js';
-import { activeMissions, acceptMission, declineMission, completeRescue, missionForEntity } from '../sim/missions.js';
-import { contractsAt, acceptContract, completeContract, deliverable, dockedStation, hailContractTarget, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, priceOf, CONTRACT_LABEL } from '../sim/contracts.js';
+import { acceptMission, declineMission } from '../sim/missions.js';
+import { contractsAt, acceptContract, completeContract, deliverable, needsBerth, inPort, dockedStation, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, priceOf, CONTRACT_LABEL } from '../sim/contracts.js';
 import { bus } from '../core/events.js';
 import { jobLabel, describeActivity } from './shipboard.js';
-import { canTransmit } from '../sim/comms.js';
 import { respondToRequest } from '../sim/agents.js';
 import { WARHEADS } from '../sim/weapons.js';
 import { TECH } from '../sim/ship-classes.js';
 import { WANTED_LABEL } from '../sim/law.js';
+import { STATIONS, stationModel } from '../sim/stations.js';
+import { clearanceFor, requestDocking, stationTraffic } from '../sim/traffic-control.js';
+import { hiringHall, hire, dismiss, shoreLeave, recallLeave, LEAVE_COST, LEAVE_MIN } from '../sim/crew-services.js';
+import { leaseSummary, extendLease, leaseShortfall, FREE_LEASE_MIN } from '../sim/leases.js';
+import { maxCrew } from '../sim/ship-classes.js';
 
 let hooks = {};
 let onClose = null;
 
 export function initDialogs(h) {
-  hooks = h;   // { plotRoute(target), setPaused(reason, on) }
+  hooks = h;   // { plotRoute(target), setPaused(reason, on), openComms(id), crewChanged(), beginDocking(stationId) }
   for (const id of ['#dialog-generic', '#dialog-event', '#dialog-station']) {
     $(id).addEventListener('pointerdown', (e) => { if (e.target === $(id) && id !== '#dialog-event') closeDialog(id); });
   }
@@ -162,42 +166,9 @@ export function openJobs() {
 
 // ---- HAIL ----
 
+/** Hailing opens the comms window on that channel (comms.js). */
 export function hail(entityId) {
-  const s = ui.state;
-  const e = getWorld(s).get(entityId);
-  if (!e) return;
-  // Close in (docked, formation) a suit radio or a signal lamp will do; beyond that it takes the array
-  const dM = Math.hypot(e.pos.x - s.flight.pos.x, e.pos.y - s.flight.pos.y) * AU_M;
-  if (!canTransmit(s) && dM > 50_000) { toast('Comms array down — no transmitter', 'danger'); return; }
-  if (e.type === 'station') { openStation(e); return; }
-  const bars = signalBars(Math.hypot(e.pos.x - s.flight.pos.x, e.pos.y - s.flight.pos.y));
-  let text = hailDialogue(e);
-  let extra = '';
-  const m = missionForEntity(s, e.id);
-  if (m) {
-    const r = completeRescue(s, m.id);
-    if (r.success) {
-      text = r.text;
-      extra = rewardsHTML(r.rewards);
-      toast('Rescue complete', 'ok');
-      logEntry(`Rescue of ${e.name} complete${rewardsText(r.rewards)}`, 'ok');
-    } else text = `${text}\n\n${r.text}`;
-  } else {
-    const r = hailContractTarget(s, e.id);
-    if (r) {
-      text = r.text;
-      if (r.ok) { toast('Objective complete', 'ok'); logEntry(`${r.contract.title}: objective complete`, 'ok'); }
-    }
-  }
-  logEntry(`Hailed ${e.transponder ? e.name : 'unidentified contact'}`, 'comms');
-  openDialog({
-    cls: 'dialog-hail',
-    html: `<div class="hail-header"><span class="hail-channel">DIRECT CHANNEL</span><span class="hail-target">${esc(e.transponder ? e.name : 'UNIDENTIFIED')}</span>
-      <span class="hail-faction hail-faction-${(e.faction || '').toLowerCase()}">${e.faction !== 'independent' ? esc(e.faction) : ''}</span></div>
-      <div class="hail-body"><div class="hail-narrative">${esc(text).replace(/\n/g, '<br>')}</div>${extra}
-      <div class="hail-signal-bar"><span class="hail-signal-icon">◈</span><span class="hail-signal-label">SIGNAL</span><span class="hail-signal-strength">${'■'.repeat(bars)}${'□'.repeat(5 - bars)}</span></div></div>`,
-    buttons: [{ label: 'Close Channel', act: 'close', cls: 'btn-secondary' }],
-  });
+  hooks.openComms?.(entityId);
 }
 
 function rewardsText(r) {
@@ -307,13 +278,16 @@ function onEventClick(e) {
 // ---- STATION ----
 
 let stationTab = 'board';
+/** What a station does only for a ship in one of its berths. */
+const DOCKED_TABS = new Set(['services', 'hire', 'leave', 'berth']);
 let currentStation = null;
 
-export function openStation(station = dockedStation(ui.state)) {
+export function openStation(station = dockedStation(ui.state), tab = null) {
   if (!station) { toast('Not in contact with a station', 'warn'); return; }
   currentStation = station;
   const s = ui.state;
-  if (!dockedStation(s) && stationTab === 'services') stationTab = 'board';
+  if (tab) stationTab = tab;
+  if (!dockedStation(s) && DOCKED_TABS.has(stationTab)) stationTab = 'board';
   renderStation();
   show($('#dialog-station'), true, 'flex');
   logEntry(`Channel open: ${station.name}`, 'comms');
@@ -324,8 +298,11 @@ function renderStation() {
   const docked = dockedStation(s)?.id === st.id;
   const bars = signalBars(Math.hypot(st.pos.x - s.flight.pos.x, st.pos.y - s.flight.pos.y));
   const board = contractsAt(s, st.id);
-  const deliver = docked ? deliverable(s, st) : [];
-  const tabs = [['board', `CONTRACTS (${board.length})`], ['deliver', `DELIVER (${deliver.length})`], ['services', 'SERVICES']];
+  const deliver = docked || inPort(s, st) ? deliverable(s, st) : [];
+  const port = inPort(s, st);
+  const spec = STATIONS[st.id];
+  const tabs = [['board', `CONTRACTS (${board.length})`], ['deliver', `DELIVER (${deliver.length})`], ['services', 'SERVICES'], ['berth', 'BERTH'],
+    ...(spec?.services.includes('hiring') ? [['hire', 'HIRING']] : []), ...(spec?.services.includes('leave') ? [['leave', 'LEAVE']] : []), ['traffic', 'TRAFFIC']];
   let content = '';
   if (stationTab === 'board') {
     content = board.length ? board.map(c => {
@@ -334,16 +311,23 @@ function renderStation() {
       return `<div class="station-mission-card"><div class="station-mission-top"><span class="station-mission-type">${CONTRACT_LABEL[c.type]}</span><span class="station-mission-deadline">${formatDuration(c.deadline)}</span></div>
         <div class="station-mission-desc">${esc(c.description)}</div><div class="station-mission-meta">${esc(meta)}</div>
         <div class="station-mission-bottom"><span class="station-mission-reward">${rewardLine(c.reward)}</span>
-        <button class="station-mission-accept" data-act="accept" data-id="${c.id}" ${needsDock && !docked ? 'disabled title="Dock to load"' : ''}>${needsDock && !docked ? 'DOCK TO LOAD' : 'ACCEPT'}</button></div></div>`;
+        <button class="station-mission-accept" data-act="accept" data-id="${c.id}" ${(needsDock && !docked) || !port ? `disabled title="${!port ? 'Come into port space to sign' : 'Dock to load'}"` : ''}>${needsDock && !docked ? 'DOCK TO LOAD' : !port ? 'IN PORT TO SIGN' : 'ACCEPT'}</button></div></div>`;
     }).join('') : '<div class="station-mission-empty">No contracts posted. Check back in a few hours.</div>';
   } else if (stationTab === 'deliver') {
-    content = !docked ? '<div class="station-mission-empty">Dock to deliver cargo, passengers or reports.</div>'
-      : deliver.length ? deliver.map(c => `<div class="station-mission-card"><div class="station-mission-top"><span class="station-mission-type">${CONTRACT_LABEL[c.type]}</span></div>
+    content = !deliver.length ? `<div class="station-mission-empty">${docked ? 'Nothing to deliver here.' : 'Nothing to turn in from here. Cargo, passengers and fuel go across a berth\'s collar; reports are turned in from port.'}</div>`
+      : deliver.map(c => `<div class="station-mission-card"><div class="station-mission-top"><span class="station-mission-type">${CONTRACT_LABEL[c.type]}</span></div>
         <div class="station-mission-desc">${esc(c.title)}</div><div class="station-mission-bottom"><span class="station-mission-reward">${rewardLine(c.reward)}</span>
-        <button class="station-mission-accept" data-act="complete" data-id="${c.id}">TURN IN</button></div></div>`).join('')
-      : '<div class="station-mission-empty">Nothing to deliver here.</div>';
+        <button class="station-mission-accept" data-act="complete" data-id="${c.id}" ${!docked && needsBerth(c) ? 'disabled title="Dock to hand it over"' : ''}>${!docked && needsBerth(c) ? 'DOCK TO DELIVER' : 'TURN IN'}</button></div></div>`).join('');
+  } else if (stationTab === 'hire') {
+    content = !docked ? '<div class="station-mission-empty">Dock to sign crew on or pay them off.</div>' : hireHTML(s, st);
+  } else if (stationTab === 'leave') {
+    content = !docked ? '<div class="station-mission-empty">Dock to send the crew ashore.</div>' : leaveHTML(s);
+  } else if (stationTab === 'berth') {
+    content = !docked ? '<div class="station-mission-empty">Our berth and its lease, once we are docked.</div>' : berthHTML(s);
+  } else if (stationTab === 'traffic') {
+    content = trafficHTML(s, st);
   } else {
-    if (!docked) content = '<div class="station-mission-empty">Dock within 50 km to trade.</div>';
+    if (!docked) content = '<div class="station-mission-empty">Dock at one of the station\'s berths to trade: a hard seal, not a hold off its gate.</div>';
     else {
       const rows = [['fuel', 'Reaction mass', 'kg'], ['water', 'Water', 'L'], ['food', 'Rations', ''], ['o2Tank', 'Oxygen', 'kg'], ['n2Tank', 'Nitrogen', 'kg'], ['medSupplies', 'Medical supplies', 'unit'], ['parts', `Spare parts (${TECH[s.ship.tl].label})`, 'unit'], ['pdcRounds', 'PDC rounds', 'rd']].filter(([k]) => s.resources[k].max > 0).map(([k, name, unit]) => {
         const q = serviceQuote(s, k);
@@ -371,10 +355,65 @@ function renderStation() {
     <div class="station-greeting">${esc(hailDialogue(st))}</div>
     <div class="station-tabs">${tabs.map(([k, l]) => `<button class="tac-tab ${k === stationTab ? 'active' : ''}" data-act="tab" data-tab="${k}">${l}</button>`).join('')}</div>
     <div class="station-board"><div class="station-board-list">${content}</div></div>
-    <div class="form-actions">${!docked ? '<button class="btn btn-primary" data-act="plot-dock">PLOT DOCKING</button>' : ''}<button class="btn btn-secondary" data-act="close">CLOSE CHANNEL</button></div>`;
+    <div class="form-actions">${!docked ? (clearanceFor(s, st.id).dock ? '<button class="btn btn-primary" data-act="plot-dock">DOCK</button>' : '<button class="btn btn-primary" data-act="ask-dock">REQUEST DOCKING CLEARANCE</button>') : ''}<button class="btn btn-secondary" data-act="close">CLOSE CHANNEL</button></div>`;
 }
 
 const rewardLine = (r) => fmtRewards(r);
+
+/** The hiring hall: who is looking for a berth today, and who we could pay off. */
+function hireHTML(s, st) {
+  const hall = hiringHall(s, st);
+  const room = maxCrew(s.ship.classId) - s.ship.crew.filter(m => !m.dead).length;
+  const sk = (m) => Object.entries(m.skills).map(([k, v]) => `${k.slice(0, 3)} ${Math.round(v)}`).join(' · ');
+  const people = hall.map((p, i) => `<div class="service-row"><span class="service-name">${esc(p.name)} <small>${esc(p.role)}</small></span><span class="service-stock">${esc(sk(p))}</span>
+    <span class="service-price">${fmtNum(p.fee)} MCR</span><button class="station-mission-accept" data-act="hire" data-i="${i}" ${room <= 0 || s.resources.credits.current < p.fee ? 'disabled' : ''}>SIGN ON</button></div>`).join('') || '<div class="station-mission-empty">Nobody looking today.</div>';
+  const crew = s.ship.crew.filter(m => !m.dead).map((m, i) => `<div class="service-row"><span class="service-name">${esc(m.name)} <small>${esc(m.role)}</small></span><span class="service-stock">${esc(sk(m))}</span><span class="service-price"></span>
+    ${i === 0 ? '<span class="service-stock">captain</span>' : `<button class="station-mission-accept" data-act="dismiss" data-id="${m.id}" ${m.away ? 'disabled' : ''}>PAY OFF</button>`}</div>`).join('');
+  return `<div class="service-list"><div class="missions-section">LOOKING FOR A BERTH · ${room > 0 ? `room for ${room} more aboard` : 'no berth free aboard'}</div>${people}
+    <div class="missions-section">OUR CREW</div>${crew}<div class="service-credits">Credits: <b>${fmtNum(s.resources.credits.current)} MCR</b></div></div>`;
+}
+
+/** Our berth's lease, and longer ones to buy. */
+function berthHTML(s) {
+  const L = leaseSummary(s);
+  if (!L) return '<div class="station-mission-empty">No lease on record.</div>';
+  const d = s.dock;
+  return `<div class="service-list">
+    <div class="station-mission-desc">A berth is let, not given: docking comes with ${FREE_LEASE_MIN / 60} hours to work the ship, free. Staying longer takes a long lease, paid in advance by the hour (${L.rate} MCR here). Overstay and you are cited every two hours; six hours over, the dock releases you.</div>
+    <div class="service-row"><span class="service-name">${esc(d.berth)}</span><span class="service-stock ${L.over ? 'tc-bad' : L.left < 60 ? 'tc-warn' : ''}">${esc(L.label)}${L.paid ? ` · ${fmtNum(L.paid)} MCR paid` : ''}</span><span></span><span></span></div>
+    ${L.options.map(o => `<div class="service-row"><span class="service-name">+${o.hours} h</span><span class="service-stock">to ${esc(formatDuration(o.until - s.clock.minute))} from now</span><span class="service-price">${fmtNum(o.cost)} MCR</span><button class="station-mission-accept" data-act="lease" data-h="${o.hours}">EXTEND</button></div>`).join('')}
+    <div class="service-credits">Credits: <b>${fmtNum(s.resources.credits.current)} MCR</b></div></div>`;
+}
+
+/** Shore leave: a run ashore for whoever can be spared. */
+function leaveHTML(s) {
+  const ashore = s.ship.crew.filter(m => m.away?.ashore);
+  const aboard = s.ship.crew.filter(m => !m.dead && !m.away);
+  const back = ashore.length ? Math.max(0, ...ashore.map(m => m.away.until - s.clock.minute)) : 0;
+  const short = leaseShortfall(s, LEAVE_MIN);
+  const plus = short.hours ? ` + ${fmtNum(short.cost)} MCR berth` : '';
+  return `<div class="service-list">
+    ${short.hours ? `<div class="station-mission-desc tc-warn">Our lease runs out before they would be back: sending them ashore takes ${short.hours} more hours of berth (${fmtNum(short.cost)} MCR).</div>` : ''}
+    <div class="station-mission-desc">Eight hours ashore: they come back rested, fed and in better spirits. ${LEAVE_COST} MCR a head. The ship can't undock until everyone is back aboard.</div>
+    ${ashore.length ? `<div class="service-row"><span class="service-name">Ashore</span><span class="service-stock">${ashore.map(m => esc(m.name)).join(', ')} · back in ${Math.round(back / 60 * 10) / 10} h</span><span></span><button class="station-mission-accept" data-act="recall-leave">RECALL</button></div>` : ''}
+    <div class="service-row"><span class="service-name">Off watch</span><span class="service-stock">everyone not standing a watch</span><span class="service-price"></span><button class="station-mission-accept" data-act="leave" data-who="off" ${aboard.length ? '' : 'disabled'}>SEND ASHORE${plus ? ' +BERTH' : ''}</button></div>
+    <div class="service-row"><span class="service-name">Everyone</span><span class="service-stock">${aboard.length} aboard · ${fmtNum(aboard.length * LEAVE_COST)} MCR${plus}</span><span class="service-price"></span><button class="station-mission-accept" data-act="leave" data-who="all" ${aboard.length ? '' : 'disabled'}>SEND ASHORE${plus ? ' +BERTH' : ''}</button></div></div>`;
+}
+
+/** The station's traffic board: berths, who is in them, the anchorage. */
+function trafficHTML(s, st) {
+  const world = getWorld(s);
+  const m = stationModel(st.id);
+  const t = stationTraffic(s, st);
+  const cl = clearanceFor(s, st.id);
+  const rows = (m?.berths || []).map(b => {
+    const who = st.berths?.[b.id];
+    const e = who && who !== 'player' ? world.get(who) : null;
+    return `<div class="service-row"><span class="service-name">${esc(b.id)}</span><span class="service-stock">${esc(b.label)} · ${b.accepts.join('/')}</span><span class="service-price">${who === 'player' ? 'US' : e ? esc(e.transponder ? e.name : 'unregistered') : (st.berthsOut?.[b.id] > s.clock.minute ? 'OUT OF SERVICE' : 'free')}</span><span></span></div>`;
+  }).join('');
+  return `<div class="service-list"><div class="station-mission-desc">${t.used} of ${t.total} berths taken · ${t.holding} of ${t.holdingTotal} holding slots${t.anchored ? ` · ${t.anchored} at the anchorage` : ''} · ${t.inbound} on the approach.
+    Our clearance: ${cl.dock ? `docking at ${esc(cl.dock.berth)}` : cl.hold ? `holding ${esc(cl.hold.slot)}` : cl.approach ? 'approach' : cl.depart ? 'departure' : 'none'}.</div>${rows}</div>`;
+}
 
 function onStationClick(e) {
   const b = e.target.closest('[data-act]');
@@ -390,7 +429,7 @@ function onStationClick(e) {
       break;
     }
     case 'complete': {
-      const r = completeContract(s, b.dataset.id);
+      const r = completeContract(s, b.dataset.id, currentStation.id);
       toast(r.ok ? `Contract complete${r.bonus ? ' + bonus' : ''}` : r.text, r.ok ? 'ok' : 'warn');
       if (r.ok) logEntry(`${r.contract.title} — complete. ${r.text}`, 'ok');
       break;
@@ -413,7 +452,39 @@ function onStationClick(e) {
       if (r.ok) logEntry(r.text, 'ok');
       break;
     }
-    case 'plot-dock': closeDialog('#dialog-station'); hooks.plotRoute({ kind: 'entity', id: currentStation.id }); return;
+    case 'plot-dock': closeDialog('#dialog-station'); hooks.beginDocking(currentStation.id); return;
+    case 'ask-dock': {
+      const r = requestDocking(s, currentStation.id);
+      toast(r.text, r.ok ? 'ok' : 'warn');
+      logEntry(`[${currentStation.name}] ${r.text}`, 'comms');
+      break;
+    }
+    case 'hire': {
+      const r = hire(s, +b.dataset.i);
+      toast(r.text, r.ok ? 'ok' : 'warn');
+      if (r.ok) { logEntry(r.text, 'crew'); hooks.crewChanged?.(); }
+      break;
+    }
+    case 'dismiss': {
+      const r = dismiss(s, +b.dataset.id);
+      toast(r.text, r.ok ? 'ok' : 'warn');
+      if (r.ok) { logEntry(r.text, 'crew'); hooks.crewChanged?.(); }
+      break;
+    }
+    case 'leave': {
+      const ids = b.dataset.who === 'all' ? null : s.ship.crew.filter(m => !m.dead && !m.away && m.task?.type !== 'watch' && m.task?.type !== 'helm').map(m => m.id);
+      const r = shoreLeave(s, ids, { extend: true });
+      toast(r.text, r.ok ? 'ok' : 'warn');
+      if (r.ok) logEntry(r.text, 'crew');
+      break;
+    }
+    case 'recall-leave': recallLeave(s); toast('Crew recalled from leave', 'info'); break;
+    case 'lease': {
+      const r = extendLease(s, +b.dataset.h);
+      toast(r.text, r.ok ? 'ok' : 'warn');
+      if (r.ok) logEntry(`[${currentStation.name}] ${r.text}`, 'comms');
+      break;
+    }
   }
   renderStation();
 }

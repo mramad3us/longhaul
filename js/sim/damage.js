@@ -26,6 +26,7 @@ import { random, randInt, weightedPick } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { SYSTEMS, damageSystem, shipSystems } from './systems.js';
 import { setBreach } from './life-support.js';
+import { ignite } from './fire.js';
 import { applyImpact, mourn } from './crew.js';
 import { triggerContainmentFailure } from './reactor.js';
 import { shipGeometry } from './ship-layout.js';
@@ -68,8 +69,50 @@ const shed = (dp, armor, spread) => dp * (1 - Math.min(ARMOR_MAX, armor * ARMOR_
 export function applyHit(state, targetId, hit, emit = () => {}) {
   if (targetId === PLAYER) return hitPlayer(state, hit, emit);
   const e = getWorld(state).get(targetId);
-  if (!e || e.type !== 'ship') return null;
+  if (!e) return null;
+  if (e.type === 'station') return hitStation(state, e, hit, emit);
+  if (e.type !== 'ship') return null;
   return hitNpc(state, e, hit, emit);
+}
+
+// ---- STATIONS ----
+// A station is a big target with sections of its own: the docks (where
+// DISABLE fire goes), its defenses (DISARM), sensors, and the power plant
+// (KILL: a station runs several shielded reactors; losing them blacks it
+// out rather than lighting a sun). Out of structure, it is broken: no
+// berths, no services, no guns. A station knows who hurts it.
+
+const STATION_SECTION = { drive: 'docks', weapons: 'weapons', sensors: 'sensors', reactor: 'reactor', hull: 'hull' };
+
+function hitStation(state, e, hit, emit) {
+  const h = ensureHull(e);
+  if (h.status === 'wreck') return null;
+  const dp = shed(hit.dp, profile(state, e.id).armor, hit.spread);
+  if (hit.from) { h.lastHitBy = hit.from; if (!h.hostile.includes(hit.from)) h.hostile.push(hit.from); h.alert = 'hostile'; }
+  h.hp -= dp;
+  const share = (k, f) => { h[k] = Math.max(0, h[k] - dp * f / (h.hpMax * 0.15)); };
+  let section = 'all';
+  if (hit.spread) for (const k of ['docks', 'weapons', 'sensors', 'reactor']) share(k, 0.5);
+  else {
+    section = STATION_SECTION[hit.section || pickSection(hit.aim, hit.precision ?? 0.5)];
+    if (section !== 'hull') share(section, 1);
+  }
+  h.crew = Math.max(0, h.crew - dp / h.hpMax * 0.1);
+  emit('station-hit', { id: e.id, name: e.name, section, dp, by: hit.from, weapon: hit.weapon });
+  if (hit.from === PLAYER) recordAttack(state, e, 'hit', emit);
+  if (h.reactor <= 0.05 && h.status === 'ok') {
+    h.status = 'blackout';
+    emit('station-blackout', { id: e.id, name: e.name, by: hit.from });
+  }
+  if (h.hp <= 0) {
+    h.status = 'wreck';
+    h.hp = 0;
+    e.name = `${e.name} (broken)`;
+    emit('station-destroyed', { id: e.id, name: e.name, by: hit.from });
+    if (hit.from === PLAYER) recordAttack(state, e, 'destroyed', emit);
+    return { section, dp, destroyed: true };
+  }
+  return { section, dp, destroyed: false };
 }
 
 // ---- THE PLAYER'S SHIP ----
@@ -110,6 +153,8 @@ function hitPlayer(state, hit, emit) {
       setBreach(state, di, true);
       effects.breaches.push(deck.name);
     }
+    // what gets inside can start a fire (fire.js; a holed deck may vent before it takes)
+    if (random() < Math.min(0.5, local / 90) && ignite(state, di, 0.1 + Math.min(0.4, local / 150), hit.kind === 'impact' ? 'impact' : 'hit', emit)) effects.fires = [...(effects.fires || []), deck.name];
     for (const id of deckSystems(state)[di]) {
       if (random() < Math.min(1, local / 45)) {
         damageSystem(state, id, { severity: local > 35 ? 'major' : 'minor', loss: Math.round(local * 0.6), cause: 'combat' }, emit);
@@ -241,7 +286,7 @@ export function detonate(state, pos, blast, sourceId, emit = () => {}, { kind = 
   const reachM = blast.scaleM * 7;
   emit('detonation', { x: pos.x, y: pos.y, scaleM: blast.scaleM, kind, sourceId });
   for (const e of world.query(pos, reachM / AU_M)) {
-    if (e.id === sourceId || e.type !== 'ship') continue;
+    if (e.id === sourceId || (e.type !== 'ship' && e.type !== 'station')) continue;
     const d = Math.hypot(e.pos.x - pos.x, e.pos.y - pos.y) * AU_M;
     const dp = blast.dp * Math.exp(-d / blast.scaleM);
     if (dp >= 2) applyHit(state, e.id, { dp, spread: true, kind: 'blast', from: by, weapon: kind }, emit);

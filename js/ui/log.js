@@ -11,7 +11,7 @@ const MAX = 300;
 const COLLAPSED = 3;
 const ICON = {
   thrust: '▲', danger: '✖', warn: '⚠', ok: '✔',
-  crew: '☺', system: '◈', nav: '◆', debug: '○', comms: '✉',
+  crew: '☺', system: '◈', nav: '◆', debug: '○', comms: '✉', chatter: '·',
 };
 
 let expanded = false;
@@ -47,7 +47,8 @@ export function renderLog() {
   if (!dirty || !ui.state) return;
   dirty = false;
   const s = ui.state;
-  const list = s.log.slice(0, expanded ? MAX : COLLAPSED);
+  // (the radio's background chatter is in the full log, not the glance at the latest)
+  const list = expanded ? s.log.slice(0, MAX) : s.log.filter(e => e.cat !== 'chatter').slice(0, COLLAPSED);
   let lastDate = null;
   const html = list.map(e => {
     const date = formatDate(s.clock, e.m);

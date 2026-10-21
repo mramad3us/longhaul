@@ -34,6 +34,8 @@ export const TileType = {
   PDC_MOUNT: 28,
   TORPEDO_LAUNCHER: 29,
   WEAPONS_CONSOLE: 30,
+  PAX_BERTH: 31,
+  CARGO_DOOR: 32,
 };
 
 export const TILE_NAMES = {
@@ -67,6 +69,8 @@ export const TILE_NAMES = {
   [TileType.PDC_MOUNT]: 'PDC Turret',
   [TileType.TORPEDO_LAUNCHER]: 'Torpedo Launcher',
   [TileType.WEAPONS_CONSOLE]: 'Weapons Station',
+  [TileType.PAX_BERTH]: 'Passenger Berth',
+  [TileType.CARGO_DOOR]: 'Cargo Door',
 };
 
 export const TILE_DESCRIPTIONS = {
@@ -85,7 +89,6 @@ export const TILE_DESCRIPTIONS = {
   [TileType.REACTOR]: 'Fusion reactor core. Powers every system including the drive. Containment failure is catastrophic.',
   [TileType.STORAGE]: 'Cargo and supply storage.',
   [TileType.LIFE_SUPPORT]: 'Atmospheric recycling: CO₂ scrubbers, O₂/N₂ injection. Keeps the crew breathing.',
-  [TileType.AIRLOCK]: 'Pressurized airlock for EVA and docking operations.',
   [TileType.MEDBAY]: 'Autodoc bed. Stabilizes and heals injured crew. One patient at a time.',
   [TileType.CRASH_COUCH]: 'Gel-filled acceleration couch with juice injector, for sustained burns above 1.5G.',
   [TileType.TERMINAL]: 'Workstation terminal. Crew interface for system operations.',
@@ -95,6 +98,9 @@ export const TILE_DESCRIPTIONS = {
   [TileType.PDC_MOUNT]: 'Point-defense cannon: a radar-laid gatling throwing tungsten at 1.2 km/s. Shoots down torpedoes in their last seconds; at a few km it shreds hulls too. Engineers service it from inside the hull.',
   [TileType.TORPEDO_LAUNCHER]: 'Torpedo tubes and magazine with autoloader. Each tube takes a few minutes to cycle.',
   [TileType.WEAPONS_CONSOLE]: 'Fire control. A gunner here lays the PDCs by hand and makes them far deadlier than the automatic mode. Built into an acceleration couch.',
+  [TileType.PAX_BERTH]: 'Passenger acceleration berth: a gel bunk with a juice line, behind the passenger deck\'s own pressure hatch. On a police cutter these are the holding cells.',
+  [TileType.CARGO_DOOR]: 'Cargo door: a hull hatch wide enough for a pallet. Not a docking collar — cargo comes and goes through it in vacuum, or against a station\'s cargo seal.',
+  [TileType.AIRLOCK]: 'Airlock and docking collar. Hard-docked, the collar seals against the other hull and the lock equalizes; otherwise it is the way out for an EVA.',
 };
 
 /** Tiles with info panels / actions. */
@@ -107,16 +113,17 @@ export const INTERACTIVE_TILES = new Set([
   TileType.BUNK, TileType.TABLE, TileType.GALLEY, TileType.HEAD, TileType.WATER_RECYCLER,
   TileType.WORKBENCH, TileType.OPS_CONSOLE, TileType.ENG_CONSOLE, TileType.REC,
   TileType.PDC_MOUNT, TileType.TORPEDO_LAUNCHER, TileType.WEAPONS_CONSOLE,
+  TileType.PAX_BERTH, TileType.CARGO_DOOR,
 ]);
 
 /** Crew can stand on / walk through these. */
 export const WALKABLE = new Set([TileType.FLOOR, TileType.DOOR, TileType.LADDER, TileType.MEDBAY]);
 
 /** Solid for sliding bodies (inertial events). */
-export const BLOCKING = new Set([TileType.HULL_WALL, TileType.INTERIOR_WALL, TileType.ENGINE, TileType.REACTOR, TileType.PDC_MOUNT]);
+export const BLOCKING = new Set([TileType.HULL_WALL, TileType.INTERIOR_WALL, TileType.ENGINE, TileType.REACTOR, TileType.PDC_MOUNT, TileType.CARGO_DOOR]);
 
 /** Pressurized volume (not structure; PDC turrets sit in the hull wall). */
-export const isInterior = (t) => t !== TileType.EMPTY && t !== TileType.HULL_WALL && t !== TileType.INTERIOR_WALL && t !== TileType.PDC_MOUNT;
+export const isInterior = (t) => t !== TileType.EMPTY && t !== TileType.HULL_WALL && t !== TileType.INTERIOR_WALL && t !== TileType.PDC_MOUNT && t !== TileType.CARGO_DOOR;
 
 /** Structural mass per tile type, kg. */
 export const TILE_MASS = {
@@ -151,4 +158,6 @@ export const TILE_MASS = {
   [TileType.PDC_MOUNT]: 1400,
   [TileType.TORPEDO_LAUNCHER]: 2600,
   [TileType.WEAPONS_CONSOLE]: 140,
+  [TileType.PAX_BERTH]: 70,
+  [TileType.CARGO_DOOR]: 900,
 };

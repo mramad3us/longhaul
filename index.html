@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="css/fonts.css">
   <link rel="stylesheet" href="css/main.css">
   <link rel="stylesheet" href="css/ui.css">
+  <link rel="stylesheet" href="css/stage.css">
 </head>
 <body>
   <div id="app">
@@ -130,6 +131,10 @@
             <span class="combat-btn-label">COMBAT</span>
             <span class="combat-btn-status" id="combat-status">OFF</span>
           </button>
+          <button class="combat-btn suits-btn" id="suits-toggle" title="All hands into EVA suits, and keep them on (U)">
+            <span class="combat-btn-label">SUITS</span>
+            <span class="combat-btn-status" id="suits-status">OFF</span>
+          </button>
         </div>
         <div class="hud-center">
           <div class="hud-center-row hud-center-sub">
@@ -143,6 +148,7 @@
         </div>
         <div class="hud-right">
           <button class="hud-icon-btn hud-text-btn" data-action="open-map" title="Navigation (M)">NAV</button>
+          <button class="hud-icon-btn hud-text-btn hud-comms-btn" data-action="open-comms" id="hud-comms-btn" title="Comms: hail ships and stations (H)">COMMS</button>
           <button class="hud-icon-btn hud-text-btn hud-station-btn" data-action="open-station" id="hud-station-btn" title="Station services (B)" style="display:none">STATION</button>
           <div class="hud-divider"></div>
           <button class="hud-icon-btn hud-text-btn hud-systems-btn" data-action="open-systems" title="Ship systems (E)">SYSTEMS<span class="hud-systems-count" id="hud-systems-count"></span></button>
@@ -182,14 +188,27 @@
           <div id="resource-list"></div>
         </aside>
 
-        <div class="ship-viewport" id="ship-viewport">
+        <div class="ship-viewport stage-cruise" id="ship-viewport">
           <div class="viewport-grid"></div>
           <div class="viewport-particles" id="viewport-particles"></div>
           <div class="viewport-vignette"></div>
-          <div class="ship-container" id="ship-container"></div>
-          <div class="nav-prompt" id="nav-prompt" style="display:none"></div>
-          <div class="hold-indicator" id="hold-indicator" style="display:none"></div>
-          <div class="route-mini" id="route-mini" style="display:none"></div>
+          <!-- The stage (js/ui/stage.js): the interior and the exterior move between these slots -->
+          <div class="stage-main" id="stage-main">
+            <div class="ship-container" id="ship-container"></div>
+            <div class="stage-exterior stage-hidden" id="stage-exterior"></div>
+          </div>
+          <div class="stage-side stage-hidden" id="stage-side"></div>
+          <!-- Everything laid over the view stacks in one column to the right of the ship, so nothing covers anything -->
+          <div class="stage-col" id="stage-col">
+            <div class="route-mini" id="route-mini" style="display:none"></div>
+            <div class="tc-chip" id="tc-chip" style="display:none"></div>
+            <div class="dock-hud" id="dock-hud" style="display:none"></div>
+            <div class="stage-pip stage-hidden" id="stage-pip" title="Swap views"><span class="stage-pip-label" id="stage-pip-label"></span></div>
+            <div class="nav-prompt" id="nav-prompt" style="display:none"></div>
+            <div class="stage-col-fill"></div>
+            <div class="hold-indicator" id="hold-indicator" style="display:none"></div>
+            <div class="comms-ticker" id="comms-ticker"></div>
+          </div>
         </div>
 
         <aside class="info-panel" id="info-panel">
@@ -269,6 +288,9 @@
               <button class="solar-zoom-btn" data-solar-view="target">TARGET</button>
               <button class="solar-zoom-btn active" data-solar-politics title="Spheres of influence and hot zones">POLITICS</button>
               <button class="solar-zoom-btn active" data-solar-intel title="Reported ships on the plot (aged, from traffic digests and lost contacts) and light-time rings">INTEL</button>
+              <button class="solar-zoom-btn active" data-solar-filter="stations" title="Show stations">STATIONS</button>
+              <button class="solar-zoom-btn active" data-solar-filter="ships" title="Show ships (live and reported)">SHIPS</button>
+              <div class="solar-search-box"><input class="solar-search" id="solar-search" type="search" placeholder="Find: station, body, ship…" autocomplete="off"><div class="solar-search-results" id="solar-search-results" style="display:none"></div></div>
             </div>
             <div class="tac-zoom-controls" data-tab-controls="scanner">
               <button class="scanner-range-btn" data-scanner-range="0">SHORT</button>
@@ -285,6 +307,7 @@
             <div class="combat-panel" id="combat-panel" style="display:none"></div>
             <div class="scanner-detail-panel" id="scanner-detail" style="display:none"></div>
             <div class="map-selection" id="map-selection" style="display:none"></div>
+            <div class="map-picklist" id="map-picklist" style="display:none"></div>
             <div class="route-panel" id="route-panel" style="display:none"></div>
           </div>
           <div class="tac-modal-info" id="nav-info"></div>
@@ -311,6 +334,8 @@
       <div class="dialog-overlay" id="dialog-generic" style="display:none"><div class="dialog" id="dialog-generic-body"></div></div>
       <div class="dialog-overlay" id="dialog-event" style="display:none"><div class="dialog dialog-event" id="dialog-event-body"></div></div>
       <div class="dialog-overlay" id="dialog-station" style="display:none"><div class="dialog dialog-station" id="dialog-station-body"></div></div>
+      <div class="dialog-overlay" id="dialog-comms" style="display:none"><div class="dialog dialog-comms" id="dialog-comms-body"></div></div>
+      <div class="dialog-overlay" id="dialog-boarding" style="display:none"><div class="dialog dialog-boarding" id="dialog-boarding-body"></div></div>
     </div>
   </div>
 

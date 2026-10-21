@@ -1,6 +1,6 @@
 # Ships
 
-Every ship belongs to a class in `js/sim/ship-classes.js`. A class is one design from one yard: a Martian Hellas-class frigate, an Earth-built Danube, a Belt refit of a forty-year-old freighter. An entity carries `cls` (class id), `tl` (its class's tech level) and `faction` (who flies it). Everything else (size, shape, drive, armor, weapons, gear, hold) comes from the class.
+Every ship belongs to a class in `js/sim/ship-classes.js`. A class is one design from one yard: a Martian Hellas-class frigate, an Earth-built Danube, a Belt refit of a forty-year-old freighter. An entity carries `cls` (class id), `tl` (its class's tech level) and `faction` (who flies it). Everything else (size, drive, armor, weapons, gear, hold, crew) comes from the class, and what the hull physically is (its parts in metres, its docking collars, its interior) is built from the class in `sim/hulls.js` and `sim/ship-layout.js`.
 
 ## Yards and tech levels
 
@@ -104,21 +104,77 @@ Civilian crews don't jink under fire (`evasive: false`).
 
 Spawning asks for a *kind* and a faction (`rollIdentity({ kind: 'frigate', faction: 'UN' })`), and the faction fields its own designs, weighted by `factions`. A faction that builds nothing of that kind (the OPA has no destroyers) fields the nearest thing it has. Pirates fly torch raiders, stolen couriers, gunships and the odd stolen corvette.
 
-## Shapes
+## Hulls
 
-`SHAPES` describe silhouettes bow to stern as segments `[length fraction, half-width fraction]`. The first segment tapers to the bow. Optional features: `ring` (a spin habitat), `tanks` (spheres along the spine), `cargo` (a block segment), `fins`. The tactical display draws them at a size that grows with the logarithm of real length, so a 30 m skiff and a 1.4 km hauler are both readable. The new-game ship picker draws the same silhouettes in the yard's colour.
+Every class has a physical hull (`hullOf`, `sim/hulls.js`): parts in metres, built the way spacecraft are built. Nothing is streamlined: pressure hulls are boxes stacked along the thrust axis (a torch ship is a tower whose decks are floors under thrust), tanks are cylinders, radiators are flat panels edge-on to the drive, the drive bell is at the stern, and armor, PDC turrets, tube doors, a keel railgun and mining drivers sit where they would. Proportions follow the kind (a shuttle is wide and flat, a courier slim, an ice hauler a 1.4 km berg on a spine). The classes a small crew can fly are built from their deck program, so the hull's boxes are the decks of the interior.
+
+**Collars** (S crew hatch, M docking collar, L cargo cradle: docs/DOCKING.md) sit on the hull surface at a face: the nose (x+), the flanks (y±). On our ship each opens onto an airlock on a deck of the interior.
+
+**Rated for atmospheric entry** are only a few hulls, and they are still boxes: a lifting body with a ceramic belly and skids (the Hermes courier and its stolen Armed runner, the Ascension and Deimos cargo shuttles: orbital lighters for Earth and Mars), or a tail-sitter that comes in tail first behind an ablative shield ring and lands on legs (the UNN Harrier and MCRN Tharsis corvettes). The OPA's refit of the Harrier and the stolen one lost their shields. Every body's atmosphere is in the ephemeris for when entry is flown.
+
+**Crew complements** are part of the design: `crew` is the rated range (the fewest who can keep watches, the most it berths), `crewStd` what a ship of the class usually carries. Every hull out there has its own number in the range, around the usual one, fixed by its identity (`manifest.complementOf`).
+
+| Class | Crew rated | Usually | Hull (L × W × H) | Collars | Atmosphere |
+|---|---|---|---|---|---|
+| Rockhopper prospecting skiff | 1–3 | 2 | 28 × 10 × 8 m | S port flank | — |
+| Kestrel survey skiff | 2–4 | 3 | 32 × 12 × 10 m | S port flank | — |
+| Arsia survey skiff | 2–3 | 2 | 30 × 11 × 9 m | S port flank | — |
+| Dart courier (Belt refit) | 1–3 | 2 | 38 × 7 × 6 m | S nose · S port flank | — |
+| Hermes-pattern courier | 2–3 | 2 | 40 × 7 × 6 m | S nose · S port flank | belly |
+| Phobos express courier | 2–3 | 2 | 42 × 8 × 7 m | S nose · S port flank | — |
+| Mule cargo shuttle | 1–3 | 2 | 35 × 15 × 8 m | M port flank · L starboard flank | — |
+| Ascension cargo shuttle | 2–3 | 2 | 36 × 15 × 9 m | M port flank · L starboard flank | belly |
+| Deimos lighter | 2–3 | 2 | 34 × 14 × 8 m | M port flank · L starboard flank | belly |
+| Tramp freighter (Belt refit) | 2–6 | 4 | 58 × 15 × 13 m | M nose · M port flank | — |
+| Armed light freighter | 3–8 | 5 | 62 × 16 × 14 m | M nose · M port flank | — |
+| Meridian light freighter | 3–6 | 4 | 64 × 17 × 14 m | M nose · M port flank | — |
+| Ares fast freighter | 3–6 | 4 | 60 × 16 × 13 m | M nose · M port flank | — |
+| Ore scow | 6–12 | 8 | 200 × 34 × 34 m | M port flank · L starboard flank | — |
+| Bulk freighter | 8–16 | 10 | 220 × 37 × 37 m | M port flank · L starboard flank | — |
+| Tharsis bulk carrier | 6–12 | 8 | 230 × 39 × 39 m | M port flank · L starboard flank | — |
+| Ice hauler | 25–50 | 35 | 1400 × 168 × 168 m | M port flank | — |
+| Aquarius water carrier | 20–40 | 28 | 1200 × 144 × 144 m | M port flank | — |
+| Belt tanker | 6–12 | 8 | 280 × 34 × 31 m | M port flank · L starboard flank | — |
+| Reaction-mass tanker | 8–14 | 10 | 300 × 36 × 33 m | M port flank · L starboard flank | — |
+| Colony transport (Belt refit) | 30–60 | 45 | 380 × 61 × 57 m | M port flank · M starboard flank · L starboard flank | — |
+| Passenger liner | 40–80 | 60 | 350 × 56 × 53 m | M port flank · M starboard flank · L starboard flank | — |
+| Valles Express liner | 40–70 | 52 | 330 × 53 × 50 m | M port flank · M starboard flank · L starboard flank | — |
+| Mining barge | 10–20 | 14 | 180 × 54 × 36 m | M port flank · L starboard flank | — |
+| Mining tender | 8–16 | 11 | 170 × 51 × 34 m | M port flank · L starboard flank | — |
+| Pallas ore processor | 8–14 | 11 | 200 × 60 × 40 m | M port flank · L starboard flank | — |
+| Militia cutter (Belt refit) | 4–9 | 6 | 52 × 12 × 10 m | M nose · S port flank | — |
+| Patrol cutter | 6–10 | 8 | 55 × 13 × 11 m | M nose · S port flank | — |
+| Martian Security cutter | 6–10 | 8 | 55 × 13 × 11 m | M nose · S port flank | — |
+| Refit corvette (ex-UNN Harrier) | 5–12 | 8 | 50 × 11 × 9 m | M nose · M port flank | — |
+| Harrier-class corvette | 6–12 | 10 | 50 × 11 × 9 m | M nose · M port flank | tail |
+| Tharsis-class corvette | 6–12 | 9 | 46 × 10 × 8 m | M nose · M port flank | tail |
+| Stolen corvette (ex-UNN Harrier) | 5–10 | 7 | 50 × 11 × 9 m | M nose · M port flank | — |
+| Refit frigate (ex-UNN Danube) | 20–40 | 28 | 125 × 20 × 18 m | M nose · M port flank · M starboard flank | — |
+| Danube-class frigate | 20–40 | 32 | 125 × 20 × 18 m | M nose · M port flank · M starboard flank | — |
+| Everest-class frigate | 20–40 | 30 | 120 × 19 × 17 m | M nose · M port flank · M starboard flank | — |
+| Hellas-class frigate | 20–40 | 26 | 120 × 19 × 17 m | M nose · M port flank · M starboard flank | — |
+| Atlas-class destroyer | 60–120 | 90 | 230 × 32 × 28 m | M nose · M port flank · M starboard flank | — |
+| Valles-class destroyer | 60–120 | 80 | 220 × 31 × 26 m | M nose · M port flank · M starboard flank | — |
+| Leviathan-class battleship | 200–400 | 320 | 500 × 75 × 65 m | M port flank · M starboard flank · M starboard flank · M nose · L port flank | — |
+| Olympus-class battleship | 200–400 | 280 | 480 × 72 × 62 m | M port flank · M starboard flank · M starboard flank · M nose · L port flank | — |
+| Converted-freighter gunship | 15–30 | 20 | 90 × 22 × 18 m | M nose · M port flank | — |
+| Pirate gunship | 6–12 | 8 | 70 × 17 × 14 m | M nose · M port flank | — |
+| Torch raider | 3–6 | 4 | 35 × 6 × 5 m | S nose · S port flank | — |
+| Armed runner (stolen courier) | 2–5 | 3 | 40 × 7 × 6 m | S nose · S port flank | belly |
+
+The tactical display, the exterior view, the docking camera, the ship picker and the library draw hulls from these models (`ui/hull-art.js`): from above, from below or along a flank as the pose shows it.
 
 ## Our ship
 
-At a new game we pick any class a crew of eight or fewer can fly (`PLAYABLE`: S and M hulls with a minimum crew of 8 or less, 23 classes). The choice sets `ship.classId` and `ship.tl`:
+At a new game we pick any class a crew of eight or fewer can fly (`PLAYABLE`: S and M hulls with a minimum crew of 8 or less, 23 classes), and sign on up to its berthed maximum (12 at most: `maxCrew`). The choice sets `ship.classId` and `ship.tl`:
 
-- **Interior.** Every playable class shares the seven-deck plan (sim/ship-layout.js), fitted to the class. Without point defense the turret wells are plated over. Without tubes the launcher bay is hold space. A ship with nothing to fire has a couch where fire control would be.
+- **Interior.** Each playable class has its own deck program (sim/ship-layout.js): which decks, bow to stern, each drawn from a deck template and fitted to the class (SHIPBOARD.md). Small craft are 7 tiles wide, the rest 9. Without point defense the turret wells are plated over, without tubes the launcher bay is hold space, a ship with nothing to fire has a couch where fire control would be. The hull is cut for airlocks where its collars are, and for a cargo door.
 - **Machinery.** Systems follow the fit (`systemsFor`): no PDCs means no `pdc` system to wear, no tubes means no `launcher`. They start in the condition of the class's TL and wear, fault and are repaired at its rates.
 - **Drive.** The class's maximum G is the limit (`flight.maxG`). The drive is rated for 70% of it (`ratedG`); past that it is overdriven, with double fuel and a containment risk. Route options above the limit aren't offered.
 - **Stores.** Hold, berths, PDC rounds (20,000 per mount) and magazine come from the class. A navy hull in private hands starts without its nuclear warheads.
 - **Upkeep.** Spare parts at a station are priced at the ship's TL (`priceOf`), and a dockside overhaul is billed at its TL and structure (`overhaulQuote`).
 
-The default is the armed light freighter: two PDCs and two tubes. Its interior houses the weapons console on the bridge, the torpedo launcher with magazine in the hold, and two PDC turrets in the engine-deck hull.
+The default is the armed light freighter: two PDCs and two tubes, an M collar on the nose and one on the port flank by the hold. Its nine decks are the bridge (helm, ops, the weapons console), crew quarters (four racks for a crew of eight on watches), the mess, utility, two passenger decks (twelve berths), the hold (the launcher with its magazine, the crew airlock, a cargo door), the engine deck (two PDC turrets in its hull) and the reactor. A new game starts in a berth at Ceres.
 
 ## How the tiers fight
 
@@ -130,12 +186,12 @@ The default is the armed light freighter: two PDCs and two tubes. Its interior h
   | Bout | Better ship wins | Both destroyed | Undecided | Weaker ship wins |
   |---|---|---|---|---|
   | Belt refit frigate vs Martian frigate | 30 | 0 | 0 | 0 |
-  | Earth TL2 frigate vs Martian frigate | 29 | 1 | 0 | 0 |
-  | Earth TL3 Everest vs Martian Hellas | 19 | 6 | 2 | 3 |
+  | Earth TL2 frigate vs Martian frigate | 29 | 0 | 0 | 1 |
+  | Earth TL3 Everest vs Martian Hellas | 18 | 2 | 1 | 9 |
   | Belt refit corvette vs Earth corvette | 30 | 0 | 0 | 0 |
-  | Earth corvette vs Martian corvette | 26 | 3 | 0 | 1 |
+  | Earth corvette vs Martian corvette | 27 | 1 | 1 | 1 |
 
-  Earth's best frigate is the only hull of its size with a real chance against Mars: it wins one bout in ten and takes the Hellas down with it in one in five.
+  Earth's best frigate is the only hull of its size with a real chance against Mars: it wins about one bout in four. (The duels are chaotic: the same code gives 3 to 9 Everest wins in 30 with only the crew size of the watching ship changed, so the duel test runs twelve bouts and only asserts that the Everest doesn't win most of them.)
 - Flying a Belt refit corvette, or the armed light freighter, against a Martian frigate, we are crippled or killed every time, and the frigate takes no damage. The armed freighter does see off a pirate gunship.
 
 ## Identities

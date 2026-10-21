@@ -34,6 +34,13 @@ import { FLIP_MINUTES, RCS_MAX_G, LEAN_MAX } from '../sim/flight.js';
 import { DIGEST_MIN, TC_REACH_AU, LIGHT_MINUTE_AU } from '../sim/intel.js';
 import { WAKE_AU, POLICE_PER_STATION, NAVY_STRENGTH, NAVY_YARDS, PIRATES_AT_LARGE } from '../sim/forces.js';
 import { DEFAULT_TRAFFIC } from '../sim/traffic.js';
+import { hullOf, portSummary, COLLARS } from '../sim/hulls.js';
+import { DECK_PROGRAMS, createLayout } from '../sim/ship-layout.js';
+import { STATIONS, stationModel, stationOrbit } from '../sim/stations.js';
+import { getBody, surfaceGravity } from '../sim/ephemeris.js';
+import { CONTROL_M, APPROACH_M, KEEPOUT_SPEED_MS, KEEPOUT_DRIVE_G, CORRIDOR_M, APPROACH_CLEARANCE_MIN, DOCK_CLEARANCE_MIN, DEPART_CLEARANCE_MIN } from '../sim/traffic-control.js';
+import { PROX_RATES, CAPTURE_MIN, SEAL_MIN, UNDOCK_MIN, CLEAR_M } from '../sim/docking.js';
+import { EVA_RANGE_M } from '../sim/boarding.js';
 
 const CATEGORIES = [
   { id: 'ships', label: 'SHIP CLASSES' },
@@ -174,7 +181,12 @@ function ships(add) {
     const c = CLASSES[id], T = TECH[c.tl];
     const specs = [
       ['Hull', `${c.lengthM} m · ${fmtNum(c.massT)} t · ${SIZES[c.size].label.toLowerCase()}`],
-      ['Crew', `${c.crew[0]}–${c.crew[1]}${c.berths ? ` · ${c.berths} berths` : ''}`],
+      ['Crew', `${c.crew[0]}–${c.crew[1]}, usually ${c.crewStd}${c.berths ? ` · ${c.berths} passenger berths` : ''}`],
+      ['Hull', `${fmtNum(hullOf(id).L)} × ${fmtNum(Math.round(hullOf(id).W))} × ${fmtNum(Math.round(hullOf(id).H))} m`],
+      ['Collars', portSummary(id) || '—'],
+      ['RCS', `${hullOf(id).rcs.accel.toFixed(2)} m/s² · ${hullOf(id).rcs.rotDeg.toFixed(1)}°/s`],
+      ['Atmosphere', c.atmo ? `rated: ${c.atmo.entry === 'belly' ? 'a lifting body on a ceramic belly' : 'tail first behind an ablative shield ring'}, lands on ${c.atmo.landing}` : 'not rated for entry'],
+      ...(DECK_PROGRAMS[id] ? [['Decks', createLayout(id).map(d => d.name).join(' · ')]] : []),
       ['Drive', `cruise ${g(c.drive.cruiseG)} · max ${g(c.drive.maxG)} · rated ${g(ratedG(c))}`],
       ['Structure', `${hullPoints(c)} DP · armor ${c.armor + T.armor}`],
       ['Point defense', c.pdc ? `${c.pdc} mounts · envelope ${km(PDC[c.tl].rangeM)} · guns ${km(PDC[c.tl].strafeM)}` : '—'],
@@ -295,6 +307,17 @@ function navigation(add) {
       'A stance is kept, flown, until released: the nav computer moves into place on the closing law, then holds it. TIGHT holds within 0.5% of the range, LOOSE within 10% (cheaper, and with a coasting target the drive stays cold).'],
       links: [['Doctrine under fire', 'nav:doctrine']] });
   }
+  add({ id: 'nav:traffic', cat: 'nav', group: 'Stations', title: 'Traffic control',
+    text: ['A busy port manages the space round it, and strangers may not wander about it. Hail traffic control to ask for clearance; the nav computer will not do it for you.',
+      `Control space reaches ${fmtNum(CONTROL_M / 1e6) * 1000} km: a transponder is required. The approach (${fmtNum(APPROACH_M / 1e6) * 1000} km) takes an approach clearance (good for ${APPROACH_CLEARANCE_MIN / 60} hours); loiter there uncleared and you are warned, cited, then reported. Inside the approach gate is the keep-out zone: only ships cleared to dock (a berth assigned, good for ${DOCK_CLEARANCE_MIN / 60} hours), or leaving on a departure clearance (${DEPART_CLEARANCE_MIN} minutes), come inside it, under ${KEEPOUT_SPEED_MS} m/s. A trespasser gets a final warning, then it is a crime, and a naval yard opens fire. Inside the gate the nav computer holds the drive to ${KEEPOUT_DRIVE_G} G: no torch near a station.`,
+      'Citations are fines owed to the station\'s power, paid at its stations or settled by an inspection; a week unpaid makes you SUSPECT there.'],
+    links: [['Docking', 'nav:docking']] });
+  add({ id: 'nav:docking', cat: 'nav', group: 'Stations', title: 'Docking',
+    text: [`A route to a station ends at its approach gate. From there the docking computer flies the final approach in the station's own frame, on the drive at 0.1 G, to the mouth of the berth's corridor ${CORRIDOR_M} m out along the collar's axis. Proximity operations follow, second by second on the RCS: the computer flies them, or the pilot does (MANUAL), lining up the collars by eye on the docking camera.`,
+      `Collars of one size mate: ${Object.entries(COLLARS).map(([k, c]) => `${k} (${c.label}: capture under ${c.captureMS} m/s, ${c.missM} m off the axis, ${c.angleDeg}°, roll ${c.rollDeg}°)`).join('; ')}. Station berths take smaller collars through adaptors. Outside the envelope the collars bounce; hard enough, the hull is damaged.`,
+      `Soft capture, then ${CAPTURE_MIN} minutes to hard dock and ${SEAL_MIN} to equalize. Undocking vents the lock (${UNDOCK_MIN} minutes) and backs out to ${CLEAR_M} m. Docking mode runs at ${PROX_RATES.map(r => `×${r}`).join(', ')} game seconds a second.`,
+      `Ship to ship: the other ship has to hold still: one that agreed to it, one that struck, a dead hull. Boarding can go through a mated collar or by EVA, at up to ${fmtNum(EVA_RANGE_M / 1000)} km.`],
+    links: [['Traffic control', 'nav:traffic']] });
   add({ id: 'nav:doctrine', cat: 'nav', group: 'Stances', title: 'Doctrine under fire',
     text: [`With a fire-control computer that plots the threat axis (TL2 and up), a ship turns away and burns from any torpedo less than ${COUNTER_BURN_S / 60} minutes out. The torpedo then arrives slowly, spends a long time under the PDCs, and has to spend its Δv catching up.`,
       `With a torpedo inbound, close on the enemy no faster than ${UNDER_FIRE_CLOSE_MS / 1000} km/s: every m/s of closing speed is a m/s on their torpedoes.`],
@@ -344,8 +367,20 @@ function stations(add) {
   const world = ui.state ? getWorld(ui.state) : null;
   for (const [id, note] of Object.entries(STATION_NOTES)) {
     const e = world?.get(id);
-    add({ id: `stn:${id}`, cat: 'stations', title: e?.name || id, sub: e ? `${e.shipClass} · ${e.orbit?.body || ''}` : '', text: [note],
-      specs: e ? [['Flag', FACTIONS[e.faction]?.name || e.faction], ['Mass', `${fmtNum(e.mass)} t`]] : [],
-      links: e ? [[FACTIONS[e.faction]?.name || e.faction, `fac:${e.faction}`]] : [] });
+    const spec = STATIONS[id], m = stationModel(id), o = stationOrbit(id), b = getBody(spec.body);
+    const d = spec.defense;
+    const where = spec.site === 'surface'
+      ? `on ${spec.body}'s surface (radius ${fmtNum(b.radius)} km, ${fmtNum(surfaceGravity(b), 2)} m/s²), turning with it once in ${fmtNum(b.rotH, 1)} h`
+      : `orbiting ${spec.body} at ${fmtNum(spec.rKm)} km, once in ${fmtNum(o.period * 24, 1)} h`;
+    add({ id: `stn:${id}`, cat: 'stations', title: e?.name || id, sub: `${spec.kind} · ${spec.body}`, text: [note, `Built ${where}.`],
+      specs: [
+        ['Flag', FACTIONS[e?.faction]?.name || e?.faction || '—'], ['Size', `${fmtNum(Math.round(m.sizeM / 100) / 10)} km across`],
+        ['Berths', `${m.berths.length} (${[...new Set(m.berths.flatMap(x => x.accepts))].join('/')} collars) · anchorage ${fmtNum(spec.anchorKm)} km up`],
+        ['Approach gate', `${fmtNum(spec.gateKm)} km`], ['People', fmtNum(spec.population)],
+        ['Defenses', `${d.pdc} PDC (TL${d.tl})${d.tubes ? ` · ${d.tubes} torpedo silos` : ''}${d.railgun ? ` · ${d.railgun} railguns` : ''} · ${fmtNum(d.hp)} DP, armor ${d.armor}`],
+        ['Services', spec.services.join(', ')],
+        ...(spec.military ? [['Berths for', 'its navy, and contractors with standing 30 or better']] : []),
+      ],
+      links: e ? [[FACTIONS[e.faction]?.name || e.faction, `fac:${e.faction}`], ['Traffic control', 'nav:traffic'], ['Docking', 'nav:docking']] : [] });
   }
 }

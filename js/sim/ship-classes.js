@@ -5,7 +5,7 @@
 // class is one design from one yard: a Martian Hellas-class frigate,
 // an Earth-built Danube, a Belt refit of a forty-year-old hauler. A
 // class fixes what the hull is for (its kind), how big it is (size),
-// how it looks (shape), what its drive can do, what it carries
+// what its drive can do, what it carries
 // (armor, point defense, torpedo tubes and magazine, railguns, mining
 // gear, cargo and berths) — and how well it is built (tech level).
 //
@@ -22,6 +22,13 @@
 //     whatever scrap is to hand, and the fix holds.
 // The gap is meant to be decisive: a Belt refit does not beat a Martian
 // warship of its size (tests/combat.test.mjs prints the duels).
+//
+// What a ship physically is (its hull in metres, its docking collars,
+// its interior) is built from the class in hulls.js and ship-layout.js.
+// A crew complement is part of the design: `crew` is the rated range (the
+// fewest who can keep watches, the most it berths) and `crewStd` what a
+// ship of the class usually carries, so the hull out there has about that
+// many people aboard (manifest.js).
 //
 // Civilian hulls are built for their trade and carry no weapons. The
 // exceptions are named: liners carry two anti-debris PDCs by law, the
@@ -91,30 +98,6 @@ export const TARGET_RADIUS_FRAC = 0.15;
  */
 export const BUILD = { civilian: 1, irregular: 1, authority: 1.2, military: 1.5 };
 
-// ---- SHAPES ----
-// Silhouettes, bow to stern: each segment is [length fraction, half-width
-// as a fraction of hull length]. The first segment tapers to the bow.
-// Features: ring (spin habitat at a length fraction), tanks (spheres
-// along the spine), cargo (ice/cargo block segment index), fins.
-
-export const SHAPES = {
-  skiff: { segs: [[0.3, 0.12], [0.45, 0.2], [0.25, 0.16]] },
-  needle: { segs: [[0.35, 0.06], [0.45, 0.09], [0.2, 0.11]] },
-  shuttle: { segs: [[0.2, 0.12], [0.6, 0.18], [0.2, 0.15]] },
-  freighter: { segs: [[0.18, 0.08], [0.12, 0.13], [0.5, 0.17], [0.2, 0.12]] },
-  box: { segs: [[0.1, 0.07], [0.72, 0.2], [0.18, 0.11]], cargo: 1 },
-  hauler: { segs: [[0.05, 0.05], [0.05, 0.015], [0.8, 0.13], [0.1, 0.04]], cargo: 2 },
-  tanker: { segs: [[0.1, 0.06], [0.7, 0.025], [0.2, 0.08]], tanks: 4 },
-  liner: { segs: [[0.15, 0.07], [0.2, 0.1], [0.5, 0.12], [0.15, 0.09]], ring: 0.3 },
-  barge: { segs: [[0.2, 0.22], [0.6, 0.28], [0.2, 0.14]] },
-  wedge: { segs: [[0.35, 0.1], [0.45, 0.17], [0.2, 0.15]] },
-  corvette: { segs: [[0.3, 0.07], [0.5, 0.13], [0.2, 0.16]], fins: true },
-  frigate: { segs: [[0.2, 0.06], [0.6, 0.11], [0.2, 0.14]], fins: true },
-  destroyer: { segs: [[0.15, 0.05], [0.2, 0.09], [0.5, 0.1], [0.15, 0.13]], fins: true },
-  dreadnought: { segs: [[0.1, 0.04], [0.15, 0.08], [0.6, 0.1], [0.15, 0.12]], fins: true },
-  gunship: { segs: [[0.2, 0.1], [0.6, 0.18], [0.2, 0.14]] },
-};
-
 // ---- KINDS ----
 // What a hull is for. Every kind is built by more than one yard.
 
@@ -127,6 +110,9 @@ export const KINDS = {
 
 // ---- CLASSES ----
 // kind · builder · tl · category · size · lengthM · massT · crew [min, max]
+// and crewStd (the usual complement) · atmo: rated for atmospheric entry
+// ({ entry: 'belly' a lifting body on a ceramic belly | 'tail' a tail-sitter
+// behind a shield ring, landing }) — only a few hulls are
 // drive: sustained cruise G and maximum G (crew on juice) · armor: points
 // (each stops ~12% of a hit) · pdc: point-defense mounts · tubes: torpedo
 // tubes · magazine: torpedoes carried {he, nuke} (magazineCap: room for
@@ -140,160 +126,160 @@ export const CLASSES = {
   // ---------------- Civilian ----------------
   rockhopper: {
     name: 'Rockhopper prospecting skiff', kind: 'prospector', builder: 'Belt', tl: 1, category: 'civilian', size: 'S',
-    lengthM: 28, massT: 260, crew: [1, 3], shape: 'skiff', drive: { cruiseG: 0.5, maxG: 2 }, ...UNARMED,
+    lengthM: 28, massT: 260, crew: [1, 3], crewStd: 2, drive: { cruiseG: 0.5, maxG: 2 }, ...UNARMED,
     gear: { type: 'charges', mounts: 1 }, cargoT: 40, berths: 0, factions: { OPA: 8, independent: 2 }, names: 'prospector',
     desc: 'Forty years old, four owners, held together with sealant and stubbornness. It breaks every week and anyone with a wrench can fix it. Its rock-cracking charges will hurt a ship that comes within a few kilometres.',
   },
   kestrel: {
     name: 'Kestrel survey skiff', kind: 'prospector', builder: 'UN', tl: 2, category: 'civilian', size: 'S',
-    lengthM: 32, massT: 320, crew: [2, 4], shape: 'skiff', drive: { cruiseG: 0.7, maxG: 3 }, ...UNARMED,
+    lengthM: 32, massT: 320, crew: [2, 4], crewStd: 3, drive: { cruiseG: 0.7, maxG: 3 }, ...UNARMED,
     cargoT: 50, berths: 0, factions: { independent: 4, UN: 3, OPA: 1 }, names: 'prospector',
     desc: 'A Luna-built survey skiff: decent sensors, a reliable drive, a hold for samples. Unarmed.',
   },
   arsia: {
     name: 'Arsia survey skiff', kind: 'prospector', builder: 'MCR', tl: 3, category: 'civilian', size: 'S',
-    lengthM: 30, massT: 300, crew: [2, 3], shape: 'skiff', drive: { cruiseG: 1, maxG: 5 }, ...UNARMED,
+    lengthM: 30, massT: 300, crew: [2, 3], crewStd: 2, drive: { cruiseG: 1, maxG: 5 }, ...UNARMED,
     cargoT: 35, berths: 0, factions: { MCR: 4, independent: 1 }, names: 'prospector',
     desc: 'Martian survey skiff with naval-grade sensors and a quiet hull. It rarely breaks; when it does, the parts are dear. Unarmed.',
   },
   dart: {
     name: 'Dart courier (Belt refit)', kind: 'courier', builder: 'Belt', tl: 1, category: 'civilian', size: 'S',
-    lengthM: 38, massT: 550, crew: [1, 3], shape: 'needle', drive: { cruiseG: 1, maxG: 5 }, ...UNARMED,
+    lengthM: 38, massT: 550, crew: [1, 3], crewStd: 2, drive: { cruiseG: 1, maxG: 5 }, ...UNARMED,
     cargoT: 8, berths: 2, factions: { OPA: 5, independent: 2 }, names: 'courier',
     desc: 'A stripped racing hull with a drive that runs hot. Fast enough, while it holds together. Unarmed.',
   },
   hermes: {
     name: 'Hermes-pattern courier', kind: 'courier', builder: 'UN', tl: 2, category: 'civilian', size: 'S',
-    lengthM: 40, massT: 600, crew: [2, 3], shape: 'needle', drive: { cruiseG: 1, maxG: 6 }, ...UNARMED,
+    lengthM: 40, massT: 600, crew: [2, 3], crewStd: 2, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, drive: { cruiseG: 1, maxG: 6 }, ...UNARMED,
     cargoT: 10, berths: 4, factions: { UN: 4, independent: 3 }, names: 'courier',
     desc: 'The inner system\'s standard fast packet: mail, small freight, a few passengers in a hurry. Unarmed.',
   },
   phobos: {
     name: 'Phobos express courier', kind: 'courier', builder: 'MCR', tl: 3, category: 'civilian', size: 'S',
-    lengthM: 42, massT: 620, crew: [2, 3], shape: 'needle', drive: { cruiseG: 1.5, maxG: 8 }, ...UNARMED,
+    lengthM: 42, massT: 620, crew: [2, 3], crewStd: 2, drive: { cruiseG: 1.5, maxG: 8 }, ...UNARMED,
     cargoT: 10, berths: 4, factions: { MCR: 4, independent: 1 }, names: 'courier',
     desc: 'The fastest civilian hull in the system and priced like it. Unarmed.',
   },
   mule: {
     name: 'Mule cargo shuttle', kind: 'shuttle', builder: 'Belt', tl: 1, category: 'civilian', size: 'S',
-    lengthM: 35, massT: 900, crew: [1, 3], shape: 'shuttle', drive: { cruiseG: 0.5, maxG: 2 }, ...UNARMED,
+    lengthM: 35, massT: 900, crew: [1, 3], crewStd: 2, drive: { cruiseG: 0.5, maxG: 2 }, ...UNARMED,
     cargoT: 400, berths: 6, factions: { OPA: 5, independent: 3 }, names: 'shuttle',
     desc: 'A box with a drive. Every rock in the Belt has three of them. Unarmed.',
   },
   ascension: {
     name: 'Ascension cargo shuttle', kind: 'shuttle', builder: 'UN', tl: 2, category: 'civilian', size: 'S',
-    lengthM: 36, massT: 950, crew: [2, 3], shape: 'shuttle', drive: { cruiseG: 0.6, maxG: 3 }, ...UNARMED,
+    lengthM: 36, massT: 950, crew: [2, 3], crewStd: 2, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, drive: { cruiseG: 0.6, maxG: 3 }, ...UNARMED,
     cargoT: 380, berths: 8, factions: { UN: 4, independent: 2 }, names: 'shuttle',
     desc: 'Luna-built lighter, the workhorse of every Earth-side port. Unarmed.',
   },
   deimos: {
     name: 'Deimos lighter', kind: 'shuttle', builder: 'MCR', tl: 3, category: 'civilian', size: 'S',
-    lengthM: 34, massT: 850, crew: [2, 3], shape: 'shuttle', drive: { cruiseG: 1, maxG: 4 }, ...UNARMED,
+    lengthM: 34, massT: 850, crew: [2, 3], crewStd: 2, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, drive: { cruiseG: 1, maxG: 4 }, ...UNARMED,
     cargoT: 320, berths: 6, factions: { MCR: 4 }, names: 'shuttle',
     desc: 'A Martian orbital lighter: less hold, more drive, very little maintenance. Unarmed.',
   },
   tramp: {
     name: 'Tramp freighter (Belt refit)', kind: 'light-freighter', builder: 'Belt', tl: 1, category: 'civilian', size: 'M',
-    lengthM: 58, massT: 3200, crew: [2, 6], shape: 'freighter', drive: { cruiseG: 0.7, maxG: 6 }, ...UNARMED, armor: 0.5,
+    lengthM: 58, massT: 3200, crew: [2, 6], crewStd: 4, drive: { cruiseG: 0.7, maxG: 6 }, ...UNARMED, armor: 0.5,
     cargoT: 18, berths: 8, factions: { OPA: 6, independent: 2 }, names: 'freighter',
     desc: 'Third-hand inner-system freighter, rebuilt at Ceres from two wrecks. Cheap to run and cheap to fix, and it needs fixing. Unarmed.',
   },
   'light-freighter': {
     name: 'Armed light freighter', kind: 'light-freighter', builder: 'independent', tl: 2, category: 'civilian', size: 'M',
-    lengthM: 62, massT: 3500, crew: [3, 8], shape: 'freighter', drive: { cruiseG: 1, maxG: 10 },
+    lengthM: 62, massT: 3500, crew: [3, 8], crewStd: 5, drive: { cruiseG: 1, maxG: 10 },
     armor: 1, pdc: 2, tubes: 2, magazine: { he: 2, nuke: 0 }, magazineCap: 6, railgun: 0,
     cargoT: 15, berths: 12, factions: { independent: 4, OPA: 1, UN: 1, MCR: 1 }, names: 'freighter', evasive: true,
     desc: 'Ganymede-built, with two PDCs and a pair of torpedo tubes on a self-defense license. Fast, tough for its size, and the closest thing to a warship a private captain can own.',
   },
   meridian: {
     name: 'Meridian light freighter', kind: 'light-freighter', builder: 'UN', tl: 2, category: 'civilian', size: 'M',
-    lengthM: 64, massT: 3600, crew: [3, 6], shape: 'freighter', drive: { cruiseG: 1, maxG: 7 }, ...UNARMED, armor: 1,
+    lengthM: 64, massT: 3600, crew: [3, 6], crewStd: 4, drive: { cruiseG: 1, maxG: 7 }, ...UNARMED, armor: 1,
     cargoT: 25, berths: 10, factions: { UN: 4, independent: 3 }, names: 'freighter',
     desc: 'The commonest small freighter in the inner system: roomy hold, honest drive, no guns.',
   },
   ares: {
     name: 'Ares fast freighter', kind: 'light-freighter', builder: 'MCR', tl: 3, category: 'civilian', size: 'M',
-    lengthM: 60, massT: 3300, crew: [3, 6], shape: 'freighter', drive: { cruiseG: 1.2, maxG: 9 }, ...UNARMED, armor: 1,
+    lengthM: 60, massT: 3300, crew: [3, 6], crewStd: 4, drive: { cruiseG: 1.2, maxG: 9 }, ...UNARMED, armor: 1,
     cargoT: 18, berths: 8, factions: { MCR: 3, independent: 1 }, names: 'freighter',
     desc: 'Martian fast freighter: naval sensors, a quiet hull, machinery that lasts. Unarmed, and it costs a fortune to keep in spares.',
   },
   'ore-scow': {
     name: 'Ore scow', kind: 'freighter', builder: 'Belt', tl: 1, category: 'civilian', size: 'L',
-    lengthM: 200, massT: 36_000, crew: [6, 12], shape: 'box', drive: { cruiseG: 0.2, maxG: 0.8 }, ...UNARMED, armor: 0.5,
+    lengthM: 200, massT: 36_000, crew: [6, 12], crewStd: 8, drive: { cruiseG: 0.2, maxG: 0.8 }, ...UNARMED, armor: 0.5,
     cargoT: 26_000, berths: 0, factions: { OPA: 6, independent: 2 }, names: 'freighter',
     desc: 'A bulk hull that has been patched more often than it has been painted.',
   },
   freighter: {
     name: 'Bulk freighter', kind: 'freighter', builder: 'UN', tl: 2, category: 'civilian', size: 'L',
-    lengthM: 220, massT: 40_000, crew: [8, 16], shape: 'box', drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED, armor: 1,
+    lengthM: 220, massT: 40_000, crew: [8, 16], crewStd: 10, drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED, armor: 1,
     cargoT: 30_000, berths: 4, factions: { UN: 4, independent: 4, OPA: 1 }, names: 'freighter',
     desc: 'The system\'s trade rides in these.',
   },
   'tharsis-bulk': {
     name: 'Tharsis bulk carrier', kind: 'freighter', builder: 'MCR', tl: 3, category: 'civilian', size: 'L',
-    lengthM: 230, massT: 38_000, crew: [6, 12], shape: 'box', drive: { cruiseG: 0.4, maxG: 1.5 }, ...UNARMED, armor: 1,
+    lengthM: 230, massT: 38_000, crew: [6, 12], crewStd: 8, drive: { cruiseG: 0.4, maxG: 1.5 }, ...UNARMED, armor: 1,
     cargoT: 28_000, berths: 4, factions: { MCR: 4, independent: 1 }, names: 'freighter',
     desc: 'Martian bulk carrier: a smaller crew, a faster drive, a smaller hold.',
   },
   'ice-hauler': {
     name: 'Ice hauler', kind: 'hauler', builder: 'Belt', tl: 1, category: 'civilian', size: 'XL',
-    lengthM: 1400, massT: 120_000, crew: [25, 50], shape: 'hauler', drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED,
+    lengthM: 1400, massT: 120_000, crew: [25, 50], crewStd: 35, drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED,
     cargoT: 100_000, berths: 0, factions: { OPA: 6, independent: 3 }, names: 'hauler',
     desc: 'A kilometre and a half of ice and girders, older than most of its crew.',
   },
   'water-carrier': {
     name: 'Aquarius water carrier', kind: 'hauler', builder: 'UN', tl: 2, category: 'civilian', size: 'XL',
-    lengthM: 1200, massT: 110_000, crew: [20, 40], shape: 'hauler', drive: { cruiseG: 0.3, maxG: 1.2 }, ...UNARMED,
+    lengthM: 1200, massT: 110_000, crew: [20, 40], crewStd: 28, drive: { cruiseG: 0.3, maxG: 1.2 }, ...UNARMED,
     cargoT: 90_000, berths: 0, factions: { UN: 3, independent: 2, MCR: 1 }, names: 'hauler',
     desc: 'Earth-built ice carrier on the Saturn–inner system run.',
   },
   'belt-tanker': {
     name: 'Belt tanker', kind: 'tanker', builder: 'Belt', tl: 1, category: 'civilian', size: 'L',
-    lengthM: 280, massT: 65_000, crew: [6, 12], shape: 'tanker', drive: { cruiseG: 0.25, maxG: 0.8 }, ...UNARMED,
+    lengthM: 280, massT: 65_000, crew: [6, 12], crewStd: 8, drive: { cruiseG: 0.25, maxG: 0.8 }, ...UNARMED,
     cargoT: 55_000, berths: 0, factions: { OPA: 5, independent: 2 }, names: 'tanker',
     desc: 'Volatiles in mismatched tanks welded to a salvaged spine.',
   },
   tanker: {
     name: 'Reaction-mass tanker', kind: 'tanker', builder: 'UN', tl: 2, category: 'civilian', size: 'L',
-    lengthM: 300, massT: 70_000, crew: [8, 14], shape: 'tanker', drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED,
+    lengthM: 300, massT: 70_000, crew: [8, 14], crewStd: 10, drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED,
     cargoT: 60_000, berths: 0, factions: { UN: 3, independent: 3, MCR: 1 }, names: 'tanker',
     desc: 'Reaction mass for the inner system\'s fleets.',
   },
   'colony-ship': {
     name: 'Colony transport (Belt refit)', kind: 'liner', builder: 'Belt', tl: 1, category: 'civilian', size: 'L',
-    lengthM: 380, massT: 130_000, crew: [30, 60], shape: 'liner', drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED,
+    lengthM: 380, massT: 130_000, crew: [30, 60], crewStd: 45, drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED,
     cargoT: 3_000, berths: 2500, factions: { OPA: 3, independent: 1 }, names: 'liner',
     desc: 'Settlers bound outward, in bunks stacked six high. Unarmed.',
   },
   liner: {
     name: 'Passenger liner', kind: 'liner', builder: 'UN', tl: 2, category: 'civilian', size: 'L',
-    lengthM: 350, massT: 120_000, crew: [40, 80], shape: 'liner', drive: { cruiseG: 0.5, maxG: 1.5 },
+    lengthM: 350, massT: 120_000, crew: [40, 80], crewStd: 60, drive: { cruiseG: 0.5, maxG: 1.5 },
     armor: 1, pdc: 2, tubes: 0, magazine: null, railgun: 0,
     cargoT: 2_000, berths: 1500, factions: { UN: 4, independent: 2 }, names: 'liner',
     desc: 'Spin-ring liner. Two anti-debris PDCs, as passenger law requires.',
   },
   'valles-liner': {
     name: 'Valles Express liner', kind: 'liner', builder: 'MCR', tl: 3, category: 'civilian', size: 'L',
-    lengthM: 330, massT: 110_000, crew: [40, 70], shape: 'liner', drive: { cruiseG: 0.7, maxG: 2 },
+    lengthM: 330, massT: 110_000, crew: [40, 70], crewStd: 52, drive: { cruiseG: 0.7, maxG: 2 },
     armor: 1, pdc: 2, tubes: 0, magazine: null, railgun: 0,
     cargoT: 1_500, berths: 1200, factions: { MCR: 3, independent: 1 }, names: 'liner',
     desc: 'Martian liner: fewer berths, a faster passage, two anti-debris PDCs.',
   },
   'mining-barge': {
     name: 'Mining barge', kind: 'miner', builder: 'Belt', tl: 1, category: 'civilian', size: 'L',
-    lengthM: 180, massT: 50_000, crew: [10, 20], shape: 'barge', drive: { cruiseG: 0.2, maxG: 0.8 }, ...UNARMED, armor: 1,
+    lengthM: 180, massT: 50_000, crew: [10, 20], crewStd: 14, drive: { cruiseG: 0.2, maxG: 0.8 }, ...UNARMED, armor: 1,
     gear: { type: 'driver', mounts: 2 }, cargoT: 35_000, berths: 0, factions: { OPA: 6, independent: 2 }, names: 'barge',
     desc: 'Rock-chewer with two ore mass drivers. They were never meant to be aimed at anything that moves.',
   },
   'mining-tender': {
     name: 'Mining tender', kind: 'miner', builder: 'UN', tl: 2, category: 'civilian', size: 'L',
-    lengthM: 170, massT: 45_000, crew: [8, 16], shape: 'barge', drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED, armor: 1,
+    lengthM: 170, massT: 45_000, crew: [8, 16], crewStd: 11, drive: { cruiseG: 0.3, maxG: 1 }, ...UNARMED, armor: 1,
     gear: { type: 'driver', mounts: 1 }, cargoT: 30_000, berths: 0, factions: { independent: 3, UN: 2 }, names: 'barge',
     desc: 'Corporate mining tender with one ore mass driver.',
   },
   'pallas-refiner': {
     name: 'Pallas ore processor', kind: 'miner', builder: 'MCR', tl: 3, category: 'civilian', size: 'L',
-    lengthM: 200, massT: 52_000, crew: [8, 14], shape: 'barge', drive: { cruiseG: 0.3, maxG: 1.2 }, ...UNARMED, armor: 1.5,
+    lengthM: 200, massT: 52_000, crew: [8, 14], crewStd: 11, drive: { cruiseG: 0.3, maxG: 1.2 }, ...UNARMED, armor: 1.5,
     gear: { type: 'driver', mounts: 2 }, cargoT: 32_000, berths: 0, factions: { MCR: 3 }, names: 'barge',
     desc: 'A Martian refinery ship, two ore mass drivers and a smelter.',
   },
@@ -301,21 +287,21 @@ export const CLASSES = {
   // ---------------- Authority (police, customs, station security) ----------------
   'belt-cutter': {
     name: 'Militia cutter (Belt refit)', kind: 'cutter', builder: 'Belt', tl: 1, category: 'authority', size: 'M',
-    lengthM: 52, massT: 1700, crew: [4, 9], shape: 'wedge', drive: { cruiseG: 0.8, maxG: 6 },
+    lengthM: 52, massT: 1700, crew: [4, 9], crewStd: 6, drive: { cruiseG: 0.8, maxG: 6 },
     armor: 0.5, pdc: 2, tubes: 2, magazine: { he: 4, nuke: 0 }, railgun: 0,
     cargoT: 5, berths: 6, factions: { OPA: 3 }, names: 'police', evasive: true,
     desc: 'Star Helix\'s cheapest hulls: an old shuttle with two salvaged PDCs and a pair of tubes bolted on.',
   },
   cutter: {
     name: 'Patrol cutter', kind: 'cutter', builder: 'UN', tl: 2, category: 'authority', size: 'M',
-    lengthM: 55, massT: 1800, crew: [6, 10], shape: 'wedge', drive: { cruiseG: 1, maxG: 8 },
+    lengthM: 55, massT: 1800, crew: [6, 10], crewStd: 8, drive: { cruiseG: 1, maxG: 8 },
     armor: 1, pdc: 3, tubes: 2, magazine: { he: 4, nuke: 0 }, railgun: 0,
     cargoT: 5, berths: 6, factions: { UN: 4, OPA: 2 }, names: 'police', evasive: true,
     desc: 'The UN\'s standard customs and police cutter, sold on second-hand to every security contractor in the Belt.',
   },
   'mcr-cutter': {
     name: 'Martian Security cutter', kind: 'cutter', builder: 'MCR', tl: 3, category: 'authority', size: 'M',
-    lengthM: 55, massT: 1800, crew: [6, 10], shape: 'wedge', drive: { cruiseG: 1, maxG: 9 },
+    lengthM: 55, massT: 1800, crew: [6, 10], crewStd: 8, drive: { cruiseG: 1, maxG: 9 },
     armor: 1.5, pdc: 4, tubes: 2, magazine: { he: 6, nuke: 0 }, railgun: 0,
     cargoT: 5, berths: 6, factions: { MCR: 4 }, names: 'police', evasive: true,
     desc: 'Martian police cutter, built to navy standards.',
@@ -324,91 +310,91 @@ export const CLASSES = {
   // ---------------- Military ----------------
   'opa-corvette': {
     name: 'Refit corvette (ex-UNN Harrier)', kind: 'corvette', builder: 'Belt', tl: 1, category: 'military', size: 'M',
-    lengthM: 50, massT: 2900, crew: [5, 12], shape: 'corvette', drive: { cruiseG: 0.8, maxG: 8 },
+    lengthM: 50, massT: 2900, crew: [5, 12], crewStd: 8, drive: { cruiseG: 0.8, maxG: 8 },
     armor: 1.5, pdc: 3, tubes: 2, magazine: { he: 4, nuke: 2 }, railgun: 0,
     cargoT: 10, berths: 4, factions: { OPA: 3 }, names: 'opa', evasive: true,
     desc: 'A decommissioned UNN corvette bought for scrap and rebuilt at Tycho with salvaged PDCs. It fights; it does not win against a navy.',
   },
   'unn-corvette': {
     name: 'Harrier-class corvette', kind: 'corvette', builder: 'UN', tl: 2, category: 'military', size: 'M',
-    lengthM: 50, massT: 2900, crew: [6, 12], shape: 'corvette', drive: { cruiseG: 1, maxG: 9 },
+    lengthM: 50, massT: 2900, crew: [6, 12], crewStd: 10, atmo: { entry: 'tail', shield: 'ablative ring', landing: 'legs' }, drive: { cruiseG: 1, maxG: 9 },
     armor: 2, pdc: 4, tubes: 2, magazine: { he: 6, nuke: 4 }, railgun: 0,
     cargoT: 5, berths: 0, factions: { UN: 5 }, names: 'navy', evasive: true,
     desc: 'The UNN\'s numerous, thirty-year-old patrol corvette.',
   },
   'mcrn-corvette': {
     name: 'Tharsis-class corvette', kind: 'corvette', builder: 'MCR', tl: 4, category: 'military', size: 'M',
-    lengthM: 46, massT: 2800, crew: [6, 12], shape: 'corvette', drive: { cruiseG: 1, maxG: 12 },
+    lengthM: 46, massT: 2800, crew: [6, 12], crewStd: 9, atmo: { entry: 'tail', shield: 'ablative ring', landing: 'legs' }, drive: { cruiseG: 1, maxG: 12 },
     armor: 2, pdc: 6, tubes: 2, magazine: { he: 6, nuke: 6 }, railgun: 0,
     cargoT: 5, berths: 0, factions: { MCR: 5 }, names: 'navy', evasive: true,
     desc: 'Martian fast-attack corvette: six TL4 PDCs, a 12G drive and a stealthy hull.',
   },
   'pirate-corvette': {
     name: 'Stolen corvette (ex-UNN Harrier)', kind: 'corvette', builder: 'UN', tl: 2, category: 'irregular', size: 'M',
-    lengthM: 50, massT: 2900, crew: [5, 10], shape: 'corvette', drive: { cruiseG: 1, maxG: 8 },
+    lengthM: 50, massT: 2900, crew: [5, 10], crewStd: 7, drive: { cruiseG: 1, maxG: 8 },
     armor: 2, pdc: 3, tubes: 2, magazine: { he: 6, nuke: 0 }, railgun: 0,
     cargoT: 60, berths: 4, factions: { pirate: 1 }, names: 'pirate', evasive: true,
     desc: 'A navy hull that went missing from a Luna scrapyard. One PDC was stripped for parts.',
   },
   'opa-frigate': {
     name: 'Refit frigate (ex-UNN Danube)', kind: 'frigate', builder: 'Belt', tl: 1, category: 'military', size: 'M',
-    lengthM: 125, massT: 12_500, crew: [20, 40], shape: 'frigate', drive: { cruiseG: 0.6, maxG: 6 },
+    lengthM: 125, massT: 12_500, crew: [20, 40], crewStd: 28, drive: { cruiseG: 0.6, maxG: 6 },
     armor: 2, pdc: 5, tubes: 3, magazine: { he: 8, nuke: 4 }, railgun: 0,
     cargoT: 100, berths: 10, factions: { OPA: 1 }, names: 'opa', evasive: true,
     desc: 'The OPA\'s pride: an old UNN frigate with its railgun gone and half its PDCs replaced by whatever Tycho could make.',
   },
   'unn-frigate': {
     name: 'Danube-class frigate', kind: 'frigate', builder: 'UN', tl: 2, category: 'military', size: 'M',
-    lengthM: 125, massT: 12_500, crew: [20, 40], shape: 'frigate', drive: { cruiseG: 1, maxG: 7 },
+    lengthM: 125, massT: 12_500, crew: [20, 40], crewStd: 32, drive: { cruiseG: 1, maxG: 7 },
     armor: 2.5, pdc: 8, tubes: 4, magazine: { he: 12, nuke: 8 }, railgun: 1,
     cargoT: 20, berths: 0, factions: { UN: 5 }, names: 'navy', evasive: true,
     desc: 'The backbone of the UN Navy, a generation old.',
   },
   'unn-frigate-new': {
     name: 'Everest-class frigate', kind: 'frigate', builder: 'UN', tl: 3, category: 'military', size: 'M',
-    lengthM: 120, massT: 12_000, crew: [20, 40], shape: 'frigate', drive: { cruiseG: 1, maxG: 9 },
+    lengthM: 120, massT: 12_000, crew: [20, 40], crewStd: 30, drive: { cruiseG: 1, maxG: 9 },
     armor: 2.5, pdc: 10, tubes: 4, magazine: { he: 12, nuke: 12 }, railgun: 1,
     cargoT: 20, berths: 0, factions: { UN: 2 }, names: 'navy', evasive: true,
     desc: 'Earth\'s modern frigate: few in number, the equal of anything but Mars.',
   },
   'mcrn-frigate': {
     name: 'Hellas-class frigate', kind: 'frigate', builder: 'MCR', tl: 4, category: 'military', size: 'M',
-    lengthM: 120, massT: 12_000, crew: [20, 40], shape: 'frigate', drive: { cruiseG: 1, maxG: 10 },
+    lengthM: 120, massT: 12_000, crew: [20, 40], crewStd: 26, drive: { cruiseG: 1, maxG: 10 },
     armor: 3, pdc: 12, tubes: 4, magazine: { he: 12, nuke: 12 }, railgun: 1,
     cargoT: 20, berths: 0, factions: { MCR: 4 }, names: 'navy', evasive: true,
     desc: 'The best frigate in the system: twelve TL4 PDCs, a keel railgun and a hull that hardly shows on radar.',
   },
   'unn-destroyer': {
     name: 'Atlas-class destroyer', kind: 'destroyer', builder: 'UN', tl: 2, category: 'military', size: 'L',
-    lengthM: 230, massT: 42_000, crew: [60, 120], shape: 'destroyer', drive: { cruiseG: 1, maxG: 6 },
+    lengthM: 230, massT: 42_000, crew: [60, 120], crewStd: 90, drive: { cruiseG: 1, maxG: 6 },
     armor: 3, pdc: 14, tubes: 6, magazine: { he: 16, nuke: 16 }, railgun: 1,
     cargoT: 50, berths: 0, factions: { UN: 3 }, names: 'navy', evasive: true,
     desc: 'UNN destroyer, refitted twice and due for a third.',
   },
   'mcrn-destroyer': {
     name: 'Valles-class destroyer', kind: 'destroyer', builder: 'MCR', tl: 4, category: 'military', size: 'L',
-    lengthM: 220, massT: 40_000, crew: [60, 120], shape: 'destroyer', drive: { cruiseG: 1, maxG: 8 },
+    lengthM: 220, massT: 40_000, crew: [60, 120], crewStd: 80, drive: { cruiseG: 1, maxG: 8 },
     armor: 3.5, pdc: 18, tubes: 6, magazine: { he: 16, nuke: 20 }, railgun: 2,
     cargoT: 50, berths: 0, factions: { MCR: 3 }, names: 'navy', evasive: true,
     desc: 'Martian destroyer with two railguns.',
   },
   'unn-battleship': {
     name: 'Leviathan-class battleship', kind: 'battleship', builder: 'UN', tl: 3, category: 'military', size: 'XL',
-    lengthM: 500, massT: 260_000, crew: [200, 400], shape: 'dreadnought', drive: { cruiseG: 0.5, maxG: 4 },
+    lengthM: 500, massT: 260_000, crew: [200, 400], crewStd: 320, drive: { cruiseG: 0.5, maxG: 4 },
     armor: 4, pdc: 32, tubes: 12, magazine: { he: 40, nuke: 60 }, railgun: 2,
     cargoT: 500, berths: 0, factions: { UN: 3 }, names: 'navy', evasive: true,
     desc: 'Earth spends on its capital ships what it saves on everything else.',
   },
   'mcrn-battleship': {
     name: 'Olympus-class battleship', kind: 'battleship', builder: 'MCR', tl: 4, category: 'military', size: 'XL',
-    lengthM: 480, massT: 250_000, crew: [200, 400], shape: 'dreadnought', drive: { cruiseG: 0.5, maxG: 5 },
+    lengthM: 480, massT: 250_000, crew: [200, 400], crewStd: 280, drive: { cruiseG: 0.5, maxG: 5 },
     armor: 4.5, pdc: 40, tubes: 12, magazine: { he: 40, nuke: 80 }, railgun: 3,
     cargoT: 500, berths: 0, factions: { MCR: 3 }, names: 'navy', evasive: true,
     desc: 'The flagship class of the Martian Navy.',
   },
   'opa-gunship': {
     name: 'Converted-freighter gunship', kind: 'gunship', builder: 'Belt', tl: 1, category: 'military', size: 'M',
-    lengthM: 90, massT: 8000, crew: [15, 30], shape: 'gunship', drive: { cruiseG: 0.5, maxG: 5 },
+    lengthM: 90, massT: 8000, crew: [15, 30], crewStd: 20, drive: { cruiseG: 0.5, maxG: 5 },
     armor: 1, pdc: 4, tubes: 2, magazine: { he: 6, nuke: 2 }, railgun: 0,
     cargoT: 2000, berths: 20, factions: { OPA: 1 }, names: 'opa', evasive: true,
     desc: 'A freighter with guns welded to it, flown by people who mean it.',
@@ -417,21 +403,21 @@ export const CLASSES = {
   // ---------------- Irregular ----------------
   'pirate-gunship': {
     name: 'Pirate gunship', kind: 'gunship', builder: 'Belt', tl: 1, category: 'irregular', size: 'M',
-    lengthM: 70, massT: 4000, crew: [6, 12], shape: 'gunship', drive: { cruiseG: 0.5, maxG: 5 },
+    lengthM: 70, massT: 4000, crew: [6, 12], crewStd: 8, drive: { cruiseG: 0.5, maxG: 5 },
     armor: 1, pdc: 2, tubes: 2, magazine: { he: 8, nuke: 0 }, railgun: 0,
     cargoT: 800, berths: 6, factions: { pirate: 3 }, names: 'pirate', evasive: true,
     desc: 'A small freighter with two PDCs and tubes. Enough to frighten a hauler.',
   },
   'pirate-raider': {
     name: 'Torch raider', kind: 'raider', builder: 'Belt', tl: 1, category: 'irregular', size: 'S',
-    lengthM: 35, massT: 700, crew: [3, 6], shape: 'needle', drive: { cruiseG: 1, maxG: 7 },
+    lengthM: 35, massT: 700, crew: [3, 6], crewStd: 4, drive: { cruiseG: 1, maxG: 7 },
     armor: 0.5, pdc: 1, tubes: 2, magazine: { he: 4, nuke: 0 }, railgun: 0,
     cargoT: 20, berths: 2, factions: { pirate: 6 }, names: 'pirate', evasive: true,
     desc: 'A racing hull with tubes: hit, take, and run.',
   },
   'pirate-runner': {
     name: 'Armed runner (stolen courier)', kind: 'raider', builder: 'UN', tl: 2, category: 'irregular', size: 'S',
-    lengthM: 40, massT: 620, crew: [2, 5], shape: 'needle', drive: { cruiseG: 1, maxG: 6 },
+    lengthM: 40, massT: 620, crew: [2, 5], crewStd: 3, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, drive: { cruiseG: 1, maxG: 6 },
     armor: 0.5, pdc: 1, tubes: 1, magazine: { he: 3, nuke: 0 }, railgun: 0,
     cargoT: 10, berths: 2, factions: { pirate: 3 }, names: 'pirate', evasive: true,
     desc: 'A Hermes courier with a tube where the mail hold was.',
@@ -441,12 +427,20 @@ export const CLASSES = {
 export const CLASS_IDS = Object.keys(CLASSES);
 export const PLAYER_CLASS = 'light-freighter';
 
-/** The interior holds a crew of eight: classes a crew that size can run are ours to choose. */
-export const PLAYER_MAX_CREW = 8;
+/**
+ * Classes a crew of eight or fewer can run are ours to choose (each has an
+ * interior: ship-layout.js); we can sign on up to the class's berthed
+ * maximum, and never more than PLAYER_MAX_CREW.
+ */
+export const PLAYABLE_MIN_CREW = 8;
+export const PLAYER_MAX_CREW = 12;
 export const PLAYABLE = CLASS_IDS.filter(id => {
   const c = CLASSES[id];
-  return c.crew[0] <= PLAYER_MAX_CREW && (c.size === 'S' || c.size === 'M');
+  return c.crew[0] <= PLAYABLE_MIN_CREW && (c.size === 'S' || c.size === 'M');
 });
+
+/** The most crew our ship of this class can berth. */
+export const maxCrew = (classId) => Math.min(PLAYER_MAX_CREW, CLASSES[classId]?.crew[1] ?? PLAYER_MAX_CREW);
 
 export const classOf = (e) => CLASSES[e?.cls] || null;
 

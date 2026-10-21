@@ -36,6 +36,7 @@ import { AU_M, MIN_S, DAY_MIN, G0 } from '../core/constants.js';
 import { hashString } from '../core/rng.js';
 import { getWorld, transitStateAt } from './world.js';
 import { radioRangeFactor } from './systems.js';
+import { declaredSouls } from './manifest.js';
 
 export const C_MS = 299_792_458;                        // speed of light, m/s
 export const LIGHT_SECOND_AU = C_MS / AU_M;             // ≈ 0.002 AU (300,000 km)
@@ -174,9 +175,11 @@ function publishDigest(state, st) {
     const rec = { id: e.id, name: e.name, faction: e.faction, shipClass: e.shipClass };
     const tr = e.transit;
     if (tr && !tr.fix) {
-      rec.plan = { from: tr.from, to: tr.to, t0: tr.t0, t1: tr.t1, g: tr.g };
+      rec.plan = { from: tr.from, to: tr.to, fromOrbit: tr.fromOrbit, toOrbit: tr.toOrbit, port: tr.port, t0: tr.t0, t1: tr.t1, g: tr.g };
+      rec.pob = declaredSouls(e);
     } else if (e.orbit && (e.tags?.at === st.id || Math.hypot(e.pos.x - st.pos.x, e.pos.y - st.pos.y) < 0.0005)) {
       rec.berth = st.id;
+      rec.pob = declaredSouls(e);
     } else {
       world.refresh(e, now);
       rec.fix = { x: e.pos.x, y: e.pos.y, vx: e.vel.vx, vy: e.vel.vy };
@@ -198,6 +201,7 @@ function receiveDigest(state, item, emit) {
     const old = I.tracks[s.id];
     if (old && old.at >= item.sent) continue;          // we know better already (our own eyes, a newer digest)
     const r = { id: s.id, name: s.name, faction: s.faction, shipClass: s.shipClass, src, at: item.sent, rx: now };
+    if (s.pob) r.pob = s.pob;
     if (s.plan) { r.kind = 'plan'; r.plan = s.plan; }
     else if (s.berth) { r.kind = 'berth'; r.berth = s.berth; }
     else { r.kind = 'fix'; Object.assign(r, s.fix); }
@@ -270,7 +274,7 @@ export function estimate(state, r, minute, out = {}) {
   }
   // Berthed, due, or charted: where that rails entity is at `minute` (never
   // its stored position, which may be an hour stale out here)
-  const id = r.kind === 'plan' ? r.plan.to : r.kind === 'berth' ? r.berth : r.id;
+  const id = r.kind === 'plan' ? (r.plan.to || r.plan.port) : r.kind === 'berth' ? r.berth : r.id;
   const at = world.get(id);
   if (!at) return null;
   if (at.orbit && world.anchorState(id, minute, _anchor)) { out.x = _anchor.pos.x; out.y = _anchor.pos.y; }
@@ -285,7 +289,7 @@ export function describeRecord(state, r) {
   const now = state.clock.minute;
   const world = getWorld(state);
   const what = r.kind === 'plan'
-    ? (now < r.plan.t1 ? `filed plan to ${world.get(r.plan.to)?.name || 'unknown'}` : `due at ${world.get(r.plan.to)?.name || 'unknown'}`)
+    ? (now < r.plan.t1 ? `filed plan to ${world.get(r.plan.to || r.plan.port)?.name || 'unknown'}` : `due at ${world.get(r.plan.to || r.plan.port)?.name || 'unknown'}`)
     : r.kind === 'berth' ? `berthed at ${world.get(r.berth)?.name || 'unknown'}`
     : r.kind === 'chart' ? 'charted orbit'
     : 'last fix, coasting';

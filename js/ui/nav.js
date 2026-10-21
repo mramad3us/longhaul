@@ -13,7 +13,7 @@ import { toast } from './toast.js';
 import { logEntry } from './log.js';
 import { AU_M, AU_KM, RANGE, DAY_MIN } from '../core/constants.js';
 import { formatDuration } from '../core/clock.js';
-import { getBody } from '../sim/ephemeris.js';
+import { getBody, BODIES } from '../sim/ephemeris.js';
 import { getWorld } from '../sim/world.js';
 import { planRoutes, simulatePlan, targetStateAt, targetName, defaultStandoff, STANDOFF, PREP_MINUTES } from '../sim/nav.js';
 import { engageRoute, abortRoute, overrideSecure, forceTurn, TURN_HOLD_MAX_MIN } from '../sim/autopilot.js';
@@ -23,6 +23,13 @@ import { isConscious } from '../sim/crew.js';
 import { SENSOR_RANGES, REVEAL, setSensorRange, selectContact, toggleLock, contactById } from '../sim/sensors.js';
 import { missionForEntity } from '../sim/missions.js';
 import { dockedStation } from '../sim/contracts.js';
+import { beginDocking, shipDockable, isDocked, dockedTo } from '../sim/docking.js';
+import { boardable } from '../sim/boarding.js';
+import { knownCrew } from '../sim/manifest.js';
+import { hullOf, portSummary } from '../sim/hulls.js';
+import { CLASSES } from '../sim/ship-classes.js';
+import { drawHullPortrait } from './hull-art.js';
+import { factionColor } from '../sim/factions.js';
 import { bus } from '../core/events.js';
 import { TacView, TAC_LABELS } from './tac.js';
 import { SolarMap, ageLabel } from './solar-map.js';
@@ -49,7 +56,14 @@ export function initNav(h) {
 
   tacModal = new TacView($('[data-nav-screen="tactical"]'), { onSelect: (id) => selectOnBoard(id) });
   map = new SolarMap($('[data-nav-screen="solar"]'), {
-    onSelect: (sel) => { ui.nav.target = sel; renderSelection(); },
+    onSelect: (sel) => { ui.nav.target = sel; hidePickList(); renderSelection(); },
+    onPickList: (cands, sx, sy) => showPickList(cands, sx, sy),
+  });
+  $$('[data-solar-filter]').forEach(b => b.addEventListener('click', () => { const k = b.dataset.solarFilter; map.filter[k] = !map.filter[k]; toggleClass(b, 'active', map.filter[k]); }));
+  initSearch();
+  $('#map-picklist').addEventListener('click', (e) => {
+    const r = e.target.closest('[data-pick]');
+    if (r) choose(JSON.parse(r.dataset.pick));
   });
   scanner = new ScannerView($('[data-nav-screen="scanner"]'), { onSelect: (id) => selectOnBoard(id) });
 
@@ -133,6 +147,91 @@ function selectOnBoard(id) {
   renderSelection();
 }
 
+// ---- FINDING THINGS ON THE MAP ----
+// A station under a crowd of traffic, a ship whose name we know: the pick
+// list offers everything under the pointer, and the search box finds by
+// name what we know of (bodies, stations, contacts, the plot's reports).
+
+function choose(t) {
+  hidePickList();
+  hideSearch();
+  if (!ui.state || !t) return;
+  ui.nav.target = t;
+  map.selected = t;
+  if (t.kind === 'entity') selectContact(ui.state, t.id);
+  const p = navTargetPos();
+  if (p) map.focusOn(p, t.kind === 'entity' ? Math.max(map.scale, 2e6) : Math.max(map.scale, 300));
+  renderSelection();
+}
+
+function labelOf(state, t) {
+  const d = describeTarget(state, t);
+  return d ? { name: d.name, kind: `${d.kind}${d.report ? ' · reported' : ''}` } : { name: t.id, kind: '' };
+}
+
+function showPickList(cands, sx, sy) {
+  const s = ui.state;
+  const box = $('#map-picklist');
+  const rows = cands.slice(0, 14).map(t => { const l = labelOf(s, t); return `<div class="ss-row" data-pick='${esc(JSON.stringify({ kind: t.kind, id: t.id }))}'><span>${esc(l.name)}</span><small>${esc(l.kind)}</small></div>`; }).join('');
+  box.innerHTML = `<div class="ss-head">${cands.length} HERE — PICK ONE</div>${rows}`;
+  const host = box.parentElement.getBoundingClientRect(), screen = $('[data-nav-screen="solar"]').getBoundingClientRect();
+  box.style.left = `${Math.min(screen.left - host.left + sx + 12, host.width - 280)}px`;
+  box.style.top = `${Math.min(screen.top - host.top + sy + 12, host.height - 200)}px`;
+  show(box, true);
+}
+
+function hidePickList() { show($('#map-picklist'), false); }
+
+let searchHits = [], searchSel = 0;
+
+function initSearch() {
+  const input = $('#solar-search');
+  input.addEventListener('input', () => { searchSel = 0; runSearch(input.value); });
+  input.addEventListener('focus', () => { if (input.value) runSearch(input.value); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { searchSel = Math.min(searchHits.length - 1, searchSel + 1); renderSearch(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { searchSel = Math.max(0, searchSel - 1); renderSearch(); e.preventDefault(); }
+    else if (e.key === 'Enter') { if (searchHits[searchSel]) choose(searchHits[searchSel].t); e.preventDefault(); }
+    else if (e.key === 'Escape') { input.value = ''; hideSearch(); input.blur(); e.stopPropagation(); }
+  });
+  $('#solar-search-results').addEventListener('click', (e) => { const r = e.target.closest('[data-i]'); if (r) choose(searchHits[+r.dataset.i]?.t); });
+}
+
+/** What we know of by name: bodies and stations always, ships on our board, reports on the plot. */
+function runSearch(q) {
+  const s = ui.state;
+  q = q.trim().toLowerCase();
+  searchHits = [];
+  if (!s || q.length < 2) { hideSearch(); return; }
+  const world = getWorld(s);
+  const hits = [];
+  const add = (t, name, kind, rank) => {
+    const n = name.toLowerCase();
+    const i = n.indexOf(q);
+    if (i < 0) return;
+    hits.push({ t, name, kind, score: rank + (i === 0 ? 0 : 1) + n.length / 100 });
+  };
+  for (const b of BODIES) add({ kind: 'body', id: b.name }, b.name, b.type, 1);
+  for (const st of world.stations) add({ kind: 'entity', id: st.id }, st.name, st.shipClass || 'station', 0);
+  for (const c of s.sensors.contacts) if (c.name && !c.station) add({ kind: 'entity', id: c.id }, c.name, `${c.shipClass || 'ship'} · on sensors`, 2);
+  const tracks = s.intel?.tracks || {};
+  let n = 0;
+  for (const id in tracks) { const r = tracks[id]; if (r.name && n < 4000) { n++; add({ kind: 'entity', id }, r.name, `${r.shipClass || 'ship'} · reported`, 3); } }
+  for (const c of s.contracts.active) { const e = world.get(c.targetId); if (e) add({ kind: 'entity', id: e.id }, e.name, 'contract target', 1); }
+  const seen = new Set();
+  searchHits = hits.sort((a, b) => a.score - b.score).filter(h => { const k = h.t.kind + h.t.id; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 14);
+  renderSearch();
+}
+
+function renderSearch() {
+  const box = $('#solar-search-results');
+  if (!searchHits.length) { box.innerHTML = '<div class="ss-head">nothing by that name</div>'; show(box, true); return; }
+  box.innerHTML = searchHits.map((h, i) => `<div class="ss-row ${i === searchSel ? 'active' : ''}" data-i="${i}"><span>${esc(h.name)}</span><small>${esc(h.kind)}</small></div>`).join('');
+  show(box, true);
+}
+
+function hideSearch() { show($('#solar-search-results'), false); }
+
 // ---- TARGET HELPERS ----
 
 function navTargetPos() {
@@ -155,6 +254,7 @@ function reportFor(state, t) {
 }
 
 function describeTarget(state, t) {
+  if (t.kind === 'slot') return { name: targetName(state, t), kind: 'Holding slot', faction: getWorld(state).get(t.id)?.faction || null, entity: null };
   if (t.kind === 'body') {
     const b = getBody(t.id);
     return { name: t.id, kind: b?.type === 'star' ? 'Star' : (b?.type || 'body').replace(/^\w/, c => c.toUpperCase()), faction: null };
@@ -215,14 +315,20 @@ function renderSelection() {
       ${row('BEARING', fmtAngle(c.bearing - s.flight.facing))}
       ${row('DRIVE', c.thrust || (c.scan < REVEAL.THRUST ? '…' : '—'), c.thrust && c.thrust !== 'COASTING' ? 'scanner-val-warn' : '')}
       ${row('MASS', c.mass ? fmtNum(c.mass / 1000, 1) + ' kt' : '…')}
+      ${shipRows(s, d.entity, c, row)}
       <div class="panel-actions">
         <button class="scanner-track-btn ${lock ? 'tracking' : ''}" data-act="lock">${lock ? 'UNLOCK' : 'LOCK'}</button>
         ${routing ? '<button class="scanner-intercept-btn intercepting" data-act="abort">ABORT INTERCEPT</button>' : '<button class="scanner-intercept-btn" data-act="plot">INTERCEPT</button>'}
         ${canHail ? '<button class="scanner-track-btn" data-act="hail">HAIL</button>' : ''}
         ${!c.ordnance ? '<button class="scanner-track-btn" data-act="stance">STANCE</button>' : ''}
-        ${!c.ordnance && !c.station ? `<button class="scanner-track-btn ${s.combat.target === t.id ? 'tracking' : ''}" data-act="target">${s.combat.target === t.id ? 'TARGETED' : 'TARGET'}</button>` : ''}
+        ${!c.ordnance ? `<button class="scanner-track-btn ${s.combat.target === t.id ? 'tracking' : ''}" data-act="target">${s.combat.target === t.id ? 'TARGETED' : 'TARGET'}</button>` : ''}
+        ${dockButton(s, d.entity)}
+        ${!c.ordnance && !c.station && boardable(s, d.entity).ok ? `<button class="scanner-track-btn" data-act="board">${d.entity?.tags?.wreck ? 'SALVAGE' : 'BOARD'}</button>` : ''}
       </div>`;
-    setHTML(scanPanel, html);
+    if (setHTML(scanPanel, html)) {
+      const cv = scanPanel.querySelector('canvas[data-hull]');
+      if (cv) drawHullPortrait(cv, hullOf(d.entity.cls), { tint: factionColor(d.entity.faction) });
+    }
     show(scanPanel, true);
     return;
   }
@@ -306,6 +412,8 @@ function onPanelClick(e) {
     case 'release': releaseStance(s); break;
     case 'target': if (t) { targetContact(s, t.id); setTab('combat'); } break;
     case 'hail': if (t) hooks.hail(t.id); break;
+    case 'dock': if (t) { const e = getWorld(s).get(t.id); hooks.dock?.({ kind: e?.type === 'station' ? 'station' : 'ship', id: t.id }); } break;
+    case 'board': if (t) hooks.board?.(t.id); break;
     case 'focus': if (t) { const p = navTargetPos(); if (p) map.focusOn(p, t.kind === 'entity' ? 2e6 : Math.max(map.scale, 300)); } break;
     case 'abort':
       if (abortRoute(s, (type, p) => bus.emit(type, p))) { toast('Route aborted — drive cut', 'warn'); }
@@ -333,6 +441,25 @@ function onPanelClick(e) {
   }
 }
 
+/** What we know of a ship's hull and people, for the contact panel. */
+function shipRows(s, e, c, row) {
+  if (!e || e.type !== 'ship' || c.ordnance) return '';
+  const known = !!c.name;
+  const crew = knownCrew(s, e, { identified: known });
+  const hull = known ? `<canvas class="scanner-detail-hull" width="260" height="60" data-hull="${e.id}"></canvas>` : '';
+  return `${hull}${row('ABOARD', crew ? `${esc(crew.text)} <span class="scanner-val-dim">${esc(crew.src)}</span>` : 'unknown', crew ? '' : 'scanner-val-dim')}
+    ${row('COLLARS', known ? esc(portSummary(e.cls)) : '—')}
+    ${known && CLASSES[e.cls]?.atmo ? row('ATMOSPHERE', 'rated for entry') : ''}`;
+}
+
+/** DOCK on the contact panel: a station (traffic control must clear us), a ship that will hold for us. */
+function dockButton(s, e) {
+  if (!e || (e.type !== 'station' && e.type !== 'ship')) return '';
+  if (isDocked(s) && dockedTo(s)?.id === e.id) return '';
+  if (e.type === 'ship' && !shipDockable(s, e).ok) return '';
+  return `<button class="scanner-track-btn" data-act="dock">DOCK</button>`;
+}
+
 /** The stance panel takes the slot of the route panel and the selection panels. */
 function showStancePanel(target) {
   hideRoutePanel();
@@ -343,21 +470,26 @@ function showStancePanel(target) {
 // ---- ROUTE PLANNING ----
 
 const STANDOFFS = {
-  dock: { label: 'DOCK', m: STANDOFF.STATION, desc: 'Park 3 km off the station' },
+  dock: { label: 'DOCK', m: STANDOFF.GATE, desc: 'To the station\'s approach gate, then down to a berth (traffic control must clear us)' },
+  gate: { label: 'GATE', m: STANDOFF.GATE, desc: 'Hold at the approach gate, outside the keep-out zone' },
+  rendezvous: { label: 'DOCK', m: 20_000, desc: 'Rendezvous, then the docking computer takes us to a collar (they must agree, or be in no state to refuse)' },
   formation: { label: 'FORMATION', m: STANDOFF.TACTICAL, desc: '2 km — boarding, tow, EVA' },
   close: { label: 'CLOSE', m: STANDOFF.CLOSE, desc: '100,000 km — full sensor lock' },
   scanner: { label: 'SCANNER', m: STANDOFF.SCANNER, desc: '15M km — inside long-range sensors' },
   orbit: { label: 'ORBIT', m: null, desc: 'Parking orbit' },
+  slot: { label: 'HOLD', m: STANDOFF.SLOT, desc: 'Into our slot in the holding pattern: a free orbit, in port, no fuel to keep it' },
 };
 
 function standoffChoices(state, t) {
   if (t.kind === 'body') return ['orbit', 'close'];
+  if (t.kind === 'slot') return ['slot'];
   const e = getWorld(state).get(t.id);
-  if (e?.type === 'station') return ['dock', 'close', 'scanner'];
+  if (e?.type === 'station') return ['dock', 'gate', 'close', 'scanner'];
+  if (e?.type === 'ship') return ['formation', 'rendezvous', 'close', 'scanner'];
   return ['formation', 'close', 'scanner'];
 }
 
-export function openRoutePanel(target) {
+export function openRoutePanel(target, opts = {}) {
   const s = ui.state;
   if (!s) return;
   if (s.autopilot && s.autopilot.plan.kind !== 'stance' && s.autopilot.plan.target.id === target.id) { toast('Already en route', 'info'); return; }
@@ -365,7 +497,8 @@ export function openRoutePanel(target) {
   ui.nav.target = target;
   if (!ui.nav.open) openNav(target.kind === 'entity' && contactById(s, target.id) ? 'scanner' : 'solar');
   const choices = standoffChoices(s, target);
-  routeUI = { target, choices, standoffKey: choices[0], options: [], selected: -1, computing: true };
+  const key = opts.dock && choices.includes('dock') ? 'dock' : opts.dock && choices.includes('rendezvous') ? 'rendezvous' : choices[0];
+  routeUI = { target, choices, standoffKey: key, options: [], selected: -1, computing: true };
   show($('#map-selection'), false); show($('#scanner-detail'), false);
   show($('#route-panel'), true, 'flex');
   computeRoutes();
@@ -461,7 +594,13 @@ function confirmRoute() {
   if (!opt.feasible) return;
   const t = routeUI.target;
   const mission = t.kind === 'entity' ? missionForEntity(s, t.id) : null;
-  engageRoute(s, opt.plan, { estimate: opt.estimate, missionId: mission?.id, intercept: routeUI.standoffKey });
+  const e = t.kind === 'entity' ? getWorld(s).get(t.id) : null;
+  if (routeUI.standoffKey === 'dock' || routeUI.standoffKey === 'rendezvous') {
+    // A docking flight: the route to the gate (or alongside), then the docking computer
+    const r = beginDocking(s, { kind: e?.type === 'station' ? 'station' : 'ship', id: t.id }, { mode: 'auto', route: opt.plan }, (type, p) => bus.emit(type, p));
+    if (!r.ok) { toast(r.text, 'warn'); return; }
+    logEntry(r.text, 'nav');
+  } else engageRoute(s, opt.plan, { estimate: opt.estimate, missionId: mission?.id, intercept: routeUI.standoffKey });
   logEntry(`Course plotted: ${targetName(s, t)} — ${opt.name} (${opt.label}), ETA ${formatDuration(opt.minutes)}, ${fmtNum(opt.fuel)} kg`, 'nav');
   logEntry('All hands — secure for acceleration', 'nav');
   toast('SECURE FOR BURN', 'warn');

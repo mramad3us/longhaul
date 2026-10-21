@@ -57,6 +57,7 @@ export function createLifeSupport(ship) {
 
 export function atmoStatus(atmo) {
   if (!atmo) return 'unknown';
+  if (atmo.fire) return 'fire';
   if (atmo.breached) return 'breached';
   if (atmo.vented) return 'vented';
   if (atmo.pressure < ATMO.PRESSURE_LETHAL) return 'vacuum';
@@ -77,7 +78,7 @@ export function lifeSupportTick(state, ctx) {
   // Who breathes where
   const breathers = new Array(ship.decks.length).fill(0);
   for (const m of ship.crew) {
-    if (m.dead || m.suit.wearing) continue;
+    if (m.dead || m.suit.wearing || m.away) continue;
     breathers[geo.deckOfRow(m.pos.sy)]++;
   }
 
@@ -152,12 +153,14 @@ export function lifeSupportTick(state, ctx) {
         ctx.emit?.('suit-depleted', { member: m });
       } else {
         removeCondition(m, 'hypoxic'); removeCondition(m, 'hypercapnia'); removeCondition(m, 'decompression');
-        // Stow the suit once the air on deck is good again (unless heading into bad air on a job)
+        // Stow the suit once the air on deck is good again (unless heading into bad air on a job, or across to another hull)
+        if (m.away) continue;
         const a = ship.decks[geo.deckOfRow(m.pos.sy)].atmosphere;
-        if (atmoStatus(a) === 'nominal' && !m.suit.keep) stowSuit(state, m);
+        if (atmoStatus(a) === 'nominal' && !m.suit.keep && !state.suitsOn) stowSuit(state, m);
         continue;
       }
     }
+    if (m.away) continue;          // breathing the other ship's air (boarding.js)
     const a = ship.decks[geo.deckOfRow(m.pos.sy)].atmosphere;
     m.couchAir ??= COUCH_AIR_MIN;
     if (atmoStatus(a) === 'nominal') m.couchAir = Math.min(COUCH_AIR_MIN, m.couchAir + 0.5);
@@ -240,6 +243,20 @@ export function completeSeal(state, deck) {
 }
 
 // ---- CONTROLS ----
+
+/**
+ * The SUITS order: every hand into an EVA suit and kept in it (crew-ai.js
+ * does the walking), so a deck can be vented to put out a fire, or holed in
+ * a fight, with its people still on it. Off: suits come off once the air
+ * where they stand is good again.
+ */
+export function orderSuits(state, on) {
+  state.suitsOn = !!on;
+  for (const m of state.ship.crew) if (m.suit.wearing) m.suit.keep = !!on;
+  return state.suitsOn;
+}
+
+export const suitedCount = (state) => state.ship.crew.filter(m => !m.dead && !m.away && m.suit.wearing).length;
 
 /** Dockside: every suit locker restocked. */
 export function restockSuits(state) {

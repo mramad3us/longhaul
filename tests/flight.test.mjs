@@ -1,5 +1,6 @@
 // Flight & guidance: every route type must actually arrive, on the target,
 // co-moving, under real gravity — and the live loop must match estimates.
+import { setGravityEpoch } from '../js/sim/gravity.js';
 import { assert, fmt } from './helpers.mjs';
 import { AU_M, DAY_MIN } from '../js/core/constants.js';
 import { seedRandom } from '../js/core/rng.js';
@@ -31,6 +32,7 @@ function flyLive(state, plan, maxMin) {
   let fuel = 0;
   for (let i = 0; i < maxMin; i++) {
     const t = state.clock.minute;
+    setGravityEpoch(t);              // (as the minute tick does: gravity.js)
     world.tick(t, state.flight.pos);
     const tgt = targetStateAt(state, plan.target, t, true);
     const arrival = plan.kind === 'transfer' ? targetStateAt(state, plan.target, plan.arriveAt) : null;

@@ -159,3 +159,13 @@ At **battle stations** the best shot takes the weapons console, the best enginee
 Time warp is capped by the tactical picture: 1× when a torpedo is under 30 minutes out, a hostile is inside 75,000 km, or a demand awaits an answer; 2× within six hours or 750,000 km.
 
 Shooting at a lawful ship is a crime (WORLD.md). Shooting back at whoever fired first never is.
+
+## Stations
+
+Stations fight too (`station-defense.js`, DOCKING.md): PDC emplacements, torpedo silos, railguns at the naval yards, armor and a structure of thousands of DP. Fire control can target a station. Its sections are its docks (DISABLE), defenses (DISARM), sensors and power plant (KILL: losing it blacks the station out). Its PDCs cover the ships in its berths and holding within 60 km. Attacking a station is a crime one step worse than the same attack on a civilian ship.
+
+**Fire.** Damage that reaches a deck of ours can start a fire there (up to a 50% chance, by the damage: SHIPBOARD.md). Before a fight, the SUITS order puts everyone in a suit, so a burning deck can be vented with its crew on it.
+
+## Boarding
+
+A ship can be taken by boarding: a party of our crew through a mated collar or by EVA, against however many of its crew resist (DOCKING.md). A wreck can be salvaged, run after run, and any secured hull's accounts cracked for its credits.

@@ -4,7 +4,19 @@ Modules: `sim/ephemeris.js` (bodies), `sim/flight.js` (our ship's dynamics), `si
 
 ## The solar system
 
-Planets, moons and the major asteroids move on analytic circular orbits (`ephemeris.js`, the only place body positions are computed). Heliocentric periods follow Kepler's third law from GM☉, so a free body at a planet's radius co-orbits with it exactly. Positions are in AU, velocities in m/s, angles in radians in the solar frame. Only solar gravity acts on ships; planets are destinations, not gravity wells.
+Planets, moons and the major asteroids move on analytic circular orbits (`ephemeris.js`, the only place body positions are computed). Heliocentric periods follow Kepler's third law from GM☉, so a free body at a planet's radius co-orbits with it exactly. Positions are in AU, velocities in m/s, angles in radians in the solar frame.
+
+## Gravity (`gravity.js`) and the ground (`terrain.js`)
+
+Free flight (our ship, NPCs at the helm, torpedoes, drifting hulks) falls under the Sun and every body with mass within three times its sphere of influence: Ceres pulls 0.28 m/s² at its surface and 0.019 G at its port's gate, Luna 0.014 G at its yards' orbit, Jupiter 0.011 G at Ganymede. A body's pull is taken from where it is at the moment asked (integrators pass the time; the minute tick sets `setGravityEpoch` for those that don't), since a minute's error in Ceres' place is a thousand kilometres.
+
+Holding a place costs the thrust between how the place moves and how we would fall there: a slot in a holding pattern (a free orbit) costs nothing; hovering at a surface port's gate costs most of the rock's pull (0.0175 G at Ceres, kept on RCS when the drive is down, as RCS gives 0.02 G); resting on the ground costs nothing. Hovering off a berth while docking costs the same (`docking.hoverG`).
+
+**The ground.** A ship that stops thrusting by a rock falls: from Ceres' gate it hits in about 17 minutes at some 200 m/s. Flying free near a body, the nav computer calls the ground out at 30, 10, 3 and 1 minutes to impact (only the last minute while a route is flying: the guard below watches for it). Contact is judged against the turning surface: up to 2 m/s a touch; above, hull damage with the square of the speed, the whole hull at 50 m/s. A ship that survives rests on the surface (a hold on the ground) until a route lifts it. NPC hulls that come down are wrecked and left on the surface; torpedoes are spent.
+
+**The terrain guard.** Routes are planned through empty space, so the nav computer (and every NPC pilot) flies a guard over them near a body: when the line to the target passes through the rock, or the path on the present command (flown out in 30-second steps under the pull) meets the ground within 5 minutes (15 while climbing) plus, on a route only passing the rock with nothing holding the ship up against the pull, what saving it would take (a half turn, six minutes, and the time the drive needs to stop the fall), it climbs off the local vertical (straight up while within 20 km of the ground, where a turn to lean would cost height it hasn't got) and round the limb toward the target's side at the speed five minutes of the drive gives (400–1,200 m/s out, 1.8× that round, under a port's speed limit), the pull covered; then the route flies on. It overrides the flip interlock and traffic control's drive cap: pulling up beats throwing the crew about. A target behind a rock is come at round it instead: the route flies first to a point four radii out between our side and the target's, moving with the body, and on to the target when the line clears (`viaPoint`). The planner flies the same guard, so its estimates are what will be flown. While the crew strap in before a route, a ship not held by anything keeps its height (a climb out of a port is kept).
+
+Bodies don't steer route *plans* yet (a route can graze a planet: guidance then takes a turn or two more), and there is no atmosphere: entry and flight in air come with planetside ports.
 
 ## Our ship's dynamics (`flight.js`)
 
@@ -63,7 +75,8 @@ A target is `{ kind: 'body' | 'entity' | 'player', id }`. Standoffs:
 
 | Standoff | Distance |
 |---|---|
-| dock | 3 km off a station |
+| dock | to a station's approach gate (1 km), then docking (DOCKING.md) |
+| gate | hold at a station's approach gate |
 | formation | 2 km off a ship |
 | close | 100,000 km |
 | scanner | 15M km |
@@ -81,6 +94,12 @@ A target is `{ kind: 'body' | 'entity' | 'player', id }`. Standoffs:
 | COMBAT 5G / ASSAULT 7G / FLANK 10G | battle stations only; FLANK overdrives the drive |
 
 A thrusting target can only be caught by out-accelerating it.
+
+**Speed limits into a port.** A plan into a port (a station, its gate, a berth's corridor, a holding slot) carries the port (`plan.port`) and keeps under traffic control's limits: no faster than what brakes down, at the closing law's margin, to 2,700 m/s at the approach (3,000 less 10%) and 180 m/s at the gate, looking ahead by four minutes at the capped speed (a flip's worth); round a small rock, 1,000 m/s within five of its radii (or three times an orbit's speed there, whichever is faster: round a moon the size of Luna that tier is above the approach limit and drops out). Far out the cap is the law's own braking curve, so it only bites near the port.
+
+A route to a station ends at its **approach gate** (`routeTarget`): a point straight up from it, outside the keep-out zone, turning with it. The last stretch to a berth is docking (DOCKING.md). Inside a station's gate the nav computer holds the drive to 0.1 G (traffic control: no torch near a station), battle stations aside. A route plotted while docked undocks first (a departure clearance is ours to ask for), backs out through the hold point, and the docking computer climbs out of the corridor on the RCS in the berth's frame (0.02 G, to 180 m/s) to just through the gate, where the route takes the ship (DOCKING.md). A 100 km gate takes about the quarter hour the walk to the couches does, so the route can light its drive when the crew are in. A ship free inside a gate while its crew strap in is carried out the same way on the RCS, the pull covered.
+
+A route into a holding slot (`{ kind: 'slot' }`, holding.js) ends in the slot, 200 m off its point, and holds there in free fall.
 
 ## Autopilot (`autopilot.js`)
 

@@ -6,7 +6,7 @@
 // ============================================================
 
 import { SVG_NS, TileType, renderTile, renderCrewMember, INTERACTIVE_TILES, setCrewSprite } from '../svg-icons.js';
-import { shipGeometry, DECK_GAP, seatKind, FIXTURE_KIND } from '../sim/ship-layout.js';
+import { shipGeometry, DECK_GAP, seatKind, FIXTURE_KIND, airlockFor } from '../sim/ship-layout.js';
 import { SYSTEM_BY_FIXTURE } from '../sim/systems.js';
 import { systemClass } from './shipboard.js';
 import { atmoStatus } from '../sim/life-support.js';
@@ -23,9 +23,11 @@ let plumeEl = null;
 let rcsEl = null;
 let rcsMode = null;
 let atmoDots = [];
+let fireRects = [];
 let sysLeds = [];       // { el, id } status light on each machine
 let hullBox = null;
 let handlers = {};
+let litLock = null;
 
 // ---- HULL OUTLINE (shared with the tactical renderer) ----
 
@@ -80,8 +82,10 @@ export function buildShipView(container, state, on) {
   container.innerHTML = '';
   crewEls = new Map();
   atmoDots = [];
+  fireRects = [];
   sysLeds = [];
   rcsEl = null; rcsMode = null;
+  litLock = null;
   const ship = state.ship;
   const geo = shipGeometry(ship);
   const cols = geo.cols;
@@ -118,6 +122,7 @@ export function buildShipView(container, state, on) {
     parts.push(`<path class="hull-outline" d="${hull}" fill="none" stroke="#2D5A6A" stroke-width="2" opacity="0.6"/>`);
   }
   svg.innerHTML = parts.join('');
+  svg.addEventListener('click', (e) => { const l = e.target.closest('[data-deck-menu]'); if (l) { e.stopPropagation(); handlers.deckMenu?.(+l.dataset.deckMenu, e.clientX, e.clientY); } });
 
   // Decks: tiles, labels, status lights, shaft connectors
   ship.decks.forEach((deck, di) => {
@@ -146,12 +151,15 @@ export function buildShipView(container, state, on) {
       }
       g.appendChild(tile);
     }));
+    // a fire on the deck: a flicker over its floor (fire.js), shown while it burns
+    g.insertAdjacentHTML('beforeend', `<rect class="deck-fire" x="${LABEL_W + TILE}" y="${OFFSET_Y + y0 * TILE}" width="${(cols - 2) * TILE}" height="${rows * TILE}" display="none" pointer-events="none"/>`);
+    fireRects[di] = g.lastElementChild;
     g.addEventListener('contextmenu', (e) => { e.preventDefault(); handlers.deckMenu?.(di, e.clientX, e.clientY); });
     svg.appendChild(g);
 
     const cy = OFFSET_Y + (y0 + rows / 2) * TILE;
     svg.insertAdjacentHTML('beforeend',
-      `<text class="deck-label" x="${LABEL_W - 10}" y="${cy + 3}" font-family='"Press Start 2P", monospace' font-size="7" fill="#3A4E62" text-anchor="end">${deck.name.toUpperCase()}</text>` +
+      `<text class="deck-label" data-deck-menu="${di}" x="${LABEL_W - 10}" y="${cy + 3}" font-family='"Press Start 2P", monospace' font-size="7" fill="${deck.zone === 'pax' ? '#8A7A50' : '#3A4E62'}" text-anchor="end"><title>Compartment: air, vents, breach</title>${deck.name.toUpperCase()}</text>` +
       `<rect x="${LABEL_W - 6}" y="${cy - 1}" width="3" height="3" fill="${deck.glow?.accent || '#3A4E62'}" opacity="0.6"/>` +
       `<rect class="atmo-indicator" data-deck-atmo="${di}" x="${LABEL_W - 6}" y="${cy + 5}" width="3" height="3" fill="#4FD1C5"><title>Atmosphere</title></rect>`);
     atmoDots[di] = svg.lastElementChild;
@@ -202,19 +210,34 @@ export function buildShipView(container, state, on) {
 // The cross-section scales to the viewport (never above 1:1, so the pixel
 // art stays crisp on screens big enough to show the whole ship).
 
-let fitObserver = null;
+let fitObserver = null, fitTarget = null, fitSize = null;
 function fitToViewport(container, W, H) {
+  fitTarget = container;
+  fitSize = { W, H };
+  refitShipView();
+}
+
+/**
+ * Fit the cross-section to whatever slot holds it now (the stage moves it:
+ * stage.js). In the main view it never shrinks below 45% (the pixel art
+ * stays legible; it scrolls); in an inset it shrinks to fit.
+ */
+export function refitShipView() {
   fitObserver?.disconnect();
-  const viewport = container.parentElement;
-  if (!viewport || typeof ResizeObserver === 'undefined') return;
+  const container = fitTarget;
+  const host = container?.parentElement;
+  if (!host || !root || typeof ResizeObserver === 'undefined') return;
+  const { W, H } = fitSize;
+  const inset = host.classList.contains('stage-pip');
   const apply = () => {
-    const k = Math.min(1, (viewport.clientWidth - 24) / W, (viewport.clientHeight - 16) / H);
-    const scale = Math.max(0.45, k);
+    // (in the inset, the top 18 px are the label's)
+    const k = Math.min(1, (host.clientWidth - (inset ? 4 : 24)) / W, (host.clientHeight - (inset ? 22 : 16)) / H);
+    const scale = inset ? Math.max(0.05, k) : Math.max(0.45, k);
     root.style.width = `${Math.round(W * scale)}px`;
     root.style.height = `${Math.round(H * scale)}px`;
   };
   fitObserver = new ResizeObserver(apply);
-  fitObserver.observe(viewport);
+  fitObserver.observe(host);
   apply();
 }
 
@@ -293,7 +316,7 @@ export function spriteKey(m, g) {
   if (seat === 'medbay') return 'medbay';
   if (seat === 'couch') return suit ? 'suitedSecured' : 'secured';
   if (seat === 'bunk') return 'sleeping';
-  if (seat === 'helm' || seat === 'ops' || seat === 'engStation') return suit ? 'suitedSecured' : 'seated';
+  if (seat === 'helm' || seat === 'ops' || seat === 'weapons' || seat === 'engStation') return suit ? 'suitedSecured' : 'seated';
   if (m.dead || !isConscious(m) || m.task?.type === 'carried') {
     if (suit) return floating ? 'suitedProneFloat' : 'suitedProne';
     return floating ? 'unconsciousFloat' : 'unconsciousFloor';
@@ -320,6 +343,20 @@ export function updateShipView(state, alpha) {
     setCrewSprite(el, spriteKey(m, g));
     el.classList.toggle('selected', selected === m.id);
     el.classList.toggle('crew-dead', !!m.dead);
+    // aboard another hull, or ashore: not on our decks
+    const away = !!m.away;
+    if (el.dataset.away !== String(away)) { el.dataset.away = String(away); el.style.display = away ? 'none' : ''; }
+  }
+
+  // The collar we are docked by: its airlock is lit (and the outer hatch open)
+  const lockId = state.dock && (state.dock.phase === 'docked' || state.dock.phase === 'seal') ? state.dock.port : null;
+  if (lockId !== litLock) {
+    litLock = lockId;
+    root.querySelectorAll('.airlock-lit').forEach(n => n.classList.remove('airlock-lit'));
+    if (lockId) {
+      const f = airlockFor(state.ship, lockId);
+      if (f) root.querySelector(`.tile-interactive[data-deck="${f.deck}"][data-x="${f.x}"][data-y="${f.y}"]`)?.classList.add('airlock-lit');
+    }
   }
 
   // Torch: visible whenever the main drive is lit, brightness ∝ thrust
@@ -332,12 +369,18 @@ export function updateShipView(state, alpha) {
   if (mode !== rcsMode) { rcsMode = mode; drawRCS(mode); }
 
   // Compartment status lights
-  const COLORS = { nominal: '#4FD1C5', warning: '#E2A355', critical: '#E25555', breached: '#FF2222', vented: '#FF2222', vacuum: '#661111', unknown: '#3A4E62' };
+  const COLORS = { nominal: '#4FD1C5', warning: '#E2A355', critical: '#E25555', breached: '#FF2222', vented: '#FF2222', vacuum: '#661111', fire: '#FF8C1A', unknown: '#3A4E62' };
   state.ship.decks.forEach((d, i) => {
     const dot = atmoDots[i];
     if (dot) {
       const c = COLORS[atmoStatus(d.atmosphere)] || COLORS.unknown;
       if (dot.getAttribute('fill') !== c) dot.setAttribute('fill', c);
+    }
+    const fr = fireRects[i];
+    if (fr) {
+      const f = d.atmosphere?.fire;
+      fr.setAttribute('display', f ? 'inline' : 'none');
+      if (f) fr.style.setProperty('--fire', (0.15 + 0.45 * f.intensity).toFixed(2));
     }
   });
 

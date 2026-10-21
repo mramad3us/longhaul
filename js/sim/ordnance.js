@@ -53,6 +53,7 @@
 // flight: PDC strafing, and mining gear turned on a ship at a few km.
 // ============================================================
 
+import { groundCheck } from './terrain.js';
 import { AU_M, G0, MIN_S, DAY_MIN, RANGE } from '../core/constants.js';
 import { random, gaussian } from '../core/rng.js';
 import { getWorld, stepFree } from './world.js';
@@ -181,6 +182,8 @@ export function moveOrdnance(state, emit = () => {}) {
     e.t = now;
     world.hash.update(e);
   }
+  // A round that meets the ground is spent (terrain.js)
+  for (let i = list.length - 1; i >= 0; i--) if (groundCheck(state, list[i], emit)) { retire(world, list[i], 'impact', emit); list.splice(i, 1); }
 
   // Encounters this minute, grouped by target for point defense
   const byTarget = new Map();
@@ -358,6 +361,15 @@ function defendersOf(state, targetId) {
     const p = profile(state, PLAYER);
     const d = Math.hypot(state.flight.pos.x - tk.pos.x, state.flight.pos.y - tk.pos.y) * AU_M;
     if (p.pdc.mounts > 0 && d <= p.pdc.rangeM) out.push({ id: PLAYER, p, cover: 0.5 });
+  }
+  // A station's guns cover the ships berthed and holding close by it (and its own)
+  for (const st of getWorld(state).stations) {
+    if (st.id === targetId || !st.combat || st.combat.status !== 'ok') continue;
+    const d = Math.hypot(st.pos.x - tk.pos.x, st.pos.y - tk.pos.y) * AU_M;
+    if (d > 60_000) continue;
+    if (targetId === PLAYER ? st.combat.hostile.includes(PLAYER) : st.combat.hostile.includes(targetId)) continue;
+    const p = profile(state, st.id);
+    if (p.pdc.mounts > 0 && d <= p.pdc.rangeM) out.push({ id: st.id, p, cover: 0.6 });
   }
   // NPC wingmen of the same side
   const e = tk.e;

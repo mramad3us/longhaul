@@ -14,7 +14,9 @@ import { hashString } from '../core/rng.js';
 import { getWorld } from '../sim/world.js';
 import { liveKnowledge } from '../sim/intel.js';
 import { factionColor } from '../sim/factions.js';
-import { CLASSES, SHAPES } from '../sim/ship-classes.js';
+import { CLASSES } from '../sim/ship-classes.js';
+import { hullOf } from '../sim/hulls.js';
+import { drawHull as drawHullArt } from './hull-art.js';
 import { fxList } from './fx.js';
 import { FitCanvas } from './dom.js';
 import { buildHullPath } from './ship-view.js';
@@ -373,72 +375,14 @@ function drawSilhouette(ctx, e, x, y, heading, color, seed, t, big) {
     ctx.restore();
     return;
   }
-  // Ships point along their heading (screen frame: 0 = right, so rotate to nose-up art)
-  ctx.rotate(-heading + Math.PI / 2);
-  // On-screen length grows with the log of the real hull length (30 m skiff … 1.4 km hauler)
+  // On-screen length grows with the log of the real hull length (30 m skiff … 1.4 km hauler),
+  // drawn from the class's hull model
   const c = CLASSES[e.cls];
+  const hull = hullOf(e.cls);
   const lenM = c?.lengthM || 60;
   const h = (10 + 9 * Math.log10(lenM / 20)) * (big ? 1.6 : 1) * (0.95 + rand(0) * 0.1);
-  const shape = SHAPES[c?.shape] || SHAPES.freighter;
-  ctx.globalAlpha = 0.85;
-  traceShape(ctx, shape, h);
-  ctx.stroke();
-  drawShapeFeatures(ctx, shape, h);
-  const stern = h / 2;
-  const hw = Math.max(1.5, shape.segs[shape.segs.length - 1][1] * h);
-  if (e.thrust > 0) {
-    ctx.globalAlpha = 0.6 + 0.3 * Math.sin(t * 30);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(-hw * 0.5, stern, hw, 2 + h * 0.2);
-    ctx.fillStyle = 'rgba(160,200,255,0.5)';
-    ctx.fillRect(-hw * 0.3, stern + 2 + h * 0.2, hw * 0.6, h * 1.5);
-  }
   ctx.restore();
-}
-
-/**
- * Outline of a class silhouette (ship-classes.js SHAPES), nose up, length h px:
- * the bow segment tapers to a point, the rest are blocks of their own width.
- */
-export function traceShape(ctx, shape, h) {
-  const pts = [];
-  let y = -h / 2;
-  shape.segs.forEach(([lf, wf], i) => {
-    const w = Math.max(0.8, wf * h);
-    const y1 = y + lf * h;
-    if (i === 0) { pts.push([0, y], [w, y1]); }
-    else { pts.push([w, y], [w, y1]); }
-    y = y1;
-  });
-  ctx.beginPath();
-  ctx.moveTo(pts[0][0], pts[0][1]);
-  for (const [x, yy] of pts) ctx.lineTo(x, yy);
-  for (let i = pts.length - 1; i >= 1; i--) ctx.lineTo(-pts[i][0], pts[i][1]);
-  ctx.closePath();
-}
-
-export function drawShapeFeatures(ctx, shape, h) {
-  const segY = (i) => -h / 2 + shape.segs.slice(0, i).reduce((s, x) => s + x[0], 0) * h;
-  if (shape.ring) {
-    const ry = -h / 2 + shape.ring * h;
-    ctx.beginPath(); ctx.ellipse(0, ry, h * 0.22, h * 0.06, 0, 0, Math.PI * 2); ctx.stroke();
-  }
-  if (shape.tanks) {
-    const i = 1, y0 = segY(i), len = shape.segs[i][0] * h;
-    for (let k = 0; k < shape.tanks; k++) {
-      ctx.beginPath(); ctx.arc(0, y0 + len * (k + 0.5) / shape.tanks, Math.max(1.5, len / shape.tanks * 0.42), 0, Math.PI * 2); ctx.stroke();
-    }
-  }
-  if (shape.cargo != null) {
-    const i = shape.cargo, y0 = segY(i), len = shape.segs[i][0] * h, w = shape.segs[i][1] * h;
-    ctx.globalAlpha *= 0.35;
-    ctx.fillRect(-w, y0, w * 2, len);
-    ctx.globalAlpha /= 0.35;
-  }
-  if (shape.fins) {
-    const last = shape.segs[shape.segs.length - 1], w = last[1] * h, y = h / 2;
-    ctx.beginPath(); ctx.moveTo(w, y - h * 0.18); ctx.lineTo(w * 1.6, y); ctx.moveTo(-w, y - h * 0.18); ctx.lineTo(-w * 1.6, y); ctx.stroke();
-  }
+  if (hull) drawHullArt(ctx, hull, { x, y, facing: heading, scale: h / hull.L, view: 'top', tint: color, detail: 1, plume: e.thrust > 0 ? Math.min(3, e.thrust) * 0.3 : 0, t, lights: false, alpha: 0.9 });
 }
 
 /** A torpedo (bright point, plume when its drive is lit) or a railgun slug (a streak). */

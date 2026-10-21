@@ -20,7 +20,7 @@ Each power projects influence from the bodies it holds (`INFLUENCE_SOURCES`), wi
 
 ## Who is out there (`sim/traffic.js`, `sim/forces.js`)
 
-A new game has **3,000 traffic ships** (`DEFAULT_TRAFFIC`). They berth at the stations and fly between them on analytic courses. A ship picks its next port by distance and flag: weight 3 for its own power's ports, 1.5 where either side is independent, 1 otherwise, divided by (0.5 + distance in AU). So the Belt trades mostly with itself, and Earth–Mars is a busy lane.
+A new game has **3,000 traffic ships** (`DEFAULT_TRAFFIC`), nine in ten of them under way. They fly between the stations on analytic courses and make **port calls** there (DOCKING.md): a berth only for the work that needs one, the layover in the holding pattern. A ship picks its next port by distance and flag: weight 3 for its own power's ports, 1.5 where either side is independent, 1 otherwise, divided by (0.5 + distance in AU). So the Belt trades mostly with itself, and Earth–Mars is a busy lane.
 
 Every power also keeps hulls in space. They are real entities on rails, indexed in `world.forces`:
 
@@ -117,7 +117,7 @@ An inspection takes 45 minutes alongside. Burning away or opening the distance c
 
 ## Law (`sim/law.js`)
 
-Each power keeps **standing** (−100 to 100) and a **wanted level** for us: CLEAN, SUSPECT (stopped and searched; a fine settles it), WANTED (heave to or be disabled), HOSTILE (shot on sight).
+Each power keeps **standing** (−100 to 100), a **wanted level** for us, and the **citations** we owe it (fines from traffic control: DOCKING.md; a week unpaid makes us SUSPECT): CLEAN, SUSPECT (stopped and searched; a fine settles it), WANTED (heave to or be disabled), HOSTILE (shot on sight).
 
 A crime is recorded against the victim's power and the power whose space it happened in. Escalations count once per victim: fired on 1, disabled 2, destroyed 3, +1 if the victim was military or police. Each crime costs 10 standing per severity point. Firing on pirates, wanted criminals, wrecks or anyone who shot first is not a crime; destroying pirates earns a little standing with the local power. Resisting an inspection raises our wanted level to WANTED.
 
@@ -127,13 +127,13 @@ A crime is recorded against the victim's power and the power whose space it happ
 
 ## Stations, contracts and distress calls
 
-Eight stations (`sim/entities.js`):
-- OPA: Ceres, Pallas, Hygiea Ring, Tycho (at Juno)
-- UN: Luna Shipyards
-- MCR: Phobos Naval Yard
-- independent: Vesta Depot, Ganymede
+Eight stations (`sim/stations.js`; where they are, their berths, traffic control and docking: DOCKING.md):
+- OPA: Ceres, Pallas (surface ports), Hygiea Ring, Tycho (orbiting Juno)
+- UN: Luna Shipyards (orbiting Luna)
+- MCR: Phobos Naval Yard (on Phobos)
+- independent: Vesta Depot (on Vesta), Ganymede (orbiting it)
 
-"Docked" means holding station within 50 km. Docked, you can buy fuel, water, food, gases, med supplies, spare parts and ammunition, and pay for a dockside overhaul (hull, every system, suits, containment). Spare parts and the overhaul are priced at our ship's tech level (×0.6 for a Belt refit up to ×2.5 for Martian kit), and hull plating by the size of its structure. Hailing a station in radio range opens its board. Boards refresh every 12 hours while in long sensor range. Every contract is a physical errand with something to fly to (`sim/contracts.js`):
+The contract board, news, the traffic board, clearances and fines are radio work, from anywhere in radio range. Signing for a contract takes being **in port**: docked, or inside the station's port space (its approach, 2,000 km, where its holding pattern is: `holding.PORT_M`). Work that ends in a report (a survey, an investigation, a bounty, recon, an escort brought in) is turned in from port too. Everything that crosses a collar takes a hard seal in one of the station's berths ("docked": docking.js): loading cargo and passengers, delivering them, fuel, salvage and medevacs, every service, the hiring hall and shore leave. Docked, you can buy fuel, water, food, gases, med supplies, spare parts and ammunition, and pay for a dockside overhaul (hull, every system, suits, containment). Spare parts and the overhaul are priced at our ship's tech level (×0.6 for a Belt refit up to ×2.5 for Martian kit), and hull plating by the size of its structure. Hailing a station opens a channel to its traffic control (below). Boards refresh every 12 hours while in long sensor range. Every contract is a physical errand with something to fly to (`sim/contracts.js`):
 
 | Contract | Work |
 |---|---|
@@ -154,3 +154,32 @@ Stations near hot zones (within 0.6 AU) also post conflict work, up to 40% of th
 | RECON | get within 300,000 km of a navy picket and hold a sensor lock on it for 30–90 minutes. Identification by that navy blows the job (and costs standing) | 4,000–9,000 |
 
 **UNDER ATTACK** distress calls come from the director's ambushes. Accepting puts the victim under our point defense. Once the raiders are dead, beaten, gone or have lost interest, hold formation and hail to complete.
+
+## Hailing (`sim/dialogue.js`)
+
+Hailing opens a channel, and a channel is a conversation: topics we can raise and what the other side says back, by who they are, how they see us, and where we stand. The comms window (`H`) lists the stations and ships in radio range (stations first, with signal and light lag), the conversation, and a card of what we know of them.
+
+| Counterpart | Topics |
+|---|---|
+| Station (traffic control) | approach, docking (or an emergency berth), departure, cancel; the traffic board (berths, the anchorage, and the manifests of the ships berthed: their declared crews); news; the registry on any ship in range; the contract board; services, the hiring hall, shore leave (docked); pay citations; hand over prisoners |
+| Civilian | identify, souls aboard, where bound, what they have seen (real zones on our plot, real pirates near them), a rendezvous to dock, buying supplies over the collar, help when we are in trouble, a warning about pirates near them, an order to heave to (a crime against a lawful ship) |
+| Police | identify, souls, our record, settle our record, report a pirate contact (they go after it), surrender to them when wanted |
+| Navy | identify, souls (not to strangers), passage through their zone (standing 10, clean, transponder on), news |
+| Pirate | who are you, a counter-offer of half when they demand, a bribe to go away, threats (they leave if we are much the stronger) |
+| A crew that struck, or a dead hull | souls aboard, open your locks (boarding is then by invitation), an offer to take survivors off, hold still while we come alongside |
+
+**Attitude** (−1 … 1) is the other side's view of us: its power's standing and wanted level, whether we fired on it, our transponder, and its trade (stations and civilians take most callers at their word; navies and pirates trust nobody). Honest ships tell the truth about their souls aboard; a hostile one may not; pirates don't say. Voices follow the flag (a Belter station speaks Lang Belta in its English).
+
+## Who is aboard (`sim/manifest.js`)
+
+Every ship has people aboard: its class's complement (SHIPS.md), its own number in the range fixed by its identity, fewer after casualties, and passengers on liners. We never see inside another hull; what we know has a source and an age, the best source winning:
+
+| Source | Gives |
+|---|---|
+| Registry | once identified, the class: its rated complement |
+| Manifest | traffic control's declarations: in station digests (berthed ships and filed plans), and the traffic board when asked |
+| Hail | what they say when asked (honest ships truthfully) |
+| Scan | a long close look (inside 100 km, 90 minutes of track): a thermal count of the living, ± a third (a sixth with ops on watch), the locked contact and the nearest few |
+| Boarded | a count taken aboard: exact |
+
+The dossier keeps what we learned (1,500 ships at most, the oldest dropped). Notable learning is logged; the contact panel and the comms card show it.

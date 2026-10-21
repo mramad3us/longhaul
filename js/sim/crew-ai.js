@@ -19,8 +19,9 @@
 // shaft; the renderer interpolates between minutes using $px/$py.
 // ============================================================
 
+import { fightFire, FIRE } from './fire.js';
 import { randInt, pick } from '../core/rng.js';
-import { shipGeometry, findPath, nearestNode, deckNodes, isSecureSeat, seatKind } from './ship-layout.js';
+import { shipGeometry, findPath, nearestNode, deckNodes, isSecureSeat, seatKind, airlockFor, walkDistance } from './ship-layout.js';
 import { TileType } from './tiles.js';
 import { isConscious, isAble, needsMedical, mobility, stabilize, medbayTick, hasCondition } from './crew.js';
 import { JobType, JOB_PRIORITY, JOB_SKILL, addJob, closeJob } from './jobs.js';
@@ -100,7 +101,7 @@ export function activePilot(state) {
 }
 
 export function crewSecureStatus(state) {
-  const able = state.ship.crew.filter(isConscious);
+  const able = state.ship.crew.filter(m => isConscious(m) && !m.away);
   const helm = helmsman(state);
   const pilot = helm || activePilot(state);
   // With a working flight computer every couch has helm repeaters; with
@@ -195,7 +196,7 @@ function taskLevel(t) {
     case 'carried': return 0;
     case 'secure': return 1;
     case 'suit': return 2;
-    case 'rescue': case 'helm': return 3;
+    case 'rescue': case 'helm': case 'board': return 3;
     case 'reactor': case 'work': return JOB_LEVEL[t.priority] ?? 4;
     case 'heal': return 5;
     case 'sleep': return t.exhausted ? 6 : 8;
@@ -214,7 +215,7 @@ export function abandonTask(state, m) {
   }
   if (m.task?.type === 'rescue' && m.task.phase === 'carry') dropPatient(state, m);
   if (m.seat && !(m.task?.type === 'heal' && m.seat.startsWith('medbay'))) leaveSeat(state, m);
-  m.suit.keep = false;
+  m.suit.keep = !!state.suitsOn;              // (under the SUITS order the suit stays on whatever the task)
   m.task = null;
   m.path = [];
 }
@@ -280,8 +281,8 @@ function eligible(state, m, job, env) {
   if (!isAble(m)) return false;
   if (job.type === JobType.RESCUE && job.data.patient === m.id) return false;
   if (job.data.engineer != null && job.data.engineer !== m.id) return false;
-  if (job.type === JobType.SEAL && !m.suit.wearing && !lockerWithSuit(state, m)) return false;
-  if (job.type !== JobType.SEAL && job.type !== JobType.RESCUE) {
+  if ((job.type === JobType.SEAL || job.type === JobType.FIRE) && !m.suit.wearing && !lockerWithSuit(state, m)) return false;
+  if (job.type !== JobType.SEAL && job.type !== JobType.FIRE && job.type !== JobType.RESCUE) {
     const f = jobFixture(state, m, job);
     if (f && !reachable(state, m, f.deck)) return false;
   }
@@ -333,7 +334,18 @@ function jobFixture(state, m, job) {
   if (job.type === JobType.REACTOR) return nearestFixture(state, m, 'reactor');
   if (job.type === JobType.HELM) return nearestFixture(state, m, 'helm');
   if (job.type === JobType.SEAL) return breachSpot(state, job.data.deck);
+  if (job.type === JobType.FIRE) return fireSpot(state, job.data.deck);
   return null;
+}
+
+/** Where to fight a fire: the open floor in the middle of the deck. */
+function fireSpot(state, deck) {
+  const geo = shipGeometry(state.ship);
+  const nodes = deckNodes(geo, deck).map(i => geo.nodes[i]);
+  if (!nodes.length) return null;
+  const cx = geo.cols / 2;
+  const n = nodes.sort((a, b) => Math.abs(a.x - cx) - Math.abs(b.x - cx) || a.y - b.y)[Math.floor(nodes.length / 3)];
+  return { sx: n.sx, sy: n.sy, deck, access: geo.index.get(geo.key(n.deck, n.x, n.y)) };
 }
 
 /** Where to work on a hull breach: the open floor nearest the deck's outer hull. */
@@ -361,8 +373,8 @@ function startJob(state, m, job) {
   if (job.type === JobType.HELM) {
     m.task = { type: 'helm', jobId: job.id, phase: 'goto', seat: f.id };
     goToSeat(state, m, f);
-  } else if (job.type === JobType.SEAL && !m.suit.wearing) {
-    // Into vacuum: suit up first, then go
+  } else if ((job.type === JobType.SEAL || job.type === JobType.FIRE) && !m.suit.wearing) {
+    // Into vacuum, or smoke: suit up first, then go
     const locker = lockerWithSuit(state, m);
     m.task = { type: 'suit', locker: locker.id, phase: 'goto', timer: 0, thenJob: job.id, priority: job.priority, jobId: job.id };
     goToNode(state, m, locker.access);
@@ -371,7 +383,7 @@ function startJob(state, m, job) {
     goToNode(state, m, standNode(geo, f));
   } else {
     m.task = { type: 'work', jobId: job.id, kind: job.type, system: job.data.system ?? null, deck: job.data.deck ?? null, priority: job.priority, phase: 'goto', progress: 0, need: 0 };
-    if (job.type === JobType.SEAL) m.suit.keep = true;
+    if (job.type === JobType.SEAL || job.type === JobType.FIRE) m.suit.keep = true;
     goToNode(state, m, f.access ?? standNode(geo, f));
   }
 }
@@ -402,19 +414,80 @@ function battleSeat(state, m) {
   return best('security', [gunner, eng]) === m ? 'ops' : null;
 }
 
-function assignSecure(state, m) {
+function assignSecure(state, m, plan = null) {
   const pilot = activePilot(state) === m;
   let seat = null;
   const ok = (f) => reachable(state, m, f.deck);
   if (pilot) seat = nearestFixture(state, m, 'helm', true, ok);
   const station = !pilot && battleSeat(state, m);
   if (station) seat = nearestFixture(state, m, station, true, ok);
+  const planned = plan?.get(m.id);
+  if (!seat && planned && !taken(state, planned.id, m) && ok(planned)) seat = planned;
   seat ||= nearestFixture(state, m, 'couch', true, ok);
+  // No couch free: every station seat is an acceleration couch too (a full
+  // crew fills the couches, and nobody may be standing at ops or fire control)
+  for (const kind of ['ops', 'weapons', 'engStation', 'helm']) seat ||= nearestFixture(state, m, kind, true, ok);
   if (!seat) return false;
   abandonTask(state, m);
   m.task = { type: 'secure', seat: seat.id };
   goToSeat(state, m, seat);
   return true;
+}
+
+/**
+ * Who takes which couch, for everyone still on their feet, by the real
+ * walk: the assignment whose longest walk is shortest (the ship is secure
+ * when the last one sits). Nearest-couch-first would send whoever moves
+ * last the length of the ship. The plan only decides a first pick: someone
+ * already walking keeps going (changing course every minute, nobody sits).
+ * A dozen people and couches at most, so a search over the walk lengths
+ * with a matching at each is cheap.
+ */
+function planCouches(state) {
+  const geo = shipGeometry(state.ship);
+  // The pilot takes the helm, if it is free for them (someone else may hold it)
+  let pilot = activePilot(state);
+  if (pilot && !nearestFixture(state, pilot, 'helm', true)) pilot = null;
+  // (asleep in a rack counts: a rack is a restraint, not a couch)
+  const crew = state.ship.crew.filter(m => isAble(m) && !m.away && m !== pilot && !isSecured(m) && m.task?.type !== 'secure' && !battleSeat(state, m) && m.task?.type !== 'helm');
+  if (!crew.length) return null;
+  const mine = new Set(crew.map(m => m.id));
+  const claimed = new Set();
+  for (const o of state.ship.crew) {
+    if (mine.has(o.id)) continue;
+    if (o.seat) claimed.add(o.seat);
+    else if (!o.dead && o.task?.seat) claimed.add(o.task.seat);
+  }
+  const free = (geo.fixtures.couch || []).filter(f => !claimed.has(f.id) && f.access != null);
+  if (!free.length) return null;
+  const dist = crew.map(m => { const from = nearestNode(geo, m.pos.sx, m.pos.sy); return free.map(f => walkDistance(geo, from, f.access)); });
+  const lengths = [...new Set(dist.flat().filter(isFinite))].sort((a, b) => a - b);
+  const want = Math.min(crew.length, free.length);
+  const match = (limit) => {
+    const owner = new Array(free.length).fill(-1);
+    const tryCrew = (i, seen) => {
+      for (let j = 0; j < free.length; j++) {
+        if (dist[i][j] > limit || seen[j]) continue;
+        seen[j] = true;
+        if (owner[j] < 0 || tryCrew(owner[j], seen)) { owner[j] = i; return true; }
+      }
+      return false;
+    };
+    let n = 0;
+    for (let i = 0; i < crew.length; i++) if (tryCrew(i, [])) n++;
+    return n >= want ? owner : null;
+  };
+  // the shortest longest-walk that still seats as many as can be seated
+  let lo = 0, hi = lengths.length - 1, best = hi >= 0 ? match(lengths[hi]) : null;
+  if (!best) return null;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const m = match(lengths[mid]);
+    if (m) { best = m; hi = mid; } else lo = mid + 1;
+  }
+  const plan = new Map();
+  best.forEach((i, j) => { if (i >= 0) plan.set(crew[i].id, free[j]); });
+  return plan;
 }
 
 // ---- BAD AIR ----
@@ -521,6 +594,20 @@ function startPatrol(state, m) {
   setDestination(state, m, n.sx, n.sy);
 }
 
+/**
+ * Join a boarding party: a suit from the nearest locker if the crossing is
+ * through open space (or the other side may fight), then to the lock.
+ */
+function startBoard(state, m, bd) {
+  abandonTask(state, m);
+  const lock = airlockFor(state.ship, bd.via === 'dock' ? state.dock?.port : null);
+  const suitUp = !m.suit.wearing && (bd.via === 'eva' || bd.defenders > 0);
+  const locker = suitUp ? lockerWithSuit(state, m) : null;
+  m.task = { type: 'board', phase: locker ? 'suit' : 'goto', locker: locker?.id ?? null, lock: lock?.id ?? null, timer: 0 };
+  if (locker) goToNode(state, m, locker.access);
+  else if (lock) goToNode(state, m, lock.access ?? standNode(shipGeometry(state.ship), lock));
+}
+
 function startHeal(state, m) {
   const bed = (shipGeometry(state.ship).fixtures.medbay || [])[0];
   if (!bed) return false;
@@ -553,8 +640,10 @@ export function crewTick(state, ctx) {
   for (const m of crew) { m.$px = m.pos.sx; m.$py = m.pos.sy; }
 
   generateJobs(state);
+  const plan = secure && crew.some(m => isAble(m) && !m.away && !isSecured(m) && m.task?.type !== 'secure') ? planCouches(state) : null;
 
   for (const m of crew) {
+    if (m.away) { m.activity = m.away.captured ? 'captured' : 'away'; continue; }   // aboard another hull (boarding.js)
     if (m.dead) { if (m.task?.type !== 'carried') m.path = []; continue; }
 
     // ---- Incapacitated: drop what you were doing (couch/bed keep holding you)
@@ -570,7 +659,7 @@ export function crewTick(state, ctx) {
       m.activity = m.seat ? (m.seat.startsWith('medbay') ? 'healing' : 'secured') : 'down';
       continue;
     }
-    decide(state, m, { secure, blocks, routineCover, g });
+    decide(state, m, { secure, blocks, routineCover, g, plan });
     stepTask(state, m, ctx, g, emit, blocks.get(m.id));
   }
 
@@ -598,6 +687,25 @@ function decide(state, m, env) {
     }
   }
 
+  // ---- The SUITS order: everyone into a suit while it stands (moving about
+  // under 1.5G, a crash couch left for it if need be), and kept on (orderSuits)
+  if (state.suitsOn && !m.suit.wearing && !m.away && isAble(m) && env.g <= 1.5 && m.task?.type !== 'suit' && m.task?.type !== 'carried' && m.task?.type !== 'heal' && m.task?.type !== 'rescue') {
+    const locker = lockerWithSuit(state, m);
+    if (locker) {
+      abandonTask(state, m);
+      m.task = { type: 'suit', locker: locker.id, phase: 'goto', timer: 0, keep: true };
+      goToNode(state, m, locker.access);
+      return;
+    }
+  }
+
+  // ---- A boarding party musters at the lock (boarding.js), maneuvers or not
+  const bd = state.boarding;
+  if (bd?.phase === 'muster' && bd.party.includes(m.id) && isAble(m)) {
+    if (m.task?.type !== 'board') startBoard(state, m, bd);
+    return;
+  }
+
   // ---- 1. Secure for maneuvers
   if (secure) {
     // A dead flight computer mid-maneuver: the best available pilot takes the helm
@@ -618,7 +726,7 @@ function decide(state, m, env) {
       if (job && job.type !== JobType.HELM) { startJob(state, m, job); return; }
     }
     if (m.task?.type === 'secure') return;
-    assignSecure(state, m);
+    assignSecure(state, m, env.plan);
     return;
   }
   if (m.task?.type === 'secure') { leaveSeat(state, m); m.task = null; m.pause = randInt(1, 4); }
@@ -694,6 +802,22 @@ function stepTask(state, m, ctx, g, emit, block) {
   if (!t) { m.activity = m.seat ? 'secured' : 'idle'; return; }
 
   switch (t.type) {
+    case 'board': {
+      m.activity = t.phase === 'ready' ? 'at the lock' : t.phase === 'suit' ? 'suiting up' : 'to the lock';
+      if (t.phase === 'ready') break;
+      if (!walk(m, speed)) break;
+      if (t.phase === 'suit') {
+        if (++t.timer < 3) break;
+        const locker = state.lifeSupport.lockers[t.locker];
+        if (locker?.hasSuit && !m.suit.wearing) { locker.hasSuit = false; m.suit = { wearing: true, o2: 48, lockerId: t.locker, keep: true }; emit('crew-suited', { member: m }); }
+        t.phase = 'goto';
+        const lock = t.lock ? G.fixtureById.get(t.lock) : null;
+        if (lock) goToNode(state, m, lock.access ?? standNode(G, lock));
+        break;
+      }
+      t.phase = 'ready';
+      break;
+    }
     case 'patrol': {
       m.activity = 'idle';
       if (walk(m, speed)) { m.task = null; m.pause = randInt(3, 12); }
@@ -717,7 +841,7 @@ function stepTask(state, m, ctx, g, emit, block) {
         const locker = state.lifeSupport.lockers[t.locker];
         if (locker?.hasSuit) {
           locker.hasSuit = false;
-          m.suit = { wearing: true, o2: 48, lockerId: t.locker };
+          m.suit = { wearing: true, o2: 48, lockerId: t.locker, keep: !!(t.keep || state.suitsOn) };
           emit('crew-suited', { member: m });
         }
         const next = t.thenJob != null && state.jobs.list.find(j => j.id === t.thenJob);
@@ -930,7 +1054,7 @@ function stepEat(state, m, t, speed, emit) {
 function stepWork(state, m, t, speed, emit) {
   const job = state.jobs.list.find(j => j.id === t.jobId);
   if (!job) { m.task = null; return; }
-  const label = t.kind === JobType.MAINTAIN ? 'maintaining' : t.kind === JobType.FABRICATE ? 'fabricating' : t.kind === JobType.SEAL ? 'sealing' : 'repairing';
+  const label = t.kind === JobType.MAINTAIN ? 'maintaining' : t.kind === JobType.FABRICATE ? 'fabricating' : t.kind === JobType.SEAL ? 'sealing' : t.kind === JobType.FIRE ? 'firefighting' : 'repairing';
   if (t.phase === 'goto') {
     m.activity = `to-${label}`;
     if (walk(m, speed)) {
@@ -943,6 +1067,11 @@ function stepWork(state, m, t, speed, emit) {
     return;
   }
   m.activity = t.kind === JobType.REPAIR && t.mode === 'jury' ? 'jury-rigging' : label;
+  if (t.kind === JobType.FIRE) {
+    // an extinguisher on it each minute, until it is out (fire.js)
+    if (fightFire(state, t.deck, FIRE.FIGHT * efficiency(m), emit)) { closeJob(state, job); m.suit.keep = !!state.suitsOn; m.task = null; m.pause = 2; }
+    return;
+  }
   t.progress += efficiency(m);
   practice(m, 'engineering');
   if (t.progress < t.need) return;
@@ -950,7 +1079,7 @@ function stepWork(state, m, t, speed, emit) {
   let result;
   if (t.kind === JobType.REPAIR) result = completeRepair(state, t.system, m.skills.engineering);
   else if (t.kind === JobType.MAINTAIN) result = completeMaintenance(state, t.system);
-  else if (t.kind === JobType.SEAL) { result = completeSeal(state, t.deck); m.suit.keep = false; }
+  else if (t.kind === JobType.SEAL) { result = completeSeal(state, t.deck); m.suit.keep = !!state.suitsOn; }
   else result = completeFabrication(state);
   emit('crew-work-done', { member: m, kind: t.kind, system: t.system, result });
   if (result.success) closeJob(state, job);

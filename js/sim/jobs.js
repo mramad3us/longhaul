@@ -13,6 +13,7 @@ export const JobType = {
   REACTOR: 'reactor',        // { work, engineer }
   HELM: 'helm',              // fly the ship by hand (flight computer down)
   SEAL: 'seal',              // { deck } patch a hull breach (suit required)
+  FIRE: 'fire',              // { deck } fight a fire (suit and extinguisher: fire.js)
 };
 
 export const JOB_PRIORITY = { CRITICAL: 0, HIGH: 1, NORMAL: 2 };
@@ -26,6 +27,7 @@ export const JOB_SKILL = {
   [JobType.REACTOR]: ['engineering', 15],
   [JobType.HELM]: ['piloting', 15],
   [JobType.SEAL]: ['engineering', 10],
+  [JobType.FIRE]: ['engineering', 0],
 };
 
 export function createJobs() {
