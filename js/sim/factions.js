@@ -13,6 +13,10 @@
 // and the space between them is sometimes nobody's. The strongest
 // power at a point controls it; where two are close it is contested;
 // where none reaches it is lawless.
+//
+// Each power is a coalition of SUB-FACTIONS, and the independents are a
+// crowd of masters of their own (below; how they pull and feud:
+// politics.js).
 // ============================================================
 
 import { getBody, bodyPos } from './ephemeris.js';
@@ -32,6 +36,112 @@ export const POWERS = ['UN', 'MCR', 'OPA'];
 /** Display color for a faction ('player' marks our own ordnance). */
 export const factionColor = (id) => id === 'player' ? '#4FD1C5' : FACTIONS[id]?.color || '#8A8A6A';
 export const factionName = (id) => FACTIONS[id]?.name || 'Unknown';
+
+// ---- SUB-FACTIONS ----
+// A power is not one mind. Each is a coalition of sub-factions that work
+// for its general interest and for their own agendas, and fight each
+// other for influence over it, mostly in the dark: budget fights, leaks,
+// arrests, a convenient accident at a yard (politics.js). Their share of
+// influence decides which way the power leans: hawks push toward war,
+// doves away from it, the intelligence services run covert work abroad
+// and at home, the companies want trade and quietly pay for proxies.
+//
+// The independents have no top: each of their sub-factions is a power of
+// its own size, answering to nobody (a farming concord, a miners'
+// cooperative, a mercenary company). The pirate clans are independents
+// too, outlaws to everyone: their ships keep the faction 'pirate', the
+// law's word for them, and carry their clan as `sub`.
+//
+//   agenda   hawk · dove · covert · profit · militant · moderate · labor ·
+//            police · trade · mercenary · plunder
+//   fleet    which of the power's hulls fly under it (category weights:
+//            civilian, authority, military, irregular), for rollIdentity
+//   influence its starting share of its power's politics (police and the
+//            independents don't take part)
+
+export const SUBFACTIONS = {
+  // ---------------- United Nations ----------------
+  'unn-fleet': { parent: 'UN', name: 'UNN Fleet Command', short: 'UNN', agenda: 'hawk', influence: 0.3, fleet: { military: 1 },
+    desc: 'The admirals of the oldest navy in the system: a big fleet, a long memory, and a budget to defend every year.' },
+  'un-intel': { parent: 'UN', name: 'Earth Intelligence Directorate', short: 'EID', agenda: 'covert', influence: 0.15, fleet: {},
+    desc: 'Earth\'s spies: wiretaps on Mars, money for anyone who makes Mars\'s life hard, and files on half the Assembly.' },
+  'un-assembly': { parent: 'UN', name: 'Assembly Peace Caucus', short: 'APC', agenda: 'dove', influence: 0.3, fleet: {},
+    desc: 'The delegates who remember what the last war cost: thirty billion voters and a fleet that is getting old.' },
+  'un-corp': { parent: 'UN', name: 'Luna-Kepler Consolidated', short: 'LKC', agenda: 'profit', influence: 0.25, fleet: { civilian: 0.35 },
+    desc: 'The biggest shipping and mining combine on Earth. It wants the lanes open, and pays quiet men when they are not.' },
+  'un-security': { parent: 'UN', name: 'UN Security', short: 'UNS', agenda: 'police', fleet: { authority: 1 },
+    desc: 'The UN\'s police in space: cutters on every station beat of Earth\'s.' },
+  // ---------------- Mars ----------------
+  'mcrn-fleet': { parent: 'MCR', name: 'MCRN Admiralty', short: 'MCRN', agenda: 'hawk', influence: 0.35, fleet: { military: 1 },
+    desc: 'Mars\'s navy: the best ships ever built, crewed by the best-drilled crews, and very sure of both.' },
+  'mcr-intel': { parent: 'MCR', name: 'Martian Naval Intelligence', short: 'MNI', agenda: 'covert', influence: 0.15, fleet: {},
+    desc: 'Small, sharp and patient. MNI watches Earth, the Belt and the Congress with the same eyes.' },
+  'mcr-congress': { parent: 'MCR', name: 'Congressional Unity Caucus', short: 'CUC', agenda: 'dove', influence: 0.3, fleet: {},
+    desc: 'Terraforming first: every hull the navy builds is a century more under the domes.' },
+  'mcr-corp': { parent: 'MCR', name: 'Hecate Arms & Drive', short: 'HAD', agenda: 'profit', influence: 0.2, fleet: { civilian: 0.3 },
+    desc: 'Mars\'s drive-maker and arms yard. A war is a contract; a cold war is a longer one.' },
+  'mcr-security': { parent: 'MCR', name: 'Martian Security', short: 'MSS', agenda: 'police', fleet: { authority: 1 },
+    desc: 'The Republic\'s police cutters: precise, polite, and armed better than most navies.' },
+  // ---------------- The Belt ----------------
+  'opa-tycho': { parent: 'OPA', name: 'Tycho Council', short: 'TYCHO', agenda: 'moderate', influence: 0.35, fleet: { military: 0.7 },
+    desc: 'The builders: a seat at the table with the inners, a navy of refits, and patience.' },
+  'opa-ceres': { parent: 'OPA', name: 'Ceres Free Belt', short: 'CFB', agenda: 'militant', influence: 0.3, fleet: { military: 0.3 },
+    desc: 'The cells that never stopped fighting: bombings on inner stations, and ships that answer to nobody at Tycho.' },
+  'opa-unions': { parent: 'OPA', name: 'Belt Unions', short: 'UNIONS', agenda: 'labor', influence: 0.35, fleet: { civilian: 0.4 },
+    desc: 'Dockers, miners and ice haulers: they can shut a port with a vote, and do.' },
+  'opa-starhelix': { parent: 'OPA', name: 'Star Helix Security', short: 'SH', agenda: 'police', fleet: { authority: 1 },
+    desc: 'The Belt\'s police contractor, keeping the peace on the OPA\'s stations for a fee.' },
+  // ---------------- Independents (each its own master) ----------------
+  'ind-ganymede': { parent: null, name: 'Ganymede Agricultural Concord', short: 'GAC', agenda: 'trade', fleet: { civilian: 0.2 },
+    desc: 'The breadbasket of the outer planets, and neutral as long as both navies need to eat.' },
+  'ind-vesta': { parent: null, name: 'Vesta Miners\' Cooperative', short: 'VMC', agenda: 'trade', fleet: { civilian: 0.15 },
+    desc: 'The prospectors and ore haulers round Vesta, owned by the people who dig.' },
+  'ind-traders': { parent: null, name: 'Free Traders\' Guild', short: 'FTG', agenda: 'trade', fleet: { civilian: 0.4 },
+    desc: 'Independent captains who share rates, news and lawyers, and nothing else.' },
+  'ind-water': { parent: null, name: 'Pur\'n\'Kleen Water', short: 'PNK', agenda: 'trade', fleet: { civilian: 0.15 },
+    desc: 'Ice from the rings to anyone who pays: the oldest water company in the Belt.' },
+  'ind-merc': { parent: null, name: 'Brannock Security Services', short: 'BSS', agenda: 'mercenary', fleet: { irregular: 1 },
+    desc: 'A mercenary company with refit warships and no questions: convoy guards for some, deniable raiders for whoever pays most.' },
+  // ---------------- Pirate clans (independents, outlaws to all) ----------------
+  'clan-rust': { parent: null, outlaw: true, name: 'Rust Queens', short: 'RUST', agenda: 'plunder', fleet: { irregular: 1 }, lairs: ['Hygiea', 'Vesta', 'Ceres'],
+    desc: 'The oldest clan in the Belt: salvage, protection, and a long memory for debts.' },
+  'clan-dark': { parent: null, outlaw: true, name: 'Hungry Dark', short: 'DARK', agenda: 'plunder', fleet: { irregular: 1 }, lairs: ['Jupiter', 'Callisto', 'Europa'],
+    desc: 'Raiders of the gulf beyond the Belt, who run cold and leave nothing behind.' },
+  'clan-knives': { parent: null, outlaw: true, name: 'Knife Season', short: 'KNIVES', agenda: 'plunder', fleet: { irregular: 1 }, lairs: ['Pallas', 'Juno', 'Hygiea'],
+    desc: 'Young, loud and fast: they hit the Belt lanes and boast about it on open channels.' },
+  'clan-ghost': { parent: null, outlaw: true, name: 'Ghost Belt', short: 'GHOST', agenda: 'plunder', fleet: { irregular: 1 }, lairs: ['Saturn', 'Titan', 'Uranus'],
+    desc: 'Nobody has seen their faces. Ships go quiet in the outer dark and are found weeks later, stripped.' },
+};
+
+export const SUB_IDS = Object.keys(SUBFACTIONS);
+/** The sub-factions of a power (or the independents for 'independent', the clans for 'pirate'). */
+export function subsOf(faction) {
+  if (faction === 'pirate') return SUB_IDS.filter(id => SUBFACTIONS[id].outlaw);
+  if (faction === 'independent') return SUB_IDS.filter(id => !SUBFACTIONS[id].parent && !SUBFACTIONS[id].outlaw);
+  return SUB_IDS.filter(id => SUBFACTIONS[id].parent === faction);
+}
+/** The sub-factions of a power that take part in its politics (not its police). */
+export const politicalSubs = (faction) => subsOf(faction).filter(id => SUBFACTIONS[id].influence != null);
+export const subName = (id) => SUBFACTIONS[id]?.name || null;
+/** The faction a sub-faction's ships fly as. */
+export const subFaction = (id) => { const s = SUBFACTIONS[id]; return !s ? null : s.parent || (s.outlaw ? 'pirate' : 'independent'); };
+
+/**
+ * Which sub-faction a new hull of a power flies under, by its category
+ * (null: a private owner). Weights are each sub-faction's share of that
+ * category; what is left over is private.
+ */
+export function pickSub(faction, category, roll) {
+  const subs = subsOf(faction);
+  const total = subs.reduce((s, id) => s + (SUBFACTIONS[id].fleet?.[category] || 0), 0);
+  if (total > 1) roll *= total;                  // (the clans share the pirates evenly)
+  let acc = 0;
+  for (const id of subs) {
+    acc += SUBFACTIONS[id].fleet?.[category] || 0;
+    if (roll < acc) return id;
+  }
+  return null;
+}
 
 
 // ---- INFLUENCE SOURCES ----

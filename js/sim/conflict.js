@@ -1,27 +1,39 @@
 // ============================================================
-// LONGHAUL — Conflict: tension, hot zones, encounters
+// LONGHAUL — Conflict: hot zones and encounters
 //
-// POLITICS. Each pair of powers has a tension (0 calm … 1 open war)
-// that wanders day to day, pulled back toward its baseline and pushed
-// up by fighting.
+// POLITICS (politics.js) decides how the powers stand with each other:
+// cold war, crisis, war, a ceasefire. This module is where it shows.
 //
-// HOT ZONES are where it shows. They are born procedurally from the
-// influence field: wherever two powers' reach overlaps (a contested
-// moon, a belt rock with a Martian claim) tension can flare into a
-// naval STANDOFF, a BLOCKADE, or — if it runs hot — a SKIRMISH; where
-// nobody's writ runs, PIRATES gather; where the Belt chafes under an
-// inner power, an INSURGENCY simmers. A zone sits on a body (it moves
-// with it), has a radius and an intensity, grows or fades, and ends.
-// Zones shape everything nearby: who patrols, who lurks, what the
-// station boards offer, what turns up wrecked.
+// HOT ZONES are born from the influence field and the state of the
+// powers, not from a script. Each day, with a chance that rises with the
+// heat of the system, a flashpoint is chosen among the bodies:
+//   where two powers' reach overlaps: a naval STANDOFF in a cold war; a
+//     standoff, a BLOCKADE or a SKIRMISH in a crisis; a skirmish or a
+//     blockade in a war;
+//   where nobody's writ runs, in the Belt or beyond: PIRATE ACTIVITY, a
+//     clan's work (factions.js);
+//   where an inner power holds a place with real Belter presence: an
+//     INSURGENCY (the Ceres Free Belt's cells).
+// Two kinds come from politics directly:
+//   a WAR FRONT for every war: the place both navies reach for (Ganymede,
+//     or Mars itself when Earth is close), big, crowded and long-lived,
+//     with control points the squadrons fight over. It ends with the war.
+//   a PROXY WAR for every proxy a power pays (politics.js): the proxy's
+//     raiders hit the target power's shipping where its reach is thin.
+// A zone sits at an offset from its body and moves with it. It has a
+// radius and an intensity that follows the state of its powers. A hot
+// standoff escalates into a skirmish; a ceasefire silences the guns.
 //
 // Zones call for ships (forces.js): navies send squadrons from their
-// yards, pirate zones gather packs. Far from us those hulls stay on
-// rails and a zone produces outcomes, hourly: warships of both sides
-// on station may lose one, pirates may take a passing hauler, a
-// blockade may stop one that runs it. The losses are real ships, left
-// as wrecks where they fell. News of all of it travels at light speed
-// (intel.js): we hear of a zone, and of its end, when the light does.
+// yards, and each power in the fight sends a COMMAND SHIP to the rear of
+// it (licensed captains report there). Pirate zones gather packs; proxy
+// zones the proxy's raiders. Far from us those hulls stay on rails and a
+// zone produces outcomes, hourly: warships of both sides on station may
+// lose one, raiders may take a passing hauler, a blockade may stop one
+// that runs it. The losses are real ships, left as wrecks where they
+// fell, and every one between two powers is an incident (politics.js):
+// it feeds the crisis, or wears the war down. News of all of it travels
+// at light speed (intel.js).
 //
 // THE ENCOUNTER DIRECTOR runs hourly around our ship only. From the
 // local politics — who holds this space, how firmly, which zones we
@@ -40,35 +52,39 @@ import { getWorld, orbitStateAt } from './world.js';
 import { createEntity } from './entities.js';
 import { rollIdentity, CLASSES } from './ship-classes.js';
 import { classStrength } from './combatants.js';
-import { FACTIONS, controlAt } from './factions.js';
+import { FACTIONS, POWERS, SUBFACTIONS, controlAt, influenceAt, subsOf } from './factions.js';
 import { spawnAgent, makeHostile, wake } from './agents.js';
 import { offerUnderAttack } from './missions.js';
 import { relay } from './intel.js';
+import { createPolitics, dailyRelations, phaseBetween, incident, PAIRS, pairKey } from './politics.js';
 import {
-  deployToZone, standDown, forcesAt, wreckInPlace, nearestAsleep, awakeNear, rouse, forcesOn,
+  deployToZone, standDown, forcesAt, wreckInPlace, nearestAsleep, awakeNear, rouse, forcesOn, proxyIdentity, sabotageYard,
 } from './forces.js';
+
+export { createPolitics, pairKey };
 
 export const ZONE_KINDS = {
   standoff: { label: 'NAVAL STANDOFF', powers: 2, desc: 'Two navies watching each other. Patrols search everyone.' },
   blockade: { label: 'BLOCKADE', powers: 2, desc: 'A navy is stopping traffic. Inspections at the cordon; smugglers pay well.' },
   skirmish: { label: 'SKIRMISH', powers: 2, desc: 'Warships are shooting. Stay out of the way — or profit from the wreckage.' },
+  front: { label: 'WAR FRONT', powers: 2, desc: 'Two navies at war, fighting for the space round a body: squadrons on both sides, control points, wrecks.' },
+  proxy: { label: 'PROXY WAR', powers: 1, desc: 'Deniable raiders, paid by one power, hitting another\'s shipping. Everyone knows; nobody can prove it.' },
   pirates: { label: 'PIRATE ACTIVITY', powers: 0, desc: 'Raiders working the lanes. Bounties posted; escorts in demand.' },
   insurgency: { label: 'INSURGENCY', powers: 1, desc: 'Belter militants against an inner power. Information is worth money.' },
 };
 
-const BASELINE = { 'MCR-UN': 0.45, 'OPA-UN': 0.3, 'MCR-OPA': 0.35 };
-const MAX_ZONES = 6;
+/** Zone kinds between two powers (a power's navy is in them). */
+export const NAVAL_KINDS = new Set(['standoff', 'blockade', 'skirmish', 'front']);
+
+const MAX_ZONES = 8;                   // flashpoints at once…
+export const ZONE_CAP = MAX_ZONES + 2;  // …and with a war's front and a proxy's raiding ground on top, at most
 const MAX_AMBIENT = 6;                 // agents the director keeps around us at most
 const MAX_ZONE_WRECKS = 4;
+const MAX_FRONT_WRECKS = 10;
 const QUIET_MIN = [6 * 60, 24 * 60];   // rest after an encounter (minutes)
+const FRONT_POINTS = ['ALPHA', 'BRAVO', 'CHARLIE'];
 
-export const pairKey = (a, b) => [a, b].sort().join('-');
-
-export function createPolitics() {
-  // quietUntil: no new encounters around us before this minute (the director rests after each one)
-  return { tension: { ...BASELINE }, zones: [], nextZone: 1, quietUntil: 6 * 60 };
-}
-
+/** The 0–1 heat between two powers (politics.js keeps it in step with their relation). */
 export const tension = (state, a, b) => state.politics.tension[pairKey(a, b)] ?? 0;
 
 /** Where a zone is now (AU). */
@@ -87,6 +103,9 @@ export function zonesAt(state, pos, slack = 1) {
   });
 }
 
+/** The zones a power is fighting in (its navy, or its shipping under a proxy's guns). */
+export const zonesOf = (state, faction) => state.politics.zones.filter(z => z.factions.includes(faction));
+
 // ---- TICK ----
 
 export function politicsTick(state, emit = () => {}) {
@@ -99,41 +118,67 @@ export function politicsTick(state, emit = () => {}) {
 function dailyPolitics(state, emit) {
   const P = state.politics;
   const now = state.clock.minute;
-  // Tension wanders, pulled toward its baseline; fighting pushes it up
-  for (const k of Object.keys(P.tension)) {
-    const fights = P.zones.filter(z => z.kind === 'skirmish' && pairKey(...z.factions) === k).length;
-    P.tension[k] = clamp01(P.tension[k] + 0.03 * gaussian() + 0.05 * (BASELINE[k] - P.tension[k]) + 0.02 * fights);
-  }
-  // Zones grow, fade, escalate, end
+  dailyRelations(state, (type, payload) => {
+    if (type === 'yard-sabotage') sabotageYard(state, payload.faction, payload.days);
+    emit(type, payload);
+  });
+  // Zones follow their powers: grow, fade, escalate, fall silent, end
   for (const z of [...P.zones]) {
-    const t = z.factions.length === 2 ? tension(state, ...z.factions) : 0.5;
-    z.intensity = clamp01(z.intensity + 0.08 * gaussian() + 0.08 * (t - 0.5));
-    if (z.kind === 'standoff' && t > 0.65 && z.intensity > 0.7 && chance(0.3)) {
+    const ph = z.factions.length === 2 ? phaseBetween(state, ...z.factions) : null;
+    const want = ph === 'war' ? 0.85 : ph === 'crisis' ? 0.6 : ph === 'cold' ? 0.4 : ph ? 0.2 : 0.55;
+    z.intensity = clamp01(z.intensity + 0.06 * gaussian() + 0.15 * (want - z.intensity));
+    if (z.kind === 'standoff' && (ph === 'war' || (ph === 'crisis' && z.intensity > 0.7 && chance(0.15)))) {
       z.kind = 'skirmish';
       news(state, z, `Shots fired near ${z.body}: the ${FACTIONS[z.factions[0]].navy}–${FACTIONS[z.factions[1]].navy} standoff has turned into a fight.`);
+    } else if (z.kind === 'skirmish' && ph !== 'war' && P.pairs[pairKey(...z.factions)]?.truce) {
+      z.kind = 'standoff';
+      news(state, z, `The guns fall silent near ${z.body}: ${FACTIONS[z.factions[0]].navy} and ${FACTIONS[z.factions[1]].navy} hold their positions under the ceasefire.`);
     }
-    if (now >= z.until || z.intensity < 0.08) {
-      P.zones.splice(P.zones.indexOf(z), 1);
-      if (z.kind === 'skirmish') P.tension[pairKey(...z.factions)] = clamp01(tension(state, ...z.factions) - 0.05);
-      standDown(state, z);
-      news(state, z, `${ZONE_KINDS[z.kind].label} near ${z.body} is over.`, { ended: true });
-    }
+    const calm = ph === 'neutral' || ph === 'friendly' || ph === 'allied';
+    const over = now >= z.until || z.intensity < 0.08 || (z.kind === 'front' && ph !== 'war') || (NAVAL_KINDS.has(z.kind) && calm)
+      || (z.kind === 'proxy' && !P.proxies.some(x => x.id === z.proxy));
+    if (over) endZone(state, z);
+  }
+  // Every war has its front; every proxy its raiding ground
+  for (const k of PAIRS) {
+    const pr = k.split('-');
+    if (P.pairs[k].phase !== 'war' || P.zones.length >= ZONE_CAP || P.zones.some(z => z.kind === 'front' && pairKey(...z.factions) === k)) continue;
+    const c = frontCandidate(state, pr);
+    if (c) { const z = spawnZone(state, c); if (z) news(state, z, zoneHeadline(z), { started: true }); }
+  }
+  for (const px of P.proxies) {
+    if (P.zones.length >= ZONE_CAP || P.zones.some(z => z.proxy === px.id)) continue;
+    const c = proxyCandidate(state, px);
+    if (c) { const z = spawnZone(state, c); if (z) news(state, z, zoneHeadline(z), { started: true }); }
   }
   // New flashpoints
-  const avg = Object.values(P.tension).reduce((a, b) => a + b, 0) / 3;
-  if (P.zones.length < MAX_ZONES && chance(0.25 + 0.6 * avg)) {
+  const heat = PAIRS.reduce((s, k) => s + (P.tension[k] || 0), 0) / PAIRS.length;
+  if (P.zones.length < MAX_ZONES && chance(0.2 + 0.5 * heat)) {
     const z = spawnZone(state);
     if (z) news(state, z, zoneHeadline(z), { started: true });
   }
 }
 
+function endZone(state, z) {
+  const P = state.politics;
+  P.zones.splice(P.zones.indexOf(z), 1);
+  standDown(state, z);
+  news(state, z, z.kind === 'front' ? `The front at ${z.body} is quiet. Both fleets pull back.` : `${ZONE_KINDS[z.kind].label} near ${z.body} is over.`, { ended: true });
+}
+
 /** Zone news leaves from the zone and reaches us at light speed. */
 function news(state, z, text, { started = false, ended = false } = {}) {
-  relay(state, zonePos(z, state.clock.minute), 'zone-news', { zoneId: z.id, body: z.body, kind: z.kind, started, ended, text },
+  relay(state, zonePos(z, state.clock.minute), 'zone-news', { zoneId: z.id, body: z.body, kind: z.kind, started, ended, text, factions: z.factions },
     { id: z.id, kind: z.kind, body: z.body, factions: z.factions, r: z.r, phase: z.phase, radius: z.radius, ended });
 }
 
-/** Candidate flashpoints from the influence field right now. */
+/** The clan that works a body's lanes (its lairs), or any. */
+function clanFor(body) {
+  const clans = subsOf('pirate');
+  return clans.find(id => SUBFACTIONS[id].lairs?.includes(body)) || pick(clans);
+}
+
+/** Candidate flashpoints from the influence field and the state of the powers right now. */
 export function zoneCandidates(state) {
   const now = state.clock.minute;
   const days = now / DAY_MIN;
@@ -146,17 +191,53 @@ export function zoneCandidates(state) {
     const r = Math.hypot(p.x, p.y);
     const belt = r > 2 && r < 3.6, outer = r >= 3.6;
     if (ctl.contested) {
-      const t = tension(state, ctl.faction, ctl.rival);
       const pair = [ctl.faction, ctl.rival];
-      out.push({ body: b.name, kind: 'standoff', factions: pair, w: t });
-      out.push({ body: b.name, kind: 'blockade', factions: chance(0.5) ? pair : [pair[1], pair[0]], w: t * 0.7 });
-      if (t > 0.6) out.push({ body: b.name, kind: 'skirmish', factions: pair, w: (t - 0.5) * 2 });
+      const ph = phaseBetween(state, ...pair);
+      const flip = () => chance(0.5) ? pair : [pair[1], pair[0]];
+      if (ph === 'neutral') out.push({ body: b.name, kind: 'standoff', factions: pair, w: 0.05 });
+      if (ph === 'cold') out.push({ body: b.name, kind: 'standoff', factions: pair, w: 0.4 });
+      if (ph === 'crisis') out.push({ body: b.name, kind: 'standoff', factions: pair, w: 0.6 }, { body: b.name, kind: 'blockade', factions: flip(), w: 0.5 }, { body: b.name, kind: 'skirmish', factions: pair, w: 0.2 });
+      if (ph === 'war') out.push({ body: b.name, kind: 'skirmish', factions: pair, w: 1 }, { body: b.name, kind: 'blockade', factions: flip(), w: 0.4 });
     }
-    if (ctl.level < 0.6 && (belt || outer)) out.push({ body: b.name, kind: 'pirates', factions: ['pirate'], w: (1 - ctl.level) * (belt ? 1 : 0.6) });
+    if (ctl.level < 0.6 && (belt || outer)) out.push({ body: b.name, kind: 'pirates', factions: ['pirate'], sub: clanFor(b.name), w: (1 - ctl.level) * (belt ? 1 : 0.6) });
     const inner = ctl.faction === 'UN' || ctl.faction === 'MCR';
-    if (inner && ctl.influence.OPA > 0.2) out.push({ body: b.name, kind: 'insurgency', factions: [ctl.faction], w: 0.5 * tension(state, ctl.faction, 'OPA') });
+    if (inner && ctl.influence.OPA > 0.2) out.push({ body: b.name, kind: 'insurgency', factions: [ctl.faction], sub: 'opa-ceres', w: 0.5 * tension(state, ctl.faction, 'OPA') });
   }
   return out.filter(c => c.w > 0.02);
+}
+
+/** Where two powers at war fight: the body both reach furthest, contested or not. */
+function frontCandidate(state, pair) {
+  const now = state.clock.minute, days = now / DAY_MIN;
+  const taken = new Set(state.politics.zones.filter(z => z.kind !== 'standoff' && z.kind !== 'skirmish').map(z => z.body));
+  let best = null, bw = 0.08;
+  const inf = {};
+  for (const b of BODIES) {
+    if (!b.a || b.type === 'star' || taken.has(b.name)) continue;
+    const p = bodyPos(b, days);
+    influenceAt(p.x, p.y, now, inf);
+    const w = Math.min(inf[pair[0]], inf[pair[1]]);
+    if (w > bw) { bw = w; best = b.name; }
+  }
+  return best ? { body: best, kind: 'front', factions: pair, w: 1 } : null;
+}
+
+/** A proxy's raiding ground: where its target's reach is real but thin, out in the Belt or beyond. */
+function proxyCandidate(state, px) {
+  const now = state.clock.minute, days = now / DAY_MIN;
+  const taken = new Set(state.politics.zones.map(z => z.body));
+  const inf = {};
+  const pool = [];
+  for (const b of BODIES) {
+    if (!b.a || b.type === 'star' || taken.has(b.name)) continue;
+    const p = bodyPos(b, days);
+    if (Math.hypot(p.x, p.y) < 1.8) continue;
+    influenceAt(p.x, p.y, now, inf);
+    if (inf[px.target] >= 0.15) pool.push({ name: b.name, w: inf[px.target] * (1.2 - inf[px.target]) });
+  }
+  if (!pool.length) return null;
+  const b = weightedPick(pool, x => x.w);
+  return { body: b.name, kind: 'proxy', factions: [px.target], proxy: px.id, sub: px.sub, backer: px.backer, until: px.until, w: 1 };
 }
 
 export function spawnZone(state, forced = null) {
@@ -165,12 +246,17 @@ export function spawnZone(state, forced = null) {
   const c = forced || weightedPick(cands, x => x.w);
   const P = state.politics;
   const now = state.clock.minute;
+  const front = c.kind === 'front';
   const z = {
     id: `zone-${P.nextZone++}`, kind: c.kind, factions: c.factions, body: c.body,
     r: randRange(0.002, 0.01), phase: random() * Math.PI * 2,
-    radius: c.kind === 'skirmish' ? randRange(0.01, 0.03) : randRange(0.02, 0.06),
-    intensity: randRange(0.35, 0.7), born: now, until: now + randInt(5, 30) * DAY_MIN, wrecks: 0,
+    radius: front ? randRange(0.04, 0.07) : c.kind === 'skirmish' ? randRange(0.01, 0.03) : randRange(0.02, 0.06),
+    intensity: front ? 0.85 : randRange(0.35, 0.7), born: now,
+    until: c.until ?? now + (front ? 120 : randInt(5, 30)) * DAY_MIN, wrecks: 0,
+    ...(c.sub ? { sub: c.sub } : {}), ...(c.proxy ? { proxy: c.proxy, backer: c.backer } : {}),
   };
+  // A front is fought over a few control points round the body (contracts.js: holding one)
+  if (front) z.points = FRONT_POINTS.slice(0, randInt(2, 3)).map((name, i) => ({ name, held: c.factions[i % 2], phase: z.phase + (i - 1) * 0.35 }));
   P.zones.push(z);
   deployToZone(state, z);
   return z;
@@ -178,28 +264,32 @@ export function spawnZone(state, forced = null) {
 
 function zoneHeadline(z) {
   const f = (i) => FACTIONS[z.factions[i]];
+  const sub = z.sub ? SUBFACTIONS[z.sub] : null;
   switch (z.kind) {
     case 'standoff': return `${f(0).navy} and ${f(1).navy} warships are facing off near ${z.body}.`;
     case 'blockade': return `${f(0).navy} has declared a blockade around ${z.body}. All traffic subject to search.`;
     case 'skirmish': return `Fighting reported near ${z.body} between ${f(0).navy} and ${f(1).navy} forces.`;
-    case 'pirates': return `Ships going missing near ${z.body}. Pirate activity suspected.`;
-    case 'insurgency': return `Bombings and sabotage on ${z.body}: Belter militants against ${f(0).name}.`;
+    case 'front': return `The ${f(0).navy} and ${f(1).navy} fleets are fighting for ${z.body}: a war front has formed there.`;
+    case 'proxy': return `Raiders flying ${sub ? `${sub.name} colours` : 'no colours'} are hitting ${f(0).short} shipping near ${z.body}.`;
+    case 'pirates': return `Ships going missing near ${z.body}. ${sub ? `The ${sub.name} are suspected.` : 'Pirate activity suspected.'}`;
+    case 'insurgency': return `Bombings and sabotage on ${z.body}: ${sub ? sub.name : 'Belter'} cells against ${f(0).name}.`;
     default: return `Trouble near ${z.body}.`;
   }
 }
 
 /**
  * Off-screen consequences, hourly. With the background forces running,
- * the losses are real hulls: warships on station at a standoff or a
- * skirmish, traffic in the lanes through a pirate zone or a blockade.
- * Nobody there, nothing happens (the squadrons may still be on their
- * way). Without them (test suites), and for insurgencies, a loss is
- * rolled up from the zone's politics. A wreck stays where it fell.
+ * the losses are real hulls: warships on station at a standoff, a
+ * skirmish or a front, traffic in the lanes through a pirate zone, a
+ * proxy's raiding ground or a blockade. Nobody there, nothing happens
+ * (the squadrons may still be on their way). Without them (test suites),
+ * and for insurgencies, a loss is rolled up from the zone's politics. A
+ * wreck stays where it fell.
  */
-const INCIDENT_RATE = { skirmish: 0.06, pirates: 0.04, blockade: 0.01, standoff: 0.005, insurgency: 0.01 };
+const INCIDENT_RATE = { front: 0.1, skirmish: 0.06, pirates: 0.04, proxy: 0.04, blockade: 0.01, standoff: 0.005, insurgency: 0.01 };
 
 function zoneIncidents(state, z, emit) {
-  if (z.wrecks >= MAX_ZONE_WRECKS) return;
+  if (z.wrecks >= (z.kind === 'front' ? MAX_FRONT_WRECKS : MAX_ZONE_WRECKS)) return;
   const rate = (INCIDENT_RATE[z.kind] || 0) * z.intensity;
   if (forcesOn(state) && z.kind !== 'insurgency') {
     const loss = zoneLoss(state, z, rate);
@@ -208,15 +298,16 @@ function zoneIncidents(state, z, emit) {
   }
   if (!chance(rate)) return;
   const world = getWorld(state);
-  const victim = z.kind === 'skirmish'
-    ? rollIdentity({ category: 'military', faction: pick(z.factions) })
-    : rollIdentity({ category: 'civilian' });
+  const victim = z.kind === 'skirmish' || z.kind === 'front'
+    ? rollIdentity({ category: 'military', faction: pick(z.factions), state })
+    : rollIdentity({ category: 'civilian', state });
   const e = createEntity({
     id: world.newId('wreck'), name: `${victim.name} (wreck)`, type: 'ship', faction: victim.faction, cls: victim.cls, tl: victim.tl,
     shipClass: victim.shipClass, mass: victim.mass, transponder: false,
     orbit: { body: z.body, r: z.r + randRange(-0.003, 0.003), phase: z.phase + randRange(-0.5, 0.5), period: 0 },
     tags: { wreck: true, zone: z.id, despawnAt: state.clock.minute + 8 * DAY_MIN },
   });
+  if (victim.sub) e.sub = victim.sub;
   e.combat = { hp: 0, hpMax: 1, drive: 0, reactor: 0, weapons: 0, sensors: 0, crew: 0, status: 'wreck', containment: null, scrammed: true, rounds: 0, magazine: { he: 0, nuke: 0 }, tubes: [], rail: [] };
   world.add(e);
   reportLoss(state, z, e, `${victim.shipClass} ${victim.name} lost near ${z.body}.`);
@@ -225,7 +316,7 @@ function zoneIncidents(state, z, emit) {
 /** Who, if anyone, the zone costs this hour. */
 function zoneLoss(state, z, rate) {
   const there = forcesAt(state, z);
-  if (z.kind === 'skirmish' || z.kind === 'standoff') {
+  if (z.kind === 'skirmish' || z.kind === 'standoff' || z.kind === 'front') {
     const [a, b] = z.factions.map(f => there[f] || []);
     if (!a.length || !b.length || !chance(rate * Math.min(1, (a.length + b.length) / 4))) return null;
     // The side facing the stronger squadron loses a ship (a Martian TL4 frigate
@@ -234,20 +325,25 @@ function zoneLoss(state, z, rate) {
     const ma = might(a), mb = might(b);
     const side = chance(mb / (ma + mb)) ? a : b;
     const e = pick(side);
-    return { e, text: `${e.shipClass} ${e.name} lost near ${z.body}${z.kind === 'skirmish' ? ' in the fighting' : ''}.` };
+    // At a front the loser may lose ground too: a control point it held
+    if (z.points && chance(0.35)) {
+      const held = z.points.filter(pt => pt.held === e.faction);
+      if (held.length) pick(held).held = z.factions.find(f => f !== e.faction);
+    }
+    return { e, text: `${e.shipClass} ${e.name} lost near ${z.body}${z.kind === 'standoff' ? '' : ' in the fighting'}.` };
   }
-  const hunters = z.kind === 'pirates' ? (there.pirate || []) : (there[z.factions[0]] || []);
+  const hunters = z.kind === 'pirates' ? (there.pirate || []) : z.kind === 'proxy' ? (there.$proxy || []) : (there[z.factions[0]] || []);
   if (!hunters.length || !chance(rate * Math.min(1, hunters.length / 3))) return null;
-  const lane = traffickedNear(state, z);
+  const lane = traffickedNear(state, z, z.kind === 'proxy' ? z.factions[0] : null);
   if (!lane) return null;
-  const how = z.kind === 'pirates' ? 'taken by raiders' : `disabled running the ${FACTIONS[z.factions[0]].navy} blockade`;
+  const how = z.kind === 'pirates' ? 'taken by raiders' : z.kind === 'proxy' ? `taken by ${SUBFACTIONS[z.sub]?.name || 'raiders'}` : `disabled running the ${FACTIONS[z.factions[0]].navy} blockade`;
   return { e: lane, text: `${lane.shipClass} ${lane.name} ${how} near ${z.body}.` };
 }
 
-/** A traffic ship in transit through the zone, if any. */
-function traffickedNear(state, z) {
+/** A traffic ship in transit through the zone (of one power, for a proxy's raiders), if any. */
+function traffickedNear(state, z, faction = null) {
   const p = zonePos(z, state.clock.minute);
-  const pool = getWorld(state).query(p, z.radius).filter(e => e.tags?.traffic && e.transit && !e.agent && !e.tags.wreck);
+  const pool = getWorld(state).query(p, z.radius).filter(e => e.tags?.traffic && e.transit && !e.agent && !e.tags.wreck && (!faction || e.faction === faction));
   return pool.length ? pick(pool) : null;
 }
 
@@ -255,6 +351,10 @@ function reportLoss(state, z, e, text) {
   if (!e.tags.wreck) wreckInPlace(state, e, z.body);
   e.tags.zone = z.id;
   z.wrecks++;
+  // Every loss between two powers is an incident: it feeds a crisis, or wears a war down
+  if (z.factions.length === 2 && NAVAL_KINDS.has(z.kind)) incident(state, z.factions[0], z.factions[1], z.kind === 'blockade' ? 0.3 : 1);
+  else if (z.kind === 'insurgency') incident(state, 'OPA', z.factions[0], 0.5);
+  else if (z.kind === 'proxy' && z.backer) incident(state, z.backer, z.factions[0], 0.2);
   relay(state, e.pos, 'zone-incident', { zoneId: z.id, entityId: e.id, chart: e.id, text, source: 'NEWSFEED' });
 }
 
@@ -297,7 +397,8 @@ export function director(state, emit = () => {}) {
   for (const z of zones) {
     if (z.kind === 'standoff') roll.push({ kind: 'patrol', p: 0.12 * z.intensity, faction: pick(z.factions), zone: z.id });
     if (z.kind === 'blockade') roll.push({ kind: 'picket', p: 0.2 * z.intensity, faction: z.factions[0], zone: z.id, body: z.body });
-    if (z.kind === 'skirmish') roll.push({ kind: 'battle', p: 0.2 * z.intensity, zone: z });
+    if (z.kind === 'skirmish' || z.kind === 'front') roll.push({ kind: 'battle', p: (z.kind === 'front' ? 0.3 : 0.2) * z.intensity, zone: z });
+    if (z.kind === 'proxy') roll.push({ kind: 'raid', p: 0.1 * z.intensity, zone: z });
     if (z.kind === 'pirates') roll.push({ kind: 'pirate', p: 0.12 * z.intensity, zone: z.id }, { kind: 'ambush', p: 0.05 * z.intensity, zone: z.id });
   }
   if (!nearStation) roll.push({ kind: 'pirate', p: 0.04 * lawless }, { kind: 'ambush', p: 0.02 * lawless });
@@ -333,6 +434,15 @@ export function spawnEncounter(state, r, emit = () => {}) {
       const { pos, vel } = nearUs(state, randRange(0.004, 0.015));
       const victim = spawnAgent(state, { role: 'civilian', category: 'civilian', pos, vel, ambient: true });
       return ambush(state, victim, r, emit);
+    }
+    case 'raid': {
+      // A proxy's raider, out for the target power's shipping (and its contractors)
+      const z = r.zone;
+      const { pos, vel } = nearUs(state, randRange(0.006, 0.02));
+      const id = proxyIdentity(z.sub);
+      const e = spawnAgent(state, { role: 'pirate', cls: id.cls, faction: id.faction, sub: z.sub, pos, vel, ambient: true, zone: z.id, transponder: false, flags: { prey: z.factions[0] }, tags: { proxy: z.sub, wanted: true } });
+      emit('encounter', { kind: 'raid', id: e.id, name: e.name, faction: e.faction });
+      return e;
     }
     case 'battle': {
       const z = r.zone;
@@ -393,6 +503,14 @@ function fromPopulation(state, r, emit) {
       if (!e) return undefined;
       rouse(state, e);
       emit('encounter', { kind: 'pirate', id: e.id, name: e.name, faction: 'pirate' });
+      return e;
+    }
+    case 'raid': {
+      if (awakeNear(state, 'proxy').length) return null;
+      const e = nearestAsleep(state, 'proxy');
+      if (!e) return undefined;
+      rouse(state, e);
+      emit('encounter', { kind: 'raid', id: e.id, name: e.name, faction: e.faction });
       return e;
     }
     case 'battle': case 'picket': {

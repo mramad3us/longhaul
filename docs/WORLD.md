@@ -1,4 +1,4 @@
-# The world: powers, conflict, law
+# The world: powers, politics, conflict, law, service
 
 ## Factions (`sim/factions.js`)
 
@@ -10,7 +10,19 @@
 | `independent` | | | | 2 |
 | `pirate` | | | | 1 (2 for their best) |
 
-Saves from before v0.10 used `UNN`, `MCRN` and `Belter`; these are mapped to `UN`, `MCR` and `OPA`.
+### Sub-factions
+
+A power is a coalition (`SUBFACTIONS`). Its sub-factions share its influence and pull it their way; the independents have no top, and each of theirs is its own master. The pirate clans are independents too, outlaws to all: their ships keep the faction `pirate` and carry the clan as `sub`.
+
+| Power | Sub-factions (agenda) |
+|---|---|
+| UN | UNN Fleet Command (hawk) · Earth Intelligence Directorate (covert) · Assembly Peace Caucus (dove) · Luna-Kepler Consolidated (profit) · UN Security (police) |
+| MCR | MCRN Admiralty (hawk) · Martian Naval Intelligence (covert) · Congressional Unity Caucus (dove) · Hecate Arms & Drive (profit) · Martian Security (police) |
+| OPA | Tycho Council (moderate) · Ceres Free Belt (militant) · Belt Unions (labor) · Star Helix Security (police) |
+| independent | Ganymede Agricultural Concord · Vesta Miners' Cooperative · Free Traders' Guild · Pur'n'Kleen Water · Brannock Security Services (mercenary) |
+| pirate clans | Rust Queens (Hygiea, Vesta, Ceres) · Hungry Dark (Jupiter's moons) · Knife Season (Pallas, Juno, Hygiea) · Ghost Belt (Saturn and beyond) |
+
+New hulls fly under a sub-faction by their category (`fleet` weights: a share of a power's civilian hulls are its company's, its warships its navy's, its cutters its police's); the rest are private. A pirate takes the clan of the rocks it lies up at.
 
 ## Spheres of influence
 
@@ -30,13 +42,21 @@ Every power also keeps hulls in space. They are real entities on rails, indexed 
 | UNN | 56 hulls | berthed at Luna Shipyards |
 | MCRN | 12 hulls | berthed at Phobos Naval Yard |
 | OPA | 8 hulls | berthed at Tycho and Ceres |
-| Pirates | about 24 at large, plus 5 per pirate zone | lying up cold, 0.004–0.03 AU from Belt and outer bodies held below 0.45 |
+| Command ships | UN 3 (Leviathan battleships), MCR 3 (Olympus battleships), OPA 2 (converted gunships) | berthed at their yards until a fight calls for one |
+| Pirates | about 24 at large, plus 5 per pirate zone, each of its clan | lying up cold, 0.004–0.03 AU from Belt and outer bodies held below 0.45 |
+| A proxy's raiders | 4 per proxy war, of the proxy's own kind (refit corvettes and cutters for the mercenaries, raiders for a clan, militia hulls for the cells) | at its raiding ground, until the war is over |
 
 Earth and Mars are matched in total strength, not in numbers. The UNN is a big fleet of TL2 corvettes and frigates a generation old (mean class strength about 1,200). The MCRN is a small fleet of TL4 hulls (about 5,900 each, so 56 × 1,200 ≈ 12 × 5,900). The OPA's refits are a militia.
 
-When a hot zone is born, each side commits a share of its navy (at least one hull): standoff 15% / 15%, blockade 25% for the blockader and 8% for the other side, skirmish 25% / 25%, insurgency 10% of the inner power. So a UN–Mars skirmish draws 14 UNN hulls against 3 MCRN. They take berthed hulls, commissioning more if none are in. The squadron flies out on a filed 1G course to the zone's anchor (a hidden mark on the zone's orbit) and holds station there. When the zone ends, it flies home. A pirate zone gathers a pack of 5 on the spot; when it ends they stay at large. A daily census makes losses good: police to their number, and navies at up to 5% of their strength a day. Pirates beyond 1.5× their number disperse, never in front of us.
+When a hot zone is born, each side commits a share of its navy (at least one hull): standoff 15% / 15%, blockade 25% for the blockader and 8% for the other side, skirmish 25% / 25%, front 40% / 40%, insurgency 10% of the inner power, proxy war 8% of the target power. So a UN–Mars skirmish draws 14 UNN hulls against 3 MCRN. They take berthed hulls, commissioning more if none are in. The squadron flies out on a filed 1G course to the zone's anchor (a hidden mark on the zone's orbit) and holds station there. When the zone ends, it flies home. A pirate zone gathers a pack of 5 on the spot; when it ends they stay at large. A proxy war's raiders gather the same way, and go home with the money when it ends.
 
-**The live window.** Within `WAKE_AU` = 0.1 AU of us (about our long sensor reach, 50 light-seconds), a hull on rails comes alive as an agent: police on routine patrol, navies with their zone and its enemies, pirates lurking. At most 3 police, 10 warships and 2 pirates are awake at once, the nearest first. A woken police cutter on **routine** leaves law-abiding ships alone. Past 0.25 AU, with no business left with us, it goes back on rails: a course from where it is (a coasting fix) to its post or home, or lying up near the nearest body. It isn't woken by proximity again for 12 hours. Traffic woken for a fight (a pirate's prey) goes back on its route the same way. A crippled hull is left out of the forces and removed.
+**Command ships.** Every power in a fight (both sides of a naval zone, the inner power of an insurgency, the target of a proxy war) sends a berthed command ship to the rear of it: a post 0.4 × the zone's radius out from its anchor, on its own side. It holds there, on rails like a station, for as long as the zone lasts: the forward command its licensed captains report to (military service, below). It doesn't wake by our coming near, only when it is attacked; with a captain alongside when its zone ends, it waits for us to cast off before it goes home. A power with none in port sends none.
+
+**The yards.** A daily census counts every power's hulls and what its yards already have on the slips, and lays down what is missing: police to their number per station, navies to strength, command ships to their number. A hull takes its time to build (`BUILD_DAYS`: a cutter 3 days, a corvette 4, a gunship 6, a frigate 8, a destroyer 14, a battleship 30; ±20%, and 40% faster for a power at war), and each power's yards build a few at a time (UN 4, MCR 2, OPA 2). A new hull is launched at its power's yard and flies out to its berth or beat; sabotage at a yard (politics) puts its slips back days. Pirates are kept to their number by the clans (up to 3 a day, at their lairs); beyond 1.5× their number they disperse, never in front of us.
+
+**Traffic** lost is replaced the same way: a new hull is laid down for each one gone, launched 1–4 days later out of a yard of its flag (Luna; Phobos; Tycho or Ceres; Ganymede or Vesta for the independents), and takes up the trade from there.
+
+**The live window.** Within `WAKE_AU` = 0.1 AU of us (about our long sensor reach, 50 light-seconds), a hull on rails comes alive as an agent: police on routine patrol, navies with their zone and their enemies (every power theirs is at war with, and the other side of a skirmish or front they were sent to), pirates lurking, a proxy's raiders after their prey. At most 3 police, 12 warships, 2 pirates and 3 proxy raiders are awake at once, the nearest first; command ships stay at anchor. A woken police cutter on **routine** leaves law-abiding ships alone (and a power's patrols never stop its own contractors of rank 1 or more for a random check). Past 0.25 AU, with no business left with us, it goes back on rails: a course from where it is (a coasting fix) to its post or home, or lying up near the nearest body. It isn't woken by proximity again for 12 hours. Traffic woken for a fight (a pirate's prey) goes back on its route the same way. A crippled hull is left out of the forces and removed.
 
 ## Light lag and the plot (`sim/intel.js`)
 
@@ -48,26 +68,47 @@ Light crosses an AU in 8.3 minutes (one light-second is 0.002 AU, one light-minu
 
 Stations, nav marks and contract targets are on published orbits: charted, not observed. The plot holds at most 6,000 records, dropping the stalest first. The solar map draws live contacts and charted orbits where they are, and reports where they should be by now: faded with age, with their circle when it says something, and as a point cloud past 1,500 in view. Light-time rings mark 1 light-second, 1 light-minute and 10 light-minutes around us. The tactical view shows only what our sensors hold.
 
-## Tension and hot zones (`sim/conflict.js`)
+## Politics (`sim/politics.js`)
 
-Each pair of powers has a tension (0 calm, 1 open war) that wanders daily, is pulled toward its baseline (UN–MCR 0.45, UN–OPA 0.3, MCR–OPA 0.35) and is pushed up by ongoing skirmishes.
+Each pair of powers has a **relation** (−100 open war … +100 alliance) and a **phase**: allied (55+), friendly (20+), neutral, cold war (−20 and below), crisis (−45 and below), war. The bands between are read off the relation with 3 points of hysteresis; war is **declared** (from a crisis past −72) and ended by a **ceasefire**, as events. Two quantities move a pair, daily:
 
-Hot zones are born from the influence field, not from a script. Each day, with a chance that rises with tension, a flashpoint is chosen among the bodies where:
+- **Pressure** (0–1) builds while they are not fighting: a drift of its own (the arms race: 0.0018/day for Earth–Mars, 0.0012 for the Belt pairs), the weight of both powers' hawks (+0.005 × lean), and incidents (+0.03 each: warships lost in a standoff, a proxy's money traced, a spy caught); it eases by 0.8% of itself a day. A crisis feeds itself (+0.012/day) unless it is the cooling after a ceasefire. The relation follows: each day it moves 4% of the way back to its baseline (UN–MCR −32, UN–OPA −10, MCR–OPA −15), less 1.8 × pressure, plus a random walk (σ 2). Past −72, war is declared with a chance of 30–60% a day (more with the hawks in charge).
+- **Exhaustion** (0–1) builds in a war, 0.014 a day and more with losses. Past 0.4 a ceasefire becomes likely; it sets the relation to −50 (a crisis that cools), and pressure to 0.
 
-- two powers' reach overlaps: a **standoff**, a **blockade** (one navy stopping traffic to the other's station), or, above tension 0.6, a **skirmish**;
-- nobody's writ runs well, in the Belt or beyond: **pirate activity**;
-- an inner power holds a place with real Belter presence: an **insurgency**.
+Earth and Mars are never friends: their relation never rises above −25. Over two years (tests/service.test.mjs) they spend about 40% in a cold war, 45% in a crisis (with the cooling after each war) and 15% at war, with three or four wars; the Belt pairs stay neutral or in a cold war, and rarely go further. The old 0–1 **tension** is kept, read off the relation, for the zones' intensity and the boards.
 
-A zone sits at an offset from its body and moves with it. It has a radius (0.02–0.06 AU; skirmishes 0.01–0.03) and an intensity that drifts with the tension. A hot standoff can escalate into a skirmish. Zones end after 5–30 days, or when their intensity dies. At most six exist at once. Their birth, escalation and end come over the newsfeed.
+**Sub-factions** share their power's influence (it sums to 1). Their agendas lean it: hawk and militant +1, profit +0.3, covert +0.2, labor −0.2, moderate −0.6, dove −1. Shares drift, are pulled back toward their usual weight, and swing with the times: a long crisis hands influence to the hawks, a war that drags on to the doves.
 
-Away from us, zones produce outcomes without flying ships. Every hour, with a chance scaled by kind and intensity, a zone costs one real ship, which becomes a wreck where it was, held with the zone's body (salvage). At most four wrecks per zone:
+**In-fighting.** Each pair of sub-factions of one power has a rivalry (opposed agendas start further apart). A feud breaks out with a chance of 2% × rivalry a day: a leak, a budget fight, arrests, a press campaign, or sabotage at a yard (its hulls on the slips are delayed 2–6 days: forces.js). The winner takes a few points of influence from the loser. Most of it reaches the newsfeed; half the time it leaves a sub-faction wanting a quiet job done against its rival (a covert job, below).
 
-- **Skirmish and standoff:** only when both sides have hulls on station. The side facing the stronger squadron (summed class strength) loses a hull.
+**Proxies.** In a cold war or a crisis, a power pays someone to fight its rival (a chance of 1% + 4% × pressure a day per pair): the mercenaries, a clan, or the Ceres Free Belt's cells against an inner power. The side whose spies and militants have more say is the likelier payer. A proxy war lasts 15–45 days; its money is traced with a chance of 3% a day, an incident.
+
+Political news leaves the capital it concerns (Earth, Mars, Ceres) and reaches us at light speed.
+
+## Hot zones (`sim/conflict.js`)
+
+Hot zones are born from the influence field and the state of the powers, not from a script. Each day, with a chance of 20% + 50% × the mean tension, a flashpoint is chosen among the bodies where:
+
+- two powers' reach overlaps: a naval **standoff** in a cold war; a standoff, a **blockade** (one navy stopping traffic to the other's station) or a **skirmish** in a crisis; a skirmish or a blockade in a war;
+- nobody's writ runs well, in the Belt or beyond: **pirate activity**, a clan's work;
+- an inner power holds a place with real Belter presence: an **insurgency** (the Ceres Free Belt's cells).
+
+Two kinds come straight from politics:
+
+- Every war has a **front** at the body both powers reach furthest (Ganymede, or Mars itself when Earth is close): radius 0.04–0.07 AU, intensity 0.85, 40% of each navy, and two or three **control points** that the squadrons fight over (the side that loses a ship there may lose a point). It ends with the war.
+- Every proxy war has its **raiding ground**: a body out in the Belt or beyond where the target power's reach is real but thin. The proxy's raiders prey on that power's shipping.
+
+A zone sits at an offset from its body and moves with it. It has a radius (0.02–0.06 AU; skirmishes 0.01–0.03) and an intensity that follows its powers (toward 0.85 at war, 0.6 in a crisis, 0.4 in a cold war). A standoff turns into a skirmish when its powers go to war (or, rarely, in a hot crisis); a ceasefire silences a skirmish back into a standoff and ends the front. Zones end after 5–30 days, when their intensity dies, or when their powers make peace (a naval zone between powers no longer at odds). At most eight flashpoints exist at once (ten with fronts and raiding grounds). Their birth, escalation and end come over the newsfeed.
+
+Away from us, zones produce outcomes without flying ships. Every hour, with a chance scaled by kind and intensity, a zone costs one real ship, which becomes a wreck where it was, held with the zone's body (salvage). At most four wrecks per zone (ten at a front):
+
+- **Skirmish, front and standoff:** only when both sides have hulls on station. The side facing the stronger squadron (summed class strength) loses a hull.
 - **Pirate zone:** a pack on station takes a traffic ship in transit through the zone.
+- **Proxy war:** the proxy's raiders take a ship of the target power's in transit.
 - **Blockade:** the blockader disables a traffic ship running it.
 - **Insurgency:** a loss is rolled up from the zone's politics.
 
-With nobody there, nothing happens: the squadrons may still be on their way. Test suites without the forces roll every loss up from the politics. News of the loss reaches us at light speed.
+Every loss between two powers is an incident (politics): it feeds a crisis, or wears a war down. With nobody there, nothing happens: the squadrons may still be on their way. Test suites without the forces roll every loss up from the politics. News of the loss reaches us at light speed.
 
 ## Encounters
 
@@ -87,6 +128,9 @@ Only when nobody suitable is near does it bring a ship in, as before:
 | battle | 20% × intensity in a skirmish | two warships of the two navies, already at war |
 | pirate | 4% × lawlessness away from stations; +12% × intensity in a pirate zone | a raider or gunship, running dark |
 | ambush | 2% × lawlessness; +5% × intensity in a pirate zone | a pirate already on a civilian, with a mayday for us |
+| raid | 10% × intensity in a proxy war | one of the proxy's raiders, running dark, after the target power's ships |
+
+Battles are rolled in fronts as in skirmishes (30% × intensity).
 
 After each encounter the director rests 6–24 hours (`politics.quietUntil`), and it never keeps more than six ambient agents around us.
 
@@ -96,7 +140,8 @@ An agent is a driven ship with a role. It flies our own flight model and guidanc
 
 - **Patrol / picket.** Watches the ships it can see. It stops ships that are suspect: wanted, running without a transponder, or caught in a random check (15%, or 60% inside a zone). It hails from about 300,000 km with an order to heave to. It goes after pirates it sees. If we are wanted at level 3, it fires on sight.
 - **Pirate.** Lurks dark. It stalks us if it is at least half our strength (pirates bluff), or jumps nearby civilian traffic. From about 75,000 km it demands about 30% of our credits. Pay and it leaves; refuse and it attacks from about 100,000 km, aiming to disable (it wants a prize, not a fireball). Once our drive is out it stops launching torpedoes and makes a last demand: about 60% of our credits, or its guns. It slips away when law ships are near, and it breaks off when hurt.
-- **Navy.** In a zone, fights the enemy navy. It warns off unidentified ships that come inside 75,000 km, and engages anyone who ignores it or whom its power wants at level 2+. Doctrine is KILL, with nuclear torpedoes against warships.
+- **Navy.** Fights its enemies' warships and patrols wherever it meets them (never their civilians). In a zone it warns off unidentified ships that come inside 75,000 km, and engages anyone who ignores it or whom its power wants at level 2+. A captain flying an enemy power's flag it engages once it knows who it is (transponder, or a good look); one flying the flag of a power it is in a crisis with it warns off its zone, and engages if it comes on. One of its own navy's hulls flown without the license (or a stolen one) it engages too. When someone attacks a flagged captain, the navies and patrols of its power's friends nearby come to its help. Doctrine is KILL, with nuclear torpedoes against warships.
+- **A proxy's raiders** fly as pirates, but take only the target power's ships, and stalk only the captains flying its flag.
 - **Civilian.** Flees from any ship or ordnance it can see coming for it, at full drive, with no jinking, and from us while we are within 0.01 AU after firing on it. A miner turns its mining gear on any attacker that comes within reach. It surrenders when disabled.
 - **Convoy.** Flies to its destination (escort contracts) and docks there.
 
@@ -119,11 +164,55 @@ An inspection takes 45 minutes alongside. Burning away or opening the distance c
 
 Each power keeps **standing** (−100 to 100), a **wanted level** for us, and the **citations** we owe it (fines from traffic control: DOCKING.md; a week unpaid makes us SUSPECT): CLEAN, SUSPECT (stopped and searched; a fine settles it), WANTED (heave to or be disabled), HOSTILE (shot on sight).
 
-A crime is recorded against the victim's power and the power whose space it happened in. Escalations count once per victim: fired on 1, disabled 2, destroyed 3, +1 if the victim was military or police. Each crime costs 10 standing per severity point. Firing on pirates, wanted criminals, wrecks or anyone who shot first is not a crime; destroying pirates earns a little standing with the local power. Resisting an inspection raises our wanted level to WANTED.
+A crime is recorded against the victim's power and the power whose space it happened in. Escalations count once per victim: fired on 1, disabled 2, destroyed 3, +1 if the victim was military or police. Each crime costs 10 standing per severity point. Firing on pirates, wanted criminals (a proxy's raiders among them), wrecks or anyone who shot first is not a crime; destroying pirates earns a little standing with the local power. Resisting an inspection raises our wanted level to WANTED. A captain flying a power's flag (below) who fires on the warships or patrols of a power at war with its own is at war, not committing a crime (that power's standing still drops with every hit); firing on its civilians is a crime as ever. A crime against our own power's people costs reputation, and from severity 2 the license.
 
-**Contraband**: smuggled cargo (illegal where its contract says) and nuclear torpedoes in UN or Martian space. An inspection seizes it and levies 1,000 + 1,500 per consignment + 1,000 per warhead + 1,500 per wanted level. Paying in full clears the record. Wanted levels fade one step per ten quiet days; standing drifts back toward neutral. Stations of a power that puts our standing below −20 won't give us work.
+**Contraband**: smuggled cargo (illegal where its contract says), nuclear torpedoes (legal only to a licensed captain: in its own power's space, and, under Earth's and Mars's rule, nowhere else in theirs), and a military hull flown without its license. An inspection seizes the cargo and the warheads and levies 1,000 + 1,500 per consignment + 1,000 per warhead + 10,000 for an unlicensed hull + 1,500 per wanted level. Paying in full clears the record, except a hull's: it can't be seized at sea, so the record stays open (SUSPECT; WANTED with the navy whose hull it is) as long as we fly it. Wanted levels fade one step per ten quiet days; standing drifts back toward neutral. Stations of a power that puts our standing below −20 won't give us work.
 
-**Arms**: PDC rounds sell everywhere (0.05 MCR each). HE torpedoes (1,800 MCR) sell at OPA, independent and pirate stations, and at UN or Martian yards only if our standing is 20 or more. Nuclear torpedoes (6,000 MCR) sell only at OPA stations, to friends (OPA standing 0 or more).
+**Arms**: PDC rounds sell everywhere (0.05 MCR each). HE torpedoes (1,800 MCR) sell at OPA, independent and pirate stations, at UN or Martian yards only if our standing is 20 or more, and from command ships to their contractors. Nuclear torpedoes (6,000 MCR) are military kit: only to a licensed captain, at its own power's stations that sell arms, or from its command ship from rank 3.
+
+## Military service (`sim/service.js`, `sim/military.js`)
+
+**The license.** A captain may hold one power's military license (UN, MCR or OPA) at a time: chosen on the new-game screen (the game then starts at that power's yards: Luna, Phobos, Tycho; a civilian starts at Ceres, and the starting standing with the licensing power is at least 20), applied for at any station of the power (in port; standing 10 or better, a clean record with it), handed back at will (at its stations, or in the service record), and revoked for a crime of severity 2 against its people or for being WANTED by it (it can't be applied for again for 30 days, and half the reputation is gone). A navy's hulls (the three navy corvettes) need its license; the stolen ex-UNN Harrier needs one nobody gives, and is illegal everywhere.
+
+**The flag.** A license and one of its navy's hulls make the captain that power's **contractor**: it flies its flag. A license in a civilian hull does nothing else (nuclear torpedoes become legal). Under a flag every faction sees us through our power:
+
+relation(X) = relation(our power, X) + our standing with X / 10
+
+| Relation | They treat us as |
+|---|---|
+| our power | ours: its patrols wave us through from rank 1 |
+| 40 or more | a friend: their warships and patrols nearby help us when we are attacked |
+| −35 or less | hostile: their warships warn us off their zones and engage if we come on; their stations won't clear us in |
+| −60 or less | an enemy: their warships and patrols engage us on sight once they know us (transponder, or a good look), their stations' guns fire on us |
+
+Pirates are everyone's enemy, the independents nobody's. Without a flag, each power judges us on our own standing, as before. Hails read the same relation (dialogue.js attitude).
+
+**Reputation and rank.** A contractor earns reputation with its power, kept per power and apart from standing: 1 a day in service; for each enemy hull it destroys (a cutter 10, corvette 15, gunship 20, frigate 30, destroyer 60, battleship 150; a command ship half again; a pirate's or a proxy's about a third); for each military mission (25–60); for reporting aboard a command ship (5). Failed missions cost half their reward, crimes against its own side 25 per severity point, a blown covert job 20. Reputation makes rank:
+
+| Rank | Reputation | UNN | MCRN | OPA |
+|---|---|---|---|---|
+| 0 | 0 | Ensign | Ensign | Volunteer |
+| 1 | 40 | Lieutenant (j.g.) | Lieutenant | Hand |
+| 2 | 120 | Lieutenant | Lieutenant Commander | Bosmang |
+| 3 | 300 | Lieutenant Commander | Commander | Kapteng |
+| 4 | 600 | Commander | Captain | Fleet Kapteng |
+| 5 | 1,000 | Captain | Commodore | Kommodore |
+| 6 | 1,600 | Commodore | Rear Admiral | Admiral |
+
+Rank raises military pay by 15% a step, opens the harder missions (holding a point from rank 1, covert jobs from 1, strikes from 2), gets nuclear warheads issued by command ships from rank 3, and from rank 1 our own side's patrols don't stop us for a random check.
+
+**Call-ups.** When a fight of our power (a naval zone it is in, an insurgency against it, a proxy war on its shipping) has a command ship within 2.5 AU of us, command orders us to report to it. The order travels at light speed (the mission log lists it under ORDERS, with the way to the command ship). A command ship takes its own contractors alongside at its post (the route panel's DOCK on it: a rendezvous, then the docking computer). Alongside we have reported; for as long as its fight lasts its supplies, field repairs and torpedoes cost a tenth of the price.
+
+**Military missions** are posted on every slot of a command ship's board while its fight lasts, and on 15% of the slots of a station of our power (or an independent one) within 0.6 AU of one of our power's fights. Only a contractor of that power can sign (alongside a command ship, in port at a station), and only at the rank each asks. They are marked MIL on the boards, in our power's colour, with the sub-faction that issues them. Each is reported at any port of our power: its stations or its command ships.
+
+| Mission | Work | Rank | Pay |
+|---|---|---|---|
+| INTELLIGENCE | a sensor lock inside 300,000 km on 2–3 different enemy warships (or a proxy's raiders), held 10–20 minutes each | any | 5,000–12,000 |
+| HOLD THE POINT | at a war front, get within 75,000 km of a control point our side holds and stay 4–8 hours; three of our warships hold it with us, and the enemy sends 2–3 ships at it every 1.5–2.5 hours (four waves at most). Two hours off it and it is lost | 1 | 10,000–25,000, PDC rounds |
+| STRIKE (HVT) | destroy (or take the surrender of) a high-value target: an enemy destroyer or frigate on detached duty with 1–2 escorts (in a war only), a proxy's ringleader, a cell's gunship | 2 | 12,000–30,000 |
+| COVERT | for one of our power's sub-factions, against a rival inside it: hold a lock on the rival's ship for 30–90 minutes without being identified by it (transponder off, keep away). If it makes us, the job is blown | 1 | 6,000–14,000 |
+
+Pay is rolled at posting and multiplied by our rank's pay factor. A mission whose fight ends before it is done fails.
 
 ## Stations, contracts and distress calls
 
@@ -144,7 +233,7 @@ The contract board, news, the traffic board, clearances and fines are radio work
 
 **Distress calls** (`sim/missions.js`) come in four kinds: fuel-dry drifters, dead drives, runaway torches stuck at high G, and scrammed reactors. Each comes with a survival timer and a feasibility estimate from the nav computer. Accept, intercept, hold formation within 10 km and hail to rescue.
 
-Stations near hot zones (within 0.6 AU) also post conflict work, up to 40% of their board:
+Stations near hot zones (within 0.6 AU) also post conflict work, up to 40% of their board (and military work for a contractor of a power fighting near them: above):
 
 | Contract | Work | Pay |
 |---|---|---|
@@ -161,10 +250,11 @@ Hailing opens a channel, and a channel is a conversation: topics we can raise an
 
 | Counterpart | Topics |
 |---|---|
-| Station (traffic control) | approach, docking (or an emergency berth), departure, cancel; the traffic board (berths, the anchorage, and the manifests of the ships berthed: their declared crews); news; the registry on any ship in range; the contract board; services, the hiring hall, shore leave (docked); pay citations; hand over prisoners |
+| Station (traffic control) | approach, docking (or an emergency berth), departure, cancel; the traffic board (berths, the anchorage, and the manifests of the ships berthed: their declared crews); news; the registry on any ship in range; the contract board; services, the hiring hall, shore leave (docked); pay citations; hand over prisoners; apply for the power's military license (in port), or hand ours back |
 | Civilian | identify, souls aboard, where bound, what they have seen (real zones on our plot, real pirates near them), a rendezvous to dock, buying supplies over the collar, help when we are in trouble, a warning about pirates near them, an order to heave to (a crime against a lawful ship) |
 | Police | identify, souls, our record, settle our record, report a pirate contact (they go after it), surrender to them when wanted |
 | Navy | identify, souls (not to strangers), passage through their zone (standing 10, clean, transponder on), news |
+| Our command ship | report in (our orders, the board, the prices), the mission board, supplies and repairs (alongside), how the fight is going |
 | Pirate | who are you, a counter-offer of half when they demand, a bribe to go away, threats (they leave if we are much the stronger) |
 | A crew that struck, or a dead hull | souls aboard, open your locks (boarding is then by invitation), an offer to take survivors off, hold still while we come alongside |
 

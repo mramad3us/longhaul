@@ -188,7 +188,10 @@ const HANDLERS = {
   'under-attack': ({ name }) => { logEntry(`${name} is firing on us!`, 'danger'); toast(`UNDER ATTACK — ${name}`, 'danger'); },
   'agent-retreats': ({ name }) => logEntry(`${name} is breaking off`, 'nav'),
   'agent-left': () => {},
-  'encounter': ({ kind, name }) => { if (kind === 'battle') logEntry(`Ops: warships maneuvering for a fight nearby — ${name}`, 'warn'); },
+  'encounter': ({ kind, name }) => {
+    if (kind === 'battle') logEntry(`Ops: warships maneuvering for a fight nearby — ${name}`, 'warn');
+    if (kind === 'raid') logEntry(`Ops: a hull running dark in the raiders' lanes — ${name}`, 'warn');
+  },
 
   // ---- Comms demands & the law
   'comm-request': ({ request }) => { logEntry(`[${request.fromName}] ${request.text}`, 'comms'); openRequest(request); },
@@ -201,6 +204,25 @@ const HANDLERS = {
   'zone-news': ({ text, lagMin }) => logEntry(`Newsfeed${aged(lagMin)}: ${text}`, 'comms'),
   'zone-incident': ({ text, lagMin }) => logEntry(`Newsfeed${aged(lagMin)}: ${text}`, 'comms'),
   'intel-digest': () => {},
+
+  // ---- The powers, and our service (they reach us at light speed: politics-news; the rest is ours)
+  'politics-news': ({ text, kind, lagMin }) => {
+    const loud = kind === 'war' || kind === 'ceasefire';
+    logEntry(`Newsfeed${aged(lagMin)}: ${text}`, kind === 'war' ? 'danger' : loud ? 'ok' : 'comms');
+    if (loud) { toast(text, kind === 'war' ? 'danger' : 'ok'); pushTicker(text, kind === 'war' ? 'danger' : 'comms', 'NEWS'); }
+  },
+  'politics-phase': () => {},
+  'proxy-war': () => {},
+  'yard-sabotage': () => {},
+  'service-callup': ({ text }) => { logEntry(text, 'warn'); toast('ORDERS: report to your command ship (Missions, L)', 'warn'); pushTicker(text, 'warn', 'COMMAND'); },
+  'service-reported': ({ callup }) => { logEntry(`Reported aboard the ${callup.shipName}: on the roster for the fight at ${callup.body}`, 'ok'); toast(`REPORTED: ${callup.shipName}`, 'ok'); },
+  'service-promoted': ({ title }) => { logEntry(`Promoted: ${title}`, 'ok'); toast(`PROMOTED — ${title.toUpperCase()}`, 'ok'); },
+  'service-demoted': ({ title }) => logEntry(`Reduced in rank: ${title}`, 'warn'),
+  'license-changed': ({ faction, how, why }) => {
+    const text = how === 'granted' ? `${faction} license granted` : how === 'resigned' ? `${faction} license handed back` : `${faction} license REVOKED: ${why}`;
+    logEntry(text, how === 'revoked' ? 'danger' : 'system');
+    if (how === 'revoked') toast(`LICENSE REVOKED — ${faction}`, 'danger');
+  },
 
   // ---- Traffic control and our nav computer near a hub
   'tc-zone': ({ name, text }) => { if (text) { logEntry(`[${name}] ${text}`, 'comms'); pushTicker(text, 'comms', name); } },

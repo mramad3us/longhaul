@@ -13,12 +13,15 @@
 // and hear news that is on the plot (intel.js), arrange a rendezvous to
 // dock and trade, warn a ship of pirates, order one to heave to (a crime
 // against a lawful ship), haggle with a pirate, pay fines, ask a navy for
-// passage through its zone, take a beaten crew's surrender terms. Some
-// answers ask the UI to open something (the contract board, services,
-// the hiring hall, trade, boarding).
+// passage through its zone, take a beaten crew's surrender terms, apply
+// for a power's military license at its stations or hand one back, and
+// report in to our command ship (service.js). Some answers ask the UI to
+// open something (the contract board, services, the hiring hall, trade,
+// boarding).
 //
 // ATTITUDE (−1 … 1) is what the other side makes of us: its power's
-// standing with us and whether it wants us, whether we fired on it,
+// standing with us (under a flag, our relation: our power's with it, and
+// a tenth of our own) and whether it wants us, whether we fired on it,
 // whether our transponder is on, and its trade (pirates and navies trust
 // nobody; civilians and stations take most callers at their word).
 //
@@ -31,7 +34,7 @@ import { AU_M } from '../core/constants.js';
 import { pick, chance, random } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { CLASSES, classOf, classLabel } from './ship-classes.js';
-import { FACTIONS } from './factions.js';
+import { FACTIONS, POWERS } from './factions.js';
 import { PLAYER, isOutOfFight, profile, strength } from './combatants.js';
 import { leaseSummary, extendLease } from './leases.js';
 import { requestApproach, requestHolding, requestDocking, requestDeparture, cancelClearance, clearanceFor, stationTraffic, voice as stationVoice } from './traffic-control.js';
@@ -41,7 +44,8 @@ import { finesOwed, payFines, recordOffense, adjustStanding, wantedBy, WANTED_LA
 import { wake, makeHostile, respondToRequest } from './agents.js';
 import { STATIONS } from './stations.js';
 import { hullOf } from './hulls.js';
-import { PRICES } from './contracts.js';
+import { PRICES, inPort } from './contracts.js';
+import { licenseOf, flagOf, applyForLicense, resignLicense, rankName, openCallups, effectiveRelation } from './service.js';
 
 // ---- WHO THEY ARE ----
 
@@ -61,7 +65,7 @@ export function persona(e) {
 /** How they see us, −1 … 1. */
 export function attitude(state, e) {
   const L = state.law;
-  let a = ((L.standing[e.faction] ?? 0) / 100) * 0.8;
+  let a = (e.faction === 'pirate' ? 0 : effectiveRelation(state, e.faction) / 100) * 0.8;    // (pirates trust nobody anyway: below)
   a -= 0.35 * (L.wanted[e.faction] ?? 0);
   if (!state.comms.transponder) a -= 0.25;
   if (e.agent?.hostile?.includes(PLAYER) || e.combat?.hostile?.includes(PLAYER)) a -= 1;
@@ -115,6 +119,10 @@ function greeting(state, e, p) {
   if (p === 'struck') return pick(['"We are not resisting. Drive is cold, tubes open. Tell us what you want."', '"We\'ve struck. Please. We have people hurt."']);
   if (p === 'crippled') return pick(['"Thank god, someone. Our drive is gone. Go ahead."', '"We read you. We\'re dead in space, so be kind."']);
   if (p === 'pirate') return att < -0.5 ? pick(['"You again. Talk fast."', '"Keep talking. We\'re measuring you for a cargo net."']) : pick(['"You lost, friend? Or shopping?"', 'A laugh, then: "Go ahead. Make it interesting."']);
+  if (p === 'navy' && e.tags?.command) {
+    const ours = flagOf(state) === e.faction;
+    return ours ? `"${e.name}, ${FACTIONS[e.faction].navy} forward command. Go ahead, ${rankName(state) || 'contractor'}."` : `"${e.name}. This is a command ship of the ${FACTIONS[e.faction].navy}. State your business and keep clear."`;
+  }
   if (p === 'navy') return { mcr: '"MCRN vessel. We have your ident. State your intent and keep your distance."', un: `"${e.name}, UN Navy. Go ahead, and keep your hands off your weapons board."`, belter: '"OPA. We hear you. Make it quick, ke."' }[v] || `"${e.name}. Go ahead."`;
   if (p === 'police') return att < -0.3 ? '"We know who you are. Go ahead."' : pick([`"${FACTIONS[e.faction]?.police || 'Patrol'} vessel ${e.name}. Go ahead."`, '"Patrol receiving. What is it?"']);
   return flavour(v, att < -0.3 ? pick(['"Yeah? What do you want?"', 'A long pause. "...Go ahead."']) : pick([`"${e.name} here. Go ahead."`, '"Receiving you. Go ahead with your traffic."', '"We hear you. What do you need?"']));
@@ -155,6 +163,9 @@ export function topics(state, conv = channel(state)) {
     const owed = finesOwed(state, e.faction);
     if (owed.length) out.push(T('fines', `Pay citations (${owed.reduce((s, f) => s + f.amount, 0).toLocaleString()} MCR)`, { group: 'station' }));
     if (state.passengers.some(x => x.kind === 'prisoners')) out.push(T('prisoners', 'Hand over prisoners', { group: 'station', why: docked ? null : 'dock first' }));
+    // Military licenses are a power's business, at any of its stations
+    if (POWERS.includes(e.faction) && licenseOf(state) !== e.faction) out.push(T('license-apply', `Apply for a ${FACTIONS[e.faction].navy} contractor's license`, { group: 'service', why: inPort(state, e) ? null : 'come into port' }));
+    if (licenseOf(state) === e.faction) out.push(T('license-resign', `Hand back our ${FACTIONS[e.faction].short} license`, { group: 'service' }));
   } else if (p === 'pirate') {
     out.push(T('ident', 'Who are you?'));
     const rq = state.comms.requests.find(r => r.from === e.id && r.kind === 'demand');
@@ -183,6 +194,12 @@ export function topics(state, conv = channel(state)) {
       if (knownPirates(state, e).length) out.push(T('report', 'Report a pirate contact'));
       if (wantedBy(state, e.faction) >= 2) out.push(T('give-up', 'Surrender to them'));
       out.push(T('dock-request', 'Request a rendezvous to dock'));
+    } else if (p === 'navy' && e.tags?.command && flagOf(state) === e.faction) {
+      // Our forward command: orders, the board, supplies alongside
+      out.push(T('orders', 'Report in: what are our orders?', { group: 'service' }));
+      out.push(T('board', 'Open the mission board', { group: 'service' }));
+      out.push(T('services', 'Supplies and repairs', { group: 'service', why: docked ? null : 'come alongside first' }));
+      out.push(T('news', 'Ask how the fight is going'));
     } else if (p === 'navy') {
       out.push(T('passage', 'Request passage through your zone', { why: e.agent?.zone ? null : 'not in a zone' }));
       out.push(T('news', 'Ask what is happening here'));
@@ -309,6 +326,21 @@ const TALK = {
     return { lines: [them(`${o.name}: ${classLabel(o)} under ${FACTIONS[o.faction]?.short || o.faction} flag, ${where}.${souls ? ` Declared ${souls.crew} crew${souls.pax ? ` and ${souls.pax} passengers` : ''}.` : ' Nothing declared.'}`)] };
   },
   board: () => ({ lines: [sys('The contract board is up.')], open: 'board' }),
+  'license-apply'(state, e, conv, arg, emit) {
+    const r = applyForLicense(state, e.faction, emit);
+    return { lines: [them(r.ok ? `Your application is approved. ${r.text}` : r.text)] };
+  },
+  'license-resign'(state, e, conv, arg, emit) {
+    const r = resignLicense(state, emit);
+    return { lines: [them(r.ok ? `Understood. ${r.text}` : r.text)] };
+  },
+  orders(state, e) {
+    const zone = state.politics.zones.find(z => z.id === e.tags.command?.zone);
+    const cu = openCallups(state).find(x => x.ship === e.id);
+    const n = e.board?.missions.length || 0;
+    const what = zone ? `We are holding the rear of the ${zone.kind === 'front' ? 'front' : zone.kind} at ${zone.body}.` : 'The fight here is over; we are standing down.';
+    return { lines: [them(`"${what} ${n ? `${n} mission${n > 1 ? 's' : ''} on the board for you.` : 'Nothing on the board right now: stand by.'} ${cu?.reported || state.dock?.target.id === e.id ? 'Supplies alongside at a tenth of the price while this lasts.' : 'Come alongside to draw supplies at a tenth of the price.'}"`)] };
+  },
   services: () => ({ lines: [sys('Station services.')], open: 'services' }),
   hire: () => ({ lines: [sys('The hiring hall.')], open: 'hire' }),
   leave: () => ({ lines: [sys('Shore leave.')], open: 'leave' }),

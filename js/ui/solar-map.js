@@ -335,7 +335,7 @@ export class SolarMap {
         const [zx, zy] = sp(p.x, p.y);
         const zr = Math.max(8, z.radius * S);
         if (zx + zr < 0 || zx - zr > W || zy + zr < 0 || zy - zr > H) continue;
-        const col = z.kind === 'pirates' ? '#C05AA0' : z.kind === 'skirmish' ? '#FF5555' : z.kind === 'insurgency' ? '#E2A355' : '#E8D56B';
+        const col = z.kind === 'pirates' ? '#C05AA0' : z.kind === 'skirmish' || z.kind === 'front' ? '#FF5555' : z.kind === 'insurgency' ? '#E2A355' : z.kind === 'proxy' ? '#D0784A' : '#E8D56B';
         ctx.strokeStyle = col; ctx.globalAlpha = 0.65; ctx.setLineDash([5, 4]);
         ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
         ctx.fillStyle = col; ctx.font = font(10);

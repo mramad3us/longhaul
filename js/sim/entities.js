@@ -31,6 +31,7 @@ export function createEntity(opts) {
     name: opts.name,
     type: opts.type || EntityType.SHIP,
     faction: opts.faction || 'independent',
+    sub: opts.sub || null,                        // sub-faction (factions.js); every entity has the key, so they all share one shape
     cls,                                          // catalog class id (ships)
     tl: cls ? CLASSES[cls].tl : (opts.tl || 2),        // a class's tech level is its yard's
     shipClass: opts.shipClass || (cls ? CLASSES[cls].name : null),

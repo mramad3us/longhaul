@@ -5,6 +5,7 @@
 import { suitedCount } from '../sim/life-support.js';
 import { ui } from './context.js';
 import { $, $$, esc, setText, setHTML, show, toggleClass, fmtSpeed, fmtMeters, fmtNum, fmtG, fmtMass } from './dom.js';
+import { flagChip, openService } from './service.js';
 import { formatDate, formatTime, formatDuration } from '../core/clock.js';
 import { AU_M } from '../core/constants.js';
 import { maxSpeed } from '../sim/autopilot.js';
@@ -35,6 +36,7 @@ export function setDockHandler(fn) { onDock = fn; }
 
 export function initHud(onSpeed, onCombat, onSystems, openCombatTab, onSuits = null) {
   onThreat = openCombatTab;
+  $('#hud-flag').addEventListener('click', () => openService());
   el = {
     date: $('#hud-date'), time: $('#hud-time'), ship: $('#hud-ship-name'), chip: $('#hud-nav-chip'),
     perf: $('#hud-perf'), combat: $('#combat-toggle'), combatStatus: $('#combat-status'), suits: $('#suits-toggle'), suitsStatus: $('#suits-status'),
@@ -42,7 +44,7 @@ export function initHud(onSpeed, onCombat, onSystems, openCombatTab, onSuits = n
     drive: $('#info-drive'), attitude: $('#info-attitude'), vel: $('#info-velocity'), ref: $('#info-vel-ref'),
     orbit: $('#info-orbit'), mass: $('#info-mass'), cargo: $('#info-cargo'), alert: $('#alert-border'),
     speedBtns: $$('.speed-btn'), strip: $('#systems-strip'), sysCount: $('#hud-systems-count'),
-    space: $('#hud-space'), threat: $('#hud-threat'), hull: $('#info-hull'),
+    space: $('#hud-space'), threat: $('#hud-threat'), hull: $('#info-hull'), flag: $('#hud-flag'),
     tc: $('#tc-chip'), comms: $('#hud-comms-btn'),
   };
   el.tc.addEventListener('click', (e) => {
@@ -176,6 +178,14 @@ export function updateHud(state) {
   setText(el.date, formatDate(state.clock));
   setText(el.time, formatTime(state.clock));
   setText(el.ship, state.ship.name);
+  // The flag we fly and our rank (or what is wrong with our papers)
+  const fc = flagChip(state);
+  const key = fc ? `${fc.text}|${fc.cls}` : '';
+  if (el.flag.dataset.key !== key) {
+    el.flag.dataset.key = key;
+    show(el.flag, !!fc);
+    if (fc) { el.flag.textContent = fc.text; el.flag.className = `hud-flag-chip ${fc.cls}`; el.flag.style.setProperty('--fc', fc.color || ''); }
+  }
   const ns = navStatus(state);
   setText(el.chip, ns.chip);
   if (el.chip.title !== ns.chip) el.chip.title = ns.chip;     // (the whole of it, when the bar cuts it short)

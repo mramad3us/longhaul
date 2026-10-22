@@ -7,7 +7,7 @@ import { createGame, advance } from '../js/sim/game.js';
 import { getWorld } from '../js/sim/world.js';
 import { getBody, bodyPos } from '../js/sim/ephemeris.js';
 import { controlAt, spaceLabel } from '../js/sim/factions.js';
-import { zoneCandidates, spawnZone, zonePos, zonesAt, director, spawnEncounter } from '../js/sim/conflict.js';
+import { zoneCandidates, spawnZone, zonePos, zonesAt, director, spawnEncounter, ZONE_CAP } from '../js/sim/conflict.js';
 import { acceptContract, ContractType, contractsTick } from '../js/sim/contracts.js';
 
 function game(seed = 5) {
@@ -50,7 +50,7 @@ export default [
       for (let d = 0; d < 60; d++) {
         advance(s, DAY_MIN);
         for (const z of s.politics.zones) seen.add(`${z.kind}@${z.body}`);
-        assert(s.politics.zones.length <= 6, 'zone cap');
+        assert(s.politics.zones.length <= ZONE_CAP, 'zone cap');
       }
       console.log(`      60 days: ${seen.size} zones (${[...seen].slice(0, 8).join(', ')}…); tension ${Object.entries(s.politics.tension).map(([k, v]) => `${k} ${fmt(v, 2)}`).join(', ')}`);
       assert(seen.size >= 3, 'zones should come and go');

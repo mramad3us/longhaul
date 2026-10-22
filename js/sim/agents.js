@@ -31,6 +31,13 @@
 // or traffic woken for a fight doesn't leave the world: it goes back on
 // rails. A woken police cutter on ROUTINE leaves law-abiding ships alone;
 // the director's patrol encounter is the one that comes to look at us.
+//
+// A captain flying a power's flag (service.js) is a combatant to the
+// rest: once a warship or patrol knows who we are, an enemy of our power
+// engages us, a hostile one warns us off its zone, and our power's
+// friends come to our help when we are attacked. Our own side's patrols
+// wave a contractor of some rank through. A proxy's raiders (pirate
+// brains with a `prey`) hunt one power's shipping, and its contractors.
 // ============================================================
 
 import { groundCheck, terrainGuard, hoverCmd } from './terrain.js';
@@ -52,6 +59,7 @@ import { hullTick } from './damage.js';
 import { wantedBy, settleInspection, adjustStanding } from './law.js';
 import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from './weapons.js';
 import { putToSleep } from './forces.js';
+import { enemyOf, hostileTo, friendOf, flagOf, hullLegal, navyOf, rankOf, RANK_FOR } from './service.js';
 import { releaseHull, parkHull } from './stations.js';
 
 /**
@@ -94,13 +102,14 @@ const PIRATE_NERVE = 0.5;             // pirates stalk ships up to twice their s
  */
 export function spawnAgent(state, opts) {
   const world = getWorld(state);
-  const id = rollIdentity({ cls: opts.cls, kind: opts.kind, category: opts.category, faction: opts.faction, near: opts.near });
+  const id = rollIdentity({ cls: opts.cls, kind: opts.kind, category: opts.category, faction: opts.faction, near: opts.near, sub: opts.sub, state });
   const role = opts.role;
   const e = createEntity({
     id: world.newId(role), name: opts.name || id.name, type: 'ship', faction: id.faction, cls: id.cls, tl: id.tl,
     shipClass: id.shipClass, mass: id.mass, pos: opts.pos, vel: opts.vel, driven: true,
     transponder: opts.transponder ?? (role !== 'pirate'), t: state.clock.minute, tags: { ...(opts.tags || {}) },
   });
+  if (id.sub) e.sub = id.sub;
   makeAgent(state, e, role, opts);
   world.add(e);
   return e;
@@ -112,7 +121,7 @@ function makeAgent(state, e, role, opts = {}) {
     target: opts.target ?? null, hostile: [...(opts.hostile || [])], aggressor: false, evade: false,
     wing: [], plan: null, planKey: '', cmd: null,
     home: opts.home || null, zone: opts.zone || null, contract: opts.contract || null, ambient: !!opts.ambient,
-    dest: opts.dest || null, enemies: opts.enemies || [], scan: {}, flags: { routine: !!opts.routine }, request: null, calmSince: state.clock.minute,
+    dest: opts.dest || null, enemies: opts.enemies || [], scan: {}, flags: { routine: !!opts.routine, ...(opts.flags || {}) }, request: null, calmSince: state.clock.minute,
   };
   e.nav = { facing: Math.atan2(e.vel.vy, e.vel.vx), turning: 0 };
   ensureHull(e);
@@ -165,6 +174,24 @@ export function makeHostile(state, e, id, { provoked = false } = {}) {
   else if (ROLES[a.role]?.aim && a.mode !== 'flee' && a.mode !== 'leave') a.mode = 'engage';
   a.next = state.clock.minute;
   if (provoked && id === PLAYER) callForHelp(state, e);
+  if (id === PLAYER) helpPlayer(state, e);
+}
+
+/** Someone went for a flagged captain: its power's friends' warships nearby come to its help. */
+function helpPlayer(state, attacker) {
+  if (!flagOf(state)) return;
+  for (const o of getWorld(state).driven) {
+    if (o === attacker || o.type !== 'ship' || !o.agent || isOutOfFight(o) || o.faction === attacker.faction) continue;
+    if (!['patrol', 'picket', 'navy'].includes(o.agent.role) || !friendOf(state, o.faction)) continue;
+    if (Math.hypot(o.pos.x - attacker.pos.x, o.pos.y - attacker.pos.y) < 0.02) makeHostile(state, o, attacker.id);
+  }
+}
+
+/** A navy hull of `faction`'s (or one stolen from it) flown without its license. */
+function stolenFrom(state, faction) {
+  if (hullLegal(state)) return false;
+  const n = navyOf(state.ship.classId);
+  return n === faction || (n === 'stolen' && CLASSES[state.ship.classId]?.stolen === faction);
 }
 
 /** The player fired on a lawful ship: its side's patrols and warships nearby join in. */
@@ -434,7 +461,9 @@ const BRAINS = {
     // Lawmen about: slip away
     if (lawNearby(state, e)) { a.mode = 'leave'; return; }
     if (a.mode === 'lurk') {
-      if (!state.lost && sees(state, e.id, PLAYER) && strength(p) >= PIRATE_NERVE * strength(profile(state, PLAYER))) {
+      // (a proxy's raider goes only for its prey's ships, and the captains flying its flag)
+      const mayStalk = !a.flags.prey || flagOf(state) === a.flags.prey;
+      if (mayStalk && !state.lost && sees(state, e.id, PLAYER) && strength(p) >= PIRATE_NERVE * strength(profile(state, PLAYER))) {
         a.target = PLAYER; a.mode = 'stalk';
       } else {
         const prey = civilianPrey(state, e);
@@ -468,12 +497,19 @@ const BRAINS = {
     const enemy = enemyWarship(state, e);
     if (enemy) { makeHostile(state, e, enemy.id); return; }
     if (state.lost || !sees(state, e.id, PLAYER)) return;
-    if (wantedBy(state, e.faction) >= 2) { makeHostile(state, e, PLAYER); return; }
+    const known = identified(state, e);
+    // Wanted, flying the enemy's flag, or in one of its own navy's stolen hulls: weapons free
+    if (wantedBy(state, e.faction) >= 2 || (known && (enemyOf(state, e.faction) || stolenFrom(state, e.faction)))) { makeHostile(state, e, PLAYER); return; }
     const d = distAU(e.pos, state.flight.pos);
-    if (a.zone && !identified(state, e) && d <= WARN_AU && !a.flags.warned) {
+    const flagged = known && hostileTo(state, e.faction);
+    // Warned off and coming on anyway
+    if (flagged && a.flags.warned === 'complied' && d <= WARN_AU * 0.5) { makeHostile(state, e, PLAYER); return; }
+    if (a.zone && (!known || flagged) && d <= WARN_AU && !a.flags.warned) {
       a.flags.warned = 'sent';
-      openRequest(state, e, 'warning', `"Unidentified vessel, this is ${e.name}. You are inside an active engagement zone. Turn on your transponder and stand off, or you will be fired upon."`,
-        [{ id: 'comply', label: 'TRANSPONDER ON · STAND OFF' }, { id: 'refuse', label: 'IGNORE' }], emit);
+      const text = flagged
+        ? `"${state.ship.name}, this is ${e.name}. You are flying ${FACTIONS[flagOf(state)].short} colours inside our zone. Stand off now, or you will be fired upon."`
+        : `"Unidentified vessel, this is ${e.name}. You are inside an active engagement zone. Turn on your transponder and stand off, or you will be fired upon."`;
+      openRequest(state, e, 'warning', text, [{ id: 'comply', label: flagged ? 'STAND OFF' : 'TRANSPONDER ON · STAND OFF' }, { id: 'refuse', label: 'IGNORE' }], emit);
     }
   },
 
@@ -512,12 +548,16 @@ function lawman(state, e, emit, stayHome) {
   if (state.lost) return;
   const seen = sees(state, e.id, PLAYER);
   const wanted = wantedBy(state, e.faction);
-  if (seen && wanted >= 3) { makeHostile(state, e, PLAYER); return; }
+  const known = seen && identified(state, e);
+  if (seen && (wanted >= 3 || (known && enemyOf(state, e.faction)))) { makeHostile(state, e, PLAYER); return; }
 
   if (a.mode === 'cruise') {
     if (!seen || a.flags.checked) return;
-    const suspicious = wanted >= 1 || (!state.comms.transponder && (a.scan.player || 0) >= 10);
-    const policy = a.flags.routine ? 0 : a.zone ? 0.6 : 0.15;
+    // (unlicensed military kit, or the flag of a power we are in a crisis with, is worth a look)
+    const suspicious = wanted >= 1 || (!state.comms.transponder && (a.scan.player || 0) >= 10) || (known && (!hullLegal(state) || hostileTo(state, e.faction)));
+    let policy = a.flags.routine ? 0 : a.zone ? 0.6 : 0.15;
+    // Our own side's patrols wave a contractor of some standing through
+    if (flagOf(state) === e.faction && rankOf(state) >= RANK_FOR.waveThrough) policy = 0;
     if (suspicious || identified(state, e)) {
       a.flags.checked = true;
       if (suspicious || chance(policy)) { a.mode = 'intercept'; a.target = PLAYER; a.since = now; }
@@ -565,12 +605,13 @@ function lawNearby(state, e) {
   return false;
 }
 
+/** An enemy power's warship or patrol it can see (never a civilian: they are not targets in a war). */
 function enemyWarship(state, e) {
   const enemies = e.agent.enemies || [];
   if (!enemies.length) return null;
   for (const o of getWorld(state).driven) {
     if (o === e || o.type !== 'ship' || !o.agent || isOutOfFight(o) || !enemies.includes(o.faction)) continue;
-    if (o.agent.role !== 'navy') continue;
+    if (!['navy', 'patrol', 'picket'].includes(o.agent.role)) continue;
     if (sees(state, e.id, o.id)) return o;
   }
   return null;
@@ -581,7 +622,8 @@ function civilianPrey(state, e) {
   if (!chance(0.1)) return null;
   const world = getWorld(state);
   const near = world.query(e.pos, 0.01);
-  const pool = near.filter(o => o.type === 'ship' && o.tags.traffic && !o.agent && CLASSES[o.cls]?.category === 'civilian');
+  const prey = e.agent.flags.prey;
+  const pool = near.filter(o => o.type === 'ship' && o.tags.traffic && !o.agent && CLASSES[o.cls]?.category === 'civilian' && (!prey || o.faction === prey));
   return pool.length ? pool[randInt(0, pool.length - 1)] : null;
 }
 

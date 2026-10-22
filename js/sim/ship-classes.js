@@ -34,10 +34,16 @@
 // exceptions are named: liners carry two anti-debris PDCs by law, the
 // armed light freighter has a self-defense fit, and mining ships can turn
 // their rock-cracking gear on a hull that comes close enough.
+//
+// A navy's hulls are military kit: flying one takes that navy's license
+// (service.js); a `stolen` one no license covers. A ship's identity
+// (rollIdentity) is its class, its flag, its sub-faction (factions.js)
+// and its name (names.js: unique in a game).
 // ============================================================
 
 import { random, pick, randInt, weightedPick } from '../core/rng.js';
-import { FACTIONS } from './factions.js';
+import { FACTIONS, pickSub } from './factions.js';
+import { shipName } from './names.js';
 
 // ---- TECH LEVELS ----
 // Combat: sensors (detection range ×), stealth (own signature ×), armor
@@ -330,7 +336,7 @@ export const CLASSES = {
     desc: 'Martian fast-attack corvette: six TL4 PDCs, a 12G drive and a stealthy hull.',
   },
   'pirate-corvette': {
-    name: 'Stolen corvette (ex-UNN Harrier)', kind: 'corvette', builder: 'UN', tl: 2, category: 'irregular', size: 'M',
+    name: 'Stolen corvette (ex-UNN Harrier)', kind: 'corvette', builder: 'UN', tl: 2, category: 'irregular', size: 'M', stolen: 'UN',
     lengthM: 50, massT: 2900, crew: [5, 10], crewStd: 7, drive: { cruiseG: 1, maxG: 8 },
     armor: 2, pdc: 3, tubes: 2, magazine: { he: 6, nuke: 0 }, railgun: 0,
     cargoT: 60, berths: 4, factions: { pirate: 1 }, names: 'pirate', evasive: true,
@@ -472,31 +478,14 @@ export const isArmed = (c) => !!c && (c.pdc > 0 || c.tubes > 0 || c.railgun > 0 
 
 // ---- IDENTITY ----
 
-const NAMES = {
-  prospector: { pre: ['Lucky', 'Iron', 'Red', 'Dust', 'Last', 'Old'], suf: ['Strike', 'Vein', 'Claim', 'Pick', 'Digger', 'Chance'] },
-  courier: { pre: ['Swift', 'Flash', 'Quick', 'Razor', 'Bright'], suf: ['Arrow', 'Dart', 'Wing', 'Bolt', 'Needle'] },
-  shuttle: { pre: ['Box', 'Load', 'Haul', 'Bulk', 'Short'], suf: ['Runner', 'Lifter', 'Cart', 'Sled', 'Hop'] },
-  freighter: { pre: ['Star', 'Deep', 'Far', 'Void', 'Long'], suf: ['Venture', 'Prospect', 'Horizon', 'Trader', 'Promise'] },
-  hauler: { pre: ['Ice', 'Frost', 'Cryo', 'Cold', 'Weeping'], suf: ['Hauler', 'Runner', 'Mule', 'Ox', 'Dray', 'Somnambulist'] },
-  tanker: { pre: ['Full', 'Heavy', 'Wet', 'Deep'], suf: ['Tank', 'Belly', 'Drum', 'Well'] },
-  liner: { pre: ['Tycho', 'Ceres', 'Eros', 'Luna', 'Ganymede'], suf: ['Star', 'Express', 'Transit', 'Grace', 'Pearl'] },
-  barge: { pre: ['Rock', 'Ore', 'Gravel', 'Stone'], suf: ['Breaker', 'Crusher', 'Chewer', 'Grinder'] },
-  police: { pre: ['Vigilant', 'Steady', 'Warden', 'Sentry', 'Constant', 'Bulwark'], suf: [''] },
-  navy: {
-    UN: ['Agatha King', 'Seung Un', 'Ravi', 'Thomas Prince', 'Kittur Chennamma', 'Okimbo', 'Nathan Hale', 'Xiaoling', 'Aravalli', 'Bremen'],
-    MCR: ['Scirocco', 'Hammurabi', 'Barkeith', 'Tachi', 'Xuesen', 'Gelan', 'Raptor', 'Dewalt', 'Tolkien', 'Hellion'],
-  },
-  opa: ['Guy Molinari', 'Connaught', 'Free Belt', 'Pella', 'Behemoth Ghost', 'Lady Kali', 'Dawn Bringer'],
-  pirate: ['Black Sky', 'Rust Queen', 'Gutter Saint', 'Bad Debt', 'Knife Season', 'No Return', 'Hungry Dark', 'Low Tide', 'Scavenger King', 'Dead Reckoning'],
-};
-
-function rollName(cls, faction) {
+/**
+ * A name for a new hull: from the class's culture and trade, its power and
+ * sub-faction (names.js); with a game state, one no ship in that game has
+ * had.
+ */
+function rollName(cls, faction, sub, state) {
   const c = CLASSES[cls];
-  const pool = NAMES[c.names];
-  if (c.names === 'navy') return `${FACTIONS[faction]?.navy || faction} ${pick(pool[faction] || pool.UN)}`;
-  if (c.names === 'opa' || c.names === 'pirate') return pick(pool);
-  if (c.names === 'police') return `${FACTIONS[faction]?.short || ''} ${pick(pool.pre)} ${randInt(2, 99)}`.trim();
-  return `${pick(pool.pre)} ${pick(pool.suf)}`;
+  return shipName(state || null, { cls, kind: c.kind, category: c.category, names: c.names, faction, sub });
 }
 
 /** Tech level of a class: fixed by the yard that builds it. (`faction` is kept for old callers.) */
@@ -513,10 +502,12 @@ function classPool(opts) {
 
 /**
  * Roll an identity for a new ship: { cls, name, shipClass, faction, tl, mass }.
- * opts: { cls, kind, category, faction, near } — `kind` asks for a type of
+ * opts: { cls, kind, category, faction, near, sub, state } — `kind` asks for a type of
  * ship (a frigate) and lets the faction pick its own design; `near` is the
  * faction whose space the ship is in (its own civilians are most common there).
  * A faction that builds nothing of that kind fields the nearest thing it has.
+ * `sub` puts it under a sub-faction (else one is drawn by the class's
+ * category); with `state`, its name is one nobody in that game has had.
  */
 export function rollIdentity(opts = {}) {
   let cls = opts.cls;
@@ -535,9 +526,11 @@ export function rollIdentity(opts = {}) {
     const ids = Object.keys(c.factions);
     faction = weightedPick(ids, f => c.factions[f] * (opts.near && f === opts.near ? 4 : 1));
   }
+  // Who it flies under within its power (null: a private owner): factions.js
+  const sub = opts.sub !== undefined ? opts.sub : pickSub(faction, c.category, random());
   return {
-    cls, faction, tl: c.tl,
-    name: rollName(cls, faction),
+    cls, faction, tl: c.tl, sub,
+    name: rollName(cls, faction, sub, opts.state),
     shipClass: c.name,
     mass: Math.round(c.massT * (0.85 + 0.3 * random())),
   };

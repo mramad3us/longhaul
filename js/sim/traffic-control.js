@@ -28,8 +28,9 @@
 // (30 minutes). Port space (the approach) is where the radio side of a
 // station is worked: a ship there with a clearance is in port. A docking request
 // may be refused: a power that wants us, standing under −20, a naval
-// yard that doesn't know us, no berth free (then we wait at the
-// anchorage and are called), docks shot out.
+// yard that doesn't know us (its own contractors it always knows), the
+// flag of a power it is in a crisis or at war with (service.js), no berth
+// free (then we wait at the anchorage and are called), docks shot out.
 //
 // Citations are fines owed to the station's power (law.js keeps them);
 // a week unpaid makes us SUSPECT there.
@@ -44,6 +45,7 @@ import { AU_M } from '../core/constants.js';
 import { randInt, pick, chance } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { FACTIONS } from './factions.js';
+import { hostileTo, flagOf } from './service.js';
 import { PLAYER_CLASS } from './ship-classes.js';
 import { hullOf } from './hulls.js';
 import { STATIONS, stationModel, freeBerth, berthFits, berthCounts, berthOccupant, gateId } from './stations.js';
@@ -109,6 +111,7 @@ export function refusal(state, st) {
   if (st.combat?.status === 'wreck') return 'The station is silent.';
   if ((L.wanted[st.faction] ?? 0) >= 2) return `Your registry is flagged by ${FACTIONS[st.faction]?.short || st.faction}. Hold your position and await the police.`;
   if ((L.standing[st.faction] ?? 0) < -20) return 'You are not welcome here. Clear our control space.';
+  if (hostileTo(state, st.faction)) return `No clearance for ${FACTIONS[flagOf(state)].short} warships. Clear our control space.`;
   if (st.combat?.hostile?.includes('player')) return 'Weapons are locked on you. Leave.';
   return null;
 }
@@ -140,7 +143,7 @@ export function requestDocking(state, stationId, { emergency = false } = {}) {
   const no = refusal(state, st);
   if (no && !(emergency && (state.law.wanted[st.faction] ?? 0) < 3)) return { ok: false, text: no };
   const spec = STATIONS[stationId];
-  if (spec?.military && !emergency && (state.law.standing[st.faction] ?? 0) < 30) {
+  if (spec?.military && !emergency && flagOf(state) !== st.faction && (state.law.standing[st.faction] ?? 0) < 30) {
     return { ok: false, text: `${st.name} berths ${FACTIONS[st.faction]?.navy || 'navy'} hulls and contractors with standing. Request denied. You may hold at the anchorage.` };
   }
   if ((st.combat?.docks ?? 1) < 0.25) return { ok: false, text: 'Our docks are out of action. We cannot take you.' };

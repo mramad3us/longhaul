@@ -33,6 +33,7 @@ import { shipGeometry } from './ship-layout.js';
 import { CLASSES, SIZES, PLAYER_CLASS, classOf, hullPoints } from './ship-classes.js';
 import { PLAYER, ensureHull, profile, DISABLED_BELOW } from './combatants.js';
 import { recordAttack } from './law.js';
+import { creditKill } from './service.js';
 import { sizeForMass } from './sensors.js';
 
 export const AIM = {
@@ -260,7 +261,7 @@ export function wreckNpc(state, e, by, emit = () => {}) {
   e.tags.despawnAt = state.clock.minute + 10 * 1440;
   e.name = `${e.name} (wreck)`;
   emit('ship-destroyed', { id: e.id, name: e.name, by, how: 'wrecked' });
-  if (by === PLAYER) recordAttack(state, e, 'destroyed', emit);
+  if (by === PLAYER) { creditKill(state, e, emit); recordAttack(state, e, 'destroyed', emit); }
 }
 
 /** Containment gone: the ship becomes a fusion fireball. */
@@ -273,7 +274,7 @@ export function explodeNpc(state, e, by, emit = () => {}) {
   if (e.combat) e.combat.status = 'wreck';
   world.remove(e);
   emit('ship-destroyed', { id: e.id, name: e.name, by, how: 'reactor' });
-  if (by === PLAYER) recordAttack(state, e, 'destroyed', emit);
+  if (by === PLAYER) { creditKill(state, e, emit); recordAttack(state, e, 'destroyed', emit); }
   detonate(state, pos, blast, e.id, emit);
 }
 

@@ -473,3 +473,52 @@ body.hit-flash .ship-viewport { box-shadow: inset 0 0 120px rgba(255, 90, 60, 0.
 
 /* MISSIONS and JOBS read as the header's other buttons do (the counter beside them is theirs) */
 .hud-missions-label, .hud-jobs-label { font-size: 0.42rem; letter-spacing: 0.15em; color: var(--text-secondary); }
+
+/* ---- Military service (v0.17): the flag chip, military work, the service record ---- */
+.hud-flag-chip { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.08em; padding: 1px 7px; background: none; cursor: pointer;
+  border: 1px solid var(--fc, var(--hull-accent)); color: var(--fc, var(--text-secondary)); white-space: nowrap; }
+.hud-flag-chip.dim { opacity: 0.65; }
+.hud-flag-chip.bad { border-color: var(--danger); color: var(--danger); animation: condPulse 1.6s ease-in-out infinite; }
+.station-mission-card.mil { border-left: 3px solid var(--mil, var(--warning)); background: linear-gradient(90deg, rgba(226, 85, 85, 0.05), transparent 40%); }
+.station-mission-card.mil .station-mission-type { color: var(--mil, var(--warning)); }
+.station-mission-mil { font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.06em; color: var(--text-secondary); margin: 2px 0 4px; text-transform: uppercase; }
+.mission-row.mission-mil { border-left: 2px solid var(--warning); }
+.missions-section.mil { color: var(--warning); }
+.dialog-service { width: min(1080px, 94vw); }
+.svc { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; max-height: 68vh; overflow-y: auto; }
+.svc-col { min-width: 0; }
+.svc-warn { color: var(--danger); font-family: var(--font-mono); font-size: 0.72rem; }
+.svc-rank { border: 1px solid var(--hull-primary); border-left: 3px solid var(--fc); padding: 8px 10px; margin: 6px 0; }
+.svc-rank-title { font-family: var(--font-pixel); font-size: 0.5rem; letter-spacing: 0.12em; color: var(--fc); margin-bottom: 6px; }
+.svc-bar { height: 4px; background: var(--bg-elevated); position: relative; }
+.svc-bar > i { position: absolute; inset: 0 auto 0 0; background: var(--fc, var(--accent)); }
+.svc-bar.small { height: 3px; width: 70px; flex: 0 0 70px; }
+.svc-meta { font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-dim); margin-top: 4px; }
+.svc-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.66rem; }
+.svc-table th { text-align: left; color: var(--text-dim); font-weight: normal; padding: 2px 4px; border-bottom: 1px solid var(--hull-primary); }
+.svc-table td { padding: 3px 4px; color: var(--text-secondary); border-bottom: 1px solid rgba(22, 32, 48, 0.6); }
+.svc-table tr.svc-enemy td { color: var(--danger); }
+.svc-table tr.svc-hostile td { color: var(--warning); }
+.svc-table tr.svc-friend td, .svc-table tr.svc-own td { color: var(--ok); }
+.svc-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; vertical-align: middle; }
+.svc-pair { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: baseline; font-family: var(--font-mono); font-size: 0.68rem; padding: 3px 0; color: var(--text-secondary); }
+.svc-pair b { font-weight: normal; letter-spacing: 0.1em; }
+.svc-ph-war b { color: var(--danger); }
+.svc-ph-crisis b { color: var(--warning); }
+.svc-ph-cold b { color: var(--info); }
+.svc-ph-friendly b, .svc-ph-allied b { color: var(--ok); }
+.svc-power { margin: 10px 0 4px; }
+.svc-power-name { font-family: var(--font-mono); font-size: 0.64rem; letter-spacing: 0.1em; margin-bottom: 3px; }
+.svc-sub { display: flex; gap: 8px; align-items: center; font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-secondary); padding: 1px 0; }
+.svc-sub > span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.svc-sub-agenda { color: var(--text-dim); flex: 0 0 66px; }
+.svc-order { display: flex; gap: 10px; align-items: center; justify-content: space-between; font-family: var(--font-mono); font-size: 0.66rem; color: var(--warning); padding: 3px 0; }
+.svc-news { font-family: var(--font-mono); font-size: 0.64rem; color: var(--text-secondary); padding: 3px 0; border-bottom: 1px solid rgba(22, 32, 48, 0.6); }
+.license-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.license-opt { font-family: var(--font-mono); font-size: 0.66rem; text-align: left; padding: 6px 8px; background: var(--bg-surface); color: var(--text-secondary);
+  border: 1px solid var(--hull-primary); border-left: 3px solid var(--fc, var(--hull-accent)); cursor: pointer; }
+.license-opt b { display: block; color: var(--fc, var(--text-primary)); letter-spacing: 0.08em; font-weight: normal; margin-bottom: 2px; }
+.license-opt.active { border-color: var(--fc, var(--accent)); box-shadow: 0 0 8px var(--accent-glow); color: var(--text-primary); }
+.sp-item.locked { opacity: 0.45; }
+.sp-lock { font-family: var(--font-mono); font-size: 0.58rem; color: var(--warning); letter-spacing: 0.06em; }
+.sp-lock.bad { color: var(--danger); }

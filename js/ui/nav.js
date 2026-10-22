@@ -30,7 +30,7 @@ import { knownCrew } from '../sim/manifest.js';
 import { hullOf, portSummary } from '../sim/hulls.js';
 import { CLASSES } from '../sim/ship-classes.js';
 import { drawHullPortrait } from './hull-art.js';
-import { factionColor } from '../sim/factions.js';
+import { factionColor, FACTIONS } from '../sim/factions.js';
 import { bus } from '../core/events.js';
 import { TacView, TAC_LABELS } from './tac.js';
 import { SolarMap, ageLabel } from './solar-map.js';
@@ -455,7 +455,9 @@ function shipRows(s, e, c, row) {
   const known = !!c.name;
   const crew = knownCrew(s, e, { identified: known });
   const hull = known ? `<canvas class="scanner-detail-hull" width="260" height="60" data-hull="${e.id}"></canvas>` : '';
-  return `${hull}${row('ABOARD', crew ? `${esc(crew.text)} <span class="scanner-val-dim">${esc(crew.src)}</span>` : 'unknown', crew ? '' : 'scanner-val-dim')}
+  // (a command ship says what it is: the forward command of its navy's fight)
+  const cmd = known && e.tags?.command ? row('ROLE', `${esc(FACTIONS[e.faction]?.navy || '')} forward command · ${esc(e.tags.command.body)}`) : '';
+  return `${hull}${cmd}${row('ABOARD', crew ? `${esc(crew.text)} <span class="scanner-val-dim">${esc(crew.src)}</span>` : 'unknown', crew ? '' : 'scanner-val-dim')}
     ${row('COLLARS', known ? esc(portSummary(e.cls)) : '—')}
     ${known && CLASSES[e.cls]?.atmo ? row('ATMOSPHERE', 'rated for entry') : ''}`;
 }

@@ -24,6 +24,9 @@ import { initLibrary, toggleLibrary, closeLibrary, openLibrary } from './library
 import { initStage, updateStage, resetStage } from './stage.js';
 import { initComms, openComms, closeComms, updateComms, commsOpen } from './comms.js';
 import { initBoarding, openBoarding, closeBoarding, updateBoarding } from './boarding.js';
+import { initService, openService } from './service.js';
+import { setPhase } from '../sim/politics.js';
+import { addRep } from '../sim/service.js';
 import { clearTicker } from './ticker.js';
 import { beginDocking } from '../sim/docking.js';
 import { keepOutM } from '../sim/traffic-control.js';
@@ -40,9 +43,9 @@ import { forceDistress } from '../sim/missions.js';
 import { damageSystem, meteoroidStrike, shipSystems } from '../sim/systems.js';
 import { spawnTrafficShip } from '../sim/traffic.js';
 import { spawnEncounter } from '../sim/conflict.js';
-import { controlAt } from '../sim/factions.js';
+import { controlAt, factionColor, FACTIONS } from '../sim/factions.js';
 import { initFx, resetFx } from './fx.js';
-import { renderShipPicker, crewRange } from './ship-picker.js';
+import { renderShipPicker, crewRange, shipAllowed } from './ship-picker.js';
 import { CLASSES, TECH, PLAYER_CLASS, maxCrew } from '../sim/ship-classes.js';
 import {
   iconNewGame, iconLoadGame, iconSettings, iconPause, iconHudSettings, iconHudSave, iconHudExit,
@@ -51,6 +54,7 @@ import {
 
 let crewCount = 4;
 let shipClass = PLAYER_CLASS;
+let license = null;
 let storageOK = true;
 let speedBeforePause = 1;
 let fps = { frames: 0, at: 0, value: 0 };
@@ -93,7 +97,7 @@ export async function boot() {
   // Menu
   $$('.menu-btn').forEach(b => b.addEventListener('click', () => {
     const a = b.dataset.action;
-    if (a === 'new-game') { openShipPicker(); updateCrewHint(); showScreen('new-game'); }
+    if (a === 'new-game') { renderLicenses(); openShipPicker(); updateCrewHint(); showScreen('new-game'); }
     if (a === 'load-game') { renderSaveList($('#save-list'), loadAndStart); showScreen('load-game'); }
     if (a === 'settings') { renderSettings($('#screen-settings [data-settings]')); showScreen('settings'); }
     if (a === 'continue') latestSave().then(s => s && loadAndStart(s.id));
@@ -112,11 +116,12 @@ export async function boot() {
   setResourceAlertHandler(resourceAlert);
   initNav({ hail: (id) => openComms(id), openStation: () => openStation(), board: (id) => openBoarding(id), dock: (target) => dockWith(target) });
   initSelection({ hail: (id) => openComms(id), openNav });
-  initDialogs({ plotRoute: (t) => openRoutePanel(t), setPaused, openComms: (id) => openComms(id), crewChanged: rebuildShipView, beginDocking: (id) => dockWith({ kind: 'station', id }) });
+  initDialogs({ plotRoute: (t, o) => openRoutePanel(t, o), setPaused, openComms: (id) => openComms(id), crewChanged: rebuildShipView, beginDocking: (id) => dockWith({ kind: 'station', id }) });
   initComms({ openStation: (e, tab) => openStation(e, tab), openBoarding: (id) => openBoarding(id), openDialog, openLibrary: (id) => openLibrary(id), plotRoute: (t) => openRoutePanel(t), dock: (id) => dockWith({ kind: 'station', id }) });
   setRouteHandler((t) => openRoutePanel(t));
   setDockHandler((id) => dockWith({ kind: 'station', id }));
   initBoarding();
+  initService({ openDialog, closeDialog, plotRoute: (t, o) => openRoutePanel(t, o) });
   setHailHandler((id) => openComms(id));
   initStage({ select: (id) => showOnBoard(id) });
   initPresenter();
@@ -125,14 +130,14 @@ export async function boot() {
     speed: requestSpeed, togglePause, nav: (tab) => toggleNav(tab), missions: openMissions, jobs: openJobs,
     systems: openSystems, roster: openRoster,
     station: () => dockedStation(ui.state) ? openStation() : toast('Not docked', 'warn'),
-    combat: toggleCombat, suits: toggleSuits, weapons: () => toggleNav('combat'), library: toggleLibrary, escape: onEscape, save: () => quickSave(), devFlip, devCut,
+    combat: toggleCombat, suits: toggleSuits, weapons: () => toggleNav('combat'), library: toggleLibrary, service: openService, escape: onEscape, save: () => quickSave(), devFlip, devCut,
     comms: () => commsOpen() ? closeComms() : openComms(),
   });
   $$('[data-action]').forEach(b => {
     const a = b.dataset.action;
     const fn = {
       'open-map': () => openNav('solar'), 'open-station': () => openStation(), 'open-missions': openMissions, 'open-comms': () => openComms(),
-      'open-jobs': openJobs, 'open-systems': openSystems, 'open-roster': openRoster, 'open-library': () => toggleLibrary(), 'game-settings': openSettingsDialog, 'save-game': openSaveDialog, 'exit-game': openExitDialog,
+      'open-jobs': openJobs, 'open-systems': openSystems, 'open-roster': openRoster, 'open-library': () => toggleLibrary(), 'open-service': openService, 'game-settings': openSettingsDialog, 'save-game': openSaveDialog, 'exit-game': openExitDialog,
     }[a];
     if (fn) b.addEventListener('click', fn);
   });
@@ -156,13 +161,39 @@ function updateCrewHint() {
   toggleClass($('#crew-hint'), 'form-hint-warn', crewCount < lo);
 }
 
+/**
+ * The license a new captain starts under (sim/service.js): none, or one
+ * power's. It decides where the game starts (that power's yards) and
+ * which navy's hulls the picker lets us take.
+ */
+const LICENSES = [
+  { id: null, name: 'None', text: 'A civilian captain. Start at Ceres. Navy hulls stay locked.' },
+  { id: 'UN', name: 'UNN', text: 'UN Navy contractor. Start at Luna Shipyards. Unlocks the Harrier.' },
+  { id: 'MCR', name: 'MCRN', text: 'Martian Navy contractor. Start at Phobos. Unlocks the Tharsis.' },
+  { id: 'OPA', name: 'OPA', text: 'OPA contractor. Start at Tycho. Unlocks the refit corvette.' },
+];
+
+function renderLicenses() {
+  const box = $('#license-picker');
+  box.innerHTML = LICENSES.map(l => `<button type="button" class="license-opt ${l.id === license ? 'active' : ''}" data-license="${l.id || ''}" style="--fc:${l.id ? factionColor(l.id) : 'var(--hull-accent)'}"><b>${l.name}</b>${l.text}</button>`).join('');
+  setText($('#license-hint'), license ? 'A license and one of its navy\'s hulls make you its contractor: you fly its flag, its enemies are yours, and its command ships send you to its fights. One license at a time.' : 'Military kit (navy hulls, nuclear torpedoes) is illegal without a license. Licenses can also be applied for in port.');
+  box.onclick = (e) => {
+    const b = e.target.closest('[data-license]');
+    if (!b) return;
+    license = b.dataset.license || null;
+    renderLicenses();
+    openShipPicker();
+  };
+}
+
 /** The ship list on the new-game screen; picking a hull fills its minimum crew. */
 function openShipPicker() {
+  if (!shipAllowed(shipClass, license)) shipClass = PLAYER_CLASS;
   renderShipPicker($('#ship-picker'), shipClass, (id) => {
     shipClass = id;
     crewCount = Math.min(maxCrew(id), Math.max(crewCount, CLASSES[id].crew[0]));
     updateCrewHint();
-  });
+  }, { license });
 }
 
 async function refreshContinue() {
@@ -176,10 +207,11 @@ async function refreshContinue() {
 function newGame() {
   const shipName = $('#input-ship-name').value.trim() || 'Longhaul';
   const captainName = $('#input-captain-name').value.trim() || randomCaptainName();
-  const state = createGame({ shipName, captainName, crewCount, classId: shipClass });
+  const state = createGame({ shipName, captainName, crewCount, classId: shipClass, license });
   startGame(state, true);
-  logEntry(`Mission start — ${state.ship.name}, ${CLASSES[shipClass].name} (${TECH[state.ship.tl].label}), Captain ${captainName}`, 'system');
-  logEntry(`Docked at Ceres Station, berth ${state.dock?.berth}. Crew of ${state.ship.crew.length}. Hail the station (H) for contracts, clearances and the hiring hall.`, 'nav');
+  logEntry(`Mission start — ${state.ship.name}, ${CLASSES[shipClass].name} (${TECH[state.ship.tl].label}), Captain ${captainName}${license ? `, ${FACTIONS[license].navy} contractor's license` : ''}`, 'system');
+  const port = getWorld(state).get(state.dock?.target.id);
+  logEntry(`Docked at ${port?.name || 'port'}, berth ${state.dock?.berth}. Crew of ${state.ship.crew.length}. Hail the station (H) for contracts, clearances and the hiring hall; your service record and the powers are under SERVICE (V).`, 'nav');
   toast('Good luck, Captain.', 'ok');
 }
 
@@ -435,6 +467,9 @@ function initDevHelm() {
     ['AMBUSH', () => spawnEncounter(ui.state, { kind: 'ambush' }, (t, p) => bus.emit(t, p))],
     ['PATROL', () => { const f = controlAt(ui.state.flight.pos.x, ui.state.flight.pos.y, ui.state.clock.minute).faction || 'OPA'; spawnEncounter(ui.state, { kind: 'patrol', faction: f }, (t, p) => bus.emit(t, p)); }],
     ['BATTLE', () => spawnEncounter(ui.state, { kind: 'battle', zone: { id: null, factions: ['UN', 'MCR'] } }, (t, p) => bus.emit(t, p))],
+    ['WAR UN·MCR', () => { setPhase(ui.state, 'UN', 'MCR', 'war'); toast('Earth and Mars are at war (dev)', 'danger'); }],
+    ['CRISIS UN·MCR', () => { setPhase(ui.state, 'UN', 'MCR', 'crisis'); toast('Earth–Mars crisis (dev)', 'warn'); }],
+    ['+500 REP', () => { addRep(ui.state, 500, 'dev'); }],
     ['+TORPS', () => { const M = ui.state.magazine; M.he = M.capacity - M.nuke; }],
     ['+1K TRAFFIC', () => { for (let i = 0; i < 1000; i++) spawnTrafficShip(ui.state); toast(`${ui.state.entities.length} entities`); }],
     ['+50K TRAFFIC', () => { for (let i = 0; i < 50_000; i++) spawnTrafficShip(ui.state); toast(`${ui.state.entities.length} entities`); }],

@@ -18,6 +18,9 @@
 //              space; an inspection that finds it ends the job
 //   RECON    — get a navy picket inside radar range and hold a lock on it
 //              without being identified, return
+// A captain flying a power's flag gets that power's MILITARY work too
+// (military.js): every slot of a command ship's board for as long as its
+// fight lasts, and a share of the boards of stations near its fights.
 // "Docked" = hard-docked at one of the station's berths (docking.js). The
 // board can be read from anywhere in radio range; signing for work takes
 // being in port (inside its port space, holding.js PORT_M: the approach,
@@ -34,24 +37,28 @@ import { createEntity } from './entities.js';
 import { rollIdentity, CLASSES, TECH, hullPoints, PLAYER_CLASS } from './ship-classes.js';
 import { restockSuits } from './life-support.js';
 import { overhaulSystems, shipSystems, unit } from './systems.js';
-import { FACTIONS, POWERS } from './factions.js';
+import { FACTIONS, POWERS, SUBFACTIONS } from './factions.js';
 import { zonePos } from './conflict.js';
 import { spawnAgent, wake, makeHostile } from './agents.js';
 import { PLAYER } from './combatants.js';
 import { WARHEADS, AMMO_PRICES } from './weapons.js';
 import { adjustStanding } from './law.js';
-import { dockedStationEntity } from './docking.js';
+import { dockedStationEntity, dockedTo } from './docking.js';
+import { MIL_TYPES, MIL_LABEL, milShare, milRefusal, generateMil, spawnMil, milProgress, milTurnIn } from './military.js';
+import { licenseOf, ourCommandShip, supplyPriceFactor, creditMission, rankOf, RANK_FOR } from './service.js';
 
 export const ContractType = {
   CARGO: 'CARGO', PASSENGERS: 'PASSENGERS', FUEL: 'FUEL',
   INVESTIGATE: 'INVESTIGATE', SALVAGE: 'SALVAGE', SURVEY: 'SURVEY', MEDEVAC: 'MEDEVAC',
   BOUNTY: 'BOUNTY', ESCORT: 'ESCORT', SMUGGLE: 'SMUGGLE', RECON: 'RECON',
+  INTEL: 'INTEL', HOLD: 'HOLD', STRIKE: 'STRIKE', COVERT: 'COVERT',
 };
 
 export const CONTRACT_LABEL = {
   CARGO: 'CARGO HAUL', PASSENGERS: 'PASSENGER TRANSPORT', FUEL: 'FUEL DELIVERY',
   INVESTIGATE: 'INVESTIGATE', SALVAGE: 'SALVAGE', SURVEY: 'SURVEY', MEDEVAC: 'MEDICAL EVAC',
   BOUNTY: 'BOUNTY', ESCORT: 'CONVOY ESCORT', SMUGGLE: 'BLOCKADE RUN', RECON: 'COVERT RECON',
+  ...MIL_LABEL,
 };
 
 const CARGO = [
@@ -69,8 +76,8 @@ export const PRICES = { fuel: 2, water: 0.5, food: 3, o2Tank: 4, n2Tank: 1, medS
 /** Spares and yard time are priced by how the ship was built (TECH.price): Martian kit costs the most. */
 const shipTech = (state) => TECH[state.ship.tl || CLASSES[state.ship.classId || PLAYER_CLASS].tl];
 
-/** Unit price of a resource for our ship. */
-export const priceOf = (state, key) => PRICES[key] * (key === 'parts' ? shipTech(state).price : 1);
+/** Unit price of a resource for our ship (a tenth of it at our command ship in a fight: service.js). */
+export const priceOf = (state, key) => PRICES[key] * (key === 'parts' ? shipTech(state).price : 1) * supplyPriceFactor(state);
 
 export function createContracts() {
   return { active: [], history: [], nextId: 1 };
@@ -81,6 +88,11 @@ export function createContracts() {
 /** The station we're hard-docked at, or null. */
 export function dockedStation(state) {
   return dockedStationEntity(state);
+}
+
+/** Where we can trade docked: a station, or our command ship in its fight (service.js). */
+export function dockedPort(state) {
+  return dockedStationEntity(state) || ourCommandShip(state);
 }
 
 // ---- GENERATION ----
@@ -98,6 +110,13 @@ const GEN = [
 function distAU(a, b) { return Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y); }
 
 function generate(state, station, others) {
+  // Military work, for a captain flying the flag of a power fighting near here (all of a command ship's board)
+  const mil = milShare(state, station);
+  if (mil >= 1 || (mil > 0 && chance(mil))) {
+    const c = generateMil(state, station, `c-${state.contracts.nextId++}`);
+    if (c || station.tags?.command) return c;
+  }
+  if (station.tags?.command) return null;
   if (chance(HOT_SHARE)) {
     const hot = generateHot(state, station, others);
     if (hot) return hot;
@@ -132,7 +151,7 @@ function generate(state, station, others) {
         reward: { credits: Math.round(kg * PRICES.fuel * 2.2 + d * 500), water: randInt(100, 400), food: randInt(50, 200) }, deadline: randInt(3, 7) * DAY_MIN, expires: now + randInt(1, 3) * DAY_MIN };
     }
     case ContractType.INVESTIGATE: {
-      const ship = rollIdentity({ category: 'civilian', near: station.faction }); const outcome = pick(['derelict', 'debris', 'alive']);
+      const ship = rollIdentity({ category: 'civilian', near: station.faction, state }); const outcome = pick(['derelict', 'debris', 'alive']);
       const dist = randRange(0.004, 0.04);
       return { ...base, distAU: dist, ship, outcome,
         title: `Investigate: ${ship.name} — contact lost`,
@@ -156,7 +175,7 @@ function generate(state, station, others) {
         reward: { credits: randInt(900, 2600) }, deadline: randInt(5, 14) * DAY_MIN, expires: now + randInt(3, 7) * DAY_MIN };
     }
     case ContractType.MEDEVAC: {
-      const ship = rollIdentity({ category: 'civilian', near: station.faction }); const n = randInt(1, 8);
+      const ship = rollIdentity({ category: 'civilian', near: station.faction, state }); const n = randInt(1, 8);
       const dist = randRange(0.003, 0.02);
       return { ...base, distAU: dist, ship, casualties: n,
         title: `MedEvac: ${n} casualties aboard ${ship.name}`,
@@ -205,7 +224,7 @@ function generateHot(state, station, others) {
   const base = { id, type: o.type, station: station.id, stationName: station.name, offeredAt: now, phase: 'offered', zone: o.zone?.id || null, zoneBody: o.zone?.body || null };
   switch (o.type) {
     case ContractType.BOUNTY: {
-      const ship = rollIdentity({ category: 'irregular', faction: 'pirate' });
+      const ship = rollIdentity({ category: 'irregular', faction: 'pirate', state });
       const where = o.zone ? `near ${o.zone.body}` : `out past ${station.orbit.body}`;
       return { ...base, ship, body: o.zone?.body || station.orbit.body, distAU: randRange(0.008, 0.03),
         title: `Bounty: the ${ship.name}`,
@@ -214,7 +233,7 @@ function generateHot(state, station, others) {
     }
     case ContractType.ESCORT: {
       const dest = pick(others);
-      const ship = rollIdentity({ category: 'civilian', kind: pick(['freighter', 'hauler', 'tanker']), near: station.faction });
+      const ship = rollIdentity({ category: 'civilian', kind: pick(['freighter', 'hauler', 'tanker']), near: station.faction, state });
       const g = Math.min(0.5, CLASSES[ship.cls].drive.cruiseG);
       const d = distAU(station, dest);
       return { ...base, dest: dest.id, destName: dest.name, ship, g,
@@ -366,10 +385,10 @@ export function contractsTick(state, emit = () => {}) {
   const now = state.clock.minute;
   const C = state.contracts;
 
-  // Boards: refresh stations within long sensor range (docked station always)
+  // Boards: refresh stations (and command ships) within long sensor range (where we are docked always)
   if (now % 10 === 0) {
-    const docked = dockedStation(state);
-    const near = world.query(state.flight.pos, RANGE.LONG).filter(e => e.type === 'station' && e.board);
+    const docked = dockedPort(state);
+    const near = world.query(state.flight.pos, RANGE.LONG).filter(e => (e.type === 'station' || e.tags?.command) && e.board);
     if (docked && !near.includes(docked)) near.push(docked);
     const allStations = world.stations.filter(e => e.board);
     for (const st of near) {
@@ -384,9 +403,21 @@ export function contractsTick(state, emit = () => {}) {
     }
   }
 
-  for (const c of C.active) {
+  for (const c of [...C.active]) {
     if (c.phase === 'complete' || c.phase === 'failed') continue;
     if (now >= c.dueAt) { failContract(state, c, 'Deadline missed', emit); continue; }
+    if (c.mil) {
+      milProgress(state, c, emit, {
+        fail: (reason) => failContract(state, c, reason, emit),
+        done: (text) => {
+          c.phase = 'return';
+          retireMark(world, c, now);
+          for (const id of c.allies || []) { const a = world.get(id)?.agent; if (a) { a.contract = null; a.ambient = true; } }
+          emit('contract-progress', { contract: c, text });
+        },
+      });
+      continue;
+    }
     if (HOT_TYPES.has(c.type)) { hotProgress(state, c, emit); continue; }
 
     const target = c.targetId ? world.get(c.targetId) : null;
@@ -433,7 +464,8 @@ export function acceptContract(state, stationId, contractId) {
   const c = st.board.missions[i];
   const now = state.clock.minute;
   if (POWERS.includes(st.faction) && state.law.standing[st.faction] < STANDING_TO_TRADE) return { ok: false, text: `${st.name} won't give work to a ship with your record.` };
-  if (!inPort(state, st)) return { ok: false, text: `Come into ${st.name}'s port space (inside ${Math.round(PORT_M / 1e6) * 1000} km) to sign for it.` };
+  if (c.mil) { const no = milRefusal(state, c); if (no) return { ok: false, text: no }; }
+  if (!inPort(state, st)) return { ok: false, text: st.tags?.command ? `Come alongside the ${st.name} (inside 10 km) to sign for it.` : `Come into ${st.name}'s port space (inside ${Math.round(PORT_M / 1e6) * 1000} km) to sign for it.` };
   if (c.cargo) {
     const load = state.cargo.reduce((s, x) => s + x.mass, 0);
     if (load + c.cargo.mass > state.cargoCapacity) return { ok: false, text: `Not enough hold space (${(state.cargoCapacity - load).toLocaleString()} kg free).` };
@@ -450,7 +482,8 @@ export function acceptContract(state, stationId, contractId) {
   c.phase = 'active';
   c.acceptedAt = now;
   c.dueAt = now + c.deadline;
-  if (HOT_TYPES.has(c.type)) spawnHotTarget(state, st, c);
+  if (c.mil) spawnMil(state, c);
+  else if (HOT_TYPES.has(c.type)) spawnHotTarget(state, st, c);
   else if (c.distAU) spawnTarget(state, st, c);
   state.contracts.active.push(c);
   return { ok: true, text: `Contract accepted: ${c.title}` };
@@ -511,29 +544,30 @@ export function hailContractTarget(state, entityId) {
   return { ok: true, contract: c, text: `${report} Report back to ${c.stationName}.` };
 }
 
-/** Contracts that can be completed at this (docked) station right now. */
+/** Contracts that can be completed at this (docked) station right now (military work at any port of its power). */
 export function deliverable(state, station) {
   return state.contracts.active.filter(c =>
     (c.phase === 'active' && c.dest === station.id && c.type !== ContractType.ESCORT) ||
     (c.phase === 'arrived' && c.dest === station.id) ||
-    (c.phase === 'return' && c.station === station.id));
+    (c.phase === 'return' && c.station === station.id) || milTurnIn(c, station));
 }
 
 /** Work that is turned in across the collar (goods, people, fuel), not over the radio. */
 export const needsBerth = (c) => !!(c.cargo || c.passengers || c.type === ContractType.FUEL || c.type === ContractType.SALVAGE || c.type === ContractType.MEDEVAC || c.type === ContractType.SMUGGLE);
 
-/** Are we in port at a station: docked there, or inside its port space? */
+/** Are we in port at a station (docked there, or inside its port space), or alongside a command ship (within 10 km)? */
 export function inPort(state, st) {
+  if (st.tags?.command) return dockedTo(state)?.id === st.id || Math.hypot(st.pos.x - state.flight.pos.x, st.pos.y - state.flight.pos.y) * AU_M <= 10_000;
   return dockedStation(state)?.id === st.id || inPortSpace(st, state.flight.pos);
 }
 
 /** Turn in a contract: at the docked station, or (a report) from port at `stationId`. */
 export function completeContract(state, contractId, stationId = null) {
   const c = state.contracts.active.find(x => x.id === contractId);
-  const st = dockedStation(state) || (stationId ? getWorld(state).get(stationId) : null);
+  const st = dockedPort(state) || (stationId ? getWorld(state).get(stationId) : null);
   if (!c || !st) return { ok: false, text: 'Dock at the right station first.' };
   if (!deliverable(state, st).includes(c)) return { ok: false, text: 'This contract is not complete here.' };
-  if (dockedStation(state)?.id !== st.id && (needsBerth(c) || !inPort(state, st))) return { ok: false, text: needsBerth(c) ? `Dock at ${st.name} to hand it over.` : `Come into ${st.name}'s port space to turn it in.` };
+  if (dockedPort(state)?.id !== st.id && (needsBerth(c) || !inPort(state, st))) return { ok: false, text: needsBerth(c) ? `Dock at ${st.name} to hand it over.` : `Come into ${st.name}'s port space to turn it in.` };
   if (c.type === ContractType.FUEL) {
     if (state.resources.fuel.current < c.fuelKg + 50) return { ok: false, text: `Need ${c.fuelKg} kg of reaction mass to spare.` };
     state.resources.fuel.current -= c.fuelKg;
@@ -545,6 +579,7 @@ export function completeContract(state, contractId, stationId = null) {
   grant(state, c.reward, bonus);
   c.phase = 'complete';
   c.completedAt = state.clock.minute;
+  if (c.mil) creditMission(state, c, true);
   archive(state, c);
   return { ok: true, contract: c, bonus, text: completionText(c, bonus) };
 }
@@ -567,7 +602,10 @@ function failContract(state, c, reason, emit) {
   retireMark(world, c, state.clock.minute);
   const t = c.targetId && world.get(c.targetId);
   if (t?.agent) { t.agent.contract = null; t.agent.ambient = true; }
+  // (the warships a mission brought out go back to their business: they leave when we are gone)
+  for (const id of c.allies || []) { const a = world.get(id)?.agent; if (a) { a.contract = null; a.ambient = true; } }
   state.combat.protect = state.combat.protect.filter(id => id !== c.targetId);
+  if (c.mil) creditMission(state, c, false, emit);
   archive(state, c);
   emit('contract-failed', { contract: c, reason });
 }
@@ -600,6 +638,10 @@ function completionText(c, bonus) {
     case ContractType.ESCORT: return `The ${c.targetName}'s captain buys the first round. Escort fee paid in full.`;
     case ContractType.SMUGGLE: return `A crew with no names unloads the hold in twenty minutes flat. The fee lands in your account from nowhere in particular.`;
     case ContractType.RECON: return `Sensor take uploaded on a secure channel. Someone is very pleased. Payment transferred.`;
+    case ContractType.INTEL: return `Intelligence take uploaded to ${FACTIONS[c.faction].navy} command. It goes straight to the plot. Payment transferred.`;
+    case ContractType.HOLD: return `Point ${c.point} is ours. ${FACTIONS[c.faction].navy} command logs your ship's part in holding it. Payment transferred.`;
+    case ContractType.STRIKE: return `The ${c.targetName} is off the enemy's order of battle. ${FACTIONS[c.faction].navy} command confirms the kill. Payment transferred.`;
+    case ContractType.COVERT: return `Take delivered on a channel that doesn't exist. The ${SUBFACTIONS[c.client]?.name || 'client'} pays in full and says nothing.`;
     default: return 'Contract complete. Payment transferred.';
   }
 }
@@ -616,7 +658,7 @@ export function serviceQuote(state, key) {
 
 /** Buy up to `qty` of a resource (or as much as credits allow). */
 export function buy(state, key, qty = Infinity) {
-  if (!dockedStation(state)) return { ok: false, text: 'Not docked.' };
+  if (!dockedPort(state)) return { ok: false, text: 'Not docked.' };
   const r = state.resources[key];
   if (!r || PRICES[key] == null) return { ok: false, text: 'Not sold here.' };
   const price = priceOf(state, key);
@@ -644,13 +686,13 @@ export function overhaulQuote(state) {
   if (state.reactor.breach && state.reactor.status === 'offline') cost += 800;
   const c = CLASSES[state.ship.classId || PLAYER_CLASS];
   cost += (100 - state.hull.integrity) * HULL_REPAIR_PER_PCT * hullPoints(c) / 120;
-  return Math.round(cost * shipTech(state).price / 10) * 10;
+  return Math.round(cost * shipTech(state).price * supplyPriceFactor(state) / 10) * 10;
 }
 
 const HULL_REPAIR_PER_PCT = 30;                // per % of a 120-DP hull, at TL2
 
 export function buyOverhaul(state) {
-  if (!dockedStation(state)) return { ok: false, text: 'Not docked.' };
+  if (!dockedPort(state)) return { ok: false, text: 'Not docked.' };
   const cost = overhaulQuote(state);
   if (state.resources.credits.current < cost) return { ok: false, text: 'Not enough credits.' };
   state.resources.credits.current -= cost;
@@ -664,28 +706,39 @@ export function buyOverhaul(state) {
 
 // ---- ARMS ----
 // PDC rounds are sold everywhere (every hauler shoots rocks). HE torpedoes
-// at Belt and independent stations, or inner-planet yards that trust us;
-// nuclear warheads only from the OPA, and only to friends.
+// at Belt and independent stations, or inner-planet yards that trust us,
+// and by command ships to their contractors. Nuclear warheads are military
+// kit (service.js): only to a licensed captain, at its own power's ports
+// (the stations that sell arms, and its command ships from a rank).
 
 const ARMS_STANDING = { he: 20, nuke: 0 };
 
-/** Can this station sell this warhead to us? Returns null or a reason it won't. */
+/** Can this station (or command ship) sell this warhead to us? Returns null or a reason it won't. */
 export function torpedoRefusal(state, station, warhead) {
   const f = station.faction;
-  if (warhead === 'nuke') return f === 'OPA' && state.law.standing.OPA >= ARMS_STANDING.nuke ? null : 'Nuclear warheads only change hands at OPA stations, among friends.';
-  if (f === 'OPA' || f === 'independent' || f === 'pirate') return null;
+  if (warhead === 'nuke') {
+    const L = licenseOf(state);
+    if (!L) return 'Nuclear warheads are military kit: they go only to licensed captains.';
+    if (f !== L) return `Only ${FACTIONS[L].short} ports issue warheads to ${FACTIONS[L].short} contractors.`;
+    if (station.tags?.command && rankOf(state) < RANK_FOR.nukes) return 'Command issues warheads to contractors of senior rank only.';
+    return (state.law.standing[f] ?? 0) >= ARMS_STANDING.nuke ? null : `${FACTIONS[f].short} won't arm a captain with your record.`;
+  }
+  if (station.tags?.command || f === 'OPA' || f === 'independent' || f === 'pirate') return null;
   return state.law.standing[f] >= ARMS_STANDING.he ? null : `${FACTIONS[f].short} yards sell torpedoes only to ships in good standing (${ARMS_STANDING.he}+).`;
 }
 
+/** What a warhead costs us here. */
+export const torpedoPrice = (state, warhead) => Math.round(AMMO_PRICES[warhead] * supplyPriceFactor(state));
+
 export function buyTorpedo(state, warhead) {
-  const st = dockedStation(state);
+  const st = dockedPort(state);
   if (!st) return { ok: false, text: 'Not docked.' };
   if (!WARHEADS[warhead]) return { ok: false, text: 'Not sold here.' };
   const no = torpedoRefusal(state, st, warhead);
   if (no) return { ok: false, text: no };
   const M = state.magazine;
   if (M.he + M.nuke >= M.capacity) return { ok: false, text: 'Magazine full.' };
-  const price = AMMO_PRICES[warhead];
+  const price = torpedoPrice(state, warhead);
   if (state.resources.credits.current < price) return { ok: false, text: 'Not enough credits.' };
   state.resources.credits.current -= price;
   M[warhead]++;

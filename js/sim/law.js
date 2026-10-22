@@ -21,11 +21,20 @@
 // inspection; a week unpaid makes us SUSPECT there. Offenses that are
 // not attacks (trespass in a keep-out zone, undocking without leave,
 // boarding a lawful ship) are recorded like crimes, with a severity.
+//
+// Military service changes some of it (service.js). A contractor firing
+// on an enemy power's warships is at war, not committing a crime; firing
+// on its own side's people costs its reputation and, past a shot or two,
+// its license. Military-grade kit is contraband without a license: a navy
+// hull flown without its navy's license (a stolen one, always), and
+// nuclear torpedoes, legal only to a licensed captain, and only in its
+// own power's space where Earth and Mars are concerned.
 // ============================================================
 
 import { DAY_MIN } from '../core/constants.js';
 import { POWERS, controlAt } from './factions.js';
 import { classOf } from './ship-classes.js';
+import { licenseOf, hullLegal, navyOf, enemyCombatant, ownSideCrime } from './service.js';
 
 export const WANTED_LABEL = ['CLEAN', 'SUSPECT', 'WANTED', 'HOSTILE'];
 const SEVERITY = { fired: 1, hit: 1, disabled: 2, destroyed: 3 };
@@ -34,10 +43,15 @@ const FINE_GRACE_DAYS = 7;          // unpaid this long, a citation makes us SUS
 const FINES_MAX = 30;
 /** Where nuclear torpedoes are contraband. */
 export const NUKES_ILLEGAL_IN = ['UN', 'MCR'];
+const LICENSED_STANDING = 20;       // a captain starting under a license starts in its power's good books
+/** What an inspection levies for an unlicensed navy hull (and the wanted level it leaves). */
+export const UNLICENSED_HULL_FINE = 10_000;
 
-export function createLaw() {
+export function createLaw(license = null) {
+  const standing = { UN: 0, MCR: 0, OPA: 10 };
+  if (license) standing[license] = Math.max(standing[license], LICENSED_STANDING);
   return {
-    standing: { UN: 0, MCR: 0, OPA: 10 },
+    standing,
     wanted: { UN: 0, MCR: 0, OPA: 0 },
     lastCrime: { UN: -Infinity, MCR: -Infinity, OPA: -Infinity },
     record: [],                 // recent crimes (for the log)
@@ -83,6 +97,7 @@ export function payFines(state, faction) {
  */
 export function recordOffense(state, faction, kind, severity, emit = () => {}, where = '') {
   const L = state.law;
+  ownSideCrime(state, faction, severity, emit);
   if (faction in L.standing) {
     adjustStanding(state, faction, -8 * severity);
     L.wanted[faction] = Math.max(L.wanted[faction], Math.min(3, severity));
@@ -95,10 +110,11 @@ export function recordOffense(state, faction, kind, severity, emit = () => {}, w
   return crime;
 }
 
-/** Is shooting at this ship a crime? */
-export function lawfulTarget(e) {
+/** Is shooting at this ship a crime? (With `state`: not for a contractor at war with its power.) */
+export function lawfulTarget(e, state = null) {
   if (e?.type === 'station') return e.faction !== 'pirate' && e.combat?.status !== 'wreck';
   if (!e || e.type !== 'ship') return false;
+  if (state && enemyCombatant(state, e)) return false;
   if (e.faction === 'pirate' || e.tags?.wanted) return false;
   if (e.agent?.aggressor) return false;              // they fired on us first
   if (e.combat?.status === 'wreck') return false;
@@ -111,6 +127,11 @@ export function lawfulTarget(e) {
  */
 export function recordAttack(state, e, kind, emit = () => {}) {
   const L = state.law;
+  if (enemyCombatant(state, e)) {
+    // War: no crime, but they won't forget whose flag it was
+    if (POWERS.includes(e.faction) && kind !== 'fired') adjustStanding(state, e.faction, -SEVERITY[kind]);
+    return null;
+  }
   if (!lawfulTarget(e)) {
     if (kind === 'destroyed' && e.faction === 'pirate') {
       const ctl = controlAt(e.pos.x, e.pos.y, state.clock.minute).faction;
@@ -132,6 +153,7 @@ export function recordAttack(state, e, kind, emit = () => {}) {
     L.wanted[f] = Math.max(L.wanted[f], Math.min(3, sev));
     L.lastCrime[f] = state.clock.minute;
   }
+  if (licenseOf(state) && powers.has(licenseOf(state)) && e.faction === licenseOf(state)) ownSideCrime(state, e.faction, sev, emit);
   const crime = { kind, victim: e.name, factions: [...powers], at: state.clock.minute };
   L.record.push(crime);
   if (L.record.length > 20) L.record.shift();
@@ -149,11 +171,22 @@ export const wantedBy = (state, faction) => state.law.wanted[faction] || 0;
 
 // ---- CONTRABAND ----
 
-/** What an inspector of `faction` would seize: { cargo: [items], nukes: n }. */
+/** Are nuclear warheads legal for us under `faction`'s law? (Only with a license; in Earth's and Mars's space only with theirs.) */
+export function nukesLegal(state, faction) {
+  const lic = licenseOf(state);
+  return !!lic && (faction === lic || !NUKES_ILLEGAL_IN.includes(faction));
+}
+
+/**
+ * What an inspector of `faction` would seize or levy: { cargo: [items],
+ * nukes: n, hull: 'unlicensed' | 'stolen' | null }.
+ */
 export function contrabandFor(state, faction) {
   const cargo = state.cargo.filter(c => c.contraband && (c.illegalIn || POWERS).includes(faction));
-  const nukes = NUKES_ILLEGAL_IN.includes(faction) ? state.magazine.nuke : 0;
-  return { cargo, nukes };
+  const nukes = nukesLegal(state, faction) ? 0 : state.magazine.nuke;
+  const navy = navyOf(state.ship.classId);
+  const hull = hullLegal(state) ? null : navy === 'stolen' || navy === faction ? 'stolen' : 'unlicensed';
+  return { cargo, nukes, hull };
 }
 
 /**
@@ -162,10 +195,10 @@ export function contrabandFor(state, faction) {
  */
 export function settleInspection(state, faction) {
   const L = state.law;
-  const { cargo, nukes } = contrabandFor(state, faction);
-  const found = cargo.length + (nukes > 0 ? 1 : 0);
+  const { cargo, nukes, hull } = contrabandFor(state, faction);
+  const found = cargo.length + (nukes > 0 ? 1 : 0) + (hull ? 1 : 0);
   const owed = finesOwed(state, faction);
-  const fine = (found ? 1000 + 1500 * cargo.length + 1000 * nukes : 0) + 1500 * L.wanted[faction] + owed.reduce((s, f) => s + f.amount, 0);
+  const fine = (found ? 1000 + 1500 * cargo.length + 1000 * nukes : 0) + (hull ? UNLICENSED_HULL_FINE : 0) + 1500 * L.wanted[faction] + owed.reduce((s, f) => s + f.amount, 0);
   const credits = state.resources.credits;
   const paid = Math.min(credits.current, fine);
   credits.current -= paid;
@@ -173,11 +206,13 @@ export function settleInspection(state, faction) {
   if (nukes) state.magazine.nuke = 0;
   const settled = paid >= fine;
   if (settled) L.fines = (L.fines || []).filter(f => !owed.includes(f));
-  L.wanted[faction] = settled ? 0 : Math.max(1, L.wanted[faction]);
+  // (a hull can't be seized at sea: the record stays open on it, as long as we fly it)
+  L.wanted[faction] = hull === 'stolen' ? Math.max(2, L.wanted[faction]) : hull ? Math.max(1, L.wanted[faction]) : settled ? 0 : Math.max(1, L.wanted[faction]);
   adjustStanding(state, faction, found ? -10 : 2);
   const what = [cargo.length ? `${cargo.length} contraband consignment${cargo.length > 1 ? 's' : ''}` : '', nukes ? `${nukes} nuclear torpedo${nukes > 1 ? 'es' : ''}` : ''].filter(Boolean).join(' and ');
+  const hullText = hull === 'stolen' ? 'This is a stolen navy hull: the record stays open as long as you fly it.' : hull ? 'You are flying a military hull without its license: the record stays open as long as you fly it.' : '';
   const text = found
-    ? `Inspectors seize ${what}. Fine ${fine.toLocaleString()} MCR${settled ? ' — paid.' : ` — you could only pay ${paid.toLocaleString()}. Your record stays open.`}`
+    ? `${what ? `Inspectors seize ${what}. ` : ''}${hullText ? `${hullText} ` : ''}Fine ${fine.toLocaleString()} MCR${settled ? ' — paid.' : ` — you could only pay ${paid.toLocaleString()}. Your record stays open.`}`
     : fine ? `The search finds nothing, but your record is settled: ${fine.toLocaleString()} MCR${settled ? ' paid.' : ' — unpaid.'}`
     : 'The search finds nothing. Papers stamped; you are cleared to proceed.';
   return { found, fine, paid, seized: cargo.map(c => c.contract), text };

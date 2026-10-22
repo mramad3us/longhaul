@@ -166,7 +166,7 @@ The tactical display, the exterior view, the docking camera, the ship picker and
 
 ## Our ship
 
-At a new game we pick any class a crew of eight or fewer can fly (`PLAYABLE`: S and M hulls with a minimum crew of 8 or less, 23 classes), and sign on up to its berthed maximum (12 at most: `maxCrew`). The choice sets `ship.classId` and `ship.tl`:
+At a new game we pick a military license (none, UN, MCR or OPA: WORLD.md, military service) and any class a crew of eight or fewer can fly (`PLAYABLE`: S and M hulls with a minimum crew of 8 or less, 23 classes), and sign on up to its berthed maximum (12 at most: `maxCrew`). A navy's corvette needs that navy's license (the picker shows the others locked); the stolen ex-UNN Harrier can be taken, and is illegal everywhere. The choice sets `ship.classId` and `ship.tl`:
 
 - **Interior.** Each playable class has its own deck program (sim/ship-layout.js): which decks, bow to stern, each drawn from a deck template and fitted to the class (SHIPBOARD.md). Small craft are 7 tiles wide, the rest 9. Without point defense the turret wells are plated over, without tubes the launcher bay is hold space, a ship with nothing to fire has a couch where fire control would be. The hull is cut for airlocks where its collars are, and for a cargo door.
 - **Machinery.** Systems follow the fit (`systemsFor`): no PDCs means no `pdc` system to wear, no tubes means no `launcher`. They start in the condition of the class's TL and wear, fault and are repaired at its rates.
@@ -196,4 +196,6 @@ The default is the armed light freighter: two PDCs and two tubes, an M collar on
 
 ## Identities
 
-`rollIdentity({ cls?, kind?, category?, faction?, near? })` picks a class (weighted by who flies it), then a faction and a name. A ship's TL is its class's. Civilian traffic around a station is mostly of the station's own flag (`near`). Navy ships get their navy's prefix (UNN, MCRN).
+`rollIdentity({ cls?, kind?, category?, faction?, near?, sub?, state? })` picks a class (weighted by who flies it), then a faction, a sub-faction (by the class's category: WORLD.md) and a name. A ship's TL is its class's. Civilian traffic around a station is mostly of the station's own flag (`near`).
+
+**Names** (`sim/names.js`) are patterns filled from word lists by culture (Earth's corporate and sentimental names, Mars's earnest frontier ones, the Belt's Lang Belta and humour, the independents' gallows humour), by trade (prospectors, couriers, haulers, liners… each have their words) and by sub-faction (a company's big hulls carry its code some of the time: LKC, HAD, GAC, BSS; each pirate clan names its hulls to its own legend). Navies prefix their hulls (UNN, MCRN; OPA warships carry bare Belter names); police carry their service's code (UNS, MSS, SH) and often a number; pirates never announce themselves. The civilian pools run to 0.7–1.5 million names each (about 1 repeat in 2,000 at a game's scale), and a game's **registry** (runtime only: rebuilt from the entities on load) makes a repeat impossible: on a clash the generator rolls again, then numbers the name in its own style ("Ceres Dawn II", "UNN Ravi (FFG-214)").

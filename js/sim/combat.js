@@ -32,6 +32,7 @@ import { PLAYER, profile, kinematics, isOutOfFight } from './combatants.js';
 import { launchTorpedo, moveOrdnance, strafe, fireGear, inboundTo, timeToGo } from './ordnance.js';
 import { moveAgents, agentsTick, wake, makeHostile, hostilesOfPlayer } from './agents.js';
 import { recordAttack, lawfulTarget } from './law.js';
+import { rouse } from './forces.js';
 import { isTracked } from './sensors.js';
 import { systemPerf } from './systems.js';
 import { isReactorOnline } from './reactor.js';
@@ -137,8 +138,10 @@ export function fireTorpedo(state, opts = {}, emit = () => {}) {
  * back, and the law takes note.
  */
 function engage(state, e, emit) {
+  // (a hull of the background forces wakes as itself: a warship as a warship, a command ship too)
+  if (!e.agent && e.tags?.force) rouse(state, e);
   if (!e.agent) wake(state, e, CLASSES[e.cls]?.category === 'civilian' ? 'civilian' : e.faction === 'pirate' ? 'pirate' : 'patrol');
-  const lawful = lawfulTarget(e);
+  const lawful = lawfulTarget(e, state);
   makeHostile(state, e, PLAYER, { provoked: lawful });
   recordAttack(state, e, 'fired', emit);
 }

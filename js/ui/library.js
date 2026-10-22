@@ -32,7 +32,7 @@ import { getWorld } from '../sim/world.js';
 import { G_THRESHOLDS, HIGH_DOSE_G } from '../sim/crew.js';
 import { FLIP_MINUTES, RCS_MAX_G, LEAN_MAX } from '../sim/flight.js';
 import { DIGEST_MIN, TC_REACH_AU, LIGHT_MINUTE_AU } from '../sim/intel.js';
-import { WAKE_AU, POLICE_PER_STATION, NAVY_STRENGTH, NAVY_YARDS, PIRATES_AT_LARGE } from '../sim/forces.js';
+import { WAKE_AU, POLICE_PER_STATION, NAVY_STRENGTH, COMMAND_SHIPS, NAVY_YARDS, PIRATES_AT_LARGE } from '../sim/forces.js';
 import { DEFAULT_TRAFFIC } from '../sim/traffic.js';
 import { hullOf, portSummary, COLLARS } from '../sim/hulls.js';
 import { DECK_PROGRAMS, createLayout } from '../sim/ship-layout.js';
@@ -41,6 +41,9 @@ import { getBody, surfaceGravity } from '../sim/ephemeris.js';
 import { CONTROL_M, APPROACH_M, KEEPOUT_SPEED_MS, KEEPOUT_DRIVE_G, CORRIDOR_M, APPROACH_CLEARANCE_MIN, DOCK_CLEARANCE_MIN, DEPART_CLEARANCE_MIN } from '../sim/traffic-control.js';
 import { PROX_RATES, CAPTURE_MIN, SEAL_MIN, UNDOCK_MIN, CLEAR_M } from '../sim/docking.js';
 import { EVA_RANGE_M } from '../sim/boarding.js';
+import { SUBFACTIONS, SUB_IDS, subsOf } from '../sim/factions.js';
+import { ZONE_KINDS } from '../sim/conflict.js';
+import { RANKS, RANK_REP, RANK_FOR, PAY_PER_RANK, CALLUP_AU } from '../sim/service.js';
 
 const CATEGORIES = [
   { id: 'ships', label: 'SHIP CLASSES' },
@@ -338,7 +341,8 @@ function navigation(add) {
     links: [['Who is out there', 'nav:population']] });
   add({ id: 'nav:population', cat: 'nav', group: 'The plot', title: 'Who is out there',
     text: [`About ${fmtNum(DEFAULT_TRAFFIC)} traffic ships work the lanes between the stations, choosing nearer and friendlier ports. Each power keeps hulls in space as well: ${POLICE_PER_STATION} police cutters on a beat around each of its stations; ${Object.entries(NAVY_STRENGTH).map(([f, n]) => `${n} ${FACTIONS[f].navy} warships`).join(', ')} berthed at their yards until a hot zone calls for them; and about ${PIRATES_AT_LARGE} raiders lying up cold where nobody's writ runs.`,
-      'Far from us these ships fly on rails, and what happens to them is settled by outcomes: warships on station at a skirmish lose ships, pirates take haulers in the lanes through their zone. The wrecks are real and stay where they fell.',
+      `Each power also keeps command ships (${Object.entries(COMMAND_SHIPS).map(([f, n]) => `${n} ${FACTIONS[f].navy}`).join(', ')}): one goes to the rear of every fight its power is in.`,
+      'Far from us these ships fly on rails, and what happens to them is settled by outcomes: warships on station at a skirmish lose ships, pirates take haulers in the lanes through their zone. The wrecks are real and stay where they fell. What is lost is replaced in time: the yards lay down new hulls (days for a cutter, weeks for a battleship, faster in a war) and launch them, and lost traffic is replaced by new ships out of their power\'s yards.',
       `Within ${fmtKm(WAKE_AU * AU_KM)} of us (about our long sensor reach) they come alive and act for themselves. The skirmish we fly into is the one the news reported, fought by the ships that were sent to it.`],
     specs: Object.entries(NAVY_YARDS).map(([f, ids]) => [`${FACTIONS[f].navy} yards`, ids.map(id => (ui.state && getWorld(ui.state).get(id)?.name) || id).join(', ')]),
     links: [['Light lag and the plot', 'nav:light']] });
@@ -357,10 +361,31 @@ function crew(add) {
 
 function factions(add) {
   for (const f of Object.values(FACTIONS)) {
-    add({ id: `fac:${f.id}`, cat: 'factions', title: f.name, text: [f.desc || ''],
-      specs: [['Navy', f.navy || '—'], ['Police', f.police || '—']],
-      links: CLASS_IDS.filter(c => CLASSES[c].factions[f.id]).slice(0, 12).map(c => [CLASSES[c].name, `ship:${c}`]) });
+    const subs = subsOf(f.id);
+    add({ id: `fac:${f.id}`, cat: 'factions', group: 'Powers', title: f.name, text: [f.desc || ''],
+      specs: [['Navy', f.navy || '—'], ['Police', f.police || '—'], ...(subs.length ? [[f.id === 'independent' ? 'Independents' : f.id === 'pirate' ? 'Clans' : 'Within it', subs.map(id => SUBFACTIONS[id].name).join(' · ')]] : [])],
+      links: [...subs.map(id => [SUBFACTIONS[id].name, `sub:${id}`]), ...CLASS_IDS.filter(c => CLASSES[c].factions[f.id]).slice(0, 8).map(c => [CLASSES[c].name, `ship:${c}`])] });
   }
+  for (const id of SUB_IDS) {
+    const x = SUBFACTIONS[id];
+    add({ id: `sub:${id}`, cat: 'factions', group: 'Sub-factions', title: x.name, sub: x.short, text: [x.desc],
+      specs: [['Part of', x.parent ? FACTIONS[x.parent].name : x.outlaw ? 'nobody: a pirate clan' : 'nobody: independent'], ['Agenda', x.agenda], ...(x.lairs ? [['Works', x.lairs.join(', ')]] : [])],
+      links: [[x.parent ? FACTIONS[x.parent].name : x.outlaw ? 'Pirates' : 'Independent', `fac:${x.parent || (x.outlaw ? 'pirate' : 'independent')}`], ['How the powers stand', 'fac:politics']] });
+  }
+  add({ id: 'fac:politics', cat: 'factions', group: 'The system', title: 'How the powers stand',
+    text: ['Each pair of powers has a relation, from open war to alliance, and a phase: allied, friendly, neutral, cold war, crisis, war. Earth and Mars are never friends: they live between a cold war and an open one. In a cold war, pressure builds (the arms race, incidents, the hawks); a crisis feeds itself until war is declared; a war wears both sides down until a ceasefire, and the long cooling starts again. The Belt\'s quarrels with the inner powers run the same way, from milder places.',
+      'Inside each power, sub-factions share its influence and pull it their way: hawks toward war, doves away, the intelligence services into everything, the companies toward a profitable cold war. They fight each other in the dark (leaks, budget fights, arrests, sabotage at a yard), and some of it reaches the news.',
+      'In a cold war or a crisis the powers fight through others: a mercenary company, a pirate clan or a Belter cell paid to raid a rival\'s shipping, deniably. When the money is traced, the crisis deepens.',
+      'Every war has a front: the place both navies reach for, fought over a few control points. Each power in a fight sends a command ship to the rear of it.'],
+    specs: [['Hot zones', Object.values(ZONE_KINDS).map(z => z.label.toLowerCase()).join(' · ')], ['See', 'SERVICE (V): the powers now, and the news']],
+    links: [['Military licenses', 'fac:service']] });
+  add({ id: 'fac:service', cat: 'factions', group: 'The system', title: 'Military licenses',
+    text: ['A captain may hold one power\'s military license at a time: chosen at the start, applied for at that power\'s stations (standing 10 or better, a clean record), handed back at will, revoked for serious crimes against it. Navy hulls need their navy\'s license; nuclear torpedoes need a license, and are legal in the licensing power\'s space.',
+      'A license and one of its navy\'s hulls make the captain that power\'s contractor, flying its flag: every other power sees it through its own (our relation with them is our power\'s, plus a tenth of our own standing). The enemy\'s warships engage it on sight, its stations refuse and fire on it; its civilians are never targets.',
+      `A contractor earns reputation with its power (time in service, enemy hulls destroyed, military missions) and rank with it: ${RANKS.UN.join(', ')} in the UNN. Rank raises military pay by ${Math.round(PAY_PER_RANK * 100)}% a step, opens the harder missions, gets nuclear warheads issued by command ships, and waves it through its own side\'s patrols.`,
+      `When its power fights within ${CALLUP_AU} AU, command orders it to the command ship: alongside, supplies cost a tenth while the fight lasts, and the board is all military work: intelligence, holding a control point at a front, strikes on high-value targets, now and then a covert job for a sub-faction against a rival inside the power.`],
+    specs: [['Rank needed', `hold a point ${RANK_FOR.hold}+ · strike ${RANK_FOR.strike}+ · warheads ${RANK_FOR.nukes}+`], ['Reputation for each rank', RANK_REP.join(' · ')]],
+    links: [['How the powers stand', 'fac:politics']] });
 }
 
 function stations(add) {
@@ -379,7 +404,7 @@ function stations(add) {
         ['Approach gate', `${fmtNum(spec.gateKm)} km`], ['People', fmtNum(spec.population)],
         ['Defenses', `${d.pdc} PDC (TL${d.tl})${d.tubes ? ` · ${d.tubes} torpedo silos` : ''}${d.railgun ? ` · ${d.railgun} railguns` : ''} · ${fmtNum(d.hp)} DP, armor ${d.armor}`],
         ['Services', spec.services.join(', ')],
-        ...(spec.military ? [['Berths for', 'its navy, and contractors with standing 30 or better']] : []),
+        ...(spec.military ? [['Berths for', 'its navy and its own contractors, and others with standing 30 or better']] : []),
       ],
       links: e ? [[FACTIONS[e.faction]?.name || e.faction, `fac:${e.faction}`], ['Traffic control', 'nav:traffic'], ['Docking', 'nav:docking']] : [] });
   }

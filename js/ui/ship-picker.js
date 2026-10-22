@@ -4,6 +4,9 @@
 // builds it, with the facts that matter for choosing one: what it
 // carries, how it fights, and what it costs to keep running. Combat
 // strength is the AI's own measure (classStrength), on a log scale.
+// A navy's hull takes that navy's license (sim/service.js): the others
+// are shown locked. A stolen navy hull can be taken, and is illegal
+// everywhere.
 // ============================================================
 
 import { esc } from './dom.js';
@@ -13,6 +16,11 @@ import { createLayout } from '../sim/ship-layout.js';
 import { drawHullPortrait } from './hull-art.js';
 import { MINING_GEAR } from '../sim/weapons.js';
 import { classStrength } from '../sim/combatants.js';
+import { navyOf } from '../sim/service.js';
+import { FACTIONS } from '../sim/factions.js';
+
+/** Can a new captain under this license (or none) take this hull? */
+export const shipAllowed = (id, license) => { const n = navyOf(id); return !n || n === 'stolen' || n === license; };
 
 const YARD_ORDER = ['MCR', 'UN', 'independent', 'Belt'];
 const YARD_COLOR = { MCR: '#C1553B', UN: '#4A90D9', independent: '#8A8A6A', Belt: '#E2A355' };
@@ -58,6 +66,7 @@ function detailHTML(id) {
         ${row('Drive', `${c.drive.cruiseG} G cruise · ${c.drive.maxG} G max`)}
         ${row('Hold', `${c.cargoT.toLocaleString()} t`)}
         ${row('Crew', `${lo}–${hi} (usually ${c.crewStd})`)}
+        ${navyOf(id) ? row('Papers', navyOf(id) === 'stolen' ? 'stolen navy hull: illegal everywhere' : `${esc(FACTIONS[navyOf(id)].navy)} contractor's license`, 'sp-warn') : ''}
         ${row('Passengers', c.berths ? `${c.berths} berths on a deck of their own${c.kind === 'cutter' ? ' (the brig)' : ''}` : '—', c.berths ? '' : 'sp-dim')}
         ${row('Collars', esc(portSummary(id)))}
         ${row('Atmosphere', c.atmo ? `rated · ${c.atmo.entry === 'belly' ? 'lifting body, ceramic belly' : 'tail-first, shield ring'} · ${c.atmo.landing}` : 'not rated', c.atmo ? '' : 'sp-dim')}
@@ -91,14 +100,21 @@ function drawHull(canvas) {
  * Fill `box` with the picker. onSelect(id) fires when the choice changes.
  * Returns { get: () => id }.
  */
-export function renderShipPicker(box, selected, onSelect) {
+export function renderShipPicker(box, selected, onSelect, { license = null } = {}) {
   let current = PLAYABLE.includes(selected) ? selected : PLAYABLE[0];
+  const lock = (id) => {
+    const n = navyOf(id);
+    if (n === 'stolen') return '<span class="sp-lock bad">ILLEGAL: STOLEN</span>';
+    if (n && n !== license) return `<span class="sp-lock">${FACTIONS[n].navy} LICENSE</span>`;
+    return '';
+  };
   const list = YARD_ORDER.map(y => {
     const ids = PLAYABLE.filter(id => CLASSES[id].builder === y);
     if (!ids.length) return '';
     return `<div class="sp-yard" style="--yard:${YARD_COLOR[y]}">${esc(BUILDERS[y].name.toUpperCase())}</div>` + ids.map(id => {
       const c = CLASSES[id];
-      return `<button class="sp-item" data-ship="${id}" type="button"><span class="sp-item-name">${esc(c.name)}</span><span class="sp-item-kind">${esc(KINDS[c.kind])}${c.category === 'military' ? ' · navy surplus' : ''}</span><span class="sp-tl sp-tl-${c.tl}">${TECH[c.tl].label}</span></button>`;
+      const ok = shipAllowed(id, license);
+      return `<button class="sp-item ${ok ? '' : 'locked'}" data-ship="${id}" type="button" ${ok ? '' : 'disabled'} title="${ok ? '' : `Needs a ${FACTIONS[navyOf(id)].navy} license`}"><span class="sp-item-name">${esc(c.name)}</span><span class="sp-item-kind">${esc(KINDS[c.kind])}${c.category === 'military' ? ` · ${esc(FACTIONS[navyOf(id)]?.navy || '')} hull` : ''} ${lock(id)}</span><span class="sp-tl sp-tl-${c.tl}">${TECH[c.tl].label}</span></button>`;
     }).join('');
   }).join('');
   box.innerHTML = `<div class="sp-list">${list}</div><div class="sp-detail"></div>`;
@@ -111,7 +127,7 @@ export function renderShipPicker(box, selected, onSelect) {
   };
   box.querySelector('.sp-list').addEventListener('click', (e) => {
     const b = e.target.closest('[data-ship]');
-    if (!b || b.dataset.ship === current) return;
+    if (!b || b.disabled || b.dataset.ship === current) return;
     show(b.dataset.ship);
     onSelect?.(current);
   });

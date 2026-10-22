@@ -412,7 +412,8 @@ export default [
       say(s, 'traffic');
       const learned = Object.values(s.dossier.ships).filter(r => r.crew?.src === 'manifest');
       assert(learned.length > 0, 'manifests from the traffic board');
-      const e = world.get(learned[0].id);
+      // (a hull with a crew of two or more: half of a crew of one is still one)
+      const e = world.get((learned.find(r => complementOf(world.get(r.id)) >= 2) || learned[0]).id);
       assert(knownCrew(s, e).lo === crewAboard(e), 'declared crews are true for honest ships');
       // casualties: a hull that lost men has fewer aboard
       ensureHull(e).crew = 0.5;

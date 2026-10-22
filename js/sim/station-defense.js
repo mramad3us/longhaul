@@ -9,7 +9,8 @@
 //
 // A station fires on:
 //   whoever has fired on it (it remembers),
-//   us, if its power has us HOSTILE and we are within reach,
+//   us, if its power has us HOSTILE and we are within reach, or we fly
+//     the flag of a power it is at war with (service.js) and it knows us,
 //   a trespasser in the keep-out zone of a naval yard, after the final
 //     warning (traffic-control.js),
 //   pirates within reach of its guns.
@@ -28,6 +29,7 @@ import { launchTorpedo, fireRailgun, strafe, launchedBy } from './ordnance.js';
 import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M } from './weapons.js';
 import { makeHostile } from './agents.js';
 import { wantedBy } from './law.js';
+import { enemyOf } from './service.js';
 
 const LOOK_AU = 0.01;                  // stations this near us are watched every minute
 const REACH_AU = 0.003;                // torpedo reach of a station's silos (≈450,000 km)
@@ -57,7 +59,9 @@ function stationMinute(state, st, now, emit) {
   const spec = STATIONS[st.id];
   const world = getWorld(state);
   const dAU = Math.hypot(st.pos.x - state.flight.pos.x, st.pos.y - state.flight.pos.y);
-  const playerThreat = !state.lost && (wantedBy(state, st.faction) >= 3 && dAU < REACH_AU
+  // (a captain under an enemy flag is fired on once the station knows who it is: transponder, or close)
+  const enemyFlag = enemyOf(state, st.faction) && dAU < REACH_AU && (state.comms.transponder || dAU < REACH_AU / 3);
+  const playerThreat = !state.lost && (wantedBy(state, st.faction) >= 3 && dAU < REACH_AU || enemyFlag
     || (spec?.military && state.tc?.station === st.id && state.tc.warned?.trespass != null && state.tc.zone === 'keepout'));
   // Nothing to look at: don't even make a combat state
   if (!st.combat && !playerThreat && !piratesNear(state, st).length) return;

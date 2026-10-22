@@ -120,7 +120,7 @@ function spawn(state, emit) {
   const type = weightedPick(Object.keys(DEF).filter(k => DEF[k].weight > 0), k => DEF[k].weight);
   const d = DEF[type];
   const sp = state.flight.pos;
-  const id = rollIdentity({ category: 'civilian', near: controlAt(sp.x, sp.y, state.clock.minute).faction });
+  const id = rollIdentity({ category: 'civilian', near: controlAt(sp.x, sp.y, state.clock.minute).faction, state });
   const ang = random() * Math.PI * 2;
   const dist = randRange(0.004, 0.025);              // 600k – 3.7M km
   const pos = { x: sp.x + Math.cos(ang) * dist, y: sp.y + Math.sin(ang) * dist };

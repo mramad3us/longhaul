@@ -32,7 +32,8 @@ import { createSensors, sensorsTick } from './sensors.js';
 import { createMissions, missionsTick } from './missions.js';
 import { createContracts, contractsTick } from './contracts.js';
 import { createTraffic, seedTraffic, trafficTick, ensurePopulation, DEFAULT_TRAFFIC } from './traffic.js';
-import { seedForces, forcesTick } from './forces.js';
+import { seedForces, forcesTick, commandShipFor } from './forces.js';
+import { createService, serviceTick } from './service.js';
 import { createIntel, ensureIntel, intelTick, recordContacts } from './intel.js';
 import { triggerManeuver, isInertiaActive, updateInertia, Maneuver } from './inertia.js';
 import { PLAYER_CLASS, CLASSES, playerClass, ratedG } from './ship-classes.js';
@@ -52,7 +53,7 @@ import { leaseTick } from './leases.js';
 import { setGravityEpoch } from './gravity.js';
 import { fireTick } from './fire.js';
 
-export const SAVE_SCHEMA = 6;
+export const SAVE_SCHEMA = 7;
 
 // Consumption per person per minute. Crew eat meals (crew-ai); passengers
 // are fed from stores continuously. Water figures are gross — the
@@ -74,8 +75,12 @@ const emit = (type, payload) => bus.emit(type, payload);
  * navies and pirates in the background (forces.js) — on whenever there is
  * traffic, off for test suites that leave both out.
  */
-export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = DEFAULT_TRAFFIC, forces = traffic > 0, classId = PLAYER_CLASS, home = 'ceres-station', docked = true } = {}) {
+/** Where a new captain starts, by license: at its power's yards (a civilian at Ceres). */
+export const HOME_PORT = { UN: 'luna-yards', MCR: 'phobos-yard', OPA: 'tycho-station', none: 'ceres-station' };
+
+export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', crewCount = 4, traffic = DEFAULT_TRAFFIC, forces = traffic > 0, classId = PLAYER_CLASS, license = null, home = null, docked = true } = {}) {
   if (!CLASSES[classId]) classId = PLAYER_CLASS;
+  home ||= HOME_PORT[license || 'none'];
   const cls = CLASSES[classId];
   const ship = { name: shipName, classId, tl: cls.tl, decks: createLayout(classId), crew: [] };
   ship.crew = createCrew(crewCount, ship);
@@ -105,7 +110,8 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
     hull: { integrity: 100 },
     magazine: { ...createMagazine(classId), nuke: 0 },
     combat: createCombat(classId),
-    law: createLaw(),
+    law: createLaw(license),
+    service: createService(license, 0),
     politics: createPolitics(),
     cargo: [],
     cargoCapacity: cls.cargoT * 1000,
@@ -157,6 +163,7 @@ export function upgradeState(state) {
   setGravityEpoch(state.clock.minute);
   ensureIntel(state);
   state.tc ??= createTrafficControl();
+  state.service ??= createService(null);
   state.dossier ??= createDossier();
   if (state.dock === undefined) state.dock = null;
   if (state.boarding === undefined) state.boarding = null;
@@ -408,6 +415,7 @@ export function minuteTick(state, { lite = false } = {}) {
   leaseTick(state, emit);
   lawTick(state);
   politicsTick(state, emit);
+  serviceTick(state, emit, { commandShipFor });
   missionsTick(state, emit);
   contractsTick(state, emit);
   trafficTick(state);

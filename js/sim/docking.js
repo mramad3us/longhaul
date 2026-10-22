@@ -61,7 +61,9 @@
 //
 // SHIP TO SHIP. The other ship has to hold still: one that agreed to it
 // (dialogue.js puts it in 'dock-hold'), one that has struck, a disabled
-// or dead hull. Collars of one size mate.
+// or dead hull, or a command ship at its post (forces.js), which takes
+// its own power's contractors alongside (service.js). Collars of one size
+// mate.
 // ============================================================
 
 import { gravityAt } from './gravity.js';
@@ -78,6 +80,7 @@ import { engageRoute, abortRoute, holdStation } from './autopilot.js';
 import { CORRIDOR_M, clearanceFor, clearanceUsed, keepOutM, markOutbound } from './traffic-control.js';
 import { CLASSES, PLAYER_CLASS } from './ship-classes.js';
 import { applyHit } from './damage.js';
+import { flagOf } from './service.js';
 import { crewAboard, passengersAboard, setCrewAboard } from './manifest.js';
 import { adjustStanding, cite } from './law.js';
 import { PLAYER, isOutOfFight } from './combatants.js';
@@ -212,6 +215,11 @@ export function shipDockable(state, e) {
   if (!e || e.type !== 'ship') return { ok: false, text: 'Nothing to dock with.' };
   const h = e.combat;
   if (e.agent?.mode === 'dock-hold') return { ok: true };
+  // A command ship at its post takes its own contractors alongside, and nobody else
+  if (e.tags?.command) {
+    if (flagOf(state) !== e.faction) return { ok: false, text: `${e.name} is a command ship: it takes only its own navy's contractors alongside.` };
+    return e.tags.force?.state === 'post' && !e.agent ? { ok: true } : { ok: false, text: `${e.name} isn't on station yet: it takes ships alongside once it holds its post.` };
+  }
   if (isOutOfFight(e) || h?.status === 'disabled' || (h && h.drive < 0.25)) return { ok: true, uninvited: !(h?.status === 'surrendered') };
   if (e.tags?.derelict || e.tags?.wreck) return { ok: true, uninvited: true };
   return { ok: false, text: `${e.name} hasn't agreed to a docking. Hail them first.` };

@@ -9,6 +9,7 @@ import { serialize, deserialize } from '../js/sim/save.js';
 import { getWorld } from '../js/sim/world.js';
 import { getBody, bodyPos, bodyVel } from '../js/sim/ephemeris.js';
 import { spawnZone, zonePos } from '../js/sim/conflict.js';
+import { setPhase } from '../js/sim/politics.js';
 import { relay, estimate, lightMinutes, liveKnowledge, INTEL_MAX } from '../js/sim/intel.js';
 import { forcesSummary, forcesAt, WAKE_AU, SLEEP_AU, NAVY_STRENGTH, POLICE_PER_STATION } from '../js/sim/forces.js';
 import { DEFAULT_TRAFFIC } from '../js/sim/traffic.js';
@@ -175,6 +176,8 @@ export default [
     name: 'the live window: a zone\'s warships wake when we arrive, fight, and go back on rails when we leave',
     fn: () => {
       const s = game(7);
+      s.politics.frozen = true;
+      setPhase(s, 'MCR', 'OPA', 'war');
       const z = spawnZone(s, { body: 'Hygiea', kind: 'skirmish', factions: ['MCR', 'OPA'], w: 1 });
       z.until = s.clock.minute + 60 * DAY_MIN;
       z.intensity = 1;

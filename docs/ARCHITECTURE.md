@@ -12,7 +12,7 @@
 
 ## State
 
-One plain, serializable object holds the game. Keys starting with `$` are runtime-only (caches, per-minute scratch, an open comms channel) and are stripped from saves. `sim/save.js` saves and loads it. A save from any other schema (the current one is 6: v0.12 rebuilt the interiors, the stations and their orbits) is refused with a message to start a new game; there are no migrations. A save of the current schema is brought up to date in place (`upgradeState`) for anything that can be filled in.
+One plain, serializable object holds the game. Keys starting with `$` are runtime-only (caches, per-minute scratch, an open comms channel) and are stripped from saves. `sim/save.js` saves and loads it. A save from any other schema (the current one is 7: v0.17 brought licenses, sub-factions and the powers' relations; 6 was v0.12's interiors, stations and orbits) is refused with a message to start a new game; there are no migrations. A save of the current schema is brought up to date in place (`upgradeState`) for anything that can be filled in.
 
 Main branches of the state:
 
@@ -23,14 +23,16 @@ Main branches of the state:
 | `systems`, `reactor`, `lifeSupport`, `jobs` | systems.js, reactor.js, life-support.js, jobs.js | machinery and the work it makes |
 | `hull`, `magazine`, `combat` | combat.js, damage.js | structure, torpedoes aboard, fire control |
 | `law` | law.js | standing and wanted level with each power |
-| `politics` | conflict.js | tension, hot zones, encounter pacing |
+| `politics` | politics.js, conflict.js | the powers' relations and phases, sub-factions' influence and rivalries, proxies, covert feuds, headlines; hot zones, encounter pacing |
+| `service` | service.js, military.js | our license, reputation and rank, call-ups, the service record |
+| `yards` | forces.js | hulls on the slips (and when each is built), each power's slips |
 | `entities` | world.js and many | every other object in space (stations carry their berth table, and a combat state once they are in a fight) |
 | `dock` | docking.js | the dock under way: target, berth, our collar, phase, our place in the berth's frame |
 | `tc` | traffic-control.js | the station whose space we are in, the zone, our clearances, the warnings given |
 | `boarding` | boarding.js | a boarding party's operation |
 | `dossier` | manifest.js | what we have learned about other ships (crew, passengers, routes) and from where |
 | `intel` | intel.js | the plot: reports with an age (lost contacts, traffic digests, news), the inbox of news in flight, the zones we have heard of |
-| `traffic` | traffic.js, forces.js | population target, and whether the background forces run |
+| `traffic` | traffic.js, forces.js | population target, replacements on the slips, and whether the background forces run |
 | `missions`, `contracts`, `comms`, `sensors` | … | |
 
 ## The minute
@@ -47,7 +49,7 @@ Main branches of the state:
 7. Inertial events, then people: G-loads, physiology, crew AI, needs.
 8. Plant: fires (fire.js), life support, reactor. A reactor that goes supercritical destroys the ship.
 9. Sensors (contacts that drop off the board go onto the plot) and comms; traffic control (zones, rules, the radio); the dossier's thermal counts.
-10. **The wider world**: combat decisions (NPCs choose next minute's command, fire weapons, make demands; our PDCs strafe), law, politics and the encounter director, distress calls, contracts, traffic, the background forces (hulls that came within reach wake), and the intel inbox (digests are published, reports that have arrived at light speed are delivered).
+10. **The wider world**: combat decisions (NPCs choose next minute's command, fire weapons, make demands; our PDCs strafe), law, politics (daily: relations, influence, feuds, proxies, zones) and the encounter director, our service (call-ups, reporting aboard, daily reputation), distress calls, contracts (military work among them), traffic, the background forces (hulls that came within reach wake; daily, the census and the yards), and the intel inbox (digests are published, reports that have arrived at light speed are delivered).
 
 In step 10 also: station defenses, a boarding's minute, crew back from leave, our berth's lease.
 
@@ -77,7 +79,7 @@ The target is more than 200,000 entities. The rules:
 - What the player knows is bounded too: the plot holds at most 6,000 reports, digests are capped at 400 ships, and the inbox holds a few dozen items in flight (intel.js).
 - Ordnance exists only where it was launched. The count is small, and every torpedo has a lifetime.
 
-`tests/game.test.mjs › scale` checks the per-minute budget at 200k ships, and `tests/intel.test.mjs › scale` the default system (3,000 traffic, the forces): about 0.07 ms per game-minute, and a 2 MB save. The 200k timing is sensitive to machine load.
+`tests/game.test.mjs › scale` checks the per-minute budget at 200k ships (about 6 ms per game-minute with ~25,000 of them within sensor range of Ceres; since v0.17 the names, which take a lot of short-lived string work to make 200k of, lead V8's pretenuring heuristics to slow the later minutes by about a quarter, measured and left: it is a constant, not a growth), and `tests/intel.test.mjs › scale` the default system (3,000 traffic, the forces): about 0.06 ms per game-minute, and a 2.5 MB save. The 200k timing is sensitive to machine load.
 
 ## Events
 
@@ -102,7 +104,8 @@ The sim emits facts (`torpedo-hit`, `crime`, `comm-request`, …). `ui/presenter
 | `stance.js` | the stance panel (order, range, drive, band, doctrine, preview), and one-click stances for fire control |
 | `library.js` | the ship's library: reference pages built from the simulation's own tables (classes, tech, systems, fittings, weapons, navigation, factions, stations); anything marked `data-lib` opens its page |
 | `tac.js`, `solar-map.js`, `scanner.js`, `combat.js` | the four canvases (`combat.js` also renders the fire-control panel). Ships are clickable on all four: the tactical view and the scanner open the contact panel, the solar map the body or report panel, the combat board targets |
-| `dialogs.js` | generic dialog, missions log, jobs, distress calls and comm requests, the station window (board, deliveries, services, hiring, leave, the traffic board) |
+| `dialogs.js` | generic dialog, missions log (orders, distress calls, contracts), jobs, distress calls and comm requests, the station window (board, deliveries, services, hiring, leave, the traffic board), which is also a command ship's (missions, report, supplies) |
+| `service.js` | the service record (V): license and flag, rank and reputation, relations with every faction and why, the powers' phases, the sub-factions' influence, orders, political news; the flag chip in the top bar |
 | `shipboard.js` | engineering board, duty roster, words for activities and jobs |
 | `presenter.js`, `fx.js`, `log.js`, `toast.js` | how events are shown |
 | `persistence.js`, `settings.js`, `../storage.js` | IndexedDB saves and settings |
@@ -123,6 +126,8 @@ CSS lives in `css/main.css` (the original design system: tokens, pixel type, tea
 | ship | watches, needs, wear and repair, hand flying, life support failures |
 | combat | classes, torpedoes and PDC, dead reckoning, railguns, damage, fire control, patrols, pirates, surrender, saves |
 | factions | influence, hot zones, the director, bounties |
+| service | the powers' relations over two years, licenses and the flag, contraband, the flag in a fight, rank, command ships and call-ups, military missions (intelligence, strike, hold), the yards and traffic replacement |
+| names | name variety over 200,000 rolls, uniqueness in a game, determinism, the registry on load |
 | intel | light lag, the plot and its accuracy, traffic digests, lost contacts, the background forces (strength, deployment, unseen war, the live window), upgrading v0.10 saves, the default system's cost |
 | docking | hulls and interiors that agree, stations where they should be, berths and the anchorage, traffic control's rules, docking at every station by the computer and by hand, undocking, ship to ship, boarding, salvage, station guns, manifests, the hiring hall and leave, berth leases, saves mid-dock |
 | port | gravity near the rocks and what holding costs, the ground and its call-outs, the terrain guard on routes round a rock, holding patterns at every port, traffic's port calls, port space and holding clearance |

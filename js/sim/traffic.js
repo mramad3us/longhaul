@@ -13,6 +13,10 @@
 // flag (its own power's ports first, independents next), so the Belt
 // trades mostly with itself and Earth–Mars is a busy lane.
 //
+// Ships are lost (to pirates, to wars, to blockades). Each is replaced in
+// time by a new hull launched at its power's yards (TRAFFIC_YARDS), a day
+// to a few days later, which takes up the trade from there.
+//
 // A PORT CALL is decided on arrival, by what the ship is (CALLS): the work
 // that needs a berth (cargo across the collar, passengers through the
 // lock, ore sold to the smelter) and how long it takes, and the layover
@@ -286,18 +290,19 @@ function serviceShip(e, minute, world) {
 }
 WORLD_VISITORS.push(serviceShip);
 
-/** Create one NPC ship in port at a random station, somewhere in a call. */
-export function spawnTrafficShip(state, minute = state.clock.minute) {
+/** Create one NPC ship in port (at a random station, or `home`), somewhere in a call. */
+export function spawnTrafficShip(state, minute = state.clock.minute, home = null) {
   const world = getWorld(state);
   const all = world.stations;
   if (!all.length) return null;
-  const home = pick(all);
-  const id = rollIdentity({ category: 'civilian', near: home.faction });
+  home ||= pick(all);
+  const id = rollIdentity({ category: 'civilian', near: home.faction, state });
   const e = createEntity({
     id: world.newId('npc'), name: id.name, type: 'ship', faction: id.faction, cls: id.cls, tl: id.tl, shipClass: id.shipClass, mass: id.mass,
     orbit: { ...home.orbit }, t: minute, tags: { traffic: true, g: Math.min(CLASSES[id.cls].drive.maxG, pick([0.3, 0.3, 0.5, 1, 1, 1.5])) },
   });
   e.transponder = random() > 0.1;
+  if (id.sub) e.sub = id.sub;
   world.add(e);
   // part-way through a call: at work in a berth if it has work and one is free, else in the pattern
   const call = e.tags.call = { ...planCall(e), since: minute, port: home.id };
@@ -311,11 +316,31 @@ export function spawnTrafficShip(state, minute = state.clock.minute) {
   return e;
 }
 
-/** Hourly: keep the population topped up. */
+/**
+ * Where new hulls are launched, by flag: a ship lost is replaced in time
+ * (REPLACE_DAYS), by a new one out of its power's yards.
+ */
+export const TRAFFIC_YARDS = { UN: ['luna-yards'], MCR: ['phobos-yard'], OPA: ['tycho-station', 'ceres-station'], independent: ['ganymede-station', 'vesta-depot'] };
+const REPLACE_DAYS = [1, 4];
+
+/** Hourly: lay down replacements for ships lost, and launch those that are built. */
 export function trafficTick(state) {
   const T = state.traffic;
-  if (!T || state.clock.minute % 60 !== 13) return;
-  if (T.spawned < T.population) spawnTrafficShip(state);
+  const now = state.clock.minute;
+  if (!T || now % 60 !== 13) return;
+  T.queue ??= [];
+  const world = getWorld(state);
+  if (T.spawned + T.queue.length < T.population && world.stations.length) {
+    const flag = pick(world.stations).faction;
+    T.queue.push({ at: now + Math.round(randInt(REPLACE_DAYS[0] * 24, REPLACE_DAYS[1] * 24) * 60), faction: flag });
+  }
+  for (let i = T.queue.length - 1; i >= 0; i--) {
+    const b = T.queue[i];
+    if (b.at > now) continue;
+    T.queue.splice(i, 1);
+    const yards = (TRAFFIC_YARDS[b.faction] || TRAFFIC_YARDS.independent).map(id => world.get(id)).filter(Boolean);
+    spawnTrafficShip(state, now, yards.length ? pick(yards) : null);
+  }
 }
 
 /**

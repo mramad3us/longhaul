@@ -61,6 +61,11 @@
               <input type="text" id="input-captain-name" class="form-input" placeholder="Captain" maxlength="32">
             </div>
             <div class="form-group">
+              <label class="form-label">Military License</label>
+              <div class="license-picker" id="license-picker"></div>
+              <p class="form-hint" id="license-hint"></p>
+            </div>
+            <div class="form-group">
               <label class="form-label">Starting Crew</label>
               <div class="crew-count-selector">
                 <button class="crew-btn" id="crew-minus" aria-label="Fewer crew"><span id="icon-minus"></span></button>
@@ -139,6 +144,7 @@
         <div class="hud-center">
           <div class="hud-center-row hud-center-sub">
             <span class="hud-ship-name" id="hud-ship-name">—</span>
+            <button class="hud-flag-chip" id="hud-flag" style="display:none" title="Service and relations (V)"></button>
             <span class="hud-space-chip" id="hud-space" title="Who holds this space"></span>
           </div>
           <div class="hud-center-row">
@@ -153,6 +159,7 @@
           <div class="hud-divider"></div>
           <button class="hud-icon-btn hud-text-btn hud-systems-btn" data-action="open-systems" title="Ship systems (E)">SYSTEMS<span class="hud-systems-count" id="hud-systems-count"></span></button>
           <button class="hud-icon-btn hud-text-btn" data-action="open-roster" title="Duty roster (D)">ROSTER</button>
+          <button class="hud-icon-btn hud-text-btn" data-action="open-service" title="Service and relations: license, rank, the powers (V)">SERVICE</button>
           <button class="hud-icon-btn hud-text-btn" data-action="open-library" title="Ship's library (I)">LIBRARY</button>
           <button class="hud-icon-btn hud-missions-btn" data-action="open-missions" title="Mission log (L)">
             <span class="hud-missions-label">MISSIONS</span>
