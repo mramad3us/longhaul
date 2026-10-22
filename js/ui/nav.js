@@ -3,8 +3,9 @@
 // The ship's displays (the system, local space, the scanner, weapons,
 // and the exterior cameras' tab: stage.js), what is selected on them
 // (an overlay card on the display, the full picture in the CONTEXT
-// panel), route planning (the ROUTE panel), route and stance status,
-// the "secure for burn" prompt, and the station-keeping indicator. The
+// panel), route planning (the ROUTE panel), route and stance status
+// (the ROUTE panel in full; the flight band, beside its nav chip: the
+// progress, the "secure for burn" prompt, the hold's buttons). The
 // stance panel (stance.js) shares the route panel's slot. A ship that
 // isn't on our board is shown as what the plot reports of it (intel.js),
 // never as it is.
@@ -55,6 +56,16 @@ export function initNav(h) {
   map = new SolarMap($('[data-nav-screen="solar"]'), {
     onSelect: (sel) => { ui.nav.target = sel; ui.nav.card = !!sel; hidePickList(); renderSelection(); },
     onPickList: (cands, sx, sy) => showPickList(cands, sx, sy),
+  });
+  // The display bar's folded groups (a narrow bar): open on their button, shut on a pick (a view) or a click elsewhere
+  $$('.mv-group-btn').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const g = b.parentElement, open = !g.classList.contains('open');
+    $$('.mv-group.open').forEach(o => o.classList.remove('open'));
+    g.classList.toggle('open', open);
+  }));
+  document.addEventListener('click', (e) => {
+    for (const g of $$('.mv-group.open')) if (!g.contains(e.target) || (!g.classList.contains('mv-group-stay') && e.target.closest('.mv-group-items'))) g.classList.remove('open');
   });
   $$('[data-solar-filter]').forEach(b => b.addEventListener('click', () => { const k = b.dataset.solarFilter; map.filter[k] = !map.filter[k]; toggleClass(b, 'active', map.filter[k]); }));
   initSearch();
@@ -282,7 +293,14 @@ function renderMapCard(state) {
   // Content refreshes a few times a second; position every frame (the map pans and the world moves)
   const now = performance.now();
   const key = `${t.kind}:${t.id}`;
-  if (key !== cardKey || now - cardAt > 300) { cardKey = key; cardAt = now; setHTML(box, cardHTML(state, t)); }
+  if (key !== cardKey || now - cardAt > 300) {
+    cardKey = key; cardAt = now;
+    const html = cardHTML(state, t);
+    setHTML(box, html);
+    box.dataset.empty = html ? '' : '1';
+  }
+  // (nothing to say about it, e.g. a ship our sensors have lost: no card at all, not an empty frame)
+  if (box.dataset.empty) { show(box, false); return; }
   show(box, true);
   const bw = box.offsetWidth, bh = box.offsetHeight;
   const flipX = sp.sx + 22 + bw > W - 8, flipY = sp.sy + 14 + bh > H - 8;
@@ -694,8 +712,7 @@ function confirmRoute() {
     logEntry(r.text, 'nav');
   } else engageRoute(s, opt.plan, { estimate: opt.estimate, missionId: mission?.id, intercept: routeUI.standoffKey });
   logEntry(`Course plotted: ${targetName(s, t)} — ${opt.name} (${opt.label}), ETA ${formatDuration(opt.minutes)}, ${fmtNum(opt.fuel)} kg`, 'nav');
-  logEntry('All hands — secure for acceleration', 'nav');
-  toast('SECURE FOR BURN', 'warn');
+  logEntry('All hands — secure for acceleration', 'nav');     // (the flight band asks for it: renderPrompt)
   etaCache.key = '';
   hideRoutePanel();
   renderSelection();
@@ -714,7 +731,7 @@ function renderHeldPrompt(state, box, st) {
   const ap = state.autopilot;
   const left = Math.max(0, TURN_HOLD_MAX_MIN - (state.clock.minute - ap.turnHeld));
   const up = st.unsecured.map(m => esc(m.name)).join(', ');
-  setHTML(box, `<div class="mp-header mp-danger">FLIP HELD → ${esc(targetName(state, ap.plan.target))}</div>
+  setHTML(box, `<div class="mp-header mp-danger">FLIP HELD</div>
     ${crewDots(state, st)}
     <span class="mp-status mp-caution">${st.unsecured.length} CREW ON THEIR FEET: ${up}</span>
     <span class="mp-status mp-waiting">Drive cold, nose held. Flipping when all hands are in${left ? `, or in ${left} min` : ''}</span>
@@ -798,6 +815,9 @@ function renderNavInfo(state, rel) {
 
 const PHASE_LABEL = { depart: 'DEPARTING · RCS', prepare: 'SECURING', held: 'FLIP HELD', burn: 'BURN', brake: 'BRAKE', coast: 'COAST', approach: 'RCS APPROACH', flip: 'FLIP', orient: 'ORIENT', 'transfer-burn': 'TRANSFER BURN' };
 
+// The ROUTE panel has the whole status (`full`). The flight band has the
+// rest of what its nav chip doesn't say (hud.js navStatus: the phase and
+// where to): how far along, how long, and the buttons.
 function renderRouteStatus(state, eta, box, full) {
   const ap = state.autopilot;
   const visible = !!ap && (full || ap.phase !== 'prepare');    // the prepare prompt covers that phase
@@ -812,12 +832,19 @@ function renderRouteStatus(state, eta, box, full) {
   const etaTxt = eta?.minutes != null ? formatDuration(eta.minutes) : '—';
   const phase = ap.helm === 'unmanned' ? 'HELM UNMANNED — COASTING' : (PHASE_LABEL[ap.display] || ap.display.toUpperCase()) + (ap.helm === 'manual' ? ` · HAND-FLOWN (${ap.helmBy})` : ap.helm === 'degraded' ? ' · GUIDANCE DEGRADED' : '');
   const flip = ap.flipIn !== Infinity && ap.flipIn < 120 && (ap.display === 'burn' || ap.display === 'coast') ? ` · flip in ${formatDuration(ap.flipIn)}` : '';
+  if (!full) {
+    setHTML(box, `<div class="route-status-summary">
+      <div class="route-status-progress"><div class="route-status-fill" style="width:${(frac * 100).toFixed(1)}%"></div></div>
+      <span class="route-status-eta">${dist != null ? fmtMeters(dist) + ' · ' : ''}${fmtSpeed(ap.relSpeed)} · ETA ${etaTxt}${flip}</span>
+      <button class="route-abort-btn" data-act="abort">ABORT</button>
+    </div>`);
+    return;
+  }
   const html = `<div class="route-status-summary">
       <span class="route-status-dest">→ ${esc(name)}</span>
       <span class="route-status-phase phase-${ap.helm === 'unmanned' ? 'unmanned' : ap.display}">${esc(phase)}${flip}</span>
       <div class="route-status-progress"><div class="route-status-fill" style="width:${(frac * 100).toFixed(1)}%"></div></div>
       <span class="route-status-eta">${dist != null ? fmtMeters(dist) + ' · ' : ''}${fmtSpeed(ap.relSpeed)} · ETA ${etaTxt}</span>
-      ${full ? '' : '<button class="route-zoom-btn" data-act="open-nav">MAP</button>'}
       <button class="route-abort-btn" data-act="abort">ABORT</button>
     </div>`;
   setHTML(box, html);
@@ -832,8 +859,8 @@ function renderStanceStatus(state, eta, box, full) {
   const moving = !ap.settled && ap.phase === 'active' && ap.display !== 'evade';
   const etaTxt = moving && eta?.minutes != null && eta.minutes > 0 ? ` · in place in ${formatDuration(eta.minutes)}` : '';
   setHTML(box, `<div class="route-status-summary">
-      <span class="route-status-dest">◎ ${esc(STANCE_MODES[plan.mode].label)} ${fmtMeters(plan.standoff)} · ${esc(name)}</span>
-      <span class="route-status-phase phase-${ap.helm === 'unmanned' ? 'unmanned' : ap.display}">${esc(phase)}</span>
+      <span class="route-status-dest">◎ ${esc(STANCE_MODES[plan.mode].label)} ${fmtMeters(plan.standoff)}${full ? ` · ${esc(name)}` : ''}</span>
+      ${full ? `<span class="route-status-phase phase-${ap.helm === 'unmanned' ? 'unmanned' : ap.display}">${esc(phase)}</span>` : ''}
       <span class="route-status-eta">${rel ? `range ${fmtMeters(rel.dist)} · rel ${fmtSpeed(rel.speed)}` : ''}${etaTxt}</span>
       <button class="route-zoom-btn" data-act="stance-edit">STANCE</button>
       <button class="route-abort-btn" data-act="release">RELEASE</button>
@@ -862,7 +889,7 @@ function renderPrompt(state) {
     : '<span class="mp-status mp-ready">ALL HANDS SECURED</span>';
   const helpless = st.helpless.length ? `<span class="mp-status mp-caution">${st.helpless.length} INCAPACITATED — WILL RIDE UNSECURED</span>` : '';
   const canEngage = st.pilotReady || (!st.pilot && !fcDown);
-  setHTML(box, `<div class="mp-header">SECURE FOR BURN → ${esc(targetName(state, ap.plan.target))}</div>
+  setHTML(box, `<div class="mp-header">SECURE FOR BURN</div>
     <div class="mp-crew-row">${dots}</div>${status}${helpless}
     <div class="mp-actions">
       <button class="mp-engage-btn" data-act="engage" ${canEngage && !ap.override ? '' : 'disabled'}>${ap.override ? 'ENGAGING…' : canEngage ? 'EXECUTE NOW' : 'WAITING FOR PILOT'}</button>
@@ -880,15 +907,16 @@ function renderHold(state) {
   if (!e) return;
   const docked = dockedStation(state);
   const d = Math.hypot(h.ox, h.oy);
-  const label = docked ? 'DOCKED' : e.type === 'station' ? 'HOLDING' : 'FORMATION';
   const mission = missionForEntity(state, e.id);
-  const contract = state.contracts.active.find(c => c.targetId === e.id && c.phase === 'active');
   const hailable = inRadio(state, e.id) || d < RANGE.FORMATION_M * 5;
-  setHTML(box, `<span class="formation-icon">◈</span>
-    <span class="formation-label">${label}</span>
-    <span class="formation-target">${esc(e.transponder || e.type === 'station' ? e.name : 'unidentified hull')} · ${fmtMeters(d)}</span>
-    ${docked ? '<button class="formation-hail-btn" data-act="station">STATION</button>' : ''}
-    ${!docked && hailable ? `<button class="formation-hail-btn" data-act="hail-hold">${mission ? 'COMPLETE RESCUE' : contract ? 'HAIL' : 'HAIL'}</button>` : ''}`);
+  // (the band's nav chip says where we hold and how far: hud.js navStatus; this is what can be done about it)
+  if (!docked && !hailable) { show(box, false); return; }
+  const key = `${e.id}|${!!docked}|${!!mission}`;
+  if (box.dataset.key !== key) {
+    box.dataset.key = key;
+    setHTML(box, docked ? '<button class="formation-hail-btn" data-act="station">STATION</button>'
+      : `<button class="formation-hail-btn" data-act="hail-hold">${mission ? 'COMPLETE RESCUE' : 'HAIL'}</button>`);
+  }
   const b = box.querySelector('[data-act="hail-hold"]');
   if (b) b.onclick = (ev) => { ev.stopPropagation(); hooks.hail(e.id); };
 }

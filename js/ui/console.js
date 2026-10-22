@@ -2,7 +2,10 @@
 // LONGHAUL — The console: what goes where on the flight deck's screen
 //
 // The main view is the ship's displays (the system, local space, the
-// scanner, weapons, the exterior cameras: nav.js). Around it:
+// scanner, weapons, the exterior cameras: nav.js), under their tab bar and
+// the flight band (what the ship is doing, what wants an answer, the
+// latest messages: a line of the layout, so nothing floats over the
+// display but the card for what is picked on it). Around it:
 //
 //   LEFT DOCK    SHIP: what the ship is doing and what it has (drive,
 //                attitude, the reference velocity, hull, systems, stores)
@@ -37,7 +40,7 @@ export function initConsole(h) {
   initWm($('#wm-layer'));
   const stash = (id) => { const n = $(id); n.remove(); n.removeAttribute('id'); return n; };
 
-  createPanel('ship', { dock: 'left', title: 'SHIP', body: stash('#panel-ship-body'), weight: 1.2, popOut: true });
+  createPanel('ship', { dock: 'left', title: 'SHIP', body: stash('#panel-ship-body'), fit: true, popOut: true });
   createPanel('rooms', { dock: 'left', title: 'CREW & ROOMS', body: stash('#panel-rooms-body'), weight: 1, popOut: true, floatW: 560, floatH: 420,
     onToggle: (on) => hooks.roomsVisible?.(on) });
   const dev = $('#panel-dev-body');
@@ -45,7 +48,7 @@ export function initConsole(h) {
   dev.closest('.panel')?.classList.add('dev-only');
 
   createPanel('context', { dock: 'right', title: 'CONTEXT', body: stash('#panel-context-body'), weight: 1.4, popOut: true });
-  createPanel('route', { dock: 'right', title: 'ROUTE', body: stash('#panel-route-body'), weight: 1, popOut: true });
+  createPanel('route', { dock: 'right', title: 'ROUTE', body: stash('#panel-route-body'), fit: true, popOut: true });
 
   initSplitter($('#split-left'), $('#dock-left'), 'left', { def: 300 });
   initSplitter($('#split-right'), $('#dock-right'), 'right', { def: 340 });

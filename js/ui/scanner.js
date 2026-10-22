@@ -5,6 +5,9 @@
 // circle), range rings in the band's units, bearing ticks, contacts in
 // their faction's colours, a target box round the selection, the lock
 // as an amber ring, what is coming at us in red with its time to impact.
+// Names go through one pass (labels.js): the selection, the lock and the
+// trouble first, and none printed over another, so a crowded board reads
+// as dots with the names that matter.
 // ============================================================
 
 import { AU_KM } from '../core/constants.js';
@@ -16,6 +19,7 @@ import { timeToGo } from '../sim/ordnance.js';
 import { hostilesOfPlayer } from '../sim/agents.js';
 import { formatDuration } from '../core/clock.js';
 import { FitCanvas, fmtKm } from './dom.js';
+import { Labels } from './labels.js';
 
 const C = { void: '#05070A', line: '#1C2632', line2: '#2A3846', text: '#D8E1EA', text2: '#94A3B2', text3: '#5E6D7C', own: '#5FD38D', sel: '#3EC7E6', caution: '#F0A93A', warn: '#EF5350' };
 const UI = (px, w = 500) => `${w} ${px}px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif`;
@@ -24,6 +28,7 @@ const MONO = (px) => `${px}px "IBM Plex Mono", ui-monospace, monospace`;
 export class ScannerView {
   constructor(container, { onSelect } = {}) {
     this.fc = new FitCanvas(container, { className: 'scanner-canvas' });
+    this.labels = new Labels();
     this.onSelect = onSelect || (() => {});
     this._hits = [];
     container.addEventListener('pointerdown', (e) => {
@@ -45,6 +50,8 @@ export class ScannerView {
     const band = SENSOR_RANGES[s.range];
     const t = performance.now() / 1000;
     this._hits.length = 0;
+    const L = this.labels;
+    L.reset();
 
     ctx.fillStyle = C.void;
     ctx.fillRect(0, 0, W, H);
@@ -55,8 +62,7 @@ export class ScannerView {
     for (let i = 1; i <= 3; i++) {
       ctx.strokeStyle = i === 3 ? C.line2 : C.line;
       ctx.beginPath(); ctx.arc(cx, cy, R * i / 3, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = C.text3; ctx.font = MONO(10); ctx.textAlign = 'left';
-      ctx.fillText(fmtKm(band.au * AU_KM * i / 3), cx + R * i / 3 + 4, cy - 4);
+      L.add(fmtKm(band.au * AU_KM * i / 3), cx + R * i / 3, cy - 9, { off: 4, font: MONO(10), color: C.text3, pri: 0, fixed: true });
     }
     ctx.strokeStyle = C.line;
     ctx.setLineDash([2, 5]);
@@ -67,7 +73,11 @@ export class ScannerView {
       const r = a * Math.PI / 180;
       ctx.strokeStyle = C.line2;
       ctx.beginPath(); ctx.moveTo(cx + Math.sin(r) * R, cy - Math.cos(r) * R); ctx.lineTo(cx + Math.sin(r) * (R + 6), cy - Math.cos(r) * (R + 6)); ctx.stroke();
-      if (a % 90 === 0) { ctx.fillStyle = C.text3; ctx.font = MONO(10); ctx.textAlign = 'center'; ctx.fillText(a === 0 ? 'NOSE' : `${a}°`, cx + Math.sin(r) * (R + 16), cy - Math.cos(r) * (R + 16) + 3); }
+      if (a % 90 === 0) {
+        const txt = a === 0 ? 'NOSE' : `${a}°`;
+        ctx.font = MONO(10);
+        L.add(txt, cx + Math.sin(r) * (R + 16) - ctx.measureText(txt).width / 2, cy - Math.cos(r) * (R + 16), { off: 0, font: MONO(10), color: C.text3, pri: 1, fixed: true });
+      }
     }
 
     // Our ship
@@ -90,10 +100,10 @@ export class ScannerView {
         ctx.beginPath(); ctx.moveTo(px, py - 4); ctx.lineTo(px + 3, py); ctx.lineTo(px, py + 4); ctx.lineTo(px - 3, py); ctx.closePath(); ctx.fill();
         if (inbound) {
           const eta = timeToGo(state, world.get(c.id));
-          ctx.font = MONO(11); ctx.textAlign = 'left';
-          ctx.fillText(`${c.name} ${isFinite(eta) ? formatDuration(eta / 60) : ''}`, px + 7, py + 4);
+          L.add(`${c.name} ${isFinite(eta) ? formatDuration(eta / 60) : ''}`, px, py, { off: 7, font: MONO(11), color: C.warn, pri: 8 });
         }
         this._hits.push({ id: c.id, x: px, y: py });
+        L.block(px - 4, py - 4, px + 4, py + 4);
         continue;
       }
       const color = c.sos ? C.warn : c.faction ? factionColor(c.faction) : c.station ? C.text : C.text2;
@@ -129,13 +139,17 @@ export class ScannerView {
         ctx.setLineDash([]);
       }
       const label = c.name || c.signature || 'Unknown';
-      if (frac < 0.9 && s.contacts.length < 60) {
-        ctx.fillStyle = color; ctx.globalAlpha = 0.85; ctx.font = UI(11); ctx.textAlign = 'left';
-        ctx.fillText(label + (c.sos ? '  SOS' : ''), px + sz + 5, py + 4);
-        ctx.globalAlpha = 1;
+      if (frac < 0.9) {
+        const pri = s.selected === c.id || state.combat.target === c.id ? 9 : s.locked === c.id ? 8 : c.sos ? 7 : hostile.has(c.id) ? 6 : c.station ? 4 : 2;
+        L.add(label + (c.sos ? '  SOS' : ''), px, py, { off: sz + 5, font: UI(11), color, alpha: 0.85, pri });
       }
+      L.block(px - sz - 1, py - sz - 1, px + sz + 1, py + sz + 1);
       this._hits.push({ id: c.id, x: px, y: py });
     }
+
+    // the names, then the display's own corners (its heading, the count; the readouts at its foot)
+    L.block(0, 0, 330, 42); L.block(W - 130, 0, W, 28); L.block(0, H - 26, W, H);
+    L.draw(ctx, W, H);
 
     ctx.textAlign = 'left';
     ctx.fillStyle = C.text; ctx.font = UI(12, 600);

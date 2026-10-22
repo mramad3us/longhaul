@@ -132,11 +132,9 @@
           </div>
           <span class="rail-perf" id="hud-perf" style="display:none"></span>
         </div>
-        <div class="rail-nav">
-          <span class="hud-nav-chip" id="hud-nav-chip">—</span>
-          <button class="hud-threat-chip" id="hud-threat" style="display:none" title="Weapons display (W)"></button>
-        </div>
+        <div class="rail-fill"></div>
         <div class="rail-ann">
+          <button class="ann ann-threat" id="hud-threat" style="display:none" title="Weapons display (W)"></button>
           <span class="ann ann-master" id="alert-border" title="Master caution: amber while the ship maneuvers with crew on their feet; red when stores run critical"><span class="ann-label ann-caution-label">MASTER<br>CAUTION</span><span class="ann-label ann-warning-label">MASTER<br>WARNING</span></span>
           <button class="ann" id="combat-toggle" title="Battle stations: crew to their stations and couches, weapons manned (C)"><span class="ann-label">BATTLE<br>STATIONS</span><span class="ann-state" id="combat-status">OFF</span></button>
           <button class="ann" id="suits-toggle" title="All hands into EVA suits, and keep them on (U)"><span class="ann-label">ALL HANDS<br>SUITED</span><span class="ann-state" id="suits-status">OFF</span></button>
@@ -176,16 +174,27 @@
               <button class="tac-zoom-btn-modal" data-tac-zoom-modal="2">25 km</button>
             </div>
             <div class="mv-controls" data-tab-controls="solar">
-              <button class="solar-zoom-btn" data-solar-view="ship" title="Centre on our ship">SHIP</button>
-              <button class="solar-zoom-btn" data-solar-view="inner" title="The inner system">INNER</button>
-              <button class="solar-zoom-btn" data-solar-view="belt" title="Out to the Belt">BELT</button>
-              <button class="solar-zoom-btn" data-solar-view="system" title="The whole system">SYSTEM</button>
-              <button class="solar-zoom-btn" data-solar-view="target" title="Centre on the selection">TARGET</button>
+              <!-- (a group is its buttons in a row; on a narrow bar it folds into a menu: css/console.css) -->
+              <div class="mv-group">
+                <button class="solar-zoom-btn mv-group-btn" title="Where the display looks">VIEW ▾</button>
+                <div class="mv-group-items">
+                  <button class="solar-zoom-btn" data-solar-view="ship" title="Centre on our ship">SHIP</button>
+                  <button class="solar-zoom-btn" data-solar-view="inner" title="The inner system">INNER</button>
+                  <button class="solar-zoom-btn" data-solar-view="belt" title="Out to the Belt">BELT</button>
+                  <button class="solar-zoom-btn" data-solar-view="system" title="The whole system">SYSTEM</button>
+                  <button class="solar-zoom-btn" data-solar-view="target" title="Centre on the selection">TARGET</button>
+                </div>
+              </div>
               <span class="mv-sep"></span>
-              <button class="solar-zoom-btn active" data-solar-politics title="Spheres of influence and hot zones">POLITICS</button>
-              <button class="solar-zoom-btn active" data-solar-intel title="Reported ships on the plot (aged, from traffic digests and lost contacts) and light-time rings">PLOT</button>
-              <button class="solar-zoom-btn active" data-solar-filter="stations" title="Show stations">STATIONS</button>
-              <button class="solar-zoom-btn active" data-solar-filter="ships" title="Show ships (live and reported)">SHIPS</button>
+              <div class="mv-group mv-group-stay">
+                <button class="solar-zoom-btn mv-group-btn" title="What the display shows">LAYERS ▾</button>
+                <div class="mv-group-items">
+                  <button class="solar-zoom-btn active" data-solar-politics title="Spheres of influence and hot zones">POLITICS</button>
+                  <button class="solar-zoom-btn active" data-solar-intel title="Reported ships on the plot (aged, from traffic digests and lost contacts) and light-time rings">PLOT</button>
+                  <button class="solar-zoom-btn active" data-solar-filter="stations" title="Show stations">STATIONS</button>
+                  <button class="solar-zoom-btn active" data-solar-filter="ships" title="Show ships (live and reported)">SHIPS</button>
+                </div>
+              </div>
               <div class="solar-search-box"><input class="solar-search" id="solar-search" type="search" placeholder="Find a station, body or ship" autocomplete="off"><div class="solar-search-results" id="solar-search-results" style="display:none"></div></div>
             </div>
             <div class="mv-controls" data-tab-controls="scanner">
@@ -196,6 +205,15 @@
             <div class="mv-controls" data-tab-controls="exterior">
               <button class="mv-btn" id="exterior-float" title="Float the exterior camera in its own window">FLOAT</button>
             </div>
+          </div>
+          <!-- The flight status band: what the ship is doing, and what wants an answer (a line of the layout, never over the display) -->
+          <div class="fband" id="flight-strip">
+            <span class="hud-nav-chip" id="hud-nav-chip">—</span>
+            <div class="route-mini" id="route-mini" style="display:none"></div>
+            <div class="hold-indicator" id="hold-indicator" style="display:none"></div>
+            <div class="nav-prompt" id="nav-prompt" style="display:none"></div>
+            <div class="tc-chip" id="tc-chip" style="display:none"></div>
+            <div class="fband-msgs toast-container" id="toast-container" aria-live="polite"></div>
           </div>
           <div class="nav-screens mv-screens" id="mv-screens">
             <div class="mv-screen" data-nav-screen="solar"></div>
@@ -209,15 +227,7 @@
             <div class="combat-panel" id="combat-panel" style="display:none"></div>
             <div class="map-picklist" id="map-picklist" style="display:none"></div>
             <div class="map-card" id="map-card" style="display:none"></div>
-            <!-- What the ship is doing: flight status over the top of the display -->
-            <div class="flight-strip" id="flight-strip">
-              <div class="tc-chip" id="tc-chip" style="display:none"></div>
-              <div class="route-mini" id="route-mini" style="display:none"></div>
-              <div class="nav-prompt" id="nav-prompt" style="display:none"></div>
-              <div class="hold-indicator" id="hold-indicator" style="display:none"></div>
-            </div>
             <div class="tac-modal-info mv-info" id="nav-info"></div>
-            <div class="toast-container" id="toast-container" aria-live="polite"></div>
             <div class="log-drawer" id="log-container"><div class="log-entries" id="log-entries"></div></div>
           </div>
         </main>

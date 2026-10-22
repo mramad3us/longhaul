@@ -36,14 +36,17 @@ import { stanceRanges, STANCE_MODES } from '../sim/stance.js';
 import { quickStance, openStance, currentStance, release as releaseStance } from './stance.js';
 import { targetName } from '../sim/nav.js';
 import { fxList } from './fx.js';
+import { Labels } from './labels.js';
 
 const DECADES = 7;                 // 1 km … 10,000,000 km
+const LABEL_FONT = '10px "IBM Plex Mono", monospace';
 const QUICK_STANCES = ['guns', 'gear', 'torpedo', 'long'];
 const choice = { warhead: 'he', profile: 'fast' };
 
 export class ThreatView {
   constructor(container, { onSelect } = {}) {
     this.fc = new FitCanvas(container, { className: 'threat-canvas' });
+    this.labels = new Labels();
     this.onSelect = onSelect || (() => {});
     this._hits = [];
     container.addEventListener('pointerdown', (e) => {
@@ -76,11 +79,12 @@ export class ThreatView {
     ctx.lineWidth = 1;
     ctx.font = '10px "IBM Plex Mono", monospace';
     ctx.textAlign = 'left';
+    const L = this.labels;
+    L.reset();
     for (let d = 1; d <= DECADES; d++) {
       ctx.strokeStyle = `rgba(90,40,40,${0.35 + d * 0.05})`;
       ctx.beginPath(); ctx.arc(cx, cy, R * d / DECADES, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = 'rgba(160,90,90,0.7)';
-      ctx.fillText(fmtKm(10 ** d), cx + R * d / DECADES + 3, cy - 3);
+      L.add(fmtKm(10 ** d), cx + R * d / DECADES, cy - 8, { off: 3, font: '10px "IBM Plex Mono", monospace', color: 'rgba(160,90,90,0.7)', pri: 0, fixed: true });
     }
     const p = profile(state, PLAYER);
     ctx.fillStyle = 'rgba(95,211,141,0.06)';
@@ -95,7 +99,6 @@ export class ThreatView {
     const world = getWorld(state);
     const facing = state.flight.facing;
     const hostile = new Set(hostilesOfPlayer(state).map(e => e.id));
-    const labels = [];             // drawn last, most important first, none over another
     const at = (c) => {
       const rel = c.bearing - facing;
       const r = radius(c.dist * AU_KM);
@@ -112,7 +115,7 @@ export class ThreatView {
         ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x + 3, y); ctx.lineTo(x, y + 4); ctx.lineTo(x - 3, y); ctx.closePath(); ctx.fill();
         if (inbound) {
           const eta = timeToGo(state, e);
-          labels.push({ text: `${c.name}${isFinite(eta) ? ' ' + formatDuration(eta / 60) : ''}`, x: x + 6, y: y + 3, col, pri: 3 });
+          L.add(`${c.name}${isFinite(eta) ? ' ' + formatDuration(eta / 60) : ''}`, x, y, { off: 6, font: LABEL_FONT, color: col, alpha: 0.9, pri: 3 });
         }
         continue;
       }
@@ -120,6 +123,7 @@ export class ThreatView {
       const col = c.wreck ? '#5A5A5A' : c.faction ? factionColor(c.faction) : '#8A8A6A';
       ctx.fillStyle = col;
       ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+      L.block(x - 4, y - 4, x + 4, y + 4);
       if (hostile.has(c.id)) { ctx.strokeStyle = '#EF5350'; ctx.strokeRect(x - 7, y - 7, 14, 14); }
       if (state.combat.target === c.id) {
         ctx.save(); ctx.translate(x, y); ctx.rotate(t);
@@ -127,7 +131,7 @@ export class ThreatView {
         ctx.beginPath(); for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2; ctx.moveTo(Math.cos(a) * 7, Math.sin(a) * 7); ctx.lineTo(Math.cos(a) * 13, Math.sin(a) * 13); } ctx.stroke();
         ctx.restore();
       }
-      labels.push({ text: c.name || c.signature || 'CONTACT', x: x + 8, y: y + 3, col, pri: state.combat.target === c.id ? 4 : hostile.has(c.id) ? 2 : c.wreck ? 0 : 1 });
+      L.add(c.name || c.signature || 'CONTACT', x, y, { off: 8, font: LABEL_FONT, color: col, alpha: 0.85, pri: state.combat.target === c.id ? 4 : hostile.has(c.id) ? 2 : c.wreck ? 0.5 : 1 });
       this._hits.push({ id: c.id, x, y });
     }
     // Our own torpedoes on their way, toward their targets
@@ -152,19 +156,11 @@ export class ThreatView {
     }
 
     // Names: a crowd at one range (a station's berths) would print on top
-    // of itself, so a name that would cover one already drawn is left off
-    // (the dot is still there to click)
-    labels.sort((a, b) => b.pri - a.pri);
-    const placed = [];
-    ctx.globalAlpha = 0.85;
-    for (const l of labels) {
-      const w = ctx.measureText(l.text).width;
-      const box = { x0: l.x - 1, x1: l.x + w + 1, y0: l.y - 10, y1: l.y + 3 };
-      if (placed.some(b => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
-      placed.push(box);
-      ctx.fillStyle = l.col; ctx.fillText(l.text, l.x, l.y);
-    }
-    ctx.globalAlpha = 1;
+    // of itself, so names are placed most important first and one with no
+    // free place is left off (labels.js: the dot is still there to click);
+    // the board's own heading keeps its corner
+    L.block(0, 0, 440, 38); L.block(0, H - 26, W, H);
+    L.draw(ctx, W, H);
 
     ctx.fillStyle = '#EF5350'; ctx.font = '11px "IBM Plex Mono", monospace'; ctx.textAlign = 'left';
     ctx.fillText('THREAT BOARD — LOG RANGE 1 km … 10M km', 10, 18);

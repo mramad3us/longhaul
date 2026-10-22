@@ -14,8 +14,9 @@
 // no starfield (stars tell a navigator nothing here), hairline orbits,
 // the Belt as the band it is, colour that means something (green is us,
 // magenta our route, cyan what is selected, amber and red the trouble
-// spots, faction colours for who owns what), labels that thin out with
-// the zoom, and nothing that moves unless the thing it shows does (a
+// spots, faction colours for who owns what), names that thin out with
+// the zoom and never print over one another (labels.js: the most
+// important are placed first), and nothing that moves unless the thing it shows does (a
 // distress beacon's pulse is the one exception: it is an alarm). Zoom
 // eases toward where the wheel asked for, about the point under the
 // pointer.
@@ -29,6 +30,7 @@ import { zonePos, ZONE_KINDS } from '../sim/conflict.js';
 import { getBody } from '../sim/ephemeris.js';
 import { estimate, liveKnowledge, LIGHT_SECOND_AU, LIGHT_MINUTE_AU } from '../sim/intel.js';
 import { FitCanvas, fmtKm } from './dom.js';
+import { Labels } from './labels.js';
 
 const LIGHT_RINGS = [[LIGHT_SECOND_AU, '1 LIGHT-SEC'], [LIGHT_MINUTE_AU, '1 LIGHT-MIN'], [LIGHT_MINUTE_AU * 10, '10 LIGHT-MIN']];
 const REPORT_FADE_MIN = 3 * 1440;   // a report is drawn faintest at this age
@@ -59,6 +61,7 @@ const ZONE_COL = { front: COL.warn, skirmish: COL.warn, blockade: COL.caution, s
 export class SolarMap {
   constructor(container, { onSelect, onHover, onPickList } = {}) {
     this.fc = new FitCanvas(container, { className: 'map-canvas' });
+    this.labels = new Labels();
     this.cx = 0; this.cy = 0;           // view center, AU
     this.scale = 60;                    // px per AU
     this.follow = 'ship';               // 'ship' | 'target' | null
@@ -251,10 +254,7 @@ export class SolarMap {
         ctx.beginPath(); ctx.arc(x, y, rp, 0, Math.PI * 2); ctx.stroke();
         ctx.setLineDash([]);
       }
-      if (focus || S > 3e4) {
-        ctx.fillStyle = col; ctx.font = UI(11);
-        ctx.fillText(`${r.name || 'Track'} · ${ageLabel(age)} old`, x + 7, y + 4);
-      }
+      if (focus || S > 3e4) this.labels.add(`${r.name || 'Track'} · ${ageLabel(age)} old`, x, y, { off: 7, font: UI(11), color: col, alpha: a, pri: focus ? 5 : 1 });
       ctx.globalAlpha = 1;
       pick.push({ kind: 'entity', id: r.id, sx: x, sy: y, report: true });
     }
@@ -272,6 +272,8 @@ export class SolarMap {
     if (this.follow === 'target' && opts.targetPos) { this.cx = opts.targetPos.x; this.cy = opts.targetPos.y; }
     const pick = this._pickables;
     pick.length = 0;
+    const L = this.labels;
+    L.reset();
 
     ctx.fillStyle = COL.void;
     ctx.fillRect(0, 0, W, H);
@@ -295,8 +297,7 @@ export class SolarMap {
       const rp = r * S;
       if (rp < 24 || rp > Math.hypot(W, H) * 4) continue;
       ctx.beginPath(); ctx.arc(sx0, sy0, rp, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = COL.ringText; ctx.font = MONO(10);
-      ctx.fillText(`${r} AU`, sx0 + 4, sy0 - rp - 4);
+      L.add(`${r} AU`, sx0, sy0 - rp - 8, { off: 4, font: MONO(10), color: COL.ringText, pri: 0, fixed: true });
     }
     ctx.setLineDash([]);
 
@@ -352,11 +353,9 @@ export class SolarMap {
         ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = 0.75; ctx.strokeStyle = col; ctx.setLineDash([6, 4]);
         ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
-        ctx.globalAlpha = 0.95; ctx.fillStyle = col; ctx.font = UI(11, 600);
-        ctx.fillText(`${ZONE_KINDS[z.kind].label}`, zx + zr * 0.72 + 5, zy - zr * 0.72 - 2);
-        ctx.fillStyle = COL.text3; ctx.font = UI(10);
-        ctx.fillText(z.body.toUpperCase(), zx + zr * 0.72 + 5, zy - zr * 0.72 + 10);
         ctx.globalAlpha = 1;
+        L.add(ZONE_KINDS[z.kind].label, zx + zr * 0.72, zy - zr * 0.72 - 6, { off: 5, font: UI(11, 600), color: col, alpha: 0.95, pri: 4, fixed: true });
+        L.add(z.body.toUpperCase(), zx + zr * 0.72, zy - zr * 0.72 + 7, { off: 5, font: UI(10), color: COL.text3, pri: 3, fixed: true });
       }
     }
 
@@ -382,11 +381,11 @@ export class SolarMap {
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
       if (b.rings && r > 2) { ctx.strokeStyle = 'rgba(212,196,154,0.45)'; ctx.beginPath(); ctx.ellipse(x, y, r * 2.2, r * 0.6, 0, 0, Math.PI * 2); ctx.stroke(); }
       pick.push({ kind: 'body', id: b.name, sx: x, sy: y });
+      if (r < 16) L.block(x - r, y - r, x + r, y + r);
       const showLabel = b.type === 'planet' || (b.type === 'asteroid' && S > 40) || (b.type === 'moon' && b.a * S > 30);
       if (showLabel) {
         const planet = b.type === 'planet';
-        ctx.fillStyle = planet ? COL.text2 : COL.text3; ctx.font = planet ? UI(12, 600) : UI(11);
-        ctx.fillText(planet ? b.name.toUpperCase() : b.name, x + r + 5, y + 4);
+        L.add(planet ? b.name.toUpperCase() : b.name, x, y, { off: r + 5, font: planet ? UI(12, 600) : UI(11), color: planet ? COL.text2 : COL.text3, pri: planet ? 8 : 3 });
       }
     }
 
@@ -456,12 +455,12 @@ export class SolarMap {
         ctx.beginPath(); ctx.arc(x, y, 6 + ph * 10, 0, Math.PI * 2); ctx.stroke();
       }
       pick.push({ kind: 'entity', id: e.id, sx: x, sy: y, station: e.type === 'station' });
+      L.block(x - 4, y - 4, x + 4, y + 4);
       const label = e.type === 'station' || e.sos || e.tags?.missionId || e.tags?.contract || S > 3e4 || e.id === opts.targetId;
       const named = e.type === 'station' || e.type === 'nav' || e.tags?.contract || contactName(state, e.id);
       if (label && named) {
-        ctx.fillStyle = e.type === 'station' ? COL.text : color; ctx.globalAlpha = e.type === 'station' ? 0.9 : 0.85; ctx.font = UI(11, e.type === 'station' ? 600 : 500);
-        ctx.fillText(named === true ? e.name : named, x + 9, y + 4);
-        ctx.globalAlpha = 1;
+        const pri = e.id === opts.targetId ? 9 : e.sos || e.tags?.missionId || e.tags?.contract ? 7 : e.type === 'station' ? 6 : 2;
+        L.add(named === true ? e.name : named, x, y, { off: 9, font: UI(11, e.type === 'station' ? 600 : 500), color: e.type === 'station' ? COL.text : color, alpha: e.type === 'station' ? 0.9 : 0.85, pri });
       }
     }
 
@@ -475,8 +474,7 @@ export class SolarMap {
         if (rp < 30 || rp > Math.hypot(W, H) * 1.5) continue;
         ctx.strokeStyle = COL.light;
         ctx.beginPath(); ctx.arc(ux, uy, rp, 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = COL.lightText; ctx.font = MONO(10);
-        ctx.fillText(txt.toLowerCase(), ux + rp * 0.71 + 4, uy - rp * 0.71 - 4);
+        L.add(txt.toLowerCase(), ux + rp * 0.71, uy - rp * 0.71 - 8, { off: 4, font: MONO(10), color: COL.lightText, pri: 0, fixed: true });
       }
       ctx.setLineDash([]);
     }
@@ -511,9 +509,14 @@ export class SolarMap {
       ctx.lineTo(x + Math.cos(-f.facing + 2.5) * 5.5, y + Math.sin(-f.facing + 2.5) * 5.5);
       ctx.lineTo(x + Math.cos(-f.facing - 2.5) * 5.5, y + Math.sin(-f.facing - 2.5) * 5.5);
       ctx.closePath(); ctx.fill();
-      ctx.font = UI(12, 600);
-      ctx.fillText(state.ship.name, x + 11, y - 8);
+      L.block(x - 9, y - 9, x + 9, y + 9);
+      L.add(state.ship.name, x, y, { off: 12, font: UI(12, 600), color: COL.own, pri: 100 });
     }
+
+    // Every name, most important first, none over another (labels.js); the
+    // foot of the display is the readouts' and the scale bar's
+    L.block(0, H - 26, W, H);
+    L.draw(ctx, W, H);
 
     // Hover, and a target box round the selection
     const at = (sel) => sel && this._pickables.find(q => q.kind === sel.kind && q.id === sel.id);

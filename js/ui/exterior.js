@@ -10,7 +10,8 @@
 // the view is turned so the station's up is up (the ground below).
 //
 // Overlays for docking: the corridor down the berth's axis with its
-// marks, the berth's collar, ours. The renderer reads sim state and
+// marks, the berth's collar, ours. Names go beside the hulls, never on
+// one (labels.js). The renderer reads sim state and
 // never changes it; a click picks a hull (onSelect), as on the tactical
 // display.
 //
@@ -48,6 +49,7 @@ import { factionColor } from '../sim/factions.js';
 import { PLAYER_CLASS } from '../sim/ship-classes.js';
 import { FitCanvas } from './dom.js';
 import { drawHull, drawStation } from './hull-art.js';
+import { Labels } from './labels.js';
 
 const _q = [];
 const IN_FRAME_PHASES = new Set(['approach', 'prox', 'separate', 'outbound']);
@@ -238,6 +240,8 @@ export class ExteriorView {
 
     const hits = this._hits;
     hits.length = 0;
+    const L = this.labels || (this.labels = new Labels());
+    L.reset();
     // Stations
     for (const o of objects) {
       if (o.e.type !== 'station') continue;
@@ -246,7 +250,7 @@ export class ExteriorView {
       const occ = new Set(Object.keys(o.e.berths || {}));
       drawStation(ctx, m, { x: sx, y: sy, angle: screenAngle(stationAngle(o.e.orbit, tm)), scale: sc, t, tint: factionColor(o.e.faction), occupied: occ, highlight: state.dock?.target.id === o.e.id ? state.dock.berth : null, labels: sc > 0.04 });
       hits.push({ id: o.e.id, x: sx, y: sy });
-      if (sc * m.sizeM < 2000) label(ctx, o.e.name, sx, sy + 14, factionColor(o.e.faction));
+      if (sc * m.sizeM < 2000) L.add(o.e.name, sx, sy, { off: 14, font: LABEL_FONT, color: factionColor(o.e.faction), alpha: 0.85, pri: 5, above: true });
     }
     // Other ships: in a berth (posed by the berth), or flying
     for (const o of objects) {
@@ -271,7 +275,10 @@ export class ExteriorView {
       // (kilometres out a hull is a few pixels: a mark in its colour, as ours has)
       if (hull.L * sc < 8) { ctx.fillStyle = factionColor(e.faction); ctx.fillRect(sx - 1.5, sy - 1.5, 3, 3); }
       hits.push({ id: e.id, x: sx, y: sy });
-      if (hull.L * sc > 6 && opts.labels !== false) label(ctx, e.transponder ? e.name : 'unidentified', sx, sy - Math.max(10, hull.W * sc), factionColor(e.faction));
+      // (its name beside the hull, never on it or on another's: labels.js)
+      const [hx, hy] = hullBox(hull, screenAngle(pose.facing), sc);
+      if (hull.L * sc > 6) L.block(sx - hx, sy - hy, sx + hx, sy + hy);
+      if (hull.L * sc > 6 && opts.labels !== false) L.add(shortName(e.transponder ? e.name : 'unidentified'), sx, sy, { off: [hx + 6, hy + 7], font: LABEL_FONT, color: factionColor(e.faction), alpha: 0.85, pri: 3 - o.d / LOOK_M, above: true });
     }
 
     // Docking overlays: the corridor and the two collars
@@ -314,6 +321,11 @@ export class ExteriorView {
     const [ox, oy] = toS(mine.mx, mine.my);
     drawHull(ctx, ours, { x: ox, y: oy, facing: screenAngle(mine.facing), scale: sc, view: mine.view, tint: '#5FD38D', plume: d?.phase === 'approach' ? state.$dockThrust || 0 : f.thrustG, rcs: Math.min(1, (d && IN_FRAME_PHASES.has(d.phase) ? state.$dockRcs || 0 : 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0)), t, ports: d?.port || true });
     if (ours.L * sc < 8) { ctx.fillStyle = '#5FD38D'; ctx.fillRect(ox - 2, oy - 2, 4, 4); }
+    { const [hx, hy] = hullBox(ours, screenAngle(mine.facing), sc); L.block(ox - hx, oy - hy, ox + hx, oy + hy); }
+
+    // The names, placed last (the scale bar keeps its corner)
+    L.block(0, H - 28, 220, H);
+    L.draw(ctx, W, H);
 
     // Scale bar
     const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000];
@@ -367,14 +379,13 @@ function edgeMarker(ctx, sx, sy, W, H, text, color) {
 
 const fmtKm = (m) => m >= 10_000 ? `${Math.round(m / 1000).toLocaleString()} km` : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
 
-function label(ctx, text, x, y, color) {
-  ctx.font = '10px "IBM Plex Mono", monospace';
-  ctx.fillStyle = color;
-  ctx.globalAlpha = 0.85;
-  ctx.textAlign = 'center';
-  ctx.fillText(text.length > 26 ? text.slice(0, 25) + '…' : text, x, y);
-  ctx.textAlign = 'left';
-  ctx.globalAlpha = 1;
+const LABEL_FONT = '10px "IBM Plex Mono", monospace';
+const shortName = (text) => text.length > 26 ? text.slice(0, 25) + '…' : text;
+
+/** Half the screen box a hull fills, turned to `angle`: [across, up and down] in px. */
+function hullBox(hull, angle, sc) {
+  const c = Math.abs(Math.cos(angle)), s = Math.abs(Math.sin(angle));
+  return [(c * hull.L + s * hull.W) / 2 * sc, (s * hull.L + c * hull.W) / 2 * sc];
 }
 
 /**

@@ -76,8 +76,10 @@ export function renderSelection(force = false) {
     setText($('#selection-title'), 'SELECTION');
     setHTML(box, '<p class="info-line info-dim">Nothing selected. Click something on the display, or a crew member or a machine on a room camera.</p>');
   }
-  // (with something picked on the display and nobody aboard, the display's pick has the panel to itself)
-  if (wrap) wrap.style.display = ui.selection.crew == null && !ui.selection.tile && ui.nav.target ? 'none' : '';
+  // (with something picked on the display and nobody aboard, the display's pick has the panel to itself,
+  // when the display has something to say about it)
+  const navCard = ['#map-selection', '#scanner-detail'].some(id => { const el = $(id); return el && el.style.display !== 'none' && el.innerHTML; });
+  if (wrap) wrap.style.display = ui.selection.crew == null && !ui.selection.tile && ui.nav.target && navCard ? 'none' : '';
 }
 
 // ---- CREW ----

@@ -1,7 +1,9 @@
 // ============================================================
-// LONGHAUL — The console's top rail and SHIP panel
-// The rail: the clock, time warp, the nav status, the annunciators
-// (master caution and warning, battle stations, suits), the flag chip.
+// LONGHAUL — The console's top rail, its flight band's status, the SHIP panel
+// The rail: the ship, the flag chip and whose space this is, the clock,
+// time warp, the annunciators (a hostile or a torpedo inbound, master
+// caution and warning, battle stations, suits). The flight band (over the
+// display): the nav status chip and traffic control's chip.
 // The SHIP panel: drive, attitude, the reference velocity, hull, mass,
 // cargo, the systems' health, stores.
 // ============================================================
@@ -166,7 +168,9 @@ function updateTcChip(state) {
   const holdingThere = state.flight.hold?.kind === 'slot' && state.flight.hold.id === st.id;
   const toSlot = cl.hold && !holdingThere && !state.autopilot && !state.dock;
   const needHail = !leaving && !holdingThere && (tc.zone !== 'docked' ? !cl.dock && !cl.hold : !cl.depart);
-  const html = `<span class="tc-zone">${st.name.toUpperCase()} · ${ZONE_LABEL[tc.zone] || ''}</span><span class="${status[0]}">${status[1]}</span>${owed ? `<span class="tc-warn">${owed.toLocaleString()} MCR OWED</span>` : ''}${cl.dock && !state.dock ? `<button data-dock="${st.id}" title="The docking computer takes us down to our berth">DOCK ${esc(cl.dock.berth)}</button>` : ''}${toSlot ? `<button data-slot="${esc(cl.hold.slot)}" data-station="${st.id}" title="Plot a route into our holding slot">TO SLOT ${esc(cl.hold.slot)}</button>` : ''}${needHail ? `<button data-hail="${st.id}">HAIL</button>` : ''}`;
+  // (docked or docking there, the nav chip beside it names the station: this is just its traffic control)
+  const ours = state.dock?.target.id === st.id;
+  const html = `<span class="tc-zone">${ours ? 'TRAFFIC' : `${st.name.toUpperCase()} · ${ZONE_LABEL[tc.zone] || ''}`}</span><span class="${status[0]}">${status[1]}</span>${owed ? `<span class="tc-warn">${owed.toLocaleString()} MCR OWED</span>` : ''}${cl.dock && !state.dock ? `<button data-dock="${st.id}" title="The docking computer takes us down to our berth">DOCK ${esc(cl.dock.berth)}</button>` : ''}${toSlot ? `<button data-slot="${esc(cl.hold.slot)}" data-station="${st.id}" title="Plot a route into our holding slot">TO SLOT ${esc(cl.hold.slot)}</button>` : ''}${needHail ? `<button data-hail="${st.id}">HAIL</button>` : ''}`;
   setHTML(el.tc, html);
   show(el.tc, true, 'flex');
 }
@@ -271,16 +275,17 @@ function updateTactical(state) {
     const ctl = controlAt(p.x, p.y, state.clock.minute);
     const zone = zonesAt(state, p)[0];
     setText(el.space, zone ? `${spaceLabel(ctl)} · ${ZONE_KINDS[zone.kind].label}` : spaceLabel(ctl));
-    el.space.className = `hud-space-chip ${zone ? 'space-hot' : ctl.lawless ? 'space-lawless' : ctl.contested ? 'space-contested' : ''}`;
+    el.space.className = `rail-space ${zone ? 'space-hot' : ctl.lawless ? 'space-lawless' : ctl.contested ? 'space-contested' : ''}`;
   }
   const th = threatSummary(state);
   const hostiles = hostilesOfPlayer(state).length;
   const show_ = !!th || hostiles > 0;
   show(el.threat, show_);
   if (!show_) return;
-  setText(el.threat, th
-    ? `⚠ ${th.count} ${th.nuke ? 'NUCLEAR ' : ''}INBOUND · ${isFinite(th.eta) ? formatDuration(th.eta / 60) : '—'}`
-    : `⚠ ${hostiles} HOSTILE${hostiles > 1 ? 'S' : ''}`);
+  // (an annunciator on the rail: what, over how soon or how many)
+  setHTML(el.threat, th
+    ? `<span class="ann-label">${th.count} ${th.nuke ? 'NUKE' : 'TORP'}${th.count > 1 ? 'S' : ''} INBOUND<br>${isFinite(th.eta) ? `${formatDuration(th.eta / 60)} OUT` : 'CLOSING'}</span>`
+    : `<span class="ann-label">${hostiles} HOSTILE<br>CONTACT${hostiles > 1 ? 'S' : ''}</span>`);
   toggleClass(el.threat, 'urgent', !!th && th.eta < 30 * 60);
 }
 
@@ -303,14 +308,14 @@ function updateSystemsStrip(state) {
 // ---- RESOURCES ----
 
 const RES = [
-  { key: 'fuel', name: 'Fuel', icon: iconFuel, bar: 'bar-fuel', fmt: (r) => `${fmtNum(r.current)} / ${fmtNum(r.max)} kg` },
+  { key: 'fuel', name: 'Fuel', icon: iconFuel, bar: 'bar-fuel', fmt: (r) => `${fmtNum(r.current)} kg` },
   // (O2, N2: the panel's pixel font has no subscript ₂)
   { key: 'o2Tank', name: 'O2', icon: iconOxygen, bar: 'bar-oxygen', fmt: (r, s) => `${fmtNum(r.current)} kg · ${hours(s.lifeSupport.oxygenHours)}` },
-  { key: 'n2Tank', name: 'N2', icon: iconN2, bar: 'bar-n2', fmt: (r) => `${fmtNum(r.current)} / ${fmtNum(r.max)} kg` },
+  { key: 'n2Tank', name: 'N2', icon: iconN2, bar: 'bar-n2', fmt: (r) => `${fmtNum(r.current)} kg` },
   { key: 'water', name: 'Water', icon: iconWater, bar: 'bar-water', fmt: (r, s) => `${fmtNum(r.current)} L · ${days(r.current, s, WATER_GROSS * (1 - waterRecovery(s)))}` },
-  { key: 'food', name: 'Food', icon: iconFood, bar: 'bar-food', fmt: (r, s) => `${fmtNum(r.current)} rations · ${days(r.current, s, 0.001)}` },
+  { key: 'food', name: 'Rations', icon: iconFood, bar: 'bar-food', fmt: (r, s) => `${fmtNum(r.current)} · ${days(r.current, s, 0.001)}` },
   { key: 'power', name: 'Power', icon: iconPower, bar: 'bar-power', fmt: (r) => `${Math.round(r.current)}%` },
-  { key: 'medSupplies', name: 'Medical', icon: iconMedical, bar: 'bar-medical', fmt: (r) => `${r.current.toFixed(1)} / ${r.max}` },
+  { key: 'medSupplies', name: 'Medical', icon: iconMedical, bar: 'bar-medical', fmt: (r) => r.current.toFixed(1) },
   { key: 'parts', name: 'Spare parts', icon: iconParts, bar: 'bar-parts', fmt: (r, s) => `${r.current.toFixed(1)} · scrap ${s.resources.scrap.current.toFixed(1)}`,
     level: (r) => r.current < 2 ? 'critical' : r.current < 5 ? 'warning' : 'ok' },
   { key: 'pdcRounds', name: 'PDC rounds', icon: iconParts, bar: 'bar-ammo', fmt: (r, s) => `${fmtNum(r.current)} · torps ${s.magazine.he} HE ${s.magazine.nuke} NUKE` },
@@ -322,10 +327,12 @@ function hours(h) { return !isFinite(h) ? '—' : h > 72 ? `${Math.round(h / 24)
 function days(amount, s, perMin) {
   const mouths = s.ship.crew.filter(m => !m.dead).length + s.passengers.reduce((a, p) => a + p.count, 0);
   if (!mouths || perMin <= 0) return '—';
-  return formatDuration(amount / (mouths * perMin));
+  const min = amount / (mouths * perMin);
+  return min > 30 * 1440 ? `${Math.round(min / 1440)}d` : formatDuration(min);     // (a month out, hours don't matter)
 }
 
 const resEls = {};
+const WIDE = new Set(['parts', 'pdcRounds']);     // (their lines say two things: a whole row in the panel)
 const lastLevel = {};
 
 function initResources() {
@@ -333,7 +340,7 @@ function initResources() {
   list.innerHTML = '';
   const row = (id, name, iconFn, bar) => {
     const item = document.createElement('div');
-    item.className = 'resource-item';
+    item.className = `resource-item${WIDE.has(id) ? ' resource-wide' : ''}`;
     item.innerHTML = `<div class="resource-icon"></div><div class="resource-info"><div class="resource-name">${name}</div><div class="resource-value"></div>${bar ? `<div class="resource-bar"><div class="resource-bar-fill ${bar}"></div></div>` : ''}</div>`;
     const icon = item.querySelector('.resource-icon');
     if (iconFn) icon.appendChild(iconFn()); else icon.innerHTML = '<span class="res-text-icon">MCR</span>';

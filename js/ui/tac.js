@@ -168,12 +168,6 @@ export class TacView {
     ctx.stroke();
     ctx.strokeStyle = 'rgba(42,56,70,0.7)';
     for (let k = 1; k <= 3; k++) { ctx.beginPath(); ctx.arc(cx, cy, rangeM * k / 3 * px, 0, Math.PI * 2); ctx.stroke(); }
-    if (big) {
-      ctx.fillStyle = 'rgba(94,109,124,0.95)';
-      ctx.font = '10px "IBM Plex Mono", monospace';
-      ctx.textAlign = 'left';
-      for (let k = 1; k <= 3; k++) ctx.fillText(`${(rangeM * k / 3 / 1000).toFixed(rangeM < 5000 ? 2 : 1)} km`, cx + rangeM * k / 3 * px + 3, cy - 3);
-    }
 
     // World → screen: rotate so the nose points up
     const rot = Math.PI / 2 - f.facing;
@@ -197,7 +191,7 @@ export class TacView {
     // already drawn is left off: a crowded port reads as dots, not a smear of names)
     const pick = opts.highlight ?? opts.selected;
     list.sort((a, b) => (b.e.id === pick) - (a.e.id === pick) || Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y));
-    const placed = [];
+    const placed = big ? [{ x: 0, y: H - 26, w: W, h: 26 }] : [];      // (the readouts at the display's foot)
     const hits = this._hits;
     hits.length = 0;
     for (const { e, x, y } of list) {
@@ -312,10 +306,28 @@ export class TacView {
         ctx.lineTo(ex + Math.cos(ang - 2.4) * 6, ey + Math.sin(ang - 2.4) * 6);
         ctx.fill();
         if (big) {
+          // (its name on the inner side of the arrow, never on it)
           ctx.font = '10px "IBM Plex Mono", monospace';
-          ctx.textAlign = 'center';
-          ctx.fillText(r.name, ex - Math.cos(ang) * 30, ey - Math.sin(ang) * 14);
+          const w = ctx.measureText(r.name).width, side = Math.abs(Math.cos(ang)) > Math.abs(Math.sin(ang));
+          const tx = side ? (Math.cos(ang) > 0 ? ex - 12 - w : ex + 12) : ex - w / 2;
+          const ty = side ? ey + 4 : ey - Math.sign(Math.sin(ang)) * 16 + 4;
+          ctx.textAlign = 'left';
+          ctx.fillText(r.name, tx, ty);
+          placed.push({ x: tx, y: ty - 10, w, h: 13 });
         }
+      }
+    }
+
+    // The rings' ranges last, where no name already is, and inside the display
+    if (big) {
+      ctx.fillStyle = 'rgba(94,109,124,0.95)';
+      ctx.font = '10px "IBM Plex Mono", monospace';
+      ctx.textAlign = 'left';
+      for (let k = 1; k <= 3; k++) {
+        const text = `${(rangeM * k / 3 / 1000).toFixed(rangeM < 5000 ? 2 : 1)} km`;
+        const r = { x: cx + rangeM * k / 3 * px + 3, y: cy - 13, w: ctx.measureText(text).width, h: 12 };
+        if (r.x + r.w > W - 4 || placed.some(p => r.x < p.x + p.w && p.x < r.x + r.w && r.y < p.y + p.h && p.y < r.y + r.h)) continue;
+        ctx.fillText(text, r.x, cy - 3);
       }
     }
 

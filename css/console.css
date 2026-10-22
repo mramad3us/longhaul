@@ -137,8 +137,6 @@ input.form-input:focus, .solar-search:focus, .library-search:focus { outline: no
   background: var(--c-bg); border-bottom: 1px solid var(--c-line); position: relative; z-index: 20; }
 .rail-id { display: flex; align-items: center; gap: 8px; min-width: 120px; flex: 0 1 auto; }
 .rail-ship { font-weight: 600; font-size: 15px; letter-spacing: 0.04em; color: var(--c-data); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; flex: 0 1 auto; min-width: 60px; }
-.rail-space { font-size: 11px; letter-spacing: 0.08em; color: var(--c-text3); text-transform: uppercase; white-space: nowrap; }
-.rail-space:empty { display: none; }
 .rail-time { display: flex; align-items: center; gap: 8px; padding-left: 12px; border-left: 1px solid var(--c-line); }
 .rail-date, .rail-clock { font-family: var(--f-data); font-size: 13px; color: var(--c-text2); }
 .rail-clock { color: var(--c-data); font-weight: 500; }
@@ -150,15 +148,14 @@ input.form-input:focus, .solar-search:focus, .library-search:focus { outline: no
 .rail-warp .speed-btn.active { background: rgba(95, 211, 141, 0.14); color: var(--c-own); }
 .rail-warp .speed-btn.paused { background: rgba(240, 169, 58, 0.16); color: var(--c-caution); }
 .rail-warp .speed-btn.speed-restricted { opacity: 0.35; }
-.rail-perf { font-family: var(--f-data); font-size: 11px; color: var(--c-text3); }
-.rail-nav { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; }
-.rail .hud-nav-chip { font-family: var(--f-data); font-size: 12px; letter-spacing: 0.02em; padding: 3px 10px; border: 1px solid var(--c-line2); color: var(--c-text2); background: var(--c-raise);
-  border-radius: 2px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: none; box-shadow: none; }
-.rail .hud-nav-chip.chip-ok { color: var(--c-own); border-color: rgba(95, 211, 141, 0.4); }
-.rail .hud-nav-chip.chip-nav { color: var(--c-route); border-color: rgba(212, 107, 224, 0.5); }
-.rail .hud-nav-chip.chip-warn { color: var(--c-caution); border-color: rgba(240, 169, 58, 0.55); }
-.rail .hud-nav-chip.chip-dim { color: var(--c-text3); }
-.hud-threat-chip { font-family: var(--f-data); font-size: 12px; padding: 3px 10px; border: 1px solid var(--c-warn); color: #FFD6D5; background: rgba(239, 83, 80, 0.14); border-radius: 2px; }
+.rail-perf { font-family: var(--f-data); font-size: 11px; color: var(--c-text3); white-space: nowrap; }
+.rail-fill { flex: 1 1 0; min-width: 0; }
+/* whose space we are in (and a hot zone's kind) */
+.rail-space { font-family: var(--f-data); font-size: 11px; letter-spacing: 0.06em; color: var(--c-text3); text-transform: uppercase; white-space: nowrap; }
+.rail-space:empty { display: none; }
+.rail-space.space-contested { color: var(--c-caution); }
+.rail-space.space-lawless { color: #C77DB8; }
+.rail-space.space-hot { color: #FF8C7A; }
 .hud-flag-chip { font-family: var(--f-ui); font-size: 11px; font-weight: 500; letter-spacing: 0.08em; padding: 2px 7px; border-radius: 2px; }
 
 /* Annunciators: off, lit (caution), lit (warning) */
@@ -172,6 +169,8 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .ann.active .ann-state { color: #FFD6D5; }
 .suits-btn.active, #suits-toggle.active { background: rgba(240, 169, 58, 0.16); border-color: var(--c-caution); color: #FFE2B5; }
 #suits-toggle.active .ann-state { color: #FFE2B5; }
+.ann-threat { background: rgba(239, 83, 80, 0.16); border-color: var(--c-warn); color: #FFD6D5; animation: ann-lit 0.5s ease-out 2; }
+.ann-threat.urgent { background: rgba(239, 83, 80, 0.34); color: #fff; }
 .ann-master .ann-warning-label { display: none; }
 .ann-master.maneuver { background: rgba(240, 169, 58, 0.18); border-color: var(--c-caution); color: #FFE2B5; animation: ann-lit 0.5s ease-out 2; }
 .ann-master.critical { background: rgba(239, 83, 80, 0.2); border-color: var(--c-warn); color: #FFD6D5; animation: ann-lit 0.5s ease-out 2; }
@@ -191,7 +190,6 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .rail-icon { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: none; border: 0; color: var(--c-text3); border-radius: 2px; }
 .rail-icon:hover { color: var(--c-text); background: var(--c-raise); }
 .rail-icon svg { width: 16px; height: 16px; }
-@media (max-width: 1700px) { .rail-space { display: none; } }
 @media (max-width: 1500px) { .rail-date { display: none; } }
 @media (max-width: 1300px) { .rail-btn { padding: 0 5px; font-size: 10px; } .ann { min-width: 76px; } }
 
@@ -203,6 +201,8 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .splitter { flex: 0 0 5px; margin: 0 -2px; z-index: 5; position: relative; }
 .splitter:hover, .wm-resizing-x .splitter { background: linear-gradient(90deg, transparent 2px, var(--c-sel) 2px, var(--c-sel) 3px, transparent 3px); }
 .panel { display: flex; flex-direction: column; min-height: 28px; flex: 1 1 0; border-bottom: 1px solid var(--c-line); overflow: hidden; transition: flex-grow var(--t-in); }
+.panel.panel-fit { flex: 0 1 auto; max-height: 72%; }
+.panel.panel-fit > .panel-body { flex: 0 1 auto; }
 .panel.collapsed { flex: 0 0 28px !important; }
 .panel.floated { flex: 0 0 28px !important; opacity: 0.6; }
 .panel.floated .panel-head::after { content: 'FLOATING'; font-size: 10px; color: var(--c-text3); letter-spacing: 0.1em; margin-left: auto; padding-right: 8px; }
@@ -220,8 +220,33 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .info-line { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; line-height: 1.85; margin: 0; }
 .info-key { color: var(--c-text3); font-size: 12px; text-transform: none; letter-spacing: 0.02em; font-family: var(--f-ui); }
 .info-val { font-family: var(--f-data); font-size: 12px; color: var(--c-text); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.info-line > .info-key { flex: none; }
+/* (the velocity reference takes the row, not the old cutaway's 120px: "Vesta Depot approach gate · 4.883 AU" fits a docked panel) */
+.info-val-ref { max-width: none; }
 .info-dim { color: var(--c-text3); font-size: 12px; line-height: 1.5; display: block; }
 .ship-readouts { padding-bottom: 2px; }
+/* SYSTEMS: three to a row, a name and its health (the old pixel pips stood two to a row) */
+.panel-body .systems-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; margin: 0 0 8px; }
+/* (the left edge is the status colour: ui.css) */
+.panel-body .sys-pip { padding: 3px 5px 4px; background: var(--c-raise); border-top: 1px solid var(--c-line); border-right: 1px solid var(--c-line); border-bottom: 1px solid var(--c-line); border-radius: 0; gap: 3px; min-width: 0; }
+.panel-body .sys-pip:hover { background: var(--c-raise2); }
+.panel-body .sys-pip-name { font-family: var(--f-ui); font-size: 10.5px; font-weight: 500; letter-spacing: 0.06em; color: var(--c-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-body .sys-pip.sys-fail .sys-pip-name { animation: none; color: #FF9E9B; }
+.panel-body .info-line { line-height: 1.7; }
+/* STORES: two columns, a line each and its level under it (the old list stood a hand high per store) */
+.panel-body #resource-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 14px; }
+.panel-body .resource-wide { grid-column: 1 / -1; }
+.panel-body .resource-item { display: block; padding: 0; margin: 0; background: none; border: 0; overflow: visible; animation: none; }
+.panel-body .resource-item::after { display: none; }
+.panel-body .resource-item:hover { background: none; border: 0; }
+.panel-body .resource-icon { display: none; }
+.panel-body .resource-info { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; column-gap: 6px; }
+.panel-body .resource-name { font-family: var(--f-ui); font-size: 11px; color: var(--c-text3); letter-spacing: 0.04em; text-transform: none; text-shadow: none; }
+.panel-body .resource-value { font-family: var(--f-data); font-size: 11px; color: var(--c-text); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%; }
+.panel-body .resource-bar { flex: 0 0 100%; height: 3px; margin-top: 3px; border: 0; background: var(--c-line); }
+.panel-body .resource-bar-fill { box-shadow: none; }
+.panel-body .resource-item.warning .resource-name, .panel-body .resource-item.warning .resource-value { color: var(--c-caution); }
+.panel-body .resource-item.critical .resource-name, .panel-body .resource-item.critical .resource-value { color: #FF9E9B; text-shadow: none; }
 
 /* Main view */
 .mainview { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; position: relative; background: var(--c-void); }
@@ -239,6 +264,25 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .mv-controls .solar-zoom-btn, .mv-controls .scanner-range-btn, .mv-controls .tac-zoom-btn-modal, .mv-controls .mv-btn { min-height: 24px; padding: 1px 8px; font-size: 11px; }
 .mv-sep { width: 1px; height: 18px; background: var(--c-line); margin: 0 4px; }
 .solar-search-box { position: relative; margin-left: 6px; }
+/* A group of the bar's buttons: in a row while the bar has room, folded into a menu when it hasn't */
+.mv-group { display: contents; }
+.mv-group-btn { display: none !important; }
+.mv-group-items { display: contents; }
+.mv-bar { container-type: inline-size; container-name: mvbar; }
+@container mvbar (max-width: 1140px) {
+  .mv-group { display: block; position: relative; }
+  .mv-group-btn { display: inline-flex !important; }
+  .mv-group-items { display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; flex-direction: column; align-items: stretch; gap: 3px; padding: 5px;
+    background: var(--c-raise); border: 1px solid var(--c-line2); border-radius: 2px; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5); min-width: 120px; }
+  .mv-group.open .mv-group-items { display: flex; }
+  .mv-group.open .mv-group-btn { color: var(--c-text); border-color: var(--c-sel); }
+  .mv-group-items .solar-zoom-btn { display: block !important; text-align: left; }
+  .mv-controls .mv-sep { display: none; }
+}
+@container mvbar (max-width: 760px) {
+  .mv-tabs .mv-tab { padding: 0 8px; font-size: 11px; }
+  .mv-controls .solar-search { width: 130px; }
+}
 .solar-search { width: 200px; height: 24px; padding: 0 8px; font-size: 12px; }
 .mv-screens { flex: 1 1 auto; position: relative; min-height: 0; overflow: hidden; }
 .mv-screen { position: absolute; inset: 0; }
@@ -250,13 +294,49 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .mv-exterior .dock-hud, .win-body .dock-hud { position: absolute; right: 12px; top: 12px; width: 360px; z-index: 4; }
 .win-body .stage-exterior { position: absolute; inset: 0; }
 
-/* What the ship is doing, over the top of the display */
-.flight-strip { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 6; pointer-events: none; max-width: min(760px, 90%); }
-.flight-strip > * { pointer-events: auto; }
-.flight-strip .tc-chip, .flight-strip .route-mini, .flight-strip .nav-prompt, .flight-strip .hold-indicator {
-  position: static; transform: none; background: rgba(10, 14, 19, 0.92); border: 1px solid var(--c-line2); border-radius: 2px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); backdrop-filter: blur(3px); }
-.flight-strip .route-mini { border-color: rgba(212, 107, 224, 0.5); }
-.flight-strip .nav-prompt { border-color: var(--c-caution); }
+/* ---- THE FLIGHT STATUS BAND ----
+   One line between the display's tabs and the display, like the mode
+   annunciators over a flight display: the nav status (hud.js), then what
+   goes with it (the route's progress, the hold's buttons, the
+   secure-for-burn prompt), traffic control, and at the far end any
+   threat and whose space this is. It is a line of the layout, not a
+   layer, so it never covers the display; when it can't hold everything
+   it takes a second line. */
+.fband { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-height: 32px; padding: 3px 8px;
+  background: var(--c-bg); border-bottom: 1px solid var(--c-line); position: relative; z-index: 6; }
+.fband > * { flex: 0 1 auto; min-width: 0; }
+.fband-fill { flex: 1 1 0; }
+.fband .hud-nav-chip, .fband .route-mini, .fband .nav-prompt, .fband .tc-chip, .fband .hud-threat-chip {
+  position: static; inset: auto; transform: none; margin: 0; box-shadow: none; backdrop-filter: none; animation: none; text-shadow: none;
+  align-items: center; gap: 8px; min-height: 24px; height: auto; padding: 0 3px 0 8px; max-width: 100%; min-width: 0;
+  background: var(--c-raise); border: 1px solid var(--c-line2); border-radius: 2px; white-space: nowrap; font-size: 12px; }
+.fband button { height: 20px; min-height: 20px; padding: 0 7px; font-family: var(--f-ui); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; border-radius: 2px; }
+.hud-nav-chip { display: block; line-height: 22px; font-family: var(--f-data); letter-spacing: 0.02em; color: var(--c-text2); padding-right: 8px !important; overflow: hidden; text-overflow: ellipsis; }
+.hud-nav-chip.chip-ok { color: var(--c-own); border-color: rgba(95, 211, 141, 0.4) !important; }
+.hud-nav-chip.chip-nav { color: var(--c-route); border-color: rgba(212, 107, 224, 0.5) !important; }
+.hud-nav-chip.chip-warn { color: var(--c-caution); border-color: rgba(240, 169, 58, 0.55) !important; }
+.hud-nav-chip.chip-danger { color: #FFC2C0; border-color: var(--c-warn) !important; background: rgba(239, 83, 80, 0.12) !important; }
+.hud-nav-chip.chip-dim { color: var(--c-text3); }
+/* the route's progress beside the nav chip (its phase and destination are in the chip) */
+.fband .route-mini { border-color: rgba(212, 107, 224, 0.45); flex-direction: row; }
+.fband .route-status-summary { display: flex; align-items: center; gap: 8px; padding: 0; margin: 0; border: 0; background: none; min-width: 0; }
+.fband .route-status-progress { width: 64px; flex: 0 0 64px; height: 3px; margin: 0; }
+.fband .route-status-dest { font-family: var(--f-data); font-size: 12px; color: var(--c-route); white-space: nowrap; }
+.fband .route-status-eta { font-family: var(--f-data); font-size: 11px; color: var(--c-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* the hold's buttons */
+.fband .hold-indicator { position: static; transform: none; min-width: 0; padding: 0; margin: 0; gap: 4px; background: none; border: 0; box-shadow: none; }
+/* secure for burn: the call to make, in a line */
+.fband .nav-prompt { flex-direction: row; flex-wrap: wrap; row-gap: 2px; border-color: var(--c-caution); background: rgba(240, 169, 58, 0.08); white-space: normal; padding: 1px 3px 1px 8px; }
+.fband .nav-prompt .mp-header { font-family: var(--f-ui); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; color: var(--c-caution); white-space: nowrap; }
+.fband .nav-prompt .mp-header.mp-danger { color: #FF9E9B; animation: none; }
+.fband .nav-prompt .mp-crew-row { display: inline-flex; gap: 2px; margin: 0; }
+.fband .nav-prompt .mp-dot { width: 13px; height: 13px; font-size: 9px; line-height: 11px; }
+.fband .nav-prompt .mp-status { font-family: var(--f-ui); font-size: 11px; letter-spacing: 0.04em; white-space: nowrap; margin: 0; }
+.fband .nav-prompt .mp-actions { display: inline-flex; gap: 4px; }
+/* traffic control */
+.fband .tc-chip { font-family: var(--f-ui); letter-spacing: 0.04em; gap: 10px; }
+.fband .tc-chip > span { overflow: visible; max-width: none; }
+.fband .tc-chip button { background: rgba(62, 199, 230, 0.1); color: var(--c-text); border: 1px solid rgba(62, 199, 230, 0.6); }
 
 /* The card beside what is selected on the display */
 .map-card { position: absolute; z-index: 7; width: 248px; background: rgba(10, 14, 19, 0.95); border: 1px solid var(--c-line2); border-top: 2px solid var(--c-sel);
@@ -298,16 +378,22 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .log-drawer .log-ok .log-entry-msg { color: #A9EFC4; }
 .log-drawer .log-date { font-size: 11px; color: var(--c-text3); letter-spacing: 0.1em; margin: 8px 0 3px; border-bottom: 1px solid var(--c-line); }
 
-/* Toasts: messages over the top right of the display */
-.mv-screens .toast-container { position: absolute; top: 10px; right: 10px; bottom: auto; left: auto; transform: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; z-index: 30; pointer-events: none; }
-.toast { font-family: var(--f-ui); font-size: 12px; font-weight: 500; letter-spacing: 0.04em; text-transform: none; padding: 7px 12px 7px 10px; min-width: 0; max-width: 360px;
-  background: rgba(10, 14, 19, 0.96); color: var(--c-text); border: 1px solid var(--c-line2); border-left: 3px solid var(--c-sel); border-radius: 2px; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
-  animation: toast-in var(--t-in); text-shadow: none; }
-.toast.ok, .toast-ok { border-left-color: var(--c-own); }
-.toast.warn, .toast-warn { border-left-color: var(--c-caution); }
-.toast.danger, .toast-danger { border-left-color: var(--c-warn); }
-.toast.nav, .toast-nav { border-left-color: var(--c-route); }
-@keyframes toast-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+/* Messages (toast.js): the band's free end, the latest two, right-aligned; they take the room
+   that is left on the band's line and are cut short rather than push it onto another */
+.fband-msgs { position: static; inset: auto; transform: none; flex: 1 1 0; min-width: 0; display: flex; flex-direction: row; justify-content: flex-end; align-items: center; gap: 6px; overflow: hidden; pointer-events: auto; z-index: auto;
+  container-type: inline-size; height: 24px; }
+/* (a slot too narrow to say anything says nothing: the log has it) */
+@container (max-width: 130px) { .fband-msgs .toast { display: none; } }
+@container (max-width: 340px) { .fband-msgs .toast:not(:last-child) { display: none; } }
+.fband-msgs .toast { flex: 0 1 auto; min-width: 0; max-width: 100%; height: 24px; line-height: 22px; padding: 0 9px 0 8px; font-family: var(--f-ui); font-size: 12px; font-weight: 500; letter-spacing: 0.03em;
+  text-transform: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--c-raise); color: var(--c-text); border: 1px solid var(--c-line2); border-left: 3px solid var(--c-sel);
+  border-radius: 2px; box-shadow: none; text-shadow: none; animation: toast-in var(--t-in), toast-out 0.3s 4.2s ease-in forwards; position: static; transform: none; }
+.fband-msgs .toast-ok { border-left-color: var(--c-own); }
+.fband-msgs .toast-warn { border-left-color: var(--c-caution); color: #FFE2B5; }
+.fband-msgs .toast-danger { border-left-color: var(--c-warn); color: #FFD6D5; background: rgba(239, 83, 80, 0.1); }
+.fband-msgs .toast-nav { border-left-color: var(--c-route); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { to { opacity: 0; } }
 
 /* ---- WINDOWS ---- */
 .wm-layer { position: absolute; left: 0; right: 0; top: var(--rail-h); bottom: var(--ai-h); pointer-events: none; z-index: 40; }
@@ -353,6 +439,14 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 }
 .panel-body .route-panel { display: flex; flex-direction: column; overflow: visible; }
 .panel-body .route-status-bar { border-top: 1px solid var(--c-line); padding-top: 6px; }
+/* the route under way, stacked to the dock's width: where to and the buttons, the phase, progress, the numbers */
+.panel-body .route-status-summary, .win-body .route-status-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 5px 4px; padding: 0; align-items: center; cursor: default; }
+.panel-body .route-status-summary:hover, .win-body .route-status-summary:hover { background: none; }
+.panel-body .route-status-dest, .win-body .route-status-dest { grid-column: 1; grid-row: 1; white-space: normal; font-family: var(--f-ui); font-size: 14px; color: var(--c-route); }
+.panel-body .route-status-summary > button, .win-body .route-status-summary > button { grid-row: 1; }
+.panel-body .route-status-phase, .win-body .route-status-phase { grid-column: 1 / -1; grid-row: 2; white-space: normal; font-size: 12px; }
+.panel-body .route-status-progress, .win-body .route-status-progress { grid-column: 1 / -1; grid-row: 3; height: 4px; }
+.panel-body .route-status-eta, .win-body .route-status-eta { grid-column: 1 / -1; grid-row: 4; white-space: normal; font-family: var(--f-data); font-size: 12px; }
 .ms-name, .scanner-detail-header { font-family: var(--f-ui); font-weight: 600; font-size: 16px; color: var(--c-data); letter-spacing: 0.02em; }
 .ms-kind { font-family: var(--f-ui); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c-text3); }
 .ms-stats { font-family: var(--f-data); font-size: 12px; color: var(--c-text3); gap: 12px; }
@@ -364,12 +458,7 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .ctx-selection { margin-top: 4px; }
 .route-idle { margin-top: 4px; }
 
-/* The flight strip's chips: never cut what traffic control says short */
-.flight-strip .tc-chip { font-family: var(--f-ui); font-size: 12px; letter-spacing: 0.04em; padding: 5px 6px 5px 10px; gap: 10px; max-width: none; }
-.flight-strip .tc-chip > span { overflow: visible; max-width: none; }
-.flight-strip .tc-chip button { font-family: var(--f-ui); font-size: 11px; font-weight: 600; padding: 3px 8px; letter-spacing: 0.06em; background: rgba(62, 199, 230, 0.1); color: var(--c-text); border: 1px solid rgba(62, 199, 230, 0.6); border-radius: 2px; }
-
-/* The docking display, bottom right of the exterior camera (the flight strip has the top) */
+/* The docking display, bottom right of the exterior camera */
 .mv-exterior .dock-hud, .win-body .dock-hud { top: auto; bottom: 14px; right: 14px; width: 340px; background: rgba(10, 14, 19, 0.94); border: 1px solid var(--c-line2); border-radius: 2px; box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5); }
 .win-body .dock-hud { width: 300px; transform-origin: 100% 100%; }
 [data-nav-screen="exterior"]:not([style*="none"]) ~ .mv-info { display: none; }
@@ -430,36 +519,20 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .fc-btn[data-fc="fire"]:not([disabled]) { color: #fff; background: rgba(239, 83, 80, 0.32); border-color: var(--c-warn); }
 .fc-tube, .fc-law { font-family: var(--f-data); font-size: 11px; border-color: var(--c-line2); border-radius: 2px; }
 
-/* ---- NARROWER SCREENS: the rail and the display bar make room ---- */
+/* ---- NARROWER SCREENS: the rail makes room (the display bar folds by its own width: .mv-group) ---- */
 .lbl-short { display: none; }
-.rail-nav { min-width: 180px; }
-.mv-bar { overflow: hidden; }
-.mv-controls { flex: 0 1 auto; overflow: hidden; }
 @media (max-width: 1600px) {
   .rail-btn .lbl-long { display: none; }
   .rail-btn .lbl-short { display: inline; }
-  .solar-search { width: 150px; }
 }
 @media (max-width: 1450px) {
+  .rail-space { display: none; }
   .rail { gap: 10px; }
   .ann { min-width: 62px; padding: 0 5px; }
   .ann .ann-label { font-size: 9px; letter-spacing: 0.06em; }
   .rail-warp .speed-btn { min-width: 34px; }
-  .mv-tab { padding: 0 8px; font-size: 11px; }
-  .mv-controls .solar-zoom-btn, .mv-controls .scanner-range-btn { padding: 1px 6px; font-size: 10px; }
-  .solar-search { width: 120px; }
-  .mv-sep { display: none; }
 }
-@media (max-width: 1300px) {
-  [data-solar-view="inner"], [data-solar-view="belt"] { display: none; }
-}
-/* (when the display bar can't hold its controls, they go to a second row rather than out of reach) */
+/* (when the display bar still can't hold its controls, they go to a second row rather than out of reach) */
 .mv-bar { height: auto; min-height: 34px; flex: 0 0 auto; flex-wrap: wrap; row-gap: 0; overflow: visible; }
 .mv-tabs { height: 34px; }
-.mv-controls { flex-wrap: wrap; overflow: visible; min-height: 34px; row-gap: 4px; padding: 2px 0; }
-
-/* (on the weapons display the fire-control panel takes the right-hand 320 px: what floats over the
-   display keeps to the board) */
-.mv-screens[data-tab="combat"] > .flight-strip { left: calc((100% - 320px) / 2); max-width: calc(100% - 340px); }
-.mv-screens[data-tab="combat"] > .toast-container { right: 330px; }
-.mv-screens[data-tab="combat"] > .flight-strip { top: 42px; }
+.mv-controls { flex: 0 1 auto; flex-wrap: wrap; overflow: visible; min-height: 34px; row-gap: 4px; padding: 2px 0; }

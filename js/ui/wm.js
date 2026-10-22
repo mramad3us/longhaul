@@ -241,8 +241,8 @@ export function closeTop() {
 
 /**
  * A panel in a dock: { title, body (element), dock: 'left'|'right',
- * weight (share of the dock's height), collapsed, tools (html for the
- * header's right side), popOut (can float) }.
+ * weight (share of the dock's height) or fit (as tall as its content),
+ * collapsed, tools (html for the header's right side), popOut (can float) }.
  */
 export function createPanel(id, opts) {
   const dock = $(`#dock-${opts.dock}`);
@@ -262,7 +262,9 @@ export function createPanel(id, opts) {
   panels.set(id, p);
   const st = layout.panel?.[id];
   setCollapsed(id, st?.collapsed ?? !!opts.collapsed, false);
-  el.style.flexGrow = String(st?.weight ?? opts.weight ?? 1);
+  // (a `fit` panel is as tall as what it holds, up to most of the dock; the others share the rest by weight)
+  if (opts.fit) el.classList.add('panel-fit');
+  else el.style.flexGrow = String(st?.weight ?? opts.weight ?? 1);
   head.querySelector('.panel-toggle').addEventListener('click', () => setCollapsed(id, !el.classList.contains('collapsed')));
   head.addEventListener('click', (e) => { if (e.target.closest('[data-panel-act="pop"]')) popOut(id); });
   if (st?.floating) requestAnimationFrame(() => popOut(id));

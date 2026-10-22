@@ -170,6 +170,7 @@ export async function boot() {
   window.__longhaul = {
     get state() { return ui.state; }, get loop() { return ui.loop; }, ui, bus,
     step: (n = 1) => advance(ui.state, n),
+    start: (state) => startGame(state, false),      // play a game state built by hand (a scene for a test)
   };
   console.log(`[LONGHAUL] v${VERSION} ready`);
 }
