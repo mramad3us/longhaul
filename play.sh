@@ -11,7 +11,10 @@ lsof -ti:$PORT | xargs kill 2>/dev/null
 
 # Start server. No caching: the game is plain ES modules, and a browser that
 # keeps some old modules and fetches some new ones after an update fails to
-# load at all (an import of an export the cached file doesn't have).
+# load at all (an import of an export the cached file doesn't have). A deep
+# listen queue: a load asks for some eighty modules at once, and with the
+# standard library's queue of 5 the odd connection is reset (about one load
+# in thirty), a module never arrives and the game never starts.
 cd "$DIR"
 python3 -c '
 import sys
@@ -22,7 +25,9 @@ class NoCache(SimpleHTTPRequestHandler):
         super().end_headers()
     def log_message(self, *a):
         pass
-ThreadingHTTPServer(("", int(sys.argv[1])), NoCache).serve_forever()
+class Server(ThreadingHTTPServer):
+    request_queue_size = 128
+Server(("", int(sys.argv[1])), NoCache).serve_forever()
 ' "$PORT" &>/dev/null &
 SERVER_PID=$!
 
