@@ -7,7 +7,9 @@
 // as an amber ring, what is coming at us in red with its time to impact.
 // Names go through one pass (labels.js): the selection, the lock and the
 // trouble first, and none printed over another, so a crowded board reads
-// as dots with the names that matter.
+// as dots with the names that matter. The nav computer's marks (marks.js):
+// a contact running dark is a hollow dot, what our work points at has its
+// magenta diamond, a flag its pennant (never crowded off).
 // ============================================================
 
 import { AU_KM } from '../core/constants.js';
@@ -20,6 +22,7 @@ import { hostilesOfPlayer } from '../sim/agents.js';
 import { formatDuration } from '../core/clock.js';
 import { FitCanvas, fmtKm } from './dom.js';
 import { Labels } from './labels.js';
+import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
 
 const C = { void: '#05070A', line: '#1C2632', line2: '#2A3846', text: '#D8E1EA', text2: '#94A3B2', text3: '#5E6D7C', own: '#5FD38D', sel: '#3EC7E6', caution: '#F0A93A', warn: '#EF5350' };
 const UI = (px, w = 500) => `${w} ${px}px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif`;
@@ -87,6 +90,7 @@ export class ScannerView {
     const facing = state.flight.facing;
     const world = getWorld(state);
     const hostile = new Set(hostilesOfPlayer(state).map(e => e.id));
+    const fm = frameMarks(state);
     for (const c of s.contacts) {
       const frac = Math.min(1, c.dist / band.au);
       const rel = c.bearing - facing;                    // relative bearing (0 = nose, + = port)
@@ -123,9 +127,12 @@ export class ScannerView {
         ctx.strokeStyle = `rgba(239,83,80,${0.6 * (1 - ph)})`;
         ctx.beginPath(); ctx.arc(px, py, sz + ph * 16, 0, Math.PI * 2); ctx.stroke();
       }
+      const m = marksOf(fm, c.id, c.dark, c.wreck);
       ctx.fillStyle = color;
       if (c.station) ctx.fillRect(px - sz, py - sz, sz * 2, sz * 2);
-      else { ctx.beginPath(); ctx.arc(px, py, sz, 0, Math.PI * 2); ctx.fill(); }
+      else { ctx.beginPath(); ctx.arc(px, py, m.dark || m.wreck ? sz + 1 : sz, 0, Math.PI * 2); paintMark(ctx, color, m.dark || m.wreck, C.void); }
+      if (m.mission) drawMissionMark(ctx, px, py, sz + 7);
+      if (m.flag) drawFlagMark(ctx, px, py, sz + 3, m.flag, L);
       if (c.plume) { ctx.strokeStyle = color; ctx.globalAlpha = 0.45; ctx.beginPath(); ctx.arc(px, py, sz + 3, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
       if (s.selected === c.id) {
         const r = sz + 8, k = 4;
@@ -138,10 +145,12 @@ export class ScannerView {
         ctx.beginPath(); ctx.arc(px, py, sz + 11, 0, Math.PI * 2); ctx.stroke();
         ctx.setLineDash([]);
       }
-      const label = c.name || c.signature || 'Unknown';
-      if (frac < 0.9) {
-        const pri = s.selected === c.id || state.combat.target === c.id ? 9 : s.locked === c.id ? 8 : c.sos ? 7 : hostile.has(c.id) ? 6 : c.station ? 4 : 2;
-        L.add(label + (c.sos ? '  SOS' : ''), px, py, { off: sz + 5, font: UI(11), color, alpha: 0.85, pri });
+      // (unnamed: its drive's signature if it is burning, else what it is to us)
+      const label = c.name || c.signature || (m.dark ? 'DARK' : m.wreck ? 'WRECK' : 'Unknown');
+      if (frac < 0.9 || m.flag || m.mission) {
+        const pri = (s.selected === c.id || state.combat.target === c.id ? 9 : s.locked === c.id ? 8 : c.sos ? 7 : hostile.has(c.id) ? 6 : c.station ? 4 : 2) + markPri(m);
+        const bare = !c.name && !c.signature;
+        L.add(label + (c.sos ? '  SOS' : ''), px, py, { off: sz + 5, font: UI(11), color: bare && m.dark ? MARK_COL.dark : color, alpha: 0.85, pri, tags: labelTags(bare ? { mission: m.mission } : m) });
       }
       L.block(px - sz - 1, py - sz - 1, px + sz + 1, py + sz + 1);
       this._hits.push({ id: c.id, x: px, y: py });

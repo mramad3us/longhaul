@@ -3,8 +3,9 @@
    A working ship's displays in 2351: dark-adapted, calm, dense.
    Hairline frames, labels and units, numbers that line up, and colour
    that means something (avionics convention): green is us and nominal,
-   cyan is selectable and informative, magenta is the route, amber is
-   caution, red is warning. Nothing decorative: no scan lines, no glow
+   cyan is selectable and informative, magenta is the route (and what our
+   work points at), amber is caution (a ship running dark), red is
+   warning, yellow the captain's own flags. Nothing decorative: no scan lines, no glow
    for its own sake, no grain. The pixel face survives only in the
    pointers and a few tiny identifiers.
    Loaded last: it remaps the older stylesheets' tokens onto its own.
@@ -36,6 +37,7 @@
   --c-warn: #EF5350;
   --c-mil: #E07B4F;
   --c-data: #EDF2F7;
+  --c-flag: #FFE15C;
   /* type */
   --f-ui: 'IBM Plex Sans Condensed', 'Arial Narrow', 'Helvetica Neue', sans-serif;
   --f-data: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
@@ -356,6 +358,30 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .card-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; margin-bottom: 8px; font-family: var(--f-data); font-size: 12px; color: var(--c-text); }
 .card-facts em { font-style: normal; font-family: var(--f-ui); font-size: 10px; letter-spacing: 0.08em; color: var(--c-text3); display: block; }
 .card-acts { display: flex; flex-wrap: wrap; gap: 4px; }
+.card-marks { margin: -2px 0 7px; }
+.card-marks .mk:first-child { margin-left: 0; }
+
+/* The nav computer's marks after a name (js/ui/marks.js): a flag's letter, a mission's job, a ship running dark (a broken frame, as its mark is hollow) */
+.mk { display: inline-block; margin-left: 5px; padding: 0 4px; border: 1px solid currentColor; border-radius: 2px; font: 500 10px/13px var(--f-data);
+  letter-spacing: 0.04em; vertical-align: 1px; white-space: nowrap; text-transform: uppercase; }
+.mk-flag { color: var(--c-flag); }
+.mk-flag::before { content: ''; display: inline-block; width: 0; height: 0; margin-right: 3px; border-left: 6px solid currentColor; border-top: 3px solid transparent; border-bottom: 3px solid transparent; }
+.mk-mission { color: var(--c-route); }
+.mk-dark { color: var(--c-caution); border-style: dashed; }
+.mk-wreck { color: var(--c-text3); }
+button.flagged { color: var(--c-flag); border-color: var(--c-flag); }
+/* the captain's flags, A to Z, at the CONTEXT panel's foot */
+.ctx-flags .sub-head { display: flex; align-items: center; gap: 8px; }
+.flag-count { font-family: var(--f-data); font-weight: 400; letter-spacing: 0; }
+.flag-clear-all { margin-left: auto; background: none; border: 0; padding: 0; color: var(--c-text3); font: 600 10px var(--f-ui); letter-spacing: 0.08em; }
+.flag-clear-all:hover { color: var(--c-text); }
+.flag-row { display: flex; align-items: center; padding: 4px; border-bottom: 1px solid var(--c-line); font-size: 12px; cursor: pointer; }
+.flag-row:hover, .flag-row.active { background: var(--c-raise2); }
+.flag-row > .mk-flag { margin: 0 7px 0 0; }
+.flag-name { min-width: 0; flex: 0 1 auto; color: var(--c-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flag-where { margin-left: auto; padding-left: 8px; font-family: var(--f-data); font-size: 11px; color: var(--c-text3); white-space: nowrap; }
+.flag-x { background: none; border: 0; padding: 0 2px 0 8px; color: var(--c-text3); font-size: 11px; }
+.flag-x:hover { color: var(--c-warn); }
 
 /* Bottom: the ship's AI, the radio, the log */
 .ai-bar { height: var(--ai-h); flex: 0 0 var(--ai-h); display: flex; align-items: stretch; background: var(--c-bg); border-top: 1px solid var(--c-line); position: relative; z-index: 15; }

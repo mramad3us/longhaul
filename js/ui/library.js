@@ -44,6 +44,7 @@ import { EVA_RANGE_M } from '../sim/boarding.js';
 import { SUBFACTIONS, SUB_IDS, subsOf } from '../sim/factions.js';
 import { ZONE_KINDS } from '../sim/conflict.js';
 import { RANKS, RANK_REP, RANK_FOR, PAY_PER_RANK, CALLUP_AU } from '../sim/service.js';
+import { FLAG_LETTERS } from '../sim/flags.js';
 
 const CATEGORIES = [
   { id: 'ships', label: 'SHIP CLASSES' },
@@ -339,6 +340,12 @@ function navigation(add) {
       'News of hot zones and losses travels at light speed too. A zone is on the plot once its news has arrived, and stays there until news of its end does.'],
     specs: [['One light-second', '299,792 km'], ['One light-minute', `${fmtNum(LIGHT_MINUTE_AU * AU_KM / 1e6, 1)} M km`], ['Earth to Ceres', '≈ 10–30 light-minutes'], ['Ceres to Jupiter', '≈ 15–50 light-minutes']],
     links: [['Who is out there', 'nav:population']] });
+  add({ id: 'nav:marks', cat: 'nav', group: 'The plot', title: 'The nav computer\'s marks',
+    text: ['Every display, and every list that names a ship, marks the same three things, so a contact that matters is never lost in a crowd.',
+      'DARK: a ship with no transponder. Whether a contact squawks is known as soon as the board holds it; one running dark (pirates, smugglers, warships on business, wrecks) is drawn hollow where a squawking ship is solid, and called DARK until we know its name. Its last fix on the plot is a broken ring.',
+      'Our work: what a signed contract or an answered distress call points at sits in a magenta diamond, the route\'s colour, with the job\'s name: the derelict, the convoy, the survey mark, the port to deliver to or report at. A ship we hunt is on no registry, so a long look will not name it: only its transponder, or its drive signature when the brief has it on file, seen in its plume (a signature is read only while the drive is lit). Until then it is one more dark contact, and only its last-seen mark is marked.',
+      `Flags: F, or FLAG on the card and the contact panel, puts a lettered yellow pennant on what is picked, A to ${FLAG_LETTERS.at(-1)}, on any ship or station we have a track of. A flagged contact is called out when it comes back on the board; the flag goes when the plot forgets the ship. The CONTEXT panel lists the flags.`],
+    links: [['Light lag and the plot', 'nav:light']] });
   add({ id: 'nav:population', cat: 'nav', group: 'The plot', title: 'Who is out there',
     text: [`About ${fmtNum(DEFAULT_TRAFFIC)} traffic ships work the lanes between the stations, choosing nearer and friendlier ports. Each power keeps hulls in space as well: ${POLICE_PER_STATION} police cutters on a beat around each of its stations; ${Object.entries(NAVY_STRENGTH).map(([f, n]) => `${n} ${FACTIONS[f].navy} warships`).join(', ')} berthed at their yards until a hot zone calls for them; and about ${PIRATES_AT_LARGE} raiders lying up cold where nobody's writ runs.`,
       `Each power also keeps command ships (${Object.entries(COMMAND_SHIPS).map(([f, n]) => `${n} ${FACTIONS[f].navy}`).join(', ')}): one goes to the rear of every fight its power is in.`,

@@ -89,7 +89,7 @@ import { getWorld } from '../sim/world.js';
 import { PLAYER } from '../sim/combatants.js';
 import { threats } from '../sim/combat.js';
 import { hostilesOfPlayer } from '../sim/agents.js';
-import { REVEAL } from '../sim/sensors.js';
+import { isIdentified } from '../sim/sensors.js';
 import { CLASSES, playerClass } from '../sim/ship-classes.js';
 import { FACTIONS, POWERS, controlAt } from '../sim/factions.js';
 import { zonesAt, zonePos, ZONE_KINDS } from '../sim/conflict.js';
@@ -250,10 +250,10 @@ function say(text) {
   return `${(sp > 50 ? cut.slice(0, sp) : cut).replace(/[\s,:;.—-]+$/, '')}…`;
 }
 
-/** What we call a ship: its name once we know it (transponder, a long look), else what it is to us. */
+/** What we call a ship: its name once we know it (sensors.js isIdentified), else what it is to us. */
 function knownName(state, e) {
   if (!e) return 'an unknown ship';
-  if (e.transponder || (state.sensors.scan?.[e.id] || 0) >= REVEAL.PROFILE) return `the ${e.name}`;
+  if (isIdentified(state, e)) return `the ${e.name}`;
   return 'an unidentified ship';
 }
 

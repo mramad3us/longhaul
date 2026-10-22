@@ -97,7 +97,7 @@ const PIRATE_NERVE = 0.5;             // pirates stalk ships up to twice their s
 /**
  * Put a new agent into the world.
  * opts: { role, cls?, kind?, category?, faction?, near?, pos, vel, mode?, home?, zone?, contract?,
- *         ambient?, hostile?: [ids], transponder?, tags?, name? }
+ *         ambient?, hostile?: [ids], transponder?, tags?, name?, signature? }
  * Ask for a `kind` (a frigate) and the faction fields its own design; `cls` pins one.
  */
 export function spawnAgent(state, opts) {
@@ -106,7 +106,7 @@ export function spawnAgent(state, opts) {
   const role = opts.role;
   const e = createEntity({
     id: world.newId(role), name: opts.name || id.name, type: 'ship', faction: id.faction, cls: id.cls, tl: id.tl,
-    shipClass: id.shipClass, mass: id.mass, pos: opts.pos, vel: opts.vel, driven: true,
+    shipClass: id.shipClass, mass: id.mass, pos: opts.pos, vel: opts.vel, driven: true, signature: opts.signature,
     transponder: opts.transponder ?? (role !== 'pirate'), t: state.clock.minute, tags: { ...(opts.tags || {}) },
   });
   if (id.sub) e.sub = id.sub;

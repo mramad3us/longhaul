@@ -11,7 +11,9 @@
 //
 // Overlays for docking: the corridor down the berth's axis with its
 // marks, the berth's collar, ours. Names go beside the hulls, never on
-// one (labels.js). The renderer reads sim state and
+// one (labels.js), with the nav computer's marks (marks.js): DARK for a
+// hull with no transponder, the job for what our work points at, and a
+// flag's pennant at the hull's shoulder. The renderer reads sim state and
 // never changes it; a click picks a hull (onSelect), as on the tactical
 // display.
 //
@@ -45,11 +47,13 @@ import { stationModel, berthOf, stationAngle, berthFrame } from '../sim/stations
 import { matePose } from '../sim/mating.js';
 import { collarFrame, dockPose, facingOf } from '../sim/docking.js';
 import { liveKnowledge } from '../sim/intel.js';
+import { isDark, isIdentified } from '../sim/sensors.js';
 import { factionColor } from '../sim/factions.js';
 import { PLAYER_CLASS } from '../sim/ship-classes.js';
 import { FitCanvas } from './dom.js';
 import { drawHull, drawStation } from './hull-art.js';
 import { Labels } from './labels.js';
+import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, MARK_COL } from './marks.js';
 
 const _q = [];
 const IN_FRAME_PHASES = new Set(['approach', 'prox', 'separate', 'outbound']);
@@ -242,6 +246,8 @@ export class ExteriorView {
     hits.length = 0;
     const L = this.labels || (this.labels = new Labels());
     L.reset();
+    const fm = frameMarks(state);
+    const marks = opts.labels !== false;
     // Stations
     for (const o of objects) {
       if (o.e.type !== 'station') continue;
@@ -250,7 +256,9 @@ export class ExteriorView {
       const occ = new Set(Object.keys(o.e.berths || {}));
       drawStation(ctx, m, { x: sx, y: sy, angle: screenAngle(stationAngle(o.e.orbit, tm)), scale: sc, t, tint: factionColor(o.e.faction), occupied: occ, highlight: state.dock?.target.id === o.e.id ? state.dock.berth : null, labels: sc > 0.04 });
       hits.push({ id: o.e.id, x: sx, y: sy });
-      if (sc * m.sizeM < 2000) L.add(o.e.name, sx, sy, { off: 14, font: LABEL_FONT, color: factionColor(o.e.faction), alpha: 0.85, pri: 5, above: true });
+      const mk = marksOf(fm, o.e.id);
+      if (sc * m.sizeM < 2000) L.add(o.e.name, sx, sy, { off: 14, font: LABEL_FONT, color: factionColor(o.e.faction), alpha: 0.85, pri: 5 + markPri(mk), above: true, tags: labelTags(mk) });
+      if (marks && mk.flag) drawFlagMark(ctx, sx, sy, 12, mk.flag, L);
     }
     // Other ships: in a berth (posed by the berth), or flying
     for (const o of objects) {
@@ -272,13 +280,24 @@ export class ExteriorView {
       if (!pose) pose = { mx: o.dx, my: o.dy, facing: facingOf(e), view: 'top' };
       const [sx, sy] = toS(pose.mx, pose.my);
       drawHull(ctx, hull, { x: sx, y: sy, facing: screenAngle(pose.facing), scale: sc, view: pose.view, tint: factionColor(e.faction), plume: e.thrust || 0, t, ports: true });
-      // (kilometres out a hull is a few pixels: a mark in its colour, as ours has)
-      if (hull.L * sc < 8) { ctx.fillStyle = factionColor(e.faction); ctx.fillRect(sx - 1.5, sy - 1.5, 3, 3); }
+      // (kilometres out a hull is a few pixels: a mark in its colour, as ours has; hollow if it runs dark)
+      const mk = marksOf(fm, e.id, isDark(e), e.tags?.wreck);
+      if (hull.L * sc < 8) {
+        ctx.fillStyle = factionColor(e.faction); ctx.strokeStyle = ctx.fillStyle;
+        if (mk.dark || mk.wreck) ctx.strokeRect(sx - 2.5, sy - 2.5, 5, 5); else ctx.fillRect(sx - 1.5, sy - 1.5, 3, 3);
+      }
       hits.push({ id: e.id, x: sx, y: sy });
-      // (its name beside the hull, never on it or on another's: labels.js)
+      // (its name beside the hull, never on it or on another's: labels.js; until we know it, what it is to us)
       const [hx, hy] = hullBox(hull, screenAngle(pose.facing), sc);
       if (hull.L * sc > 6) L.block(sx - hx, sy - hy, sx + hx, sy + hy);
-      if (hull.L * sc > 6 && opts.labels !== false) L.add(shortName(e.transponder ? e.name : 'unidentified'), sx, sy, { off: [hx + 6, hy + 7], font: LABEL_FONT, color: factionColor(e.faction), alpha: 0.85, pri: 3 - o.d / LOOK_M, above: true });
+      if (marks) {
+        const r = Math.max(hx, hy, 4);
+        if (mk.mission && r < 60) drawMissionMark(ctx, sx, sy, r + 6);
+        if (mk.flag) drawFlagMark(ctx, sx, sy, r + 3, mk.flag, L);
+      }
+      const name = isIdentified(state, e) ? e.name : null;
+      if (hull.L * sc > 6 && marks) L.add(shortName(name || (mk.dark ? 'DARK' : mk.wreck ? 'WRECK' : 'unidentified')), sx, sy, { off: [hx + 6, hy + 7], font: LABEL_FONT,
+        color: name ? factionColor(e.faction) : mk.dark ? MARK_COL.dark : MARK_COL.wreck, alpha: 0.85, pri: 3 - o.d / LOOK_M + markPri(mk), above: true, tags: labelTags(name ? mk : { mission: mk.mission }) });
     }
 
     // Docking overlays: the corridor and the two collars

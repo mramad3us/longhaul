@@ -5,7 +5,8 @@
 // stations always first), the conversation with the one we hail (the
 // topics the sim offers: sim/dialogue.js), and a card of what we know
 // about them: their hull, flag and class, how many are aboard and how we
-// know it, their collars, and for a station our clearances, the berth
+// know it (the nav computer's marks by each name on the channel list:
+// marks.js), their collars, and for a station our clearances, the berth
 // board and what we owe there. Some answers open another window: the
 // station's board or services, the hiring hall, shore leave, trade over
 // the collar, a boarding.
@@ -29,9 +30,10 @@ import { classLabel, CLASSES } from '../sim/ship-classes.js';
 import { FACTIONS, factionColor } from '../sim/factions.js';
 import { completeRescue, missionForEntity } from '../sim/missions.js';
 import { hailContractTarget } from '../sim/contracts.js';
-import { contactById } from '../sim/sensors.js';
+import { contactById, isDark } from '../sim/sensors.js';
 import { isDocked, dockedTo } from '../sim/docking.js';
 import { drawHullPortrait } from './hull-art.js';
+import { frameMarks, marksOf, markChips } from './marks.js';
 
 const emit = (t, p) => bus.emit(t, p);
 let hooks = {};
@@ -108,13 +110,14 @@ function render() {
   const body = $('#dialog-comms-body');
   const conv = channel(s);
   const list = channels(s);
+  const fm = frameMarks(s);
   const row = ({ e, dAU }) => {
     const c = contactById(s, e.id);
     const known = e.type === 'station' || e.transponder || c?.name;
     const lag = dAU * AU_M / 299_792_458;
     const bars = signalBars(dAU);
     return `<div class="cm-ch ${conv?.with === e.id ? 'active' : ''}" data-act="channel" data-id="${e.id}">
-      <span class="cm-ch-name" style="color:${known ? factionColor(e.faction) : '#7A8EA2'}">${e.sos ? '⚠ ' : ''}${esc(known ? e.name : 'unidentified contact')}</span>
+      <span class="cm-ch-name" style="color:${known ? factionColor(e.faction) : '#7A8EA2'}">${e.sos ? '⚠ ' : ''}${esc(known ? e.name : 'unidentified contact')}${markChips(marksOf(fm, e.id, isDark(e), e.tags?.wreck))}</span>
       <span class="cm-ch-meta"><span>${esc(e.type === 'station' ? e.shipClass : known ? (CLASSES[e.cls]?.name || 'ship') : 'no transponder')}</span><span>${fmtMeters(dAU * AU_M)} · <span class="cm-bars" title="Signal ${bars} of 5">${'▮'.repeat(bars)}${'▯'.repeat(5 - bars)}</span>${lag >= 0.1 ? ` · ${lag.toFixed(1)} s` : ''}</span></span></div>`;
   };
   const stations = list.filter(x => x.e.type === 'station'), ships = list.filter(x => x.e.type !== 'station');

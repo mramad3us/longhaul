@@ -152,7 +152,7 @@ export function recordContacts(state) {
     const known = c.name ? c : old?.name ? old : null;
     I.tracks[c.id] = {
       id: c.id, name: known?.name || null, faction: known?.faction || null, shipClass: known?.shipClass || null,
-      kind: 'fix', src: 'SENSORS', at: now, rx: now, wreck: !!c.wreck,
+      kind: 'fix', src: 'SENSORS', at: now, rx: now, wreck: !!c.wreck, dark: !!c.dark,
       x: e.pos.x, y: e.pos.y, vx: e.vel.vx, vy: e.vel.vy,
     };
   }

@@ -10,11 +10,20 @@
 //   cold and silent — radar/thermal only, by hull size, cut by stealth
 //   ordnance — a coasting torpedo is a few meters of cold metal
 //
+// Whether a contact squawks is known as soon as it is held (a ship
+// running dark is marked so on every display: flags.js).
+//
 // An observer sees a target when it is inside the signature range
 // times the observer's sensor quality (tech level, damage, a watch
 // stander at ops). The player's display band caps how far the board
 // looks. Tracking a contact over time reveals more about it; a
 // ranging-laser lock is 3× faster.
+//
+// Who a contact is: its transponder says so; a long look (REVEAL.PROFILE)
+// matches its profile against the registries. A ship we are hunting (a
+// bounty, a strike) is on no registry: only its transponder names it, or
+// its drive signature, when the brief has it on file and we see it in
+// the plume (a drive signature is read only while the drive is lit).
 //
 // Everything on the board is under a light-minute away (long range is
 // 50 light-seconds), so the picture is live to within one sim step;
@@ -87,6 +96,7 @@ export function sensorsTick(state) {
   const pos = state.flight.pos;
   const quality = playerSensorQuality(state);
   const rate = state.$watch?.ops != null ? 2 : 1;
+  const hunts = huntsOf(state);
   _q.length = 0;
   world.query(pos, SENSOR_RANGES[s.range].au, _q);
 
@@ -98,7 +108,7 @@ export function sensorsTick(state) {
     if (!canSee(dist, signatureRange(e), quality)) continue;
     seen.add(e.id);
     s.scan[e.id] = (s.scan[e.id] || 0) + (s.locked === e.id ? 3 : 1) * rate;
-    contacts.push(describe(e, dist, Math.atan2(dy, dx), s.scan[e.id]));
+    contacts.push(describe(e, dist, Math.atan2(dy, dx), s.scan[e.id], isIdentified(state, e, s.scan[e.id], hunts)));
   }
   for (const id of Object.keys(s.scan)) {
     if (seen.has(id)) continue;
@@ -118,10 +128,57 @@ export function sensorsTick(state) {
 /** Is this entity on our sensors right now? */
 export const isTracked = (state, id) => !!state.sensors.$seen?.has(id) || state.sensors.contacts.some(c => c.id === id);
 
-/** What the crew knows about an entity after `scan` minutes of observation. */
-export function describe(e, dist, bearing, scan) {
+/**
+ * A ship with no transponder (pirates, smugglers, warships on business,
+ * wrecks): the board knows it the moment it holds the contact, since the
+ * radio hears an ident or it doesn't. A distress beacon says who it is.
+ */
+export const isDark = (e) => e.type === 'ship' && !e.transponder && !e.sos;
+
+/** Contracts whose target we must find and name ourselves. */
+const HUNTS = new Set(['BOUNTY', 'STRIKE']);
+
+/** The ships we are hunting: target id → its contract. */
+export function huntsOf(state) {
+  const m = new Map();
+  for (const c of state.contracts?.active || []) if (HUNTS.has(c.type) && c.phase === 'active' && c.targetId) m.set(c.targetId, c);
+  return m;
+}
+
+/**
+ * Do we know who this is (on the board, or as last seen)? Its transponder;
+ * a long look; for a ship we hunt, only its transponder or its signature
+ * matched (identifyHunt). `hunts`: huntsOf(state), when asking about many.
+ */
+export function isIdentified(state, e, scan = state.sensors.scan[e.id] || 0, hunts = null) {
+  if (e.type === 'ordnance') return false;
+  if (e.transponder || e.type !== 'ship') return true;
+  const hunt = (hunts || huntsOf(state)).get(e.id);
+  return hunt ? !!hunt.identified : scan >= REVEAL.PROFILE;
+}
+
+/**
+ * A hunted ship on the board is named by its transponder, or by its drive
+ * signature on file seen in its plume; once named it stays named. Returns
+ * true the minute it is (contracts.js and military.js say so).
+ */
+export function identifyHunt(state, c) {
+  if (c.identified || !state.sensors.$seen?.has(c.targetId)) return false;
+  const e = getWorld(state).get(c.targetId);
+  if (!e) return false;
+  if (e.transponder) c.identified = 'transponder';
+  else if (c.signature && e.thrust > 0 && e.signature === c.signature) c.identified = 'signature';
+  return !!c.identified;
+}
+
+/** What the board says when a hunted ship is named. */
+export const huntNamed = (c) => c.identified === 'signature'
+  ? `Drive signature ${c.signature} matched: that contact is the ${c.targetName}`
+  : `The ${c.targetName} is squawking its transponder: that is our target`;
+
+/** What the crew knows about an entity after `scan` minutes of observation (`known`: isIdentified). */
+export function describe(e, dist, bearing, scan, known = e.type !== 'ordnance' && (e.transponder || scan >= REVEAL.PROFILE)) {
   const ordnance = e.type === 'ordnance';
-  const known = !ordnance && (e.transponder || scan >= REVEAL.PROFILE);
   return {
     id: e.id,
     dist,                      // AU
@@ -136,6 +193,7 @@ export function describe(e, dist, bearing, scan) {
     signature: e.thrust > 0 ? e.signature : null,
     plume: e.thrust > 0,
     sos: e.sos,
+    dark: isDark(e),
     station: e.type === 'station',
     wreck: !!e.tags?.wreck,
     scan,

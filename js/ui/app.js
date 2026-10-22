@@ -11,7 +11,7 @@ import { $, $$, esc, show, toggleClass, setText } from './dom.js';
 import { toast } from './toast.js';
 import { initLog, logEntry, renderLog, resetLogView } from './log.js';
 import { initHud, updateHud, updatePerf, setResourceAlertHandler, resetResourceAlerts, setHailHandler, setRouteHandler, setDockHandler } from './hud.js';
-import { initNav, updateNav, openNav, closeNav, toggleNav, openRoutePanel, resetNavForGame, showOnBoard, setTab, currentTab, selectTarget } from './nav.js';
+import { initNav, updateNav, openNav, closeNav, toggleNav, openRoutePanel, resetNavForGame, showOnBoard, setTab, currentTab, selectTarget, toggleFlagOnPick } from './nav.js';
 import { resetTacCache } from './tac.js';
 import { initConsole, closeTopWindow, setExteriorFloating, exteriorIsFloating, showPanel, toggleLog } from './console.js';
 import { initTooltips, initPointers } from './tooltip.js';
@@ -150,7 +150,7 @@ export async function boot() {
     systems: openSystems, roster: openRoster,
     station: () => dockedStation(ui.state) ? openStation() : toast('Not docked', 'warn'),
     combat: toggleCombat, suits: toggleSuits, weapons: () => toggleNav('combat'), library: toggleLibrary, service: openService, escape: onEscape, save: () => quickSave(), devFlip, devCut,
-    exterior: () => exteriorIsFloating() ? setExteriorFloating(false) : toggleNav('exterior'), log: () => toggleLog(),
+    exterior: () => exteriorIsFloating() ? setExteriorFloating(false) : toggleNav('exterior'), log: () => toggleLog(), flag: toggleFlagOnPick,
     comms: () => commsOpen() ? closeComms() : openComms(),
   });
   $$('[data-action]').forEach(b => {

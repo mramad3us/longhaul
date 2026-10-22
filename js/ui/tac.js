@@ -7,12 +7,16 @@
 // the ship. Only what our sensors hold is drawn (intel.liveKnowledge).
 // In the nav modal a click picks a contact (onSelect), which opens the
 // same contact panel as the scanner; the small panel isn't clickable.
+// The nav computer's marks (marks.js): a ship running dark is a hollow
+// mark (seen as a hull, DARK by its name), what our work points at has
+// its magenta diamond, a flag its pennant.
 // ============================================================
 
 import { AU_M } from '../core/constants.js';
 import { hashString } from '../core/rng.js';
 import { getWorld } from '../sim/world.js';
 import { liveKnowledge } from '../sim/intel.js';
+import { isDark, isIdentified, huntsOf } from '../sim/sensors.js';
 import { factionColor } from '../sim/factions.js';
 import { CLASSES } from '../sim/ship-classes.js';
 import { hullOf } from '../sim/hulls.js';
@@ -21,6 +25,7 @@ import { fxList } from './fx.js';
 import { FitCanvas } from './dom.js';
 import { TileType } from '../svg-icons.js';
 import { DECK_GAP } from '../sim/ship-layout.js';
+import { frameMarks, marksOf, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
 
 const TILE = 32;
 
@@ -187,10 +192,13 @@ export class TacView {
 
     // Contacts
     const list = nearby(state, rangeM, alpha);
-    // (labels by priority, the one picked out first, then the nearest; one that would overlap a label
-    // already drawn is left off: a crowded port reads as dots, not a smear of names)
+    // (labels by priority: the one picked out first, then the flagged and what our work points at,
+    // then the nearest; one that would overlap a label already drawn is left off: a crowded port
+    // reads as dots, not a smear of names; a flag's pennant is drawn whatever happens to its name)
     const pick = opts.highlight ?? opts.selected;
-    list.sort((a, b) => (b.e.id === pick) - (a.e.id === pick) || Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y));
+    const fm = frameMarks(state), hunts = huntsOf(state);
+    const rank = (e) => (fm.flags[e.id] ? 2 : 0) + (fm.missions.has(e.id) ? 1 : 0);
+    list.sort((a, b) => (b.e.id === pick) - (a.e.id === pick) || rank(b.e) - rank(a.e) || Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y));
     const placed = big ? [{ x: 0, y: H - 26, w: W, h: 26 }] : [];      // (the readouts at the display's foot)
     const hits = this._hits;
     hits.length = 0;
@@ -202,27 +210,42 @@ export class TacView {
       if (e.type === 'ordnance') { drawOrdnance(ctx, e, sx, sy, heading, t); continue; }
       const color = e.sos ? '#EF5350' : e.tags?.wreck ? '#5A5A5A' : factionColor(e.faction);
       const seed = hashString(e.id);
+      const m = marksOf(fm, e.id, isDark(e), e.tags?.wreck);
+      const hollow = m.dark || m.wreck;
       if (this.zoom === 0) drawSilhouette(ctx, e, sx, sy, heading, color, seed, t, big);
-      else if (this.zoom === 1) drawIcon(ctx, e, sx, sy, heading, color, t);
-      else drawDot(ctx, e, sx, sy, color, t);
+      else if (this.zoom === 1) drawIcon(ctx, e, sx, sy, heading, color, t, hollow);
+      else drawDot(ctx, e, sx, sy, color, t, hollow);
+      const mr = this.zoom === 0 ? (big ? 22 : 15) : 10;
+      if (m.mission) drawMissionMark(ctx, sx, sy, mr);
+      if (m.flag) {
+        drawFlagMark(ctx, sx, sy, mr * 0.8, m.flag);
+        placed.push({ x: sx + mr * 0.56, y: sy - mr * 0.56 - 14, w: 22, h: 15 });
+      }
       if (e.sos) {
         const ph = (t % 1.5) / 1.5;
         ctx.strokeStyle = `rgba(226,85,85,${0.5 * (1 - ph)})`;
         ctx.beginPath(); ctx.arc(sx, sy, 6 + ph * 16, 0, Math.PI * 2); ctx.stroke();
       }
-      const label = e.transponder ? e.name : null;
+      // (its name once we know it: a transponder, or a long look; else what it is to us)
+      const name = isIdentified(state, e, undefined, hunts) ? e.name : null;
+      const label = name || (m.dark ? 'DARK' : m.wreck ? 'WRECK' : null);
+      const tags = labelTags(name ? m : { mission: m.mission }) || [];
       let room = false;
       if (label && (this.zoom < 2 || big)) {
         ctx.font = `${big ? 10 : 7}px "IBM Plex Mono", monospace`;
         const text = label.length > 22 ? label.slice(0, 21) + '…' : label;
-        const r = { x: sx + 8, y: sy - (big ? 7 : 5), w: ctx.measureText(text).width + 4, h: big ? 22 : 9 };
+        const tw = ctx.measureText(text).width;
+        const w = tags.reduce((a, g) => a + 5 + ctx.measureText(g.text).width, tw);
+        const r = { x: sx + 8, y: sy - (big ? 7 : 5), w: w + 4, h: big ? 22 : 9 };
         room = e.id === pick || !placed.some(p => r.x < p.x + p.w && p.x < r.x + r.w && r.y < p.y + p.h && p.y < r.y + r.h);
         if (room) placed.push(r);
         if (room) {
-        ctx.fillStyle = color;
+        ctx.fillStyle = name ? color : m.dark ? MARK_COL.dark : MARK_COL.wreck;
         ctx.globalAlpha = 0.85;
         ctx.textAlign = 'left';
         ctx.fillText(text, sx + 10, sy + 3);
+        let tx = sx + 10 + tw;
+        for (const g of tags) { ctx.fillStyle = g.color; ctx.fillText(g.text, tx += 5, sy + 3); tx += ctx.measureText(g.text).width; }
         if (big) {
           ctx.fillStyle = 'rgba(122,142,162,0.8)';
           ctx.fillText(`${(Math.hypot(x, y) / 1000).toFixed(2)} km`, sx + 10, sy + 14);
@@ -473,7 +496,8 @@ function drawOrdnance(ctx, e, x, y, heading, t) {
   ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
 }
 
-function drawIcon(ctx, e, x, y, heading, color, t) {
+/** A ship's arrowhead, solid (squawking) or hollow (dark, a wreck); a station's diamond. */
+function drawIcon(ctx, e, x, y, heading, color, t, hollow) {
   ctx.strokeStyle = color;
   ctx.lineWidth = 1;
   ctx.globalAlpha = 0.9;
@@ -484,7 +508,8 @@ function drawIcon(ctx, e, x, y, heading, color, t) {
     ctx.moveTo(x + Math.cos(-heading) * 7, y + Math.sin(-heading) * 7);
     ctx.lineTo(x + Math.cos(-heading + 2.5) * 5, y + Math.sin(-heading + 2.5) * 5);
     ctx.lineTo(x + Math.cos(-heading - 2.5) * 5, y + Math.sin(-heading - 2.5) * 5);
-    ctx.closePath(); ctx.stroke();
+    ctx.closePath();
+    paintMark(ctx, color, hollow);
     if (e.thrust > 0) {
       ctx.strokeStyle = `rgba(226,163,85,${0.5 + 0.4 * Math.sin(t * 20)})`;
       ctx.beginPath(); ctx.moveTo(x - Math.cos(-heading) * 5, y - Math.sin(-heading) * 5); ctx.lineTo(x - Math.cos(-heading) * 14, y - Math.sin(-heading) * 14); ctx.stroke();
@@ -493,7 +518,7 @@ function drawIcon(ctx, e, x, y, heading, color, t) {
   ctx.globalAlpha = 1;
 }
 
-function drawDot(ctx, e, x, y, color, t) {
+function drawDot(ctx, e, x, y, color, t, hollow) {
   // At 25 km a running torch is the brightest thing in the sky
   if (e.thrust > 0) {
     const g = ctx.createRadialGradient(x, y, 0, x, y, 10);
@@ -502,6 +527,7 @@ function drawDot(ctx, e, x, y, color, t) {
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.fill();
   }
+  if (hollow) { ctx.fillStyle = '#05070A'; ctx.fillRect(x - 3, y - 3, 6, 6); ctx.strokeStyle = color; ctx.strokeRect(x - 2.5, y - 2.5, 5, 5); return; }
   ctx.fillStyle = color;
   ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
 }

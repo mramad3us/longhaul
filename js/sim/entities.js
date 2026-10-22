@@ -15,7 +15,8 @@ export const EntityType = {
   NAV: 'nav',            // navigation marker (survey zone, rendezvous point, approach gate) — not a sensor contact
 };
 
-function signature() {
+/** A drive's signature, as a sensor log writes it. */
+export function newSignature() {
   return 'SIG-' + Math.floor(random() * 0xFFFFFF).toString(16).toUpperCase().padStart(6, '0');
 }
 
@@ -44,7 +45,7 @@ export function createEntity(opts) {
     heading: opts.heading || 0,                   // radians, solar frame
     transponder: opts.transponder !== false,
     sos: !!opts.sos,
-    signature: opts.signature || signature(),
+    signature: opts.signature || newSignature(),
     t: opts.t,                                    // minute pos/vel are valid for
     tags: opts.tags || {},                        // gameplay links (missionId, contractId, …)
   };

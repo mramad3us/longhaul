@@ -34,6 +34,7 @@ import { moveAgents, agentsTick, wake, makeHostile, hostilesOfPlayer } from './a
 import { recordAttack, lawfulTarget } from './law.js';
 import { rouse } from './forces.js';
 import { isTracked } from './sensors.js';
+import { knownName } from './flags.js';
 import { systemPerf } from './systems.js';
 import { isReactorOnline } from './reactor.js';
 import { WARHEADS, PROFILES, TORPEDO_RELOAD_MIN, EVADE_G } from './weapons.js';
@@ -74,7 +75,7 @@ export function setFireTarget(state, id) {
   if (!e || (e.type !== 'ship' && e.type !== 'station')) return { ok: false, text: 'Fire control needs a ship or a station to target' };
   if (!isTracked(state, id)) return { ok: false, text: 'No sensor track on that contact' };
   state.combat.target = id;
-  return { ok: true, text: `Fire control: target ${e.transponder ? e.name : 'contact ' + e.signature}` };
+  return { ok: true, text: `Fire control: target ${knownName(state, id) || (e.thrust > 0 ? `contact ${e.signature}` : 'unidentified contact')}` };
 }
 
 export function setPdcMode(state, mode) {

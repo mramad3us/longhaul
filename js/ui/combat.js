@@ -5,7 +5,9 @@
 // its range is logarithmic — 1 km to 10 million km on one screen —
 // because a fight spans both: a torpedo launched from millions of km
 // arrives in seconds of PDC fire at a few km. Contacts come from our
-// own sensor picture; ordnance coming for us is red, ours teal.
+// own sensor picture; ordnance coming for us is red, ours teal. The nav
+// computer's marks as everywhere (marks.js): a hollow dot runs dark, a
+// magenta diamond is what our work points at, a pennant a flag.
 //
 // The fire-control panel drives sim/combat.js: target, torpedo
 // warhead and profile, launch, PDC mode, aim, evasive maneuvers, and
@@ -30,13 +32,14 @@ import { setFireTarget, setPdcMode, setAim, setEvasive, fireTorpedo, readyTubes,
 import { AIM } from '../sim/damage.js';
 import { WARHEADS, PROFILES } from '../sim/weapons.js';
 import { WANTED_LABEL } from '../sim/law.js';
-import { contactById, REVEAL } from '../sim/sensors.js';
+import { contactById, REVEAL, isDark, isIdentified } from '../sim/sensors.js';
 import { relativeTo, STANCE_PHASE } from './hud.js';
 import { stanceRanges, STANCE_MODES } from '../sim/stance.js';
 import { quickStance, openStance, currentStance, release as releaseStance } from './stance.js';
 import { targetName } from '../sim/nav.js';
 import { fxList } from './fx.js';
 import { Labels } from './labels.js';
+import { frameMarks, marksOf, markPri, labelTags, markChips, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
 
 const DECADES = 7;                 // 1 km … 10,000,000 km
 const LABEL_FONT = '10px "IBM Plex Mono", monospace';
@@ -99,6 +102,7 @@ export class ThreatView {
     const world = getWorld(state);
     const facing = state.flight.facing;
     const hostile = new Set(hostilesOfPlayer(state).map(e => e.id));
+    const fm = frameMarks(state);
     const at = (c) => {
       const rel = c.bearing - facing;
       const r = radius(c.dist * AU_KM);
@@ -121,8 +125,10 @@ export class ThreatView {
       }
       if (c.station || e?.type === 'nav') continue;
       const col = c.wreck ? '#5A5A5A' : c.faction ? factionColor(c.faction) : '#8A8A6A';
-      ctx.fillStyle = col;
-      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+      const m = marksOf(fm, c.id, c.dark, c.wreck);
+      ctx.beginPath(); ctx.arc(x, y, m.dark || m.wreck ? 4 : 3, 0, Math.PI * 2); paintMark(ctx, col, m.dark || m.wreck, '#0A0608');
+      if (m.mission) drawMissionMark(ctx, x, y, 10);
+      if (m.flag) drawFlagMark(ctx, x, y, 6, m.flag, L);
       L.block(x - 4, y - 4, x + 4, y + 4);
       if (hostile.has(c.id)) { ctx.strokeStyle = '#EF5350'; ctx.strokeRect(x - 7, y - 7, 14, 14); }
       if (state.combat.target === c.id) {
@@ -131,7 +137,9 @@ export class ThreatView {
         ctx.beginPath(); for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2; ctx.moveTo(Math.cos(a) * 7, Math.sin(a) * 7); ctx.lineTo(Math.cos(a) * 13, Math.sin(a) * 13); } ctx.stroke();
         ctx.restore();
       }
-      L.add(c.name || c.signature || 'CONTACT', x, y, { off: 8, font: LABEL_FONT, color: col, alpha: 0.85, pri: state.combat.target === c.id ? 4 : hostile.has(c.id) ? 2 : c.wreck ? 0.5 : 1 });
+      const bare = !c.name && !c.signature;
+      L.add(c.name || c.signature || (m.dark ? 'DARK' : m.wreck ? 'WRECK' : 'CONTACT'), x, y, { off: 8, font: LABEL_FONT, color: bare && m.dark ? MARK_COL.dark : col, alpha: 0.85,
+        pri: (state.combat.target === c.id ? 4 : hostile.has(c.id) ? 2 : c.wreck ? 0.5 : 1) + markPri(m), tags: labelTags(bare ? { mission: m.mission } : m) });
       this._hits.push({ id: c.id, x, y });
     }
     // Our own torpedoes on their way, toward their targets
@@ -179,15 +187,16 @@ export function renderFireControl(state, box) {
   const now = state.clock.minute;
   const tgt = C.target ? world.get(C.target) : null;
   const c = tgt ? contactById(state, tgt.id) : null;
+  const fm = frameMarks(state);
   const sec = (title, body) => `<div class="fc-section"><div class="fc-title">${title}</div>${body}</div>`;
   const btn = (act, label, active = false, extra = '') => `<button class="fc-btn ${active ? 'active' : ''}" data-fc="${act}" ${extra}>${label}</button>`;
 
   let target = '<div class="fc-dim">No target. Click a contact on the threat board, or TARGET it from the scanner.</div>';
   if (tgt) {
     const rel = relativeTo(state, { kind: 'entity', id: tgt.id });
-    const known = c && (tgt.transponder || c.scan >= REVEAL.PROFILE);
+    const known = !!c?.name;
     const hull = tgt.combat && c?.scan >= REVEAL.MASS ? `${Math.max(0, Math.round(tgt.combat.hp / tgt.combat.hpMax * 100))}%${tgt.combat.status !== 'ok' ? ' · ' + tgt.combat.status.toUpperCase() : ''}` : '…';
-    target = `<div class="fc-target-name" style="color:${factionColor(known ? tgt.faction : null)}">${esc(known ? tgt.name : c?.signature || 'Unidentified contact')}</div>
+    target = `<div class="fc-target-name" style="color:${factionColor(known ? tgt.faction : null)}">${esc(known ? tgt.name : c?.signature || 'Unidentified contact')}${markChips(marksOf(fm, tgt.id, isDark(tgt), tgt.tags?.wreck))}</div>
       <div class="fc-row"><span>CLASS</span><b>${known ? `<span class="lib-inline" data-lib="ship:${tgt.cls}" title="Ship's library">${esc(classLabel(tgt))}</span> · TL${tgt.tl}` : '—'}</b></div>
       <div class="fc-row"><span>FLAG</span><b>${known ? esc(FACTIONS[tgt.faction]?.name || tgt.faction) : '—'}</b></div>
       <div class="fc-row"><span>RANGE</span><b>${rel ? fmtKm(rel.dist / 1000) : '—'}</b></div>
@@ -226,7 +235,7 @@ export function renderFireControl(state, box) {
   const inbound = threats(state);
   const hostiles = hostilesOfPlayer(state);
   const threatRows = inbound.map(th => `<div class="fc-threat"><span>${th.kind === 'slug' ? 'SLUG' : th.warhead === 'nuke' ? 'NUKE' : 'TORPEDO'}</span><b>${isFinite(th.etaS) ? formatDuration(th.etaS / 60) : 'opening'}</b></div>`).join('')
-    + hostiles.map(h => `<div class="fc-threat fc-hostile"><span>${esc(h.transponder ? h.name : 'hostile contact')}</span><b>${fmtKm(Math.hypot(h.pos.x - state.flight.pos.x, h.pos.y - state.flight.pos.y) * AU_KM)}</b></div>`).join('');
+    + hostiles.map(h => `<div class="fc-threat fc-hostile"><span>${esc(isIdentified(state, h) ? h.name : 'hostile contact')}${markChips(marksOf(fm, h.id, isDark(h), h.tags?.wreck))}</span><b>${fmtKm(Math.hypot(h.pos.x - state.flight.pos.x, h.pos.y - state.flight.pos.y) * AU_KM)}</b></div>`).join('');
   // (MARS, not MCR: beside the credits, MCR reads as money)
   const record = ['UN', 'MCR', 'OPA'].map(f => `<span class="fc-law ${state.law.wanted[f] ? 'fc-warn' : ''}">${{ MCR: 'MARS' }[f] || f} ${Math.round(state.law.standing[f])} · ${WANTED_LABEL[state.law.wanted[f]]}</span>`).join('');
 

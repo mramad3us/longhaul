@@ -18,7 +18,9 @@
 //   STRIKE   destroy a high-value target: an enemy destroyer or frigate on
 //            detached duty, a proxy's ringleader, a cell's gunship; it has
 //            escorts and it fights back. Only in a war (or on a proxy or
-//            an insurgency, whose raiders are fair game). Rank 2.
+//            an insurgency, whose raiders are fair game). Rank 2. A navy
+//            squawks; a proxy's or a cell's runs dark and is named only by
+//            its drive signature, when the brief has it (sensors.js).
 //   COVERT   a sub-faction's quiet job against a rival inside our own
 //            power (politics.js in-fighting): hold a lock on one of the
 //            rival's ships for a while without being identified by it. If
@@ -31,14 +33,14 @@
 import { DAY_MIN } from '../core/constants.js';
 import { random, randInt, randRange, pick, weightedPick, chance } from '../core/rng.js';
 import { getWorld } from './world.js';
-import { createEntity } from './entities.js';
+import { createEntity, newSignature } from './entities.js';
 import { rollIdentity, CLASSES } from './ship-classes.js';
 import { FACTIONS, SUBFACTIONS, subName } from './factions.js';
 import { zonePos } from './conflict.js';
 import { atWar, enemiesOf } from './politics.js';
 import { spawnAgent } from './agents.js';
 import { PLAYER, sees } from './combatants.js';
-import { REVEAL } from './sensors.js';
+import { REVEAL, identifyHunt, huntNamed } from './sensors.js';
 import { proxyIdentity } from './forces.js';
 import { flagOf, payFactor, rankOf, rankName, RANK_FOR, addRep } from './service.js';
 
@@ -46,6 +48,7 @@ export const MIL_TYPES = new Set(['INTEL', 'HOLD', 'STRIKE', 'COVERT']);
 export const MIL_LABEL = { INTEL: 'MIL · INTELLIGENCE', HOLD: 'MIL · HOLD THE POINT', STRIKE: 'MIL · STRIKE (HVT)', COVERT: 'MIL · COVERT' };
 export const MIL_SHARE = 0.15;           // share of a station's board slots near our power's fights
 const MIL_REACH_AU = 0.6;                // fights this near a station shape its board
+const HVT_SIG_ON_FILE = 0.5;             // share of strikes whose brief carries the target's drive signature
 export const HOLD_RADIUS_AU = 0.0005;    // 75,000 km round a control point
 export const LOCK_RANGE_AU = 0.002;      // 300,000 km: intelligence and covert locks
 const HOLD_AWAY_MAX = 120;               // minutes off the point (after reaching it) before it is given up
@@ -134,10 +137,13 @@ export function generateMil(state, port, id) {
         : o.E === '$cells' ? rollIdentity({ cls: pick(['opa-gunship', 'opa-corvette']), faction: 'OPA', sub: 'opa-ceres', state })
         : rollIdentity({ kind: pick(['destroyer', 'frigate', 'frigate']), category: 'military', faction: o.E, state });
       const escorts = randInt(1, 2);
-      const who = o.E === '$proxy' || o.E === '$cells' ? `the ${subName(ship.sub) || 'raiders'}' ${ship.shipClass}` : `the ${FACTIONS[o.E].navy} ${ship.shipClass}`;
-      return { ...base, enemy: o.E, ship, escorts, body: o.z.body, zoneR: o.z.r, zonePhase: o.z.phase, issuer: fleetOf(L), rankMin: RANK_FOR.strike, rep: 60,
+      const outlaw = o.E === '$proxy' || o.E === '$cells';
+      const who = outlaw ? `the ${subName(ship.sub) || 'raiders'}' ${ship.shipClass}` : `the ${FACTIONS[o.E].navy} ${ship.shipClass}`;
+      const signature = chance(HVT_SIG_ON_FILE) ? newSignature() : null;
+      return { ...base, enemy: o.E, ship, signature, escorts, body: o.z.body, zoneR: o.z.r, zonePhase: o.z.phase, issuer: fleetOf(L), rankMin: RANK_FOR.strike, rep: 60,
         title: `Strike: ${ship.name}`,
-        description: `High-value target: ${who} "${ship.name}", with ${escorts} escort${escorts > 1 ? 's' : ''}, last fixed near ${o.z.body}. Find it and destroy it (its surrender will do). Report to any ${FACTIONS[L].short} port.`,
+        description: `High-value target: ${who} "${ship.name}", with ${escorts} escort${escorts > 1 ? 's' : ''}, last fixed near ${o.z.body}. Find it and destroy it (its surrender will do). Report to any ${FACTIONS[L].short} port.${signature
+          ? ` Its drive signature is on file (${signature}).` : outlaw ? ' It runs dark, and its drive signature is not on file.' : ''}`,
         reward: { credits: Math.round(randInt(12000, 30000) * pay) }, deadline: randInt(3, 6) * DAY_MIN, expires: now + randInt(12, 36) * 60 };
     }
     case 'COVERT': {
@@ -194,7 +200,7 @@ export function spawnMil(state, c) {
     const outlaw = c.enemy === '$proxy' || c.enemy === '$cells';
     const enemies = [c.faction];
     const at = around(mark, 0.0004);
-    const t = spawnAgent(state, { role: 'navy', cls: c.ship.cls, faction: c.ship.faction, sub: c.ship.sub, name: c.ship.name, pos: at.pos, vel: at.vel,
+    const t = spawnAgent(state, { role: 'navy', cls: c.ship.cls, faction: c.ship.faction, sub: c.ship.sub, name: c.ship.name, pos: at.pos, vel: at.vel, signature: c.signature || undefined,
       home: { kind: 'entity', id: mark.id }, zone: c.zone, enemies, contract: c.id, transponder: !outlaw, tags: { contract: c.id, hvt: true, ...(outlaw ? { wanted: true } : {}) } });
     for (let i = 0; i < c.escorts; i++) {
       const s = around(t, 0.0002);
@@ -279,6 +285,7 @@ export function milProgress(state, c, emit, { fail, done }) {
     case 'STRIKE': {
       const t = world.get(c.targetId);
       if (!t) { fail(`The ${c.targetName} got away`); return; }
+      if (identifyHunt(state, c)) emit('contract-progress', { contract: c, text: huntNamed(c) });
       if (t.combat?.status === 'wreck' || t.combat?.status === 'surrendered') done(`${c.targetName} ${t.combat.status === 'wreck' ? 'destroyed' : 'has struck'} — report to any ${FACTIONS[c.faction].short} port`);
       return;
     }

@@ -29,6 +29,7 @@ import {
 import { random, gaussian } from '../core/rng.js';
 import { createComms, commsTick } from './comms.js';
 import { createSensors, sensorsTick } from './sensors.js';
+import { createNavFlags, flagsTick } from './flags.js';
 import { createMissions, missionsTick } from './missions.js';
 import { createContracts, contractsTick } from './contracts.js';
 import { createTraffic, seedTraffic, trafficTick, ensurePopulation, DEFAULT_TRAFFIC } from './traffic.js';
@@ -122,6 +123,7 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
     systems: createSystems(classId),
     comms: createComms(),
     sensors: createSensors(),
+    navFlags: createNavFlags(),
     intel: createIntel(),
     jobs: createJobs(),
     missions: createMissions(),
@@ -165,6 +167,7 @@ export function upgradeState(state) {
   state.tc ??= createTrafficControl();
   state.service ??= createService(null);
   state.dossier ??= createDossier();
+  state.navFlags ??= createNavFlags();
   if (state.dock === undefined) state.dock = null;
   if (state.boarding === undefined) state.boarding = null;
   const fresh = state.traffic && !state.traffic.v;
@@ -421,6 +424,7 @@ export function minuteTick(state, { lite = false } = {}) {
   trafficTick(state);
   forcesTick(state, { lite });
   intelTick(state, emit);
+  flagsTick(state, emit);
 
   if (state.crewPolicy !== policyBefore) emit('crew-policy', { policy: state.crewPolicy });
 }

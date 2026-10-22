@@ -209,7 +209,7 @@ Rank raises military pay by 15% a step, opens the harder missions (holding a poi
 |---|---|---|---|
 | INTELLIGENCE | a sensor lock inside 300,000 km on 2–3 different enemy warships (or a proxy's raiders), held 10–20 minutes each | any | 5,000–12,000 |
 | HOLD THE POINT | at a war front, get within 75,000 km of a control point our side holds and stay 4–8 hours; three of our warships hold it with us, and the enemy sends 2–3 ships at it every 1.5–2.5 hours (four waves at most). Two hours off it and it is lost | 1 | 10,000–25,000, PDC rounds |
-| STRIKE (HVT) | destroy (or take the surrender of) a high-value target: an enemy destroyer or frigate on detached duty with 1–2 escorts (in a war only), a proxy's ringleader, a cell's gunship | 2 | 12,000–30,000 |
+| STRIKE (HVT) | destroy (or take the surrender of) a high-value target: an enemy destroyer or frigate on detached duty with 1–2 escorts (in a war only), a proxy's ringleader, a cell's gunship. A navy's squawks; a proxy's or a cell's runs dark, named only by its drive signature when the brief has it on file (half of them) | 2 | 12,000–30,000 |
 | COVERT | for one of our power's sub-factions, against a rival inside it: hold a lock on the rival's ship for 30–90 minutes without being identified by it (transponder off, keep away). If it makes us, the job is blown | 1 | 6,000–14,000 |
 
 Pay is rolled at posting and multiplied by our rank's pay factor. A mission whose fight ends before it is done fails.
@@ -237,7 +237,7 @@ Stations near hot zones (within 0.6 AU) also post conflict work, up to 40% of th
 
 | Contract | Work | Pay |
 |---|---|---|
-| BOUNTY | find a wanted pirate near the last reported position (it runs cold); destroy it, or disable it and accept its surrender (+50%); return | 3,000–8,000 |
+| BOUNTY | find a wanted pirate near the last reported position (it runs cold and dark: named only by its transponder, or by its drive signature seen in its plume when the brief has it on file, 60% of them); destroy it, or disable it and accept its surrender (+50%); return | 3,000–8,000 |
 | ESCORT | join a convoy ship within 10 km at its station. It departs at ≤ 0.5G, and raiders strike partway along the route. Keep it alive; collect at the destination | 2,500–5,000 + distance, PDC rounds |
 | SMUGGLE | carry contraband through a blockade, or into inner-planet space. An inspection that finds it ends the job | 6,000–12,000 + distance |
 | RECON | get within 300,000 km of a navy picket and hold a sensor lock on it for 30–90 minutes. Identification by that navy blows the job (and costs standing) | 4,000–9,000 |

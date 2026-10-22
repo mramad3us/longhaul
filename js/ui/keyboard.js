@@ -6,7 +6,7 @@ import { ui } from './context.js';
 
 /**
  * actions: { speed(n), togglePause(), nav(tab), missions(), jobs(), systems(), roster(),
- *            station(), combat(), weapons(), library(), service(), exterior(), log(), escape(), save(), devFlip(), devCut() }
+ *            station(), combat(), weapons(), library(), service(), exterior(), log(), flag(), escape(), save(), devFlip(), devCut() }
  */
 export function initKeyboard(actions) {
   document.addEventListener('keydown', (e) => {
@@ -23,7 +23,7 @@ export function initKeyboard(actions) {
       l: actions.missions, j: actions.jobs, b: actions.station, c: actions.combat, u: actions.suits,
       e: actions.systems, d: actions.roster, w: actions.weapons, i: actions.library, h: actions.comms, v: actions.service,
       x: actions.exterior, o: actions.log,
-      f: () => ui.settings.devMode && actions.devFlip(),
+      f: () => ui.settings.devMode ? actions.devFlip() : actions.flag(),
       Escape: actions.escape,
     };
     const fn = map[k];

@@ -8,7 +8,10 @@
 // progress, the "secure for burn" prompt, the hold's buttons). The
 // stance panel (stance.js) shares the route panel's slot. A ship that
 // isn't on our board is shown as what the plot reports of it (intel.js),
-// never as it is.
+// never as it is. The nav computer's marks (DARK, a mission's job, the
+// captain's lettered flags: sim/flags.js, marks.js) go with a ship's name
+// wherever it is listed; F (or FLAG on the card and the panel) flags what
+// is picked, and the CONTEXT panel lists the flags.
 // ============================================================
 
 import { ui } from './context.js';
@@ -24,7 +27,8 @@ import { engageRoute, abortRoute, overrideSecure, forceTurn, TURN_HOLD_MAX_MIN }
 import { crewSecureStatus, isSecured } from '../sim/crew-ai.js';
 import { driveLimitG, systemPerf, flightComputerState } from '../sim/systems.js';
 import { isConscious } from '../sim/crew.js';
-import { SENSOR_RANGES, REVEAL, setSensorRange, selectContact, toggleLock, contactById } from '../sim/sensors.js';
+import { SENSOR_RANGES, REVEAL, setSensorRange, selectContact, toggleLock, contactById, isDark } from '../sim/sensors.js';
+import { toggleFlag, flagOf, flagList, clearFlags, missionTargets, knownName, FLAG_LETTERS } from '../sim/flags.js';
 import { missionForEntity } from '../sim/missions.js';
 import { dockedStation } from '../sim/contracts.js';
 import { beginDocking, shipDockable, isDocked, dockedTo } from '../sim/docking.js';
@@ -44,6 +48,7 @@ import { relativeTo, velocityReference, STANCE_PHASE } from './hud.js';
 import { initStance, openStance, closeStance, stanceOpen, release as releaseStance } from './stance.js';
 import { STANCE_MODES } from '../sim/stance.js';
 import { ThreatView, renderFireControl, onFireControlClick, targetContact } from './combat.js';
+import { frameMarks, marksOf, markChips, markWords } from './marks.js';
 
 let tacModal = null, map = null, scanner = null, threat = null;
 let routeUI = null;          // { target, standoffKey, options, selected, computing }
@@ -91,7 +96,7 @@ export function initNav(h) {
   $$('[data-scanner-range]').forEach(b => b.addEventListener('click', () => { setSensorRange(ui.state, +b.dataset.scannerRange); syncButtons(); }));
 
   // Delegated actions inside panels
-  for (const id of ['#map-selection', '#scanner-detail', '#route-panel', '#route-status', '#route-mini', '#nav-prompt', '#hold-indicator', '#map-card']) {
+  for (const id of ['#map-selection', '#scanner-detail', '#route-panel', '#route-status', '#route-mini', '#nav-prompt', '#hold-indicator', '#map-card', '#ctx-flags']) {
     $(id).addEventListener('click', onPanelClick);
   }
   bus.on('route-arrived', () => { etaCache.key = ''; });
@@ -170,7 +175,10 @@ export function selectTarget(t) {
 // ---- FINDING THINGS ON THE MAP ----
 // A station under a crowd of traffic, a ship whose name we know: the pick
 // list offers everything under the pointer, and the search box finds by
-// name what we know of (bodies, stations, contacts, the plot's reports).
+// name what we know of (bodies, stations, contacts, the plot's reports),
+// and only where we know it is: a ship we have neither on the board nor
+// on the plot is not found, whatever its name (nor is a contact we have
+// not identified, by the name it hides).
 
 function choose(t) {
   hidePickList();
@@ -185,15 +193,16 @@ function choose(t) {
   renderSelection();
 }
 
-function labelOf(state, t) {
+function labelOf(state, t, fm) {
   const d = describeTarget(state, t);
-  return d ? { name: d.name, kind: `${d.kind}${d.report ? ' · reported' : ''}` } : { name: t.id, kind: '' };
+  return d ? { name: d.name, kind: `${d.kind}${d.report ? ' · reported' : ''}`, chips: markChips(marksFor(state, t, fm) || {}) } : { name: t.id, kind: '', chips: '' };
 }
 
 function showPickList(cands, sx, sy) {
   const s = ui.state;
   const box = $('#map-picklist');
-  const rows = cands.slice(0, 14).map(t => { const l = labelOf(s, t); return `<div class="ss-row" data-pick='${esc(JSON.stringify({ kind: t.kind, id: t.id }))}'><span>${esc(l.name)}</span><small>${esc(l.kind)}</small></div>`; }).join('');
+  const fm = frameMarks(s);
+  const rows = cands.slice(0, 14).map(t => { const l = labelOf(s, t, fm); return `<div class="ss-row" data-pick='${esc(JSON.stringify({ kind: t.kind, id: t.id }))}'><span>${esc(l.name)}${l.chips}</span><small>${esc(l.kind)}</small></div>`; }).join('');
   box.innerHTML = `<div class="ss-head">${cands.length} HERE — PICK ONE</div>${rows}`;
   const host = box.parentElement.getBoundingClientRect(), screen = $('[data-nav-screen="solar"]').getBoundingClientRect();
   box.style.left = `${Math.min(screen.left - host.left + sx + 12, host.width - 280)}px`;
@@ -218,7 +227,7 @@ function initSearch() {
   $('#solar-search-results').addEventListener('click', (e) => { const r = e.target.closest('[data-i]'); if (r) choose(searchHits[+r.dataset.i]?.t); });
 }
 
-/** What we know of by name: bodies and stations always, ships on our board, reports on the plot. */
+/** What we know of by name, and where: bodies and stations always, ships on our board, reports on the plot, charted marks. */
 function runSearch(q) {
   const s = ui.state;
   q = q.trim().toLowerCase();
@@ -238,7 +247,12 @@ function runSearch(q) {
   const tracks = s.intel?.tracks || {};
   let n = 0;
   for (const id in tracks) { const r = tracks[id]; if (r.name && n < 4000) { n++; add({ kind: 'entity', id }, r.name, `${r.shipClass || 'ship'} · reported`, 3); } }
-  for (const c of s.contracts.active) { const e = world.get(c.targetId); if (e) add({ kind: 'entity', id: e.id }, e.name, 'contract target', 1); }
+  // what our work points at, where we know it is (a hunted ship once named and held; its last-seen mark)
+  for (const [id, tag] of missionTargets(s)) {
+    const e = world.get(id);
+    const name = e && (liveKnowledge(s, e) || trackOf(s, id)) && knownName(s, id);
+    if (name) add({ kind: 'entity', id }, name, `${tag.toLowerCase()} · mission`, 1);
+  }
   const seen = new Set();
   searchHits = hits.sort((a, b) => a.score - b.score).filter(h => { const k = h.t.kind + h.t.id; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 14);
   renderSearch();
@@ -247,7 +261,8 @@ function runSearch(q) {
 function renderSearch() {
   const box = $('#solar-search-results');
   if (!searchHits.length) { box.innerHTML = '<div class="ss-head">nothing by that name</div>'; show(box, true); return; }
-  box.innerHTML = searchHits.map((h, i) => `<div class="ss-row ${i === searchSel ? 'active' : ''}" data-i="${i}"><span>${esc(h.name)}</span><small>${esc(h.kind)}</small></div>`).join('');
+  const s = ui.state, fm = frameMarks(s);
+  box.innerHTML = searchHits.map((h, i) => `<div class="ss-row ${i === searchSel ? 'active' : ''}" data-i="${i}"><span>${esc(h.name)}${h.t.kind === 'entity' ? markChips(marksFor(s, h.t, fm) || {}) : ''}</span><small>${esc(h.kind)}</small></div>`).join('');
   show(box, true);
 }
 
@@ -255,6 +270,7 @@ function hideSearch() { show($('#solar-search-results'), false); }
 
 // ---- TARGET HELPERS ----
 
+/** Where the display puts what is picked: what we know of where it is (never where a ship we can't see really is). */
 function navTargetPos() {
   const t = ui.nav.target;
   if (!t || !ui.state) return null;
@@ -263,6 +279,7 @@ function navTargetPos() {
     const est = estimate(ui.state, r, ui.state.clock.minute);
     return est ? { x: est.x, y: est.y } : null;
   }
+  if (t.kind === 'entity') { const e = getWorld(ui.state).get(t.id); if (!e || !liveKnowledge(ui.state, e)) return null; }
   return targetStateAt(ui.state, t, ui.state.clock.minute)?.pos || null;
 }
 
@@ -270,7 +287,7 @@ function navTargetPos() {
 function hoverLabel(h) {
   const s = ui.state;
   const d = s && describeTarget(s, h);
-  return d ? `${d.name} · ${d.kind}${d.report ? ' (reported)' : ''}` : null;
+  return d ? `${d.name} · ${d.kind}${d.report ? ' (reported)' : ''}${markWords(marksFor(s, h) || {})}` : null;
 }
 
 // ---- THE CARD ON THE DISPLAY ----
@@ -335,10 +352,13 @@ function cardHTML(s, t) {
     if (dockable && !(isDocked(s) && dockedTo(s)?.id === e.id)) acts.push('<button class="btn-mini" data-act="dock">DOCK</button>');
   }
   if (t.kind === 'entity' && inRadio(s, t.id)) acts.push('<button class="btn-mini" data-act="hail">HAIL</button>');
+  if (flaggable(e)) acts.push(flagButton(s, t.id, 'btn-mini'));
   acts.push('<button class="btn-mini" data-act="details" title="The full picture, in the CONTEXT panel">DETAILS</button>');
   const dot = d.faction ? `<i class="card-dot" style="background:${factionColor(d.faction)}"></i>` : '';
+  const chips = markChips(marksFor(s, t) || {});
   return `<div class="card-head">${dot}<span class="card-name">${esc(d.name)}</span><button class="card-x" data-act="card-close" title="Close">✕</button></div>
     <div class="card-kind">${esc(d.kind)}${d.faction && d.faction !== 'independent' ? ` · ${esc(FACTIONS[d.faction]?.short || d.faction)}` : ''}${d.report ? ' · <span class="card-report">ON THE PLOT</span>' : ''}</div>
+    ${chips ? `<div class="card-marks">${chips}</div>` : ''}
     ${facts.length ? `<div class="card-facts">${facts.map(([k, v]) => `<span><em>${k}</em> ${v}</span>`).join('')}</div>` : ''}
     <div class="card-acts">${acts.join('')}</div>`;
 }
@@ -362,13 +382,65 @@ function describeTarget(state, t) {
   if (report) return { name: report.name || 'Unidentified track', kind: report.shipClass || 'Ship', faction: report.faction, entity: e, report };
   if (!e || !liveKnowledge(state, e)) return null;
   const c = contactById(state, e.id);
-  const known = e.transponder || (c && c.name) || e.type === 'station' || e.type === 'nav';
+  // (on the board, by what the board knows; off it, charted: a contract's target on its published orbit)
+  const known = c ? !!c.name : e.type === 'station' || e.type === 'nav' || liveKnowledge(state, e) === 'charted';
   return {
     name: known ? e.name : (c?.signature || 'Unidentified contact'),
     kind: e.type === 'station' ? (e.shipClass || 'Station') : e.type === 'nav' ? 'Navigation mark' : (known ? e.shipClass || 'Ship' : 'Unknown'),
     faction: known ? e.faction : null,
     entity: e,
   };
+}
+
+/** The nav computer's marks on what is picked, from what we know of it: the board, a chart, the plot (marks.js). */
+function marksFor(state, t, fm = frameMarks(state)) {
+  if (t?.kind !== 'entity') return null;
+  const r = reportFor(state, t);
+  if (r) return marksOf(fm, t.id, r.dark, r.wreck);
+  const e = getWorld(state).get(t.id);
+  return e ? marksOf(fm, t.id, isDark(e), e.tags?.wreck) : null;
+}
+
+/** Ships and stations take a flag (sim/flags.js). */
+const flaggable = (e) => e?.type === 'ship' || e?.type === 'station';
+
+function flagButton(state, id, cls) {
+  const f = flagOf(state, id);
+  return `<button class="${cls} ${f ? 'flagged' : ''}" data-act="flag" title="${f ? `Clear flag ${f}` : 'Flag it on every display'} (F)">${f ? `FLAG ${f} ✕` : 'FLAG'}</button>`;
+}
+
+/** Flag what is picked, or take its flag off (F). */
+export function toggleFlagOnPick() {
+  const s = ui.state, t = ui.nav.target;
+  if (!s) return;
+  if (t?.kind !== 'entity' || !flaggable(getWorld(s).get(t.id))) { toast('Pick a ship or a station to flag', 'warn'); return; }
+  const r = toggleFlag(s, t.id);
+  toast(r.text, r.ok ? 'ok' : 'warn');
+  if (r.ok) logEntry(`Nav: ${r.text}`, 'nav');
+  ui.nav._selAt = 0;
+  cardKey = '';
+  renderSelection();
+}
+
+/** The flags, A to Z, in the CONTEXT panel: what each is, where it was last, a click picks it. */
+function renderFlags(state) {
+  const box = $('#ctx-flags');
+  if (!box) return;
+  const list = flagList(state);
+  if (!list.length) { setHTML(box, ''); show(box, false); return; }
+  const now = state.clock.minute;
+  const rows = list.map(f => {
+    const t = { kind: 'entity', id: f.id };
+    const d = describeTarget(state, t);
+    const r = d?.report;
+    const where = r ? `plot · ${ageLabel(now - r.at)} old` : d ? (() => { const rel = relativeTo(state, t); return rel ? fmtMeters(rel.dist) : 'charted'; })() : 'no track';
+    const m = marksFor(state, t) || {};
+    return `<div class="flag-row ${ui.nav.target?.id === f.id ? 'active' : ''}" data-act="flag-pick" data-id="${esc(f.id)}">
+      <span class="mk mk-flag">${f.letter}</span><span class="flag-name">${esc(d?.name || f.name || 'Unidentified contact')}</span>${markChips({ ...m, flag: null })}
+      <span class="flag-where">${esc(where)}</span><button class="flag-x" data-act="flag-clear" data-id="${esc(f.id)}" title="Clear flag ${f.letter}">✕</button></div>`;
+  }).join('');
+  setHTML(box, `<div class="sub-head">FLAGS <span class="flag-count">${list.length}/${FLAG_LETTERS.length}</span>${list.length > 1 ? '<button class="flag-clear-all" data-act="flag-clear-all" title="Clear every flag">CLEAR ALL</button>' : ''}</div>${rows}`);
+  show(box, true);
 }
 
 /** A class or station name that opens its page in the ship's library. */
@@ -388,6 +460,7 @@ function renderSelection() {
   const t = ui.nav.target;
   const mapPanel = $('#map-selection');
   const scanPanel = $('#scanner-detail');
+  if (s) renderFlags(s);
   show(mapPanel, false); show(scanPanel, false);
   if (!s || !t || routeUI || stanceOpen()) return;
   const d = describeTarget(s, t);
@@ -402,7 +475,7 @@ function renderSelection() {
     if (!c) return;
     const lock = s.sensors.locked === t.id;
     const row = (k, v, cls = '') => `<div class="scanner-detail-row"><span class="scanner-detail-key">${k}</span><span class="scanner-detail-val ${cls}">${v}</span></div>`;
-    const html = `<div class="scanner-detail-header">${c.sos ? '<span class="scanner-sos-tag">⚠ SOS</span> ' : ''}${esc(c.name || c.signature || 'CONTACT')}</div>
+    const html = `<div class="scanner-detail-header">${c.sos ? '<span class="scanner-sos-tag">⚠ SOS</span> ' : ''}${esc(c.name || c.signature || 'CONTACT')}${markChips(marksFor(s, t) || {})}</div>
       ${row('TRANSPONDER', c.name ? esc(c.name) : 'SILENT', c.name ? 'scanner-val-accent' : 'scanner-val-dim')}
       ${row('SIGNATURE', c.signature || '—')}
       ${row('FACTION', c.faction || '—', c.faction ? '' : 'scanner-val-dim')}
@@ -422,6 +495,7 @@ function renderSelection() {
         ${!c.ordnance ? `<button class="scanner-track-btn ${s.combat.target === t.id ? 'tracking' : ''}" data-act="target">${s.combat.target === t.id ? 'TARGETED' : 'TARGET'}</button>` : ''}
         ${dockButton(s, d.entity)}
         ${!c.ordnance && !c.station && boardable(s, d.entity).ok ? `<button class="scanner-track-btn" data-act="board">${d.entity?.tags?.wreck ? 'SALVAGE' : 'BOARD'}</button>` : ''}
+        ${flaggable(d.entity) ? flagButton(s, t.id, 'scanner-track-btn') : ''}
       </div>`;
     if (setHTML(scanPanel, html)) {
       const cv = scanPanel.querySelector('canvas[data-hull]');
@@ -433,7 +507,7 @@ function renderSelection() {
 
   if (d.report) { renderReport(s, t, d, routing); return; }
   const html = `<div class="ms-header">
-      <span class="ms-name">${esc(d.name)}</span>
+      <span class="ms-name">${esc(d.name)}${markChips(marksFor(s, t) || {})}</span>
       <span class="ms-kind">${esc(d.kind)}${d.faction && d.faction !== 'independent' ? ` · ${esc(d.faction)}` : ''}</span>
     </div>
     <div class="ms-stats">
@@ -445,6 +519,7 @@ function renderSelection() {
       ${t.id === 'Sol' ? '' : '<button class="route-zoom-btn" data-act="stance">STANCE</button>'}
       <button class="route-zoom-btn" data-act="focus">FOCUS</button>
       ${canHail ? '<button class="route-zoom-btn" data-act="hail">HAIL</button>' : ''}
+      ${flaggable(d.entity) ? flagButton(s, t.id, 'route-zoom-btn') : ''}
     </div>`;
   setHTML(mapPanel, html);
   show(mapPanel, true);
@@ -464,7 +539,7 @@ function renderReport(s, t, d, routing) {
   const dist = est ? Math.hypot(est.x - f.x, est.y - f.y) * AU_KM : null;
   const plotable = !!d.entity && r.kind !== 'fix';
   const html = `<div class="ms-header">
-      <span class="ms-name">${esc(d.name)}</span>
+      <span class="ms-name">${esc(d.name)}${markChips(marksFor(s, t) || {})}</span>
       <span class="ms-kind">${esc(d.kind)}${d.faction && d.faction !== 'independent' ? ` · ${esc(d.faction)}` : ''} · <span class="ms-report">REPORTED</span></span>
     </div>
     <div class="ms-stats">
@@ -480,6 +555,7 @@ function renderReport(s, t, d, routing) {
     <div class="panel-actions">
       ${routing ? '<button class="route-abort-btn" data-act="abort">ABORT ROUTE</button>' : plotable ? '<button class="route-plot-btn" data-act="plot" title="Fly to its filed plan; sensors take over on approach">PLOT ROUTE</button>' : '<span class="ms-hint">No live track: close in until our sensors hold it</span>'}
       <button class="route-zoom-btn" data-act="focus">FOCUS</button>
+      ${flaggable(d.entity) ? flagButton(s, t.id, 'route-zoom-btn') : ''}
     </div>`;
   setHTML($('#map-selection'), html);
   show($('#map-selection'), true);
@@ -537,6 +613,15 @@ function onPanelClick(e) {
       break;
     case 'station': hooks.openStation(); break;
     case 'open-nav': openNav('solar'); break;
+    case 'flag': toggleFlagOnPick(); break;
+    case 'flag-pick': selectTarget({ kind: 'entity', id: btn.dataset.id }); break;
+    case 'flag-clear': {
+      const r = toggleFlag(s, btn.dataset.id);
+      if (r.ok) logEntry(`Nav: ${r.text}`, 'nav');
+      cardKey = ''; renderSelection();
+      break;
+    }
+    case 'flag-clear-all': clearFlags(s); logEntry('Nav: every flag cleared', 'nav'); cardKey = ''; renderSelection(); break;
   }
 }
 

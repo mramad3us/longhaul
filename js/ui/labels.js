@@ -9,7 +9,8 @@
 // important first: to the right of the mark, else to its left, above,
 // below; a name with no free place is left off (the mark is still there
 // to hover and click; our ship and the selection go first, so they keep
-// theirs). Names stay inside the display.
+// theirs). Names stay inside the display. A name can carry tags after it
+// in their own colours (DARK, a mission's job: marks.js), placed with it.
 //
 // Cost: what is placed goes into a coarse grid of cells, so a name is
 // only tested against what is near it: a map with thousands of marks
@@ -18,6 +19,7 @@
 
 const PX = /(\d+(?:\.\d+)?)px/;
 const CELL = 48;
+const GAP = 5;            // px between a name and its tags
 
 export class Labels {
   constructor() { this.list = []; this.grid = new Map(); }
@@ -33,10 +35,10 @@ export class Labels {
    * to the text, or [across, up and down] for a long mark (a hull seen side
    * on). `above` tries above and below first. `fixed` names have one place
    * only (a ring's label, a zone's corner): (x + off, y) as the text's left
-   * and middle.
+   * and middle. `tags`: [{ text, color }] written after the name.
    */
-  add(text, x, y, { off = 8, font, color, alpha = 1, pri = 1, fixed = false, above = false } = {}) {
-    if (text) this.list.push({ text, x, y, off, font, color, alpha, pri, fixed, above });
+  add(text, x, y, { off = 8, font, color, alpha = 1, pri = 1, fixed = false, above = false, tags = null } = {}) {
+    if (text) this.list.push({ text, x, y, off, font, color, alpha, pri, fixed, above, tags });
   }
 
   /** Visit the grid cells a box touches; stop when `fn` says false. */
@@ -64,7 +66,9 @@ export class Labels {
     ctx.textBaseline = 'middle';
     for (const l of list) {
       ctx.font = l.font;
-      const w = ctx.measureText(l.text).width;
+      const tw = ctx.measureText(l.text).width;
+      let w = tw;
+      if (l.tags) for (const t of l.tags) w += GAP + (t.w = ctx.measureText(t.text).width);
       const h = +(PX.exec(l.font)?.[1] ?? 11);
       // (a name's box is its text, no margin: the gap to its mark is `off`)
       const box = (tx, ty) => ({ x0: tx, y0: ty - h * 0.5, x1: tx + w, y1: ty + h * 0.5, tx, ty });
@@ -78,6 +82,10 @@ export class Labels {
       ctx.globalAlpha = l.alpha;
       ctx.fillStyle = l.color;
       ctx.fillText(l.text, at.tx, at.ty);
+      if (l.tags) {
+        let x = at.tx + tw;
+        for (const t of l.tags) { ctx.fillStyle = t.color; ctx.fillText(t.text, x += GAP, at.ty); x += t.w; }
+      }
     }
     ctx.globalAlpha = 1;
     ctx.textBaseline = 'alphabetic';

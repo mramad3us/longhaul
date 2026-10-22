@@ -11,7 +11,10 @@
 //                                for the required time, return
 // Near hot zones (conflict.js) the boards also carry the dangerous work:
 //   BOUNTY   — find a wanted pirate; destroy it, or disable it and take
-//              its surrender (paid half again), return
+//              its surrender (paid half again), return. It runs dark and
+//              is on no registry: it is named only by its transponder or,
+//              when the brief has it on file, its drive signature seen in
+//              its plume (sensors.js identifyHunt)
 //   ESCORT   — fly formation with a convoy ship to its destination; it
 //              departs when we join it, and raiders will come
 //   SMUGGLE  — carry contraband through a blockade or into inner-planet
@@ -33,7 +36,8 @@ import { AU_M, AU_KM, RANGE, DAY_MIN, G0, MIN_S } from '../core/constants.js';
 import { random, randInt, randRange, pick, weightedPick, chance } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { inPortSpace, PORT_M } from './holding.js';
-import { createEntity } from './entities.js';
+import { createEntity, newSignature } from './entities.js';
+import { identifyHunt, huntNamed } from './sensors.js';
 import { rollIdentity, CLASSES, TECH, hullPoints, PLAYER_CLASS } from './ship-classes.js';
 import { restockSuits } from './life-support.js';
 import { overhaulSystems, shipSystems, unit } from './systems.js';
@@ -191,6 +195,7 @@ function generate(state, station, others) {
 const STANDING_TO_TRADE = -20;        // below this a power's stations won't deal with us
 const HOT_TYPES = new Set([ContractType.BOUNTY, ContractType.ESCORT, ContractType.SMUGGLE, ContractType.RECON]);
 const HOT_SHARE = 0.4;               // share of board slots offered to conflict work when any applies
+const BOUNTY_SIG_ON_FILE = 0.6;      // share of bounties whose brief carries the pirate's drive signature
 const HOT_REACH_AU = 0.6;             // zones this close to a station shape its board
 const SMUGGLE_GOODS = ['unregistered weapons', 'medical supplies for the blockaded', 'protomolecule research samples', 'black-market fusion pellets', 'Belter militia ammunition', 'stolen navy parts'];
 
@@ -226,9 +231,12 @@ function generateHot(state, station, others) {
     case ContractType.BOUNTY: {
       const ship = rollIdentity({ category: 'irregular', faction: 'pirate', state });
       const where = o.zone ? `near ${o.zone.body}` : `out past ${station.orbit.body}`;
-      return { ...base, ship, body: o.zone?.body || station.orbit.body, distAU: randRange(0.008, 0.03),
+      const signature = chance(BOUNTY_SIG_ON_FILE) ? newSignature() : null;
+      return { ...base, ship, signature, body: o.zone?.body || station.orbit.body, distAU: randRange(0.008, 0.03),
         title: `Bounty: the ${ship.name}`,
-        description: `The ${ship.shipClass} "${ship.name}" has been taking ships ${where}. ${station.name} pays for it destroyed — half again if you disable it and take the crew's surrender. Last reported position on file; it runs cold.`,
+        description: `The ${ship.shipClass} "${ship.name}" has been taking ships ${where}. ${station.name} pays for it destroyed — half again if you disable it and take the crew's surrender. Last reported position on file; it runs cold and dark. ${signature
+          ? `Its drive signature is on file (${signature}): we will know it when it burns.`
+          : 'No drive signature on file: unless it squawks, it is one more dark contact.'}`,
         reward: { credits: randInt(3000, 8000) }, aliveBonus: 0.5, deadline: randInt(6, 14) * DAY_MIN, expires: now + randInt(2, 4) * DAY_MIN };
     }
     case ContractType.ESCORT: {
@@ -286,7 +294,7 @@ function spawnHotTarget(state, station, c) {
   const pos = { x: mark.pos.x + Math.cos(ang) * off, y: mark.pos.y + Math.sin(ang) * off };
   const vel = { vx: mark.vel.vx, vy: mark.vel.vy };
   const e = c.type === ContractType.BOUNTY
-    ? spawnAgent(state, { role: 'pirate', cls: c.ship.cls, faction: 'pirate', name: c.ship.name, pos, vel, contract: c.id, transponder: false, tags: { wanted: true, contract: c.id } })
+    ? spawnAgent(state, { role: 'pirate', cls: c.ship.cls, faction: 'pirate', name: c.ship.name, pos, vel, contract: c.id, transponder: false, signature: c.signature || undefined, tags: { wanted: true, contract: c.id } })
     : spawnAgent(state, { role: 'navy', kind: pick(['corvette', 'frigate']), category: 'military', faction: c.watched, pos, vel, contract: c.id, home: { kind: 'entity', id: mark.id }, zone: c.zone, tags: { contract: c.id } });
   c.markId = mark.id;
   c.targetId = e.id; c.targetName = e.name;
@@ -302,6 +310,7 @@ function hotProgress(state, c, emit) {
     case ContractType.BOUNTY: {
       if (c.phase !== 'active') return;
       if (!t) { failContract(state, c, `The ${c.targetName} got away`, emit); return; }
+      if (identifyHunt(state, c)) emit('contract-progress', { contract: c, text: huntNamed(c) });
       if (t.combat?.status === 'wreck' || t.combat?.status === 'surrendered') {
         c.outcome = t.combat.status === 'surrendered' ? 'captured' : 'destroyed';
         c.phase = 'return';

@@ -204,6 +204,8 @@ const HANDLERS = {
   'zone-news': ({ text, lagMin }) => logEntry(`Newsfeed${aged(lagMin)}: ${text}`, 'comms'),
   'zone-incident': ({ text, lagMin }) => logEntry(`Newsfeed${aged(lagMin)}: ${text}`, 'comms'),
   'intel-digest': () => {},
+  'flag-back': ({ letter, name }) => { logEntry(`Nav: flag ${letter} back on the board${name ? `: ${name}` : ''}`, 'nav'); toast(`FLAG ${letter} BACK ON THE BOARD`, 'nav'); },
+  'flag-lost': ({ letter, name }) => logEntry(`Nav: flag ${letter} dropped, the plot has lost ${name ? `the ${name}` : 'the contact'}`, 'nav'),
 
   // ---- The powers, and our service (they reach us at light speed: politics-news; the rest is ours)
   'politics-news': ({ text, kind, lagMin }) => {
