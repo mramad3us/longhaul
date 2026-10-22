@@ -11,7 +11,7 @@ import { AU_M, AU_KM } from '../core/constants.js';
 import { formatDuration } from '../core/clock.js';
 import { getWorld } from '../sim/world.js';
 import { hailDialogue, signalBars } from '../sim/comms.js';
-import { acceptMission, declineMission } from '../sim/missions.js';
+import { acceptMission, declineMission, activeMissions } from '../sim/missions.js';
 import { contractsAt, acceptContract, completeContract, deliverable, needsBerth, inPort, dockedStation, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, priceOf, CONTRACT_LABEL } from '../sim/contracts.js';
 import { bus } from '../core/events.js';
 import { jobLabel, describeActivity } from './shipboard.js';
@@ -92,10 +92,15 @@ function onGenericClick(e) {
 
 // ---- MISSIONS LOG ----
 
+const SOS_DONE_SHOWN = 4;     // finished distress calls listed under the live ones
+
 export function openMissions() {
   const render = () => {
     const s = ui.state;
-    const sos = s.missions.list.slice().reverse();
+    // live calls, and only the last few finished ones: a long game piles them up
+    const open = new Set(activeMissions(s));
+    const done = new Set(s.missions.list.filter(m => !open.has(m)).slice(-SOS_DONE_SHOWN));
+    const sos = s.missions.list.filter(m => open.has(m) || done.has(m)).reverse();
     const act = s.contracts.active;
     const hist = s.contracts.history.slice(-12).reverse();
     const timer = (min) => min >= 60 ? formatDuration(min) : `${Math.max(0, Math.round(min))} min`;
