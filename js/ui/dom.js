@@ -89,6 +89,19 @@ export function fmtAngle(rad) {
 }
 
 /** Device-pixel-ratio aware canvas that tracks its container size. */
+/** The pick nearest (x, y) within `r` px, from a display's [{ id, x, y }], or null. */
+export function nearestHit(hits, x, y, r = 18) {
+  let best = null, bd = r * r;
+  for (const h of hits) { const d = (h.x - x) ** 2 + (h.y - y) ** 2; if (d < bd) { bd = d; best = h; } }
+  return best;
+}
+
+/** A display's pointer: the hand over something it can pick, else its own (the crosshair). */
+export function pointAt(canvas, pickable) {
+  const c = pickable ? 'var(--cur-hand, pointer)' : '';
+  if (canvas.style.cursor !== c) canvas.style.cursor = c;
+}
+
 export class FitCanvas {
   constructor(container, { className = '' } = {}) {
     this.container = container;

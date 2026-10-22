@@ -22,7 +22,7 @@ import { CLASSES } from '../sim/ship-classes.js';
 import { hullOf } from '../sim/hulls.js';
 import { drawHull as drawHullArt } from './hull-art.js';
 import { fxList } from './fx.js';
-import { FitCanvas } from './dom.js';
+import { FitCanvas, pointAt } from './dom.js';
 import { TileType } from '../svg-icons.js';
 import { DECK_GAP } from '../sim/ship-layout.js';
 import { frameMarks, marksOf, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
@@ -128,7 +128,7 @@ export class TacView {
     this._hits = [];
     if (onSelect) {
       container.addEventListener('pointerdown', (e) => onSelect(this.hit(container, e)));
-      container.addEventListener('pointermove', (e) => { container.style.cursor = this.hit(container, e) ? 'pointer' : 'default'; });
+      container.addEventListener('pointermove', (e) => pointAt(this.fc.canvas, this.hit(container, e)));
     }
   }
 

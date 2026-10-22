@@ -33,7 +33,7 @@ import { zonePos, ZONE_KINDS } from '../sim/conflict.js';
 import { getBody } from '../sim/ephemeris.js';
 import { estimate, liveKnowledge, LIGHT_SECOND_AU, LIGHT_MINUTE_AU } from '../sim/intel.js';
 import { isDark } from '../sim/sensors.js';
-import { FitCanvas, fmtKm } from './dom.js';
+import { FitCanvas, fmtKm, pointAt } from './dom.js';
 import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
 
@@ -143,7 +143,7 @@ export class SolarMap {
           this.follow = null;
           this.cx = drag.cx - dx / this.scale;
           this.cy = drag.cy + dy / this.scale;
-          el.style.cursor = 'var(--cur-move, grabbing)';
+          this.fc.canvas.style.cursor = 'var(--cur-move, grabbing)';
         }
       } else {
         const hit = this.pick(e.clientX - r.left, e.clientY - r.top);
@@ -152,7 +152,7 @@ export class SolarMap {
           this.hover = hit;
           this.onHover(hit);
         }
-        el.style.cursor = hit ? 'var(--cur-hand, pointer)' : 'var(--cur-cross, crosshair)';
+        pointAt(this.fc.canvas, hit);
       }
     });
     el.addEventListener('pointerup', (e) => {
@@ -168,7 +168,7 @@ export class SolarMap {
         }
       }
       drag = null;
-      el.style.cursor = 'var(--cur-cross, crosshair)';
+      pointAt(this.fc.canvas, false);
     });
   }
 

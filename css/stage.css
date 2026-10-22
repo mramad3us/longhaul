@@ -30,7 +30,7 @@
   border: 1px solid var(--hull-accent);
   box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 6px 24px rgba(0,0,0,0.5);
   overflow: hidden;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
 }
 .stage-near .stage-pip { left: auto; right: 14px; top: 14px; bottom: auto; width: 360px; height: 220px; }
 .stage-pip > .ship-container { width: 100%; height: 100%; box-sizing: border-box; padding-top: 18px; display: flex; align-items: center; justify-content: center; }
@@ -84,11 +84,11 @@
 .dh-group { display: inline-flex; gap: 2px; margin-right: 4px; }
 .dh-btn {
   font: 9px var(--font-pixel); padding: 5px 7px; background: var(--bg-raised); color: var(--text-secondary);
-  border: 1px solid var(--hull-accent); cursor: pointer;
+  border: 1px solid var(--hull-accent); cursor: var(--cur-hand, pointer);
 }
 .dh-btn:hover { color: var(--accent-bright); border-color: var(--accent); }
 .dh-btn.active { color: var(--bg-void); background: var(--accent); border-color: var(--accent); }
-.dh-btn[disabled] { opacity: 0.35; cursor: not-allowed; }
+.dh-btn[disabled] { opacity: 0.35; cursor: var(--cur-default, not-allowed); }
 .dh-primary { color: var(--accent-bright); border-color: var(--accent); }
 .dh-warnbtn { color: var(--warning); border-color: var(--warm-dim); }
 .dh-keys { margin-top: 8px; font-size: 10px; color: var(--text-dim); line-height: 1.5; }
@@ -108,7 +108,7 @@
 .tc-chip .tc-ok { color: var(--ok); }
 .tc-chip .tc-warn { color: var(--warning); }
 .tc-chip .tc-bad { color: var(--danger); }
-.tc-chip button { font: 8px var(--font-pixel); padding: 4px 6px; background: var(--bg-raised); color: var(--accent-bright); border: 1px solid var(--accent-dim); cursor: pointer; }
+.tc-chip button { font: 8px var(--font-pixel); padding: 4px 6px; background: var(--bg-raised); color: var(--accent-bright); border: 1px solid var(--accent-dim); cursor: var(--cur-hand, pointer); }
 .stage-prox .tc-chip, .stage-docked .tc-chip { left: 14px; transform: none; }
 
 .comms-ticker {
@@ -138,7 +138,7 @@
 .cm-title { font: 11px var(--font-pixel); color: var(--accent); letter-spacing: 2px; }
 .cm-cols { flex: 1; display: grid; grid-template-columns: 230px 1fr 260px; min-height: 0; }
 .cm-channels { border-right: 1px solid var(--hull-primary); overflow-y: auto; }
-.cm-ch { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-bottom: 1px solid rgba(22,32,48,0.7); cursor: pointer; }
+.cm-ch { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-bottom: 1px solid rgba(22,32,48,0.7); cursor: var(--cur-hand, pointer); }
 .cm-ch:hover { background: var(--bg-raised); }
 .cm-ch.active { background: var(--bg-elevated); border-left: 2px solid var(--accent); }
 .cm-ch-name { font: 12px var(--font-mono); color: var(--text-primary); }
@@ -155,9 +155,9 @@
 .cm-line.cm-sys { color: var(--text-dim); font-size: 11px; align-self: center; }
 .cm-line .cm-who { display: block; font: 8px var(--font-pixel); color: var(--text-dim); margin-bottom: 2px; letter-spacing: 1px; }
 .cm-topics { border-top: 1px solid var(--hull-primary); padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 6px; max-height: 40%; overflow-y: auto; }
-.cm-topic { font: 12px var(--font-mono); padding: 6px 10px; background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--hull-accent); cursor: pointer; text-align: left; }
+.cm-topic { font: 12px var(--font-mono); padding: 6px 10px; background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--hull-accent); cursor: var(--cur-hand, pointer); text-align: left; }
 .cm-topic:hover { border-color: var(--accent); color: var(--accent-bright); }
-.cm-topic[disabled] { opacity: 0.4; cursor: not-allowed; }
+.cm-topic[disabled] { opacity: 0.4; cursor: var(--cur-default, not-allowed); }
 .cm-topic.cm-threat { border-color: var(--warm-dim); color: var(--warning); }
 .cm-topic .cm-why { color: var(--text-dim); font-size: 10px; margin-left: 6px; }
 .cm-sub { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
@@ -170,7 +170,7 @@
 /* ---- BOARDING ---- */
 .dialog.dialog-boarding { width: min(760px, 94vw); max-width: none; }
 .bd-party { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; margin: 8px 0 12px; }
-.bd-member { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--bg-raised); border: 1px solid var(--hull-primary); font: 11px var(--font-mono); cursor: pointer; }
+.bd-member { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--bg-raised); border: 1px solid var(--hull-primary); font: 11px var(--font-mono); cursor: var(--cur-hand, pointer); }
 .bd-member.on { border-color: var(--accent); }
 .bd-member small { color: var(--text-dim); display: block; }
 .bd-log { max-height: 220px; overflow-y: auto; font: 11px var(--font-mono); color: var(--text-secondary); border-top: 1px solid var(--hull-primary); padding-top: 8px; margin-top: 8px; }
@@ -198,7 +198,7 @@
   background: rgba(6, 12, 20, 0.97); border: 1px solid var(--hull-accent);
 }
 .solar-search-results { top: 28px; right: 0; }
-.ss-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 10px; font: 11px var(--font-mono); color: var(--text-primary); cursor: pointer; border-bottom: 1px solid rgba(22,32,48,0.7); }
+.ss-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 10px; font: 11px var(--font-mono); color: var(--text-primary); cursor: var(--cur-hand, pointer); border-bottom: 1px solid rgba(22,32,48,0.7); }
 .ss-row:hover, .ss-row.active { background: var(--bg-elevated); color: var(--accent-bright); }
 .ss-row small { color: var(--text-dim); }
 .map-picklist .ss-head { padding: 5px 10px; font: 8px var(--font-pixel); color: var(--text-dim); letter-spacing: 1px; }
@@ -206,7 +206,7 @@
 /* ---- FIRE ABOARD (fire.js) & THE SUITS SWITCH ---- */
 .deck-fire { fill: #FF6A1A; opacity: var(--fire, 0.3); mix-blend-mode: screen; animation: deck-fire 0.9s steps(3) infinite alternate; }
 @keyframes deck-fire { from { opacity: calc(var(--fire, 0.3) * 0.6); } to { opacity: var(--fire, 0.3); } }
-.deck-label[data-deck-menu] { cursor: pointer; }
+.deck-label[data-deck-menu] { cursor: var(--cur-hand, pointer); }
 .deck-label[data-deck-menu]:hover { fill: var(--accent-bright); }
 .suits-btn.active { border-color: var(--warning); color: var(--warning); box-shadow: 0 0 8px rgba(226, 163, 85, 0.35); }
 .suits-btn.active .combat-btn-status { color: var(--warning); }

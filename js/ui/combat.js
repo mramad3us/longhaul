@@ -16,7 +16,7 @@
 // ============================================================
 
 import { ui } from './context.js';
-import { esc, setHTML, fmtNum, fmtKm, fmtSpeed, FitCanvas } from './dom.js';
+import { esc, setHTML, fmtNum, fmtKm, fmtSpeed, FitCanvas, nearestHit, pointAt } from './dom.js';
 import { toast } from './toast.js';
 import { logEntry } from './log.js';
 import { AU_KM } from '../core/constants.js';
@@ -52,13 +52,9 @@ export class ThreatView {
     this.labels = new Labels();
     this.onSelect = onSelect || (() => {});
     this._hits = [];
-    container.addEventListener('pointerdown', (e) => {
-      const r = container.getBoundingClientRect();
-      const x = e.clientX - r.left, y = e.clientY - r.top;
-      let best = null, bd = 18 * 18;
-      for (const h of this._hits) { const d = (h.x - x) ** 2 + (h.y - y) ** 2; if (d < bd) { bd = d; best = h; } }
-      this.onSelect(best ? best.id : null);
-    });
+    const at = (e) => { const r = container.getBoundingClientRect(); return nearestHit(this._hits, e.clientX - r.left, e.clientY - r.top); };
+    container.addEventListener('pointerdown', (e) => this.onSelect(at(e)?.id ?? null));
+    container.addEventListener('pointermove', (e) => pointAt(this.fc.canvas, at(e)));
   }
 
   render(state) {

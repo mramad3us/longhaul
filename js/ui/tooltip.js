@@ -9,12 +9,17 @@
 // never shows; modules keep writing `title=` as they always have.
 //
 // POINTERS are pixel art (the one place the console keeps the old
-// pixel look): an arrow, a hand over what can be pressed, a crosshair
-// over the displays that pick things, a move cross on title bars, and
-// resize arrows on grips and splitters. They are drawn here from small
-// pixel maps into SVG data URIs at twice their size, crisp-edged, and
-// set as CSS variables the stylesheet uses (`cursor: var(--cur-hand)`),
-// with the system pointer as the fallback.
+// pixel look): an arrow, a hand over what can be pressed (a contact on a
+// display too), a crosshair over the displays that pick things, a move
+// cross on title bars and for dragging a display, and resize arrows on
+// grips and splitters. They are drawn here from small pixel maps into
+// crisp-edged SVG data URIs and set as CSS variables every stylesheet
+// uses (`cursor: var(--cur-hand, pointer)`, never a bare system pointer),
+// with the system pointer as the fallback. A pixel of the art is a whole
+// number of the screen's pixels, the arrow about the system's size, and
+// no pointer is more than 32 px a side: Chrome swaps a bigger one for the
+// system's near the window's edge. Moved to a screen of another density,
+// they are drawn again for it.
 // ============================================================
 
 const DWELL_MS = 380;
@@ -106,7 +111,17 @@ const MAPS = {
 
 const INK = '#0A0E13', FILL = '#E8EEF4', HOT = '#3EC7E6';
 
-function svgFor(name, scale = 2) {
+/**
+ * CSS px per pixel of the art: a whole number of device pixels, about 1.4
+ * of them (one on a plain screen, three on a Retina one: the arrow 18 px
+ * tall there, as the system's is).
+ */
+function pixelScale() {
+  const dpr = window.devicePixelRatio || 1;
+  return Math.max(1, Math.round(dpr * 1.4)) / dpr;
+}
+
+function svgFor(name, scale) {
   const m = MAPS[name];
   const h = m.px.length, w = Math.max(...m.px.map(r => r.length));
   let rects = '';
@@ -115,18 +130,25 @@ function svgFor(name, scale = 2) {
     else if (c === '.') rects += `<rect x="${x}" y="${y}" width="1" height="1" fill="${name === 'cross' ? HOT : FILL}"/>`;
   }));
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w * scale}" height="${h * scale}" viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges">${rects}</svg>`;
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${m.hot[0] * scale} ${m.hot[1] * scale}`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${Math.round(m.hot[0] * scale)} ${Math.round(m.hot[1] * scale)}`;
 }
+
+let density = null;
 
 /** Set the pointer variables on the document (the stylesheet falls back to the system's). */
 export function initPointers() {
   const root = document.documentElement.style;
-  root.setProperty('--cur-default', `${svgFor('arrow')}, default`);
-  root.setProperty('--cur-hand', `${svgFor('hand')}, pointer`);
-  root.setProperty('--cur-cross', `${svgFor('cross')}, crosshair`);
-  root.setProperty('--cur-move', `${svgFor('move')}, move`);
-  root.setProperty('--cur-ew', `${svgFor('ew')}, ew-resize`);
-  root.setProperty('--cur-ns', `${svgFor('ns')}, ns-resize`);
-  root.setProperty('--cur-nwse', `${svgFor('nwse')}, nwse-resize`);
-  root.setProperty('--cur-text', `${svgFor('text')}, text`);
+  const k = pixelScale();
+  root.setProperty('--cur-default', `${svgFor('arrow', k)}, default`);
+  root.setProperty('--cur-hand', `${svgFor('hand', k)}, pointer`);
+  root.setProperty('--cur-cross', `${svgFor('cross', k)}, crosshair`);
+  root.setProperty('--cur-move', `${svgFor('move', k)}, move`);
+  root.setProperty('--cur-ew', `${svgFor('ew', k)}, ew-resize`);
+  root.setProperty('--cur-ns', `${svgFor('ns', k)}, ns-resize`);
+  root.setProperty('--cur-nwse', `${svgFor('nwse', k)}, nwse-resize`);
+  root.setProperty('--cur-text', `${svgFor('text', k)}, text`);
+  // (another screen, or the page zoomed: drawn again at its density)
+  density?.removeEventListener('change', initPointers);
+  density = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  density.addEventListener('change', initPointers);
 }

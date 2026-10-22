@@ -88,6 +88,7 @@
 
 /* ---- BASE ---- */
 html, body { background: var(--c-void); color: var(--c-text); font-family: var(--f-ui); font-size: 13px; cursor: var(--cur-default, default); }
+label { cursor: var(--cur-default, default); }
 body { -webkit-font-smoothing: antialiased; }
 button, a, [data-act], [data-action], .tac-tab, .mv-tab, .sp-item, .license-opt, label[for], select, .panel-toggle, [data-lib] { cursor: var(--cur-hand, pointer); }
 button:disabled { cursor: var(--cur-default, default); }
@@ -375,7 +376,7 @@ button.flagged { color: var(--c-flag); border-color: var(--c-flag); }
 .flag-count { font-family: var(--f-data); font-weight: 400; letter-spacing: 0; }
 .flag-clear-all { margin-left: auto; background: none; border: 0; padding: 0; color: var(--c-text3); font: 600 10px var(--f-ui); letter-spacing: 0.08em; }
 .flag-clear-all:hover { color: var(--c-text); }
-.flag-row { display: flex; align-items: center; padding: 4px; border-bottom: 1px solid var(--c-line); font-size: 12px; cursor: pointer; }
+.flag-row { display: flex; align-items: center; padding: 4px; border-bottom: 1px solid var(--c-line); font-size: 12px; cursor: var(--cur-hand, pointer); }
 .flag-row:hover, .flag-row.active { background: var(--c-raise2); }
 .flag-row > .mk-flag { margin: 0 7px 0 0; }
 .flag-name { min-width: 0; flex: 0 1 auto; color: var(--c-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -466,7 +467,7 @@ button.flagged { color: var(--c-flag); border-color: var(--c-flag); }
 .panel-body .route-panel { display: flex; flex-direction: column; overflow: visible; }
 .panel-body .route-status-bar { border-top: 1px solid var(--c-line); padding-top: 6px; }
 /* the route under way, stacked to the dock's width: where to and the buttons, the phase, progress, the numbers */
-.panel-body .route-status-summary, .win-body .route-status-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 5px 4px; padding: 0; align-items: center; cursor: default; }
+.panel-body .route-status-summary, .win-body .route-status-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 5px 4px; padding: 0; align-items: center; cursor: var(--cur-default, default); }
 .panel-body .route-status-summary:hover, .win-body .route-status-summary:hover { background: none; }
 .panel-body .route-status-dest, .win-body .route-status-dest { grid-column: 1; grid-row: 1; white-space: normal; font-family: var(--f-ui); font-size: 14px; color: var(--c-route); }
 .panel-body .route-status-summary > button, .win-body .route-status-summary > button { grid-row: 1; }

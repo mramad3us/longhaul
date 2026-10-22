@@ -20,7 +20,7 @@ import { PLAYER } from '../sim/combatants.js';
 import { timeToGo } from '../sim/ordnance.js';
 import { hostilesOfPlayer } from '../sim/agents.js';
 import { formatDuration } from '../core/clock.js';
-import { FitCanvas, fmtKm } from './dom.js';
+import { FitCanvas, fmtKm, nearestHit, pointAt } from './dom.js';
 import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
 
@@ -34,13 +34,9 @@ export class ScannerView {
     this.labels = new Labels();
     this.onSelect = onSelect || (() => {});
     this._hits = [];
-    container.addEventListener('pointerdown', (e) => {
-      const r = container.getBoundingClientRect();
-      const x = e.clientX - r.left, y = e.clientY - r.top;
-      let best = null, bd = 18 * 18;
-      for (const h of this._hits) { const d = (h.x - x) ** 2 + (h.y - y) ** 2; if (d < bd) { bd = d; best = h; } }
-      this.onSelect(best ? best.id : null);
-    });
+    const at = (e) => { const r = container.getBoundingClientRect(); return nearestHit(this._hits, e.clientX - r.left, e.clientY - r.top); };
+    container.addEventListener('pointerdown', (e) => this.onSelect(at(e)?.id ?? null));
+    container.addEventListener('pointermove', (e) => pointAt(this.fc.canvas, at(e)));
   }
 
   render(state) {

@@ -84,7 +84,7 @@ html {
   font-size: 14px;
   line-height: 1.5;
   image-rendering: pixelated;
-  cursor: default;
+  cursor: var(--cur-default, default);
   /* Scroll when content exceeds viewport */
   overflow: auto;
 }
@@ -262,7 +262,7 @@ body {
   font-family: var(--font-pixel);
   font-size: 0.6rem;
   letter-spacing: 0.15em;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all var(--transition-fast);
   position: relative;
   overflow: hidden;
@@ -422,7 +422,7 @@ body {
   font-family: var(--font-pixel);
   font-size: 0.5rem;
   letter-spacing: 0.1em;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all var(--transition-fast);
   border: 2px solid transparent;
   position: relative;
@@ -477,7 +477,7 @@ body {
   background: var(--bg-surface);
   border: 2px solid var(--hull-primary);
   border-radius: 0;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all var(--transition-fast);
 }
 
@@ -526,7 +526,7 @@ body {
   border: 2px solid var(--hull-primary);
   border-left: 3px solid transparent;
   margin-bottom: 6px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all var(--transition-fast);
 }
 
@@ -564,7 +564,7 @@ body {
 .save-item-delete {
   background: none;
   border: none;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   padding: 4px;
   opacity: 0.3;
   transition: all var(--transition-fast);
@@ -603,7 +603,7 @@ body {
   font-family: var(--font-pixel);
   font-size: 0.4rem;
   color: var(--text-dim);
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all var(--transition-fast);
   letter-spacing: 0.08em;
 }
@@ -815,7 +815,7 @@ body {
   color: var(--text-dim);
   font-family: var(--font-pixel);
   font-size: 0.4rem;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all var(--transition-fast);
 }
 
@@ -846,7 +846,7 @@ body {
 .speed-btn.speed-restricted {
   opacity: 0.2;
   pointer-events: none;
-  cursor: not-allowed;
+  cursor: var(--cur-default, not-allowed);
 }
 
 /* ---- DEV MODE ---- */
@@ -894,7 +894,7 @@ body.dev-mode .info-section.dev-only {
   color: var(--text-dim);
   font-family: var(--font-pixel);
   font-size: 0.45rem;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all 0.15s;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -941,7 +941,7 @@ body.dev-mode .info-section.dev-only {
   background: none;
   border: 2px solid transparent;
   border-radius: 0;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all var(--transition-fast);
 }
 
@@ -1035,7 +1035,7 @@ body.dev-mode .info-section.dev-only {
   color: var(--text-dim);
   font-family: var(--font-pixel);
   font-size: 0.4rem;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   padding: 0;
   transition: all 0.1s;
 }
@@ -1713,7 +1713,7 @@ body.dev-mode .info-section.dev-only {
   letter-spacing: 0.08em;
   border: 2px solid;
   background: var(--bg-surface);
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all 0.15s;
   position: relative;
 }
@@ -1791,7 +1791,7 @@ body.dev-mode .info-section.dev-only {
   background: var(--bg-void);
   border: 1px solid var(--hull-primary);
   outline: none;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
 }
 
 .thrust-slider::-webkit-slider-thumb {
@@ -1801,7 +1801,7 @@ body.dev-mode .info-section.dev-only {
   height: 16px;
   background: var(--text-dim);
   border: 1px solid var(--hull-accent);
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: background 0.1s, box-shadow 0.1s;
 }
 
@@ -1821,7 +1821,7 @@ body.dev-mode .info-section.dev-only {
   background: var(--text-dim);
   border: 1px solid var(--hull-accent);
   border-radius: 0;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
 }
 
 .thrust-slider-labels {
@@ -1876,7 +1876,7 @@ body.dev-mode .info-section.dev-only {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  cursor: default;
+  cursor: var(--cur-default, default);
 }
 
 .log-count {
@@ -2008,7 +2008,7 @@ body.dev-mode .info-section.dev-only {
   font-family: var(--font-pixel);
   font-size: 0.4rem;
   letter-spacing: 0.08em;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all 0.15s;
 }
 
@@ -2077,7 +2077,7 @@ body.dev-mode .info-section.dev-only {
   background: rgba(79, 209, 197, 0.08);
   border: 2px solid var(--accent-dim);
   color: var(--accent);
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all var(--transition-fast);
   text-shadow: 0 0 6px rgba(79, 209, 197, 0.2);
 }
@@ -2090,7 +2090,7 @@ body.dev-mode .info-section.dev-only {
 .mp-engage-btn:disabled {
   color: var(--text-dim);
   border-color: var(--hull-primary);
-  cursor: not-allowed;
+  cursor: var(--cur-default, not-allowed);
   opacity: 0.5;
 }
 
@@ -2422,7 +2422,7 @@ body.dev-mode .info-section.dev-only {
 }
 
 .crew-symbol {
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
 }
 
 .crew-symbol:hover {
@@ -2445,12 +2445,12 @@ body.dev-mode .info-section.dev-only {
 }
 
 .deck-group {
-  cursor: default;
+  cursor: var(--cur-default, default);
 }
 
 /* Interactive tiles */
 .tile-interactive {
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: filter 0.12s ease;
 }
 
@@ -2610,7 +2610,7 @@ body.dev-mode .info-section.dev-only {
 
 .ctx-item {
   padding: 6px 12px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   color: var(--text-primary);
   transition: all 0.12s ease;
   border-left: 2px solid transparent;
@@ -2800,7 +2800,7 @@ body.dev-mode .info-section.dev-only {
   background: transparent;
   border: 1px solid var(--warm);
   color: var(--warm);
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   flex-shrink: 0;
   transition: all var(--transition-fast);
 }
@@ -2973,7 +2973,7 @@ body.dev-mode .info-section.dev-only {
 .station-mission-card {
   border: 1px solid var(--hull-accent);
   padding: 10px 12px;
-  cursor: default;
+  cursor: var(--cur-default, default);
   transition: border-color 0.15s;
 }
 .station-mission-card:hover {
@@ -3026,7 +3026,7 @@ body.dev-mode .info-section.dev-only {
   font-family: var(--font-pixel);
   font-size: 0.3rem;
   padding: 5px 12px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   letter-spacing: 0.08em;
   transition: all 0.15s;
 }
@@ -3114,7 +3114,7 @@ body.dev-mode .info-section.dev-only {
   background: none;
   border: 1px solid var(--hull-primary);
   padding: 3px 10px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   letter-spacing: 0.12em;
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
@@ -3146,7 +3146,7 @@ body.dev-mode .info-section.dev-only {
   font-size: 1.2rem;
   line-height: 1;
   padding: 2px 8px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: color 0.15s, border-color 0.15s;
 }
 .tac-modal-close:hover {
@@ -3160,7 +3160,7 @@ body.dev-mode .info-section.dev-only {
   border: 1px solid var(--hull-primary);
   color: var(--text-dim);
   padding: 2px 6px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: color 0.15s, border-color 0.15s;
 }
 .tac-zoom-btn-modal:hover {
@@ -3228,10 +3228,10 @@ body.dev-mode .info-section.dev-only {
 /* Solar Map */
 .tac-screen-solar {
   background: #030810;
-  cursor: grab;
+  cursor: var(--cur-move, grab);
 }
 .tac-screen-solar:active {
-  cursor: grabbing;
+  cursor: var(--cur-move, grabbing);
 }
 .solar-zoom-btn {
   font-family: var(--font-pixel);
@@ -3240,7 +3240,7 @@ body.dev-mode .info-section.dev-only {
   border: 1px solid var(--hull-primary);
   color: var(--text-dim);
   padding: 2px 5px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   letter-spacing: 0.05em;
   transition: color 0.15s, border-color 0.15s;
 }
@@ -3264,7 +3264,7 @@ body.dev-mode .info-section.dev-only {
   border: 1px solid var(--hull-accent);
   color: var(--text-secondary);
   padding: 5px 12px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   transition: background 0.2s, color 0.2s, border-color 0.2s;
@@ -3285,7 +3285,7 @@ body.dev-mode .info-section.dev-only {
   border: 1px solid var(--accent);
   color: var(--accent);
   padding: 5px 14px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   transition: background 0.2s, box-shadow 0.2s;
@@ -3339,7 +3339,7 @@ body.dev-mode .info-section.dev-only {
   border: none;
   color: var(--text-secondary);
   font-size: 1.3rem;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   padding: 2px 6px;
   transition: color 0.15s;
 }
@@ -3389,7 +3389,7 @@ body.dev-mode .info-section.dev-only {
   border-left: 3px solid transparent;
   background: rgba(10, 20, 30, 0.5);
   padding: 12px 14px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all 0.2s ease;
 }
 .route-card:hover {
@@ -3406,7 +3406,7 @@ body.dev-mode .info-section.dev-only {
 }
 .route-card.infeasible {
   opacity: 0.4;
-  cursor: not-allowed;
+  cursor: var(--cur-default, not-allowed);
 }
 
 .route-card-header {
@@ -3497,7 +3497,7 @@ body.dev-mode .info-section.dev-only {
   align-items: center;
   gap: 10px;
   padding: 6px 14px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: background var(--transition-fast);
 }
 .route-status-summary:hover {
@@ -3544,7 +3544,7 @@ body.dev-mode .info-section.dev-only {
   border: 1px solid var(--danger);
   color: var(--danger);
   padding: 3px 10px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   letter-spacing: 0.08em;
   transition: all 0.15s;
 }
@@ -3622,7 +3622,7 @@ body.ship-blackout .tac-view {
   font-family: var(--font-pixel);
   font-size: 0.4rem;
   padding: 2px 7px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   letter-spacing: 0.08em;
   transition: all 0.15s;
 }
@@ -3644,7 +3644,7 @@ body.ship-blackout .tac-view {
   font-family: var(--font-pixel);
   font-size: 0.4rem;
   padding: 6px 14px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   letter-spacing: 0.08em;
   transition: all 0.15s;
   position: relative;
@@ -3749,7 +3749,7 @@ body.ship-blackout .tac-view {
   font-family: var(--font-pixel);
   font-size: 0.4rem;
   padding: 6px 14px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   letter-spacing: 0.1em;
   transition: all 0.15s;
   position: relative;
@@ -3930,7 +3930,7 @@ body.ship-blackout .tac-view {
 }
 .event-accept-btn:disabled {
   opacity: 0.35;
-  cursor: not-allowed;
+  cursor: var(--cur-default, not-allowed);
   pointer-events: none;
 }
 .event-actions {
@@ -3994,7 +3994,7 @@ body.ship-blackout .tac-view {
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: background var(--transition-fast);
 }
 .mission-row-header:hover {
@@ -4150,7 +4150,7 @@ body.ship-blackout .tac-view {
   font-size: 0.32rem;
   letter-spacing: 0.12em;
   padding: 5px 14px;
-  cursor: pointer;
+  cursor: var(--cur-hand, pointer);
   transition: all 0.15s;
   text-shadow: 0 0 6px rgba(107, 203, 119, 0.15);
 }

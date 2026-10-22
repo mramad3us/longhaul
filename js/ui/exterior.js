@@ -50,7 +50,7 @@ import { liveKnowledge } from '../sim/intel.js';
 import { isDark, isIdentified } from '../sim/sensors.js';
 import { factionColor } from '../sim/factions.js';
 import { PLAYER_CLASS } from '../sim/ship-classes.js';
-import { FitCanvas } from './dom.js';
+import { FitCanvas, pointAt } from './dom.js';
 import { drawHull, drawStation } from './hull-art.js';
 import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, MARK_COL } from './marks.js';
@@ -75,7 +75,7 @@ export class ExteriorView {
     if (onSelect) {
       // (a hull clicked is selected; the click goes no further: in the inset it would swap the views too)
       container.addEventListener('click', (e) => { const id = this.hit(container, e); if (id) { e.stopPropagation(); onSelect(id); } });
-      container.addEventListener('pointermove', (e) => { container.style.cursor = this.hit(container, e) ? 'pointer' : 'default'; });
+      container.addEventListener('pointermove', (e) => pointAt(this.fc.canvas, this.hit(container, e)));
     }
   }
 
