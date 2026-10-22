@@ -1,5 +1,7 @@
 // ============================================================
-// LONGHAUL — Selection panel (crew member or ship console)
+// LONGHAUL — The CONTEXT panel's crew and machine card
+// A crew member or a machine, picked on a room camera (cams.js), and a
+// compartment's own menu (vent it, seal it: right-click its camera).
 // Re-rendered a few times a second; buttons use delegated handlers
 // so refreshes never eat clicks.
 // ============================================================
@@ -30,7 +32,7 @@ import { FUEL_PER_G_MIN } from '../sim/flight.js';
 let hooks = {};
 
 export function initSelection(h) {
-  hooks = h;   // { hail(id), openNav(tab) }
+  hooks = h;   // { hail(id), openNav(tab), showPanel(id) }
   $('#crew-info').addEventListener('click', onClick);
 }
 
@@ -38,12 +40,14 @@ export function selectCrew(id) {
   ui.selection.crew = id;
   ui.selection.tile = null;
   renderSelection(true);
+  hooks.showPanel?.('context');
 }
 
 export function selectTile(tile, deck, x, y) {
   ui.selection.tile = { tile, deck, x, y };
   ui.selection.crew = null;
   renderSelection(true);
+  hooks.showPanel?.('context');
 }
 
 export function clearSelection() {
@@ -60,17 +64,20 @@ export function renderSelection(force = false) {
   if (!force && now - lastRender < 250) return;
   lastRender = now;
   const box = $('#crew-info');
+  const wrap = $('#ctx-selection');
   if (ui.selection.crew != null) {
     const m = s.ship.crew.find(c => c.id === ui.selection.crew);
-    setText($('#selection-title'), 'Crew Member');
+    setText($('#selection-title'), 'CREW');
     if (m) setHTML(box, crewHTML(s, m));
   } else if (ui.selection.tile) {
-    setText($('#selection-title'), 'Ship System');
+    setText($('#selection-title'), 'ABOARD');
     setHTML(box, tileHTML(s, ui.selection.tile));
   } else {
-    setText($('#selection-title'), 'Selection');
-    setHTML(box, '<p class="info-line info-dim">Click a crew member or a console</p>');
+    setText($('#selection-title'), 'SELECTION');
+    setHTML(box, '<p class="info-line info-dim">Nothing selected. Click something on the display, or a crew member or a machine on a room camera.</p>');
   }
+  // (with something picked on the display and nobody aboard, the display's pick has the panel to itself)
+  if (wrap) wrap.style.display = ui.selection.crew == null && !ui.selection.tile && ui.nav.target ? 'none' : '';
 }
 
 // ---- CREW ----

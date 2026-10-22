@@ -291,9 +291,9 @@ export class ExteriorView {
           const [mx, my] = toS(bx + fr.normal.x * mark, by + fr.normal.y * mark);
           ctx.fillStyle = 'rgba(110,234,224,0.6)';
           ctx.fillRect(mx - 1.5, my - 1.5, 3, 3);
-          if (sc * mark > 30) { ctx.font = '9px "Share Tech Mono", monospace'; ctx.fillText(`${mark} m`, mx + 5, my); }
+          if (sc * mark > 30) { ctx.font = '9px "IBM Plex Mono", monospace'; ctx.fillText(`${mark} m`, mx + 5, my); }
         }
-        ctx.strokeStyle = '#6EEAE0'; ctx.lineWidth = 1.5;
+        ctx.strokeStyle = '#3EC7E6'; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(ax, ay, Math.max(4, 2 * sc), 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1;
       }
     }
@@ -312,16 +312,16 @@ export class ExteriorView {
     const ours = hullOf(state.ship.classId || PLAYER_CLASS);
     const mine = ourPose ? { mx: 0, my: 0, facing: ourPose.facing, view: ourPose.view } : { mx: 0, my: 0, facing: f.facing, view: 'top' };
     const [ox, oy] = toS(mine.mx, mine.my);
-    drawHull(ctx, ours, { x: ox, y: oy, facing: screenAngle(mine.facing), scale: sc, view: mine.view, tint: '#4FD1C5', plume: d?.phase === 'approach' ? state.$dockThrust || 0 : f.thrustG, rcs: Math.min(1, (d && IN_FRAME_PHASES.has(d.phase) ? state.$dockRcs || 0 : 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0)), t, ports: d?.port || true });
-    if (ours.L * sc < 8) { ctx.fillStyle = '#4FD1C5'; ctx.fillRect(ox - 2, oy - 2, 4, 4); }
+    drawHull(ctx, ours, { x: ox, y: oy, facing: screenAngle(mine.facing), scale: sc, view: mine.view, tint: '#5FD38D', plume: d?.phase === 'approach' ? state.$dockThrust || 0 : f.thrustG, rcs: Math.min(1, (d && IN_FRAME_PHASES.has(d.phase) ? state.$dockRcs || 0 : 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0)), t, ports: d?.port || true });
+    if (ours.L * sc < 8) { ctx.fillStyle = '#5FD38D'; ctx.fillRect(ox - 2, oy - 2, 4, 4); }
 
     // Scale bar
     const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000];
     const want80 = 80 / sc;
     const bar = nice.find(n => n >= want80) || nice[nice.length - 1];
-    ctx.strokeStyle = 'rgba(79,209,197,0.7)'; ctx.fillStyle = 'rgba(79,209,197,0.8)';
+    ctx.strokeStyle = 'rgba(148,163,178,0.9)'; ctx.fillStyle = 'rgba(148,163,178,0.95)';
     ctx.beginPath(); ctx.moveTo(14, H - 16); ctx.lineTo(14 + bar * sc, H - 16); ctx.moveTo(14, H - 20); ctx.lineTo(14, H - 12); ctx.moveTo(14 + bar * sc, H - 20); ctx.lineTo(14 + bar * sc, H - 12); ctx.stroke();
-    ctx.font = '10px "Share Tech Mono", monospace';
+    ctx.font = '10px "IBM Plex Mono", monospace';
     ctx.fillText(bar >= 1000 ? `${bar / 1000} km` : `${bar} m`, 18 + bar * sc, H - 12);
     if (!objects.length && !d) { ctx.fillStyle = 'rgba(122,142,162,0.6)'; ctx.fillText('Nothing within 12 km', 14, 20); }
   }
@@ -357,7 +357,7 @@ function edgeMarker(ctx, sx, sy, W, H, text, color) {
   ctx.fillStyle = color; ctx.globalAlpha = 0.9;
   ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-5, -6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
   ctx.restore();
-  ctx.font = '10px "Share Tech Mono", monospace';
+  ctx.font = '10px "IBM Plex Mono", monospace';
   ctx.fillStyle = color;
   const tw = ctx.measureText(text).width;
   const lx = Math.max(6, Math.min(W - tw - 6, x - tw / 2 - Math.cos(a) * (tw / 2 + 14)));
@@ -368,7 +368,7 @@ function edgeMarker(ctx, sx, sy, W, H, text, color) {
 const fmtKm = (m) => m >= 10_000 ? `${Math.round(m / 1000).toLocaleString()} km` : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
 
 function label(ctx, text, x, y, color) {
-  ctx.font = '10px "Share Tech Mono", monospace';
+  ctx.font = '10px "IBM Plex Mono", monospace';
   ctx.fillStyle = color;
   ctx.globalAlpha = 0.85;
   ctx.textAlign = 'center';

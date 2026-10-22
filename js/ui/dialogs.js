@@ -1,6 +1,8 @@
 // ============================================================
 // LONGHAUL — Dialogs
-// Generic modal + missions log, jobs, hail, distress call, station.
+// Generic dialog + missions log, jobs, hail, distress call, station.
+// On the console they are windows (wm.js adopts them); this module still
+// shows and hides them.
 // ============================================================
 
 import { ui } from './context.js';
@@ -246,6 +248,18 @@ function answerRequest(opt) {
   eventRequest = null;
   closeDialog('#dialog-event');
   const res = respondToRequest(ui.state, r.id, opt, (t, p) => bus.emit(t, p));
+  if (res.text) { logEntry(res.text, opt === 'refuse' ? 'danger' : 'comms'); toast(res.text, opt === 'refuse' ? 'danger' : 'info'); }
+}
+
+/**
+ * Answer a request from elsewhere (the ship's AI line): the same answer as
+ * the request's own window, which closes (or the queued one is dropped).
+ */
+export function answerRequestById(id, opt) {
+  if (eventRequest?.id === id) { answerRequest(opt); return; }
+  const i = eventQueue.findIndex(q => q.request?.id === id);
+  if (i >= 0) eventQueue.splice(i, 1);
+  const res = respondToRequest(ui.state, id, opt, (t, p) => bus.emit(t, p));
   if (res.text) { logEntry(res.text, opt === 'refuse' ? 'danger' : 'comms'); toast(res.text, opt === 'refuse' ? 'danger' : 'info'); }
 }
 

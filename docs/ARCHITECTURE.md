@@ -87,30 +87,36 @@ The sim emits facts (`torpedo-hit`, `crime`, `comm-request`, …). `ui/presenter
 
 ## UI modules (`js/ui/`)
 
+The screen is the ship's flight console: a top rail, the main view (the ship's displays) between two docks of panels, the ship's AI and the radio along the bottom, and floating windows over it all. None of it touches the simulation.
+
 | Module | |
 |---|---|
-| `app.js` | screens, game lifecycle, frame loop wiring, dev tools, the `window.__longhaul` debug handle (`state`, `loop`, `step(n)`) |
-| `stage.js` | the main view's slots and layouts: cruise (the interior), near (an inset exterior camera), prox (the exterior and the docking display, the interior inset), docked (the interior beside the exterior); `atmo` is reserved for entry. Everything laid over the view (route, traffic control, docking display, the inset, prompts, the hold indicator, the radio ticker) stacks in one column to the right of the ship (`#stage-col`, css/stage.css), so no window covers another |
-| `exterior.js`, `hull-art.js` | the exterior at true scale, drawn at the moment between sim minutes the frame stands for (rails exactly, free flight carried on its velocity and thrust, a step the sim takes in one go spread over a third of a second) (the rock under a surface port, stations, berthed ships posed at their collars, our hull, the corridor); drawing any hull or station from its model, also for the tactical display, the ship picker, the library and the contact panel |
+| `app.js` | screens, game lifecycle, frame loop wiring, what the AI's buttons do, dev tools, the `window.__longhaul` debug handle (`state`, `loop`, `step(n)`) |
+| `console.js` | what goes where: the panels in the docks (SHIP and CREW & ROOMS on the left, CONTEXT and ROUTE on the right), the windows the dialogs become, the exterior camera's window, the log drawer |
+| `wm.js` | the window manager: docked panels (collapse, pop out, dock back), dock splitters, floating windows (move, resize, raise, Esc closes the top one), dialogs adopted as windows; the layout is a per-viewer convenience kept in localStorage |
+| `tooltip.js` | the console's own tooltips (anything with a `title`), and the pixel-art pointers set as CSS variables |
+| `hud.js` | the top rail (clock, warp, nav status, annunciators, flag chip) and the SHIP panel (status, systems, stores) |
+| `nav.js` | the main view: SOLAR, LOCAL, SCANNER, WEAPONS and EXTERIOR tabs; the card on the display for what is picked; route planning (the ROUTE panel); route and stance status; the flight strip |
+| `solar-map.js` | the solar map: bodies, the Belt, influence, and what we know: live contacts, charted orbits, the plot's reports aged and with their uncertainty, light-time rings, our velocity and route; layer filters (stations, ships), a pick list for crowds, and search by name (nav.js) |
+| `tac.js`, `scanner.js`, `combat.js` | local space, the scanner, the weapons board (`combat.js` also renders the fire-control panel). Ships are clickable on all of them: local space and the scanner open the contact card, the solar map the body or report card, the weapons board targets |
+| `stage.js` | the exterior cameras' place: the EXTERIOR tab, or a window; comes up by itself for a dock under way and goes back to the display it replaced when the dock is done; marks the tab when there is something outside |
+| `exterior.js`, `hull-art.js` | the exterior at true scale, drawn at the moment between sim minutes the frame stands for (rails exactly, free flight carried on its velocity and thrust, a step the sim takes in one go spread over a third of a second) (the rock under a surface port, stations, berthed ships posed at their collars, our hull, the corridor); drawing any hull or station from its model, also for local space, the ship picker, the library and the contact card |
 | `docking-hud.js` | the docking display: the docking camera, tapes, the capture envelope, AUTO/MANUAL, rates, abort, undock, and the hand-flying keys |
-| `comms.js`, `ticker.js` | the comms window (channels, conversation, what we know of them, trade over the collar), and the radio ticker over the main view |
+| `cams.js`, `roomcam.js` | CREW & ROOMS: a camera in every compartment, small feeds in the panel and one large in a window. `roomcam.js` builds the room in 3D from the deck's tile grid (bulkheads, hatches, fixtures, lit per pixel), cached per deck, size and lighting (normal, battle stations, emergency, blackout, vacuum, fire), and draws the crew in their postures over it; picking a crew member or a machine on a feed selects it |
+| `selection.js` | the CONTEXT panel's crew and machine card, and a compartment's menu (right-click its camera) |
+| `advisor.js`, `ai-line.js` | VIGIL, the ship's AI: `advisor.js` is pure logic over the state (what needs the captain now, most urgent first, each with one-click actions; tests/advisor.test.mjs); `ai-line.js` shows the top advisory in the bottom bar and the rest in a window, and runs its actions through `app.js` |
+| `stance.js` | the stance panel (order, range, drive, band, doctrine, preview), and one-click stances for fire control |
+| `comms.js`, `ticker.js` | the comms window (channels, conversation, what we know of them, trade over the collar), and the radio in the bottom bar |
 | `boarding.js` | the boarding window: the party, then the operation as it runs |
 | `context.js` | the shared `ui` object: live state, loop, settings, selection |
-| `hud.js` | top bar (clock, warp, battle stations, nav/space/threat chips), ship status, stores |
-| `ship-view.js` | the SVG cross-section of the decks and crew (tile art in `js/svg-icons.js`) |
-| `selection.js` | the side panel for a selected crew member or console |
-| `nav.js` | the navigation modal: TACTICAL, SOLAR, SCANNER and COMBAT tabs; route planning; route and stance status |
-| `solar-map.js` | the solar map: bodies, influence, and what we know: live contacts, charted orbits, the plot's reports aged and with their uncertainty, light-time rings; layer filters (stations, ships), a pick list for crowds, and search by name (nav.js) |
-| `stance.js` | the stance panel (order, range, drive, band, doctrine, preview), and one-click stances for fire control |
 | `library.js` | the ship's library: reference pages built from the simulation's own tables (classes, tech, systems, fittings, weapons, navigation, factions, stations); anything marked `data-lib` opens its page |
-| `tac.js`, `solar-map.js`, `scanner.js`, `combat.js` | the four canvases (`combat.js` also renders the fire-control panel). Ships are clickable on all four: the tactical view and the scanner open the contact panel, the solar map the body or report panel, the combat board targets |
 | `dialogs.js` | generic dialog, missions log (orders, distress calls, contracts), jobs, distress calls and comm requests, the station window (board, deliveries, services, hiring, leave, the traffic board), which is also a command ship's (missions, report, supplies) |
-| `service.js` | the service record (V): license and flag, rank and reputation, relations with every faction and why, the powers' phases, the sub-factions' influence, orders, political news; the flag chip in the top bar |
+| `service.js` | the service record (V): license and flag, rank and reputation, relations with every faction and why, the powers' phases, the sub-factions' influence, orders, political news; the flag chip on the rail |
 | `shipboard.js` | engineering board, duty roster, words for activities and jobs |
 | `presenter.js`, `fx.js`, `log.js`, `toast.js` | how events are shown |
 | `persistence.js`, `settings.js`, `../storage.js` | IndexedDB saves and settings |
 
-CSS lives in `css/main.css` (the original design system: tokens, pixel type, teal/amber), `css/ui.css` (components added since v0.8, combat at the end) and `css/stage.css` (the stage, the exterior, docking, comms, boarding, the map's search).
+CSS: `css/main.css` (the original design system and the menus), `css/ui.css` (components added since v0.8, combat at the end), `css/stage.css` (the exterior, docking, comms, boarding, the map's search), then the console's own: `css/console-type.css` (the type over the older rules) and `css/console.css` (its tokens, which also remap the older variables; the rail, docks, panels, main view, windows, tooltips, the AI line, the cameras). The console's type is IBM Plex Sans Condensed and IBM Plex Mono (`fonts/`, latin subsets).
 
 ## Tests (`tests/`)
 

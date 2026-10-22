@@ -1,10 +1,13 @@
 // ============================================================
-// LONGHAUL — Navigation UI
-// Nav modal (tactical / solar / scanner), target selection, route
-// planning, route and stance status, the "secure for burn" prompt,
-// and the station-keeping indicator. The stance panel (stance.js)
-// shares the route panel's slot. A ship that isn't on our board is
-// shown as what the plot reports of it (intel.js), never as it is.
+// LONGHAUL — Navigation UI: the console's main view
+// The ship's displays (the system, local space, the scanner, weapons,
+// and the exterior cameras' tab: stage.js), what is selected on them
+// (an overlay card on the display, the full picture in the CONTEXT
+// panel), route planning (the ROUTE panel), route and stance status,
+// the "secure for burn" prompt, and the station-keeping indicator. The
+// stance panel (stance.js) shares the route panel's slot. A ship that
+// isn't on our board is shown as what the plot reports of it (intel.js),
+// never as it is.
 // ============================================================
 
 import { ui } from './context.js';
@@ -41,23 +44,16 @@ import { initStance, openStance, closeStance, stanceOpen, release as releaseStan
 import { STANCE_MODES } from '../sim/stance.js';
 import { ThreatView, renderFireControl, onFireControlClick, targetContact } from './combat.js';
 
-let tacModal = null, map = null, scanner = null, tacSmall = null, threat = null;
+let tacModal = null, map = null, scanner = null, threat = null;
 let routeUI = null;          // { target, standoffKey, options, selected, computing }
 let etaCache = { at: 0, key: '', minutes: null, path: null };
 let hooks = {};
 
 export function initNav(h) {
-  hooks = h;   // { hail(entityId), openStation() }
-  tacSmall = new TacView($('#tac-screen'));
-  $('#tac-screen').addEventListener('click', () => openNav('tactical'));
-  $$('.tac-zoom-btn').forEach(b => b.addEventListener('click', (e) => {
-    e.stopPropagation();
-    setTacZoom(+b.dataset.tacZoom);
-  }));
-
+  hooks = h;   // { hail(entityId), openStation(), board(id), dock(target), showPanel(id) }
   tacModal = new TacView($('[data-nav-screen="tactical"]'), { onSelect: (id) => selectOnBoard(id) });
   map = new SolarMap($('[data-nav-screen="solar"]'), {
-    onSelect: (sel) => { ui.nav.target = sel; hidePickList(); renderSelection(); },
+    onSelect: (sel) => { ui.nav.target = sel; ui.nav.card = !!sel; hidePickList(); renderSelection(); },
     onPickList: (cands, sx, sy) => showPickList(cands, sx, sy),
   });
   $$('[data-solar-filter]').forEach(b => b.addEventListener('click', () => { const k = b.dataset.solarFilter; map.filter[k] = !map.filter[k]; toggleClass(b, 'active', map.filter[k]); }));
@@ -82,11 +78,9 @@ export function initNav(h) {
     map.setView(b.dataset.solarView, ui.state);
   }));
   $$('[data-scanner-range]').forEach(b => b.addEventListener('click', () => { setSensorRange(ui.state, +b.dataset.scannerRange); syncButtons(); }));
-  $('#nav-modal-close').addEventListener('click', closeNav);
-  $('#nav-modal').addEventListener('pointerdown', (e) => { if (e.target.id === 'nav-modal') closeNav(); });
 
   // Delegated actions inside panels
-  for (const id of ['#map-selection', '#scanner-detail', '#route-panel', '#route-status', '#route-mini', '#nav-prompt', '#hold-indicator']) {
+  for (const id of ['#map-selection', '#scanner-detail', '#route-panel', '#route-status', '#route-mini', '#nav-prompt', '#hold-indicator', '#map-card']) {
     $(id).addEventListener('click', onPanelClick);
   }
   bus.on('route-arrived', () => { etaCache.key = ''; });
@@ -96,42 +90,42 @@ export function initNav(h) {
   });
 }
 
-function setTacZoom(z) {
-  ui.nav.tacZoom = z;
-  tacSmall.zoom = z;
-  $$('.tac-zoom-btn').forEach(b => toggleClass(b, 'active', +b.dataset.tacZoom === z));
-  setText($('#tac-range'), TAC_LABELS[z]);
-}
-
+/** The main view shows one of the ship's displays: bring one up. */
 export function openNav(tab = ui.nav.tab) {
   if (!ui.state) return;
-  if (ui.state.reactor.blackout) { toast('No power — displays dark', 'danger'); return; }
+  if (ui.state.reactor.blackout) toast('No power — displays dark', 'danger');
   ui.nav.open = true;
-  show($('#nav-modal'), true, 'flex');
-  if (!ui.nav.modalZoomSet) { ui.nav.modalZoom = ui.nav.tacZoom; tacModal.zoom = ui.nav.modalZoom; ui.nav.modalZoomSet = true; }
+  if (!ui.nav.modalZoomSet) { tacModal.zoom = ui.nav.modalZoom || 0; ui.nav.modalZoomSet = true; }
   setTab(tab);
-  if (tab === 'solar' && !map._init) { map._init = true; requestAnimationFrame(() => map.setView('ship', ui.state)); }
 }
 
+/** Put away what is laid over the displays: the route planner, a stance, the card. */
 export function closeNav() {
-  ui.nav.open = false;
-  show($('#nav-modal'), false);
   hideRoutePanel();
   closeStance();
+  ui.nav.card = false;
+  show($('#map-card'), false);
 }
 
+/** A display's key: bring it up, or (pressed again) go back to the system. */
 export function toggleNav(tab) {
-  if (ui.nav.open && ui.nav.tab === tab) closeNav(); else openNav(tab);
+  openNav(ui.nav.tab === tab && tab !== 'solar' ? 'solar' : tab);
 }
 
-function setTab(tab) {
+export const currentTab = () => ui.nav.tab;
+
+export function setTab(tab) {
   ui.nav.tab = tab;
+  const screens = $('#mv-screens');
+  if (screens) screens.dataset.tab = tab;
   $$('[data-nav-tab]').forEach(b => toggleClass(b, 'active', b.dataset.navTab === tab));
   $$('[data-nav-screen]').forEach(s => show(s, s.dataset.navScreen === tab));
   $$('[data-tab-controls]').forEach(c => show(c, c.dataset.tabControls === tab, 'flex'));
   show($('#combat-panel'), tab === 'combat' && !stanceOpen(), 'flex');
+  if (tab === 'solar' && !map._init) { map._init = true; requestAnimationFrame(() => map.setView('ship', ui.state)); }
   syncButtons();
   renderSelection();
+  window.dispatchEvent(new Event('resize'));
 }
 
 function syncButtons() {
@@ -144,14 +138,22 @@ function selectOnBoard(id) {
   if (!ui.state) return;
   selectContact(ui.state, id);
   ui.nav.target = id ? { kind: 'entity', id } : null;
+  ui.nav.card = !!id;
   hideRoutePanel();
   renderSelection();
 }
 
-/** Show a contact on the tactical board, selected (a hull clicked in the exterior view). */
+/** Show a contact selected (a hull clicked in the exterior view): its details, on whatever display is up. */
 export function showOnBoard(id) {
-  openNav('tactical');
   selectOnBoard(id);
+  hooks.showPanel?.('context');
+}
+
+/** Select something from elsewhere (the AI line, a log entry): it shows on the system display. */
+export function selectTarget(t) {
+  if (!ui.state || !t) return;
+  if (ui.nav.tab !== 'solar' && ui.nav.tab !== 'tactical' && ui.nav.tab !== 'scanner') openNav('solar');
+  choose(t);
 }
 
 // ---- FINDING THINGS ON THE MAP ----
@@ -164,6 +166,7 @@ function choose(t) {
   hideSearch();
   if (!ui.state || !t) return;
   ui.nav.target = t;
+  ui.nav.card = true;
   map.selected = t;
   if (t.kind === 'entity') selectContact(ui.state, t.id);
   const p = navTargetPos();
@@ -250,6 +253,76 @@ function navTargetPos() {
     return est ? { x: est.x, y: est.y } : null;
   }
   return targetStateAt(ui.state, t, ui.state.clock.minute)?.pos || null;
+}
+
+/** The display's tooltip for what the pointer is on: its name, and what it is. */
+function hoverLabel(h) {
+  const s = ui.state;
+  const d = s && describeTarget(s, h);
+  return d ? `${d.name} · ${d.kind}${d.report ? ' (reported)' : ''}` : null;
+}
+
+// ---- THE CARD ON THE DISPLAY ----
+// What is selected on the system display gets a card beside it: what it
+// is, how far, how old our picture of it is, and the two or three things
+// to do about it. The full picture is in the CONTEXT panel.
+
+let cardKey = '', cardAt = 0;
+
+function renderMapCard(state) {
+  const box = $('#map-card');
+  const t = ui.nav.target;
+  const p = ui.nav.tab === 'solar' && ui.nav.card && t && !routeUI && !stanceOpen() ? navTargetPos() : null;
+  if (!p) { show(box, false); cardKey = ''; return; }
+  // (beside the object as the display draws it: a far station's mark can be the background pass's last fix)
+  const drawnAt = map._pickables.find(q => q.kind === t.kind && q.id === t.id);
+  const sp = drawnAt ? { sx: drawnAt.sx, sy: drawnAt.sy } : map.toScreen(p.x, p.y);
+  const W = map.fc.w, H = map.fc.h;
+  if (sp.sx < 0 || sp.sy < 0 || sp.sx > W || sp.sy > H) { show(box, false); return; }
+  // Content refreshes a few times a second; position every frame (the map pans and the world moves)
+  const now = performance.now();
+  const key = `${t.kind}:${t.id}`;
+  if (key !== cardKey || now - cardAt > 300) { cardKey = key; cardAt = now; setHTML(box, cardHTML(state, t)); }
+  show(box, true);
+  const bw = box.offsetWidth, bh = box.offsetHeight;
+  const flipX = sp.sx + 22 + bw > W - 8, flipY = sp.sy + 14 + bh > H - 8;
+  toggleClass(box, 'flip-x', flipX);
+  toggleClass(box, 'flip-y', flipY);
+  box.style.left = `${Math.round(flipX ? sp.sx - 22 - bw : sp.sx + 22)}px`;
+  box.style.top = `${Math.round(flipY ? sp.sy - 14 - bh : sp.sy + 14)}px`;
+}
+
+function cardHTML(s, t) {
+  const d = describeTarget(s, t);
+  if (!d) return '';
+  const rel = d.report ? null : relativeTo(s, t);
+  const ap = s.autopilot;
+  const routing = ap && ap.plan.target.id === t.id;
+  const e = d.entity;
+  const facts = [];
+  if (d.report) {
+    const info = describeRecord(s, d.report);
+    facts.push(['REPORTED', `${ageLabel(info.ageMin)} ago · ${esc(info.src)}`]);
+  } else if (rel) {
+    facts.push(['RANGE', fmtMeters(rel.dist)], ['REL V', fmtSpeed(rel.speed)]);
+    const lag = rel.dist / 299_792_458;
+    if (lag > 1) facts.push(['LIGHT', lag < 60 ? `${lag.toFixed(0)} s` : `${(lag / 60).toFixed(1)} min`]);
+  }
+  if (routing && etaCache.minutes != null) facts.push(['ETA', formatDuration(etaCache.minutes)]);
+  const acts = [];
+  if (routing) acts.push('<button class="btn-mini warn" data-act="abort">ABORT</button>');
+  else if (t.id !== 'Sol' && !(d.report && d.report.kind === 'fix')) acts.push('<button class="btn-mini primary" data-act="plot">PLOT</button>');
+  if (e && t.kind === 'entity' && (e.type === 'station' || e.type === 'ship') && !d.report) {
+    const dockable = e.type === 'station' || shipDockable(s, e).ok;
+    if (dockable && !(isDocked(s) && dockedTo(s)?.id === e.id)) acts.push('<button class="btn-mini" data-act="dock">DOCK</button>');
+  }
+  if (t.kind === 'entity' && inRadio(s, t.id)) acts.push('<button class="btn-mini" data-act="hail">HAIL</button>');
+  acts.push('<button class="btn-mini" data-act="details" title="The full picture, in the CONTEXT panel">DETAILS</button>');
+  const dot = d.faction ? `<i class="card-dot" style="background:${factionColor(d.faction)}"></i>` : '';
+  return `<div class="card-head">${dot}<span class="card-name">${esc(d.name)}</span><button class="card-x" data-act="card-close" title="Close">✕</button></div>
+    <div class="card-kind">${esc(d.kind)}${d.faction && d.faction !== 'independent' ? ` · ${esc(FACTIONS[d.faction]?.short || d.faction)}` : ''}${d.report ? ' · <span class="card-report">ON THE PLOT</span>' : ''}</div>
+    ${facts.length ? `<div class="card-facts">${facts.map(([k, v]) => `<span><em>${k}</em> ${v}</span>`).join('')}</div>` : ''}
+    <div class="card-acts">${acts.join('')}</div>`;
 }
 
 /** The plot's record for a target we can't see or chart right now (null if we can). */
@@ -340,7 +413,6 @@ function renderSelection() {
     return;
   }
 
-  if (ui.nav.tab !== 'solar') return;
   if (d.report) { renderReport(s, t, d, routing); return; }
   const html = `<div class="ms-header">
       <span class="ms-name">${esc(d.name)}</span>
@@ -407,11 +479,12 @@ function onPanelClick(e) {
       renderSelection();
       break;
     case 'plot': if (t) openRoutePanel(t); break;
+    case 'details': hooks.showPanel?.('context'); ui.nav.card = false; show($('#map-card'), false); break;
+    case 'card-close': ui.nav.card = false; show($('#map-card'), false); break;
     case 'stance': if (t) showStancePanel(t); break;
     case 'stance-edit': {
       const ap = s.autopilot;
       if (ap?.plan.kind !== 'stance') break;
-      if (!ui.nav.open) openNav();
       ui.nav.target = { ...ap.plan.target };
       showStancePanel(ap.plan.target);
       break;
@@ -505,12 +578,13 @@ export function openRoutePanel(target, opts = {}) {
   if (s.autopilot && s.autopilot.plan.kind !== 'stance' && s.autopilot.plan.target.id === target.id) { toast('Already en route', 'info'); return; }
   closeStance();
   ui.nav.target = target;
-  if (!ui.nav.open) openNav(target.kind === 'entity' && contactById(s, target.id) ? 'scanner' : 'solar');
+  if (ui.nav.tab === 'exterior' || ui.nav.tab === 'combat') openNav(target.kind === 'entity' && contactById(s, target.id) ? 'scanner' : 'solar');
   const choices = standoffChoices(s, target);
   const key = opts.dock && choices.includes('dock') ? 'dock' : opts.dock && choices.includes('rendezvous') ? 'rendezvous' : choices[0];
   routeUI = { target, choices, standoffKey: key, options: [], selected: -1, computing: true };
   show($('#map-selection'), false); show($('#scanner-detail'), false);
   show($('#route-panel'), true, 'flex');
+  hooks.showPanel?.('route');
   computeRoutes();
 }
 
@@ -624,7 +698,7 @@ function confirmRoute() {
   toast('SECURE FOR BURN', 'warn');
   etaCache.key = '';
   hideRoutePanel();
-  closeNav();
+  renderSelection();
 }
 
 function hideRoutePanel() {
@@ -677,14 +751,11 @@ export function updateNav(state, alpha) {
   const eta = refreshEta(state);
   if (map) map.routePath = ap ? eta?.path : null;
 
-  // Small tac: always live
   const ref = velocityReference(state);
   const rel = ref ? relativeTo(state, ref.target) : null;
-  tacSmall.render(state, alpha, { reference: rel ? { ...rel } : null, highlight: ref?.target.id });
-
-  if (ui.nav.open) {
+  {
     if (ui.nav.tab === 'tactical') tacModal.render(state, alpha, { reference: rel, highlight: ref?.target.id, selected: ui.nav.target?.id });
-    else if (ui.nav.tab === 'solar') map.render(state, { targetPos: navTargetPos(), targetId: ui.nav.target?.id, lockedId: state.sensors.locked });
+    else if (ui.nav.tab === 'solar') map.render(state, { targetPos: navTargetPos(), targetId: ui.nav.target?.id, lockedId: state.sensors.locked, hoverLabel });
     else if (ui.nav.tab === 'scanner') scanner.render(state);
     else if (ui.nav.tab === 'combat') {
       threat.render(state);
@@ -694,6 +765,8 @@ export function updateNav(state, alpha) {
     if (!routeUI && !stanceOpen() && (performance.now() - (ui.nav._selAt || 0) > 400)) { ui.nav._selAt = performance.now(); renderSelection(); }
     renderNavInfo(state, rel);
     renderRouteStatus(state, eta, $('#route-status'), true);
+    show($('#route-idle'), !state.autopilot && !routeUI && !stanceOpen());
+    renderMapCard(state);
   }
   renderRouteStatus(state, eta, $('#route-mini'), false);
   renderPrompt(state);
@@ -827,6 +900,7 @@ export function resetNavForGame() {
   closeStance();
   etaCache = { at: 0, key: '' };
   if (map) { map._init = false; map.selected = null; map.preview = null; map.routePath = null; }
-  setTacZoom(0);
   closeNav();
+  ui.nav.tab = 'solar';
+  openNav('solar');
 }

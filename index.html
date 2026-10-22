@@ -9,6 +9,8 @@
   <link rel="stylesheet" href="css/main.css">
   <link rel="stylesheet" href="css/ui.css">
   <link rel="stylesheet" href="css/stage.css">
+  <link rel="stylesheet" href="css/console-type.css">
+  <link rel="stylesheet" href="css/console.css">
 </head>
 <body>
   <div id="app">
@@ -111,215 +113,167 @@
       </div>
     </div>
 
-    <!-- Game -->
-    <div id="screen-game" class="screen">
-      <div class="crt-overlay"></div>
-      <div class="alert-border" id="alert-border"></div>
-
-      <header class="hud-bar">
-        <div class="hud-left">
-          <div class="hud-datetime">
-            <span class="hud-date" id="hud-date">----.--.--</span>
-            <span class="hud-time-sep">|</span>
-            <span class="hud-time" id="hud-time">--:--</span>
-          </div>
-          <div class="hud-divider"></div>
-          <div class="hud-speed">
+    <!-- Game: the ship's flight console (js/ui/console.js lays it out; js/ui/wm.js runs its windows) -->
+    <div id="screen-game" class="screen console">
+      <header class="rail" id="rail">
+        <div class="rail-id">
+          <span class="rail-ship" id="hud-ship-name">—</span>
+          <button class="hud-flag-chip" id="hud-flag" style="display:none" title="Service and relations (V)"></button>
+          <span class="rail-space" id="hud-space" title="Who holds this space"></span>
+        </div>
+        <div class="rail-time">
+          <span class="rail-date" id="hud-date">----.--.--</span>
+          <span class="rail-clock" id="hud-time">--:--</span>
+          <div class="rail-warp" role="group" aria-label="Time warp">
             <button class="speed-btn" data-speed="0" title="Pause (Space)"><span id="icon-pause"></span></button>
-            <button class="speed-btn" data-speed="1" title="1 min/s (1)">1x</button>
-            <button class="speed-btn" data-speed="2" title="1 hr/s (2)">2x</button>
-            <button class="speed-btn" data-speed="3" title="1 day/s (3)">3x</button>
+            <button class="speed-btn" data-speed="1" title="Real time: 1 minute a second (1)">1×</button>
+            <button class="speed-btn" data-speed="2" title="1 hour a second (2)">60×</button>
+            <button class="speed-btn" data-speed="3" title="1 day a second (3)">1440×</button>
           </div>
-          <span class="hud-fps" id="hud-perf" style="display:none"></span>
-          <div class="hud-divider"></div>
-          <button class="combat-btn" id="combat-toggle" title="Battle stations (C)">
-            <span class="combat-btn-label">COMBAT</span>
-            <span class="combat-btn-status" id="combat-status">OFF</span>
-          </button>
-          <button class="combat-btn suits-btn" id="suits-toggle" title="All hands into EVA suits, and keep them on (U)">
-            <span class="combat-btn-label">SUITS</span>
-            <span class="combat-btn-status" id="suits-status">OFF</span>
-          </button>
+          <span class="rail-perf" id="hud-perf" style="display:none"></span>
         </div>
-        <div class="hud-center">
-          <div class="hud-center-row hud-center-sub">
-            <span class="hud-ship-name" id="hud-ship-name">—</span>
-            <button class="hud-flag-chip" id="hud-flag" style="display:none" title="Service and relations (V)"></button>
-            <span class="hud-space-chip" id="hud-space" title="Who holds this space"></span>
-          </div>
-          <div class="hud-center-row">
-            <span class="hud-nav-chip" id="hud-nav-chip">—</span>
-            <button class="hud-threat-chip" id="hud-threat" style="display:none" title="Combat (W)"></button>
-          </div>
+        <div class="rail-nav">
+          <span class="hud-nav-chip" id="hud-nav-chip">—</span>
+          <button class="hud-threat-chip" id="hud-threat" style="display:none" title="Weapons display (W)"></button>
         </div>
-        <div class="hud-right">
-          <button class="hud-icon-btn hud-text-btn" data-action="open-map" title="Navigation (M)">NAV</button>
-          <button class="hud-icon-btn hud-text-btn hud-comms-btn" data-action="open-comms" id="hud-comms-btn" title="Comms: hail ships and stations (H)">COMMS</button>
-          <button class="hud-icon-btn hud-text-btn hud-station-btn" data-action="open-station" id="hud-station-btn" title="Station services (B)" style="display:none">STATION</button>
-          <div class="hud-divider"></div>
-          <button class="hud-icon-btn hud-text-btn hud-systems-btn" data-action="open-systems" title="Ship systems (E)">SYSTEMS<span class="hud-systems-count" id="hud-systems-count"></span></button>
-          <button class="hud-icon-btn hud-text-btn" data-action="open-roster" title="Duty roster (D)">ROSTER</button>
-          <button class="hud-icon-btn hud-text-btn" data-action="open-service" title="Service and relations: license, rank, the powers (V)">SERVICE</button>
-          <button class="hud-icon-btn hud-text-btn" data-action="open-library" title="Ship's library (I)">LIBRARY</button>
-          <button class="hud-icon-btn hud-missions-btn" data-action="open-missions" title="Mission log (L)">
-            <span class="hud-missions-label">MISSIONS</span>
-            <span class="hud-missions-count" id="hud-missions-count">0</span>
-          </button>
-          <button class="hud-icon-btn hud-jobs-btn" data-action="open-jobs" title="Crew jobs (J)">
-            <span class="hud-jobs-label">JOBS</span>
-            <span class="hud-jobs-count" id="hud-jobs-count">0</span>
-          </button>
-          <button class="hud-icon-btn" data-action="game-settings" title="Settings"><span id="icon-hud-settings"></span></button>
-          <button class="hud-icon-btn" data-action="save-game" title="Save (Ctrl+S)"><span id="icon-hud-save"></span></button>
-          <button class="hud-icon-btn" data-action="exit-game" title="Exit to menu"><span id="icon-hud-exit"></span></button>
+        <div class="rail-ann">
+          <span class="ann ann-master" id="alert-border" title="Master caution: amber while the ship maneuvers with crew on their feet; red when stores run critical"><span class="ann-label ann-caution-label">MASTER<br>CAUTION</span><span class="ann-label ann-warning-label">MASTER<br>WARNING</span></span>
+          <button class="ann" id="combat-toggle" title="Battle stations: crew to their stations and couches, weapons manned (C)"><span class="ann-label">BATTLE<br>STATIONS</span><span class="ann-state" id="combat-status">OFF</span></button>
+          <button class="ann" id="suits-toggle" title="All hands into EVA suits, and keep them on (U)"><span class="ann-label">ALL HANDS<br>SUITED</span><span class="ann-state" id="suits-status">OFF</span></button>
         </div>
+        <nav class="rail-menu">
+          <button class="rail-btn" data-action="open-comms" id="hud-comms-btn" title="Comms: hail ships and stations (H)">COMMS</button>
+          <button class="rail-btn hud-station-btn" data-action="open-station" id="hud-station-btn" title="Station services (B)" style="display:none"><span class="lbl-long">STATION</span><span class="lbl-short">STN</span></button>
+          <button class="rail-btn" data-action="open-systems" title="Engineering: every system aboard (E)"><span class="lbl-long">ENGINEERING</span><span class="lbl-short">ENG</span><span class="rail-count" id="hud-systems-count"></span></button>
+          <button class="rail-btn" data-action="open-roster" title="Duty roster (D)"><span class="lbl-long">ROSTER</span><span class="lbl-short">CREW</span></button>
+          <button class="rail-btn" data-action="open-jobs" title="Crew jobs (J)">JOBS<span class="rail-count" id="hud-jobs-count">0</span></button>
+          <button class="rail-btn" data-action="open-missions" title="Missions and orders (L)"><span class="lbl-long">MISSIONS</span><span class="lbl-short">MSN</span><span class="rail-count" id="hud-missions-count">0</span></button>
+          <button class="rail-btn" data-action="open-service" title="Service and relations: license, rank, the powers (V)"><span class="lbl-long">SERVICE</span><span class="lbl-short">SVC</span></button>
+          <button class="rail-btn" data-action="open-library" title="Ship's library (I)"><span class="lbl-long">LIBRARY</span><span class="lbl-short">LIB</span></button>
+          <span class="rail-sep"></span>
+          <button class="rail-icon" data-action="game-settings" title="Settings"><span id="icon-hud-settings"></span></button>
+          <button class="rail-icon" data-action="save-game" title="Save (Ctrl+S)"><span id="icon-hud-save"></span></button>
+          <button class="rail-icon" data-action="exit-game" title="Exit to the menu"><span id="icon-hud-exit"></span></button>
+        </nav>
       </header>
 
-      <main class="game-main">
-        <aside class="resource-panel" id="resource-panel">
-          <div class="tac-view" id="tac-view">
-            <div class="tac-header">
-              <span class="tac-label">TAC</span>
-              <div class="tac-zoom-controls">
-                <button class="tac-zoom-btn active" data-tac-zoom="0" title="1 km">1</button>
-                <button class="tac-zoom-btn" data-tac-zoom="1" title="5 km">2</button>
-                <button class="tac-zoom-btn" data-tac-zoom="2" title="25 km">3</button>
-              </div>
-              <span class="tac-range" id="tac-range">1 km</span>
-            </div>
-            <div class="tac-screen" id="tac-screen" title="Open navigation (M)"></div>
-          </div>
-          <div class="panel-header">Ship Systems</div>
-          <div class="systems-strip" id="systems-strip"></div>
-          <div class="panel-header">Stores</div>
-          <div id="resource-list"></div>
-        </aside>
+      <div class="console-body">
+        <aside class="dock dock-left" id="dock-left"></aside>
+        <div class="splitter" id="split-left" title="Drag to resize · double-click to hide"></div>
 
-        <div class="ship-viewport stage-cruise" id="ship-viewport">
-          <div class="viewport-grid"></div>
-          <div class="viewport-particles" id="viewport-particles"></div>
-          <div class="viewport-vignette"></div>
-          <!-- The stage (js/ui/stage.js): the interior and the exterior move between these slots -->
-          <div class="stage-main" id="stage-main">
-            <div class="ship-container" id="ship-container"></div>
-            <div class="stage-exterior stage-hidden" id="stage-exterior"></div>
-          </div>
-          <div class="stage-side stage-hidden" id="stage-side"></div>
-          <!-- Everything laid over the view stacks in one column to the right of the ship, so nothing covers anything -->
-          <div class="stage-col" id="stage-col">
-            <div class="route-mini" id="route-mini" style="display:none"></div>
-            <div class="tc-chip" id="tc-chip" style="display:none"></div>
-            <div class="dock-hud" id="dock-hud" style="display:none"></div>
-            <div class="stage-pip stage-hidden" id="stage-pip" title="Swap views"><span class="stage-pip-label" id="stage-pip-label"></span></div>
-            <div class="nav-prompt" id="nav-prompt" style="display:none"></div>
-            <div class="stage-col-fill"></div>
-            <div class="hold-indicator" id="hold-indicator" style="display:none"></div>
-            <div class="comms-ticker" id="comms-ticker"></div>
-          </div>
-          <!-- Toasts over the ship, clear of the column -->
-          <div class="toast-container" id="toast-container" aria-live="polite"></div>
-        </div>
-
-        <aside class="info-panel" id="info-panel">
-          <div class="info-section">
-            <h3 class="info-title">Ship Status</h3>
-            <div class="info-content">
-              <p class="info-line"><span class="info-key">Drive</span> <span class="info-val" id="info-drive">—</span></p>
-              <p class="info-line"><span class="info-key">Attitude</span> <span class="info-val" id="info-attitude">—</span></p>
-              <p class="info-line"><span class="info-key">Rel. velocity</span> <span class="info-val" id="info-velocity">—</span></p>
-              <p class="info-line info-vel-ref"><span class="info-key">Reference</span> <span class="info-val info-val-ref" id="info-vel-ref">—</span></p>
-              <p class="info-line"><span class="info-key">Orbit (Sun)</span> <span class="info-val" id="info-orbit">—</span></p>
-              <p class="info-line"><span class="info-key">Hull</span> <span class="info-val" id="info-hull">—</span></p>
-              <p class="info-line"><span class="info-key">Mass</span> <span class="info-val" id="info-mass">—</span></p>
-              <p class="info-line"><span class="info-key">Cargo</span> <span class="info-val" id="info-cargo">—</span></p>
+        <main class="mainview" id="mainview">
+          <div class="mv-bar">
+            <div class="mv-tabs" role="tablist">
+              <button class="mv-tab" data-nav-tab="solar" title="The system: bodies, stations, traffic, the plot (M)">SOLAR</button>
+              <button class="mv-tab" data-nav-tab="tactical" title="Local space: kilometres round the ship (T)">LOCAL</button>
+              <button class="mv-tab" data-nav-tab="scanner" title="Sensor contacts (R)">SCANNER</button>
+              <button class="mv-tab mv-tab-combat" data-nav-tab="combat" title="Weapons and the threat board (W)">WEAPONS</button>
+              <button class="mv-tab" data-nav-tab="exterior" id="mv-tab-exterior" title="The exterior cameras: what is outside (X)">EXTERIOR</button>
             </div>
-          </div>
-          <div class="info-section">
-            <h3 class="info-title" id="selection-title">Selection</h3>
-            <div class="info-content" id="crew-info"><p class="info-line info-dim">Click a crew member or a console</p></div>
-          </div>
-          <div class="info-section dev-only">
-            <h3 class="info-title">Manual Helm (dev)</h3>
-            <div class="info-content">
-              <div class="thrust-slider-group">
-                <input type="range" class="thrust-slider" id="thrust-slider" min="0" max="100" value="0" step="1" aria-label="Manual throttle">
-                <div class="thrust-slider-labels">
-                  <span>0G</span>
-                  <span class="thrust-slider-value" id="thrust-slider-value">0.0G</span>
-                  <span>10G</span>
-                </div>
-                <div class="thrust-g-zones">
-                  <span class="g-zone g-zone-safe" style="width:15%"></span>
-                  <span class="g-zone g-zone-high" style="width:10%"></span>
-                  <span class="g-zone g-zone-danger" style="width:75%"></span>
-                </div>
-              </div>
-              <div class="dev-helm-row">
-                <button class="crew-action-btn" id="dev-flip">FLIP (F)</button>
-                <button class="crew-action-btn" id="dev-cut">CUT DRIVE (T)</button>
-              </div>
-              <div class="dev-helm-row" id="dev-tools"></div>
+            <div class="mv-controls" data-tab-controls="tactical">
+              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="0">1 km</button>
+              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="1">5 km</button>
+              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="2">25 km</button>
             </div>
-          </div>
-          <div class="info-section info-section-log">
-            <h3 class="info-title log-header">
-              <span>Ship's Log</span>
-              <span class="log-count" id="log-count">0</span>
-            </h3>
-            <div class="log-container" id="log-container"><div class="log-entries" id="log-entries"></div></div>
-            <button class="log-expand-btn" id="log-expand-btn"><span id="log-expand-text">SHOW FULL LOG</span></button>
-          </div>
-        </aside>
-      </main>
-
-
-      <!-- Navigation modal: tactical / solar / scanner -->
-      <div class="tac-modal-overlay" id="nav-modal" style="display:none">
-        <div class="tac-modal nav-modal">
-          <div class="tac-modal-header">
-            <div class="tac-modal-tabs">
-              <button class="tac-tab" data-nav-tab="tactical">TACTICAL</button>
-              <button class="tac-tab" data-nav-tab="solar">SOLAR</button>
-              <button class="tac-tab" data-nav-tab="scanner">SCANNER</button>
-              <button class="tac-tab tac-tab-combat" data-nav-tab="combat">COMBAT</button>
-            </div>
-            <div class="tac-zoom-controls" data-tab-controls="tactical">
-              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="0">1 KM</button>
-              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="1">5 KM</button>
-              <button class="tac-zoom-btn-modal" data-tac-zoom-modal="2">25 KM</button>
-            </div>
-            <div class="tac-zoom-controls" data-tab-controls="solar">
-              <button class="solar-zoom-btn" data-solar-view="ship">SHIP</button>
-              <button class="solar-zoom-btn" data-solar-view="inner">INNER</button>
-              <button class="solar-zoom-btn" data-solar-view="belt">BELT</button>
-              <button class="solar-zoom-btn" data-solar-view="system">SYSTEM</button>
-              <button class="solar-zoom-btn" data-solar-view="target">TARGET</button>
+            <div class="mv-controls" data-tab-controls="solar">
+              <button class="solar-zoom-btn" data-solar-view="ship" title="Centre on our ship">SHIP</button>
+              <button class="solar-zoom-btn" data-solar-view="inner" title="The inner system">INNER</button>
+              <button class="solar-zoom-btn" data-solar-view="belt" title="Out to the Belt">BELT</button>
+              <button class="solar-zoom-btn" data-solar-view="system" title="The whole system">SYSTEM</button>
+              <button class="solar-zoom-btn" data-solar-view="target" title="Centre on the selection">TARGET</button>
+              <span class="mv-sep"></span>
               <button class="solar-zoom-btn active" data-solar-politics title="Spheres of influence and hot zones">POLITICS</button>
-              <button class="solar-zoom-btn active" data-solar-intel title="Reported ships on the plot (aged, from traffic digests and lost contacts) and light-time rings">INTEL</button>
+              <button class="solar-zoom-btn active" data-solar-intel title="Reported ships on the plot (aged, from traffic digests and lost contacts) and light-time rings">PLOT</button>
               <button class="solar-zoom-btn active" data-solar-filter="stations" title="Show stations">STATIONS</button>
               <button class="solar-zoom-btn active" data-solar-filter="ships" title="Show ships (live and reported)">SHIPS</button>
-              <div class="solar-search-box"><input class="solar-search" id="solar-search" type="search" placeholder="Find: station, body, ship…" autocomplete="off"><div class="solar-search-results" id="solar-search-results" style="display:none"></div></div>
+              <div class="solar-search-box"><input class="solar-search" id="solar-search" type="search" placeholder="Find a station, body or ship" autocomplete="off"><div class="solar-search-results" id="solar-search-results" style="display:none"></div></div>
             </div>
-            <div class="tac-zoom-controls" data-tab-controls="scanner">
+            <div class="mv-controls" data-tab-controls="scanner">
               <button class="scanner-range-btn" data-scanner-range="0">SHORT</button>
-              <button class="scanner-range-btn" data-scanner-range="1">MED</button>
+              <button class="scanner-range-btn" data-scanner-range="1">MEDIUM</button>
               <button class="scanner-range-btn" data-scanner-range="2">LONG</button>
             </div>
-            <button class="tac-modal-close" id="nav-modal-close" aria-label="Close">&times;</button>
+            <div class="mv-controls" data-tab-controls="exterior">
+              <button class="mv-btn" id="exterior-float" title="Float the exterior camera in its own window">FLOAT</button>
+            </div>
           </div>
-          <div class="nav-screens">
-            <div class="tac-screen tac-screen-modal" data-nav-screen="tactical"></div>
-            <div class="tac-screen tac-screen-modal tac-screen-solar" data-nav-screen="solar"></div>
-            <div class="tac-screen tac-screen-modal tac-screen-scanner" data-nav-screen="scanner"></div>
-            <div class="tac-screen tac-screen-modal tac-screen-combat" data-nav-screen="combat"></div>
+          <div class="nav-screens mv-screens" id="mv-screens">
+            <div class="mv-screen" data-nav-screen="solar"></div>
+            <div class="mv-screen" data-nav-screen="tactical"></div>
+            <div class="mv-screen" data-nav-screen="scanner"></div>
+            <div class="mv-screen" data-nav-screen="combat"></div>
+            <div class="mv-screen mv-exterior" data-nav-screen="exterior" id="mv-exterior">
+              <div class="stage-exterior" id="stage-exterior"></div>
+              <div class="dock-hud" id="dock-hud" style="display:none"></div>
+            </div>
             <div class="combat-panel" id="combat-panel" style="display:none"></div>
-            <div class="scanner-detail-panel" id="scanner-detail" style="display:none"></div>
-            <div class="map-selection" id="map-selection" style="display:none"></div>
             <div class="map-picklist" id="map-picklist" style="display:none"></div>
-            <div class="route-panel" id="route-panel" style="display:none"></div>
+            <div class="map-card" id="map-card" style="display:none"></div>
+            <!-- What the ship is doing: flight status over the top of the display -->
+            <div class="flight-strip" id="flight-strip">
+              <div class="tc-chip" id="tc-chip" style="display:none"></div>
+              <div class="route-mini" id="route-mini" style="display:none"></div>
+              <div class="nav-prompt" id="nav-prompt" style="display:none"></div>
+              <div class="hold-indicator" id="hold-indicator" style="display:none"></div>
+            </div>
+            <div class="tac-modal-info mv-info" id="nav-info"></div>
+            <div class="toast-container" id="toast-container" aria-live="polite"></div>
+            <div class="log-drawer" id="log-container"><div class="log-entries" id="log-entries"></div></div>
           </div>
-          <div class="tac-modal-info" id="nav-info"></div>
+        </main>
+
+        <div class="splitter" id="split-right" title="Drag to resize · double-click to hide"></div>
+        <aside class="dock dock-right" id="dock-right"></aside>
+      </div>
+
+      <footer class="ai-bar" id="ai-bar">
+        <div class="ai-line" id="ai-line"></div>
+        <div class="comms-ticker" id="comms-ticker"></div>
+        <button class="ai-log-btn" id="log-expand-btn" title="The ship's log"><span id="log-expand-text">LOG</span><span class="rail-count" id="log-count">0</span></button>
+      </footer>
+
+      <!-- Panel bodies (js/ui/console.js moves them into the docks) -->
+      <div class="console-stash" hidden>
+        <div id="panel-ship-body">
+          <div class="ship-readouts">
+            <p class="info-line"><span class="info-key">Drive</span> <span class="info-val" id="info-drive">—</span></p>
+            <p class="info-line"><span class="info-key">Attitude</span> <span class="info-val" id="info-attitude">—</span></p>
+            <p class="info-line"><span class="info-key">Rel. velocity</span> <span class="info-val" id="info-velocity">—</span></p>
+            <p class="info-line info-vel-ref"><span class="info-key">Reference</span> <span class="info-val info-val-ref" id="info-vel-ref">—</span></p>
+            <p class="info-line"><span class="info-key">Orbit (Sun)</span> <span class="info-val" id="info-orbit">—</span></p>
+            <p class="info-line"><span class="info-key">Hull</span> <span class="info-val" id="info-hull">—</span></p>
+            <p class="info-line"><span class="info-key">Mass</span> <span class="info-val" id="info-mass">—</span></p>
+            <p class="info-line"><span class="info-key">Cargo</span> <span class="info-val" id="info-cargo">—</span></p>
+          </div>
+          <div class="sub-head">SYSTEMS</div>
+          <div class="systems-strip" id="systems-strip"></div>
+          <div class="sub-head">STORES</div>
+          <div id="resource-list"></div>
+        </div>
+        <div id="panel-rooms-body"><div class="cams" id="cams"></div></div>
+        <div id="panel-context-body">
+          <div class="map-selection" id="map-selection" style="display:none"></div>
+          <div class="scanner-detail-panel" id="scanner-detail" style="display:none"></div>
+          <div class="ctx-selection" id="ctx-selection">
+            <div class="sub-head" id="selection-title">SELECTION</div>
+            <div class="info-content" id="crew-info"><p class="info-line info-dim">Select something on the display, or a crew member on a camera.</p></div>
+          </div>
+        </div>
+        <div id="panel-route-body">
+          <div class="route-panel" id="route-panel" style="display:none"></div>
           <div class="route-status-bar" id="route-status" style="display:none"></div>
+          <p class="info-line info-dim route-idle" id="route-idle">No route. Select a destination on the display and plot a course.</p>
+        </div>
+        <div id="panel-dev-body" class="dev-only">
+          <div class="thrust-slider-group">
+            <input type="range" class="thrust-slider" id="thrust-slider" min="0" max="100" value="0" step="1" aria-label="Manual throttle">
+            <div class="thrust-slider-labels"><span>0G</span><span class="thrust-slider-value" id="thrust-slider-value">0.0G</span><span>10G</span></div>
+          </div>
+          <div class="dev-helm-row">
+            <button class="crew-action-btn" id="dev-flip">FLIP (F)</button>
+            <button class="crew-action-btn" id="dev-cut">CUT DRIVE (T)</button>
+          </div>
+          <div class="dev-helm-row" id="dev-tools"></div>
         </div>
       </div>
 
@@ -338,12 +292,14 @@
         </div>
       </div>
 
-      <!-- Dialogs (content rendered by JS) -->
-      <div class="dialog-overlay" id="dialog-generic" style="display:none"><div class="dialog" id="dialog-generic-body"></div></div>
-      <div class="dialog-overlay" id="dialog-event" style="display:none"><div class="dialog dialog-event" id="dialog-event-body"></div></div>
-      <div class="dialog-overlay" id="dialog-station" style="display:none"><div class="dialog dialog-station" id="dialog-station-body"></div></div>
-      <div class="dialog-overlay" id="dialog-comms" style="display:none"><div class="dialog dialog-comms" id="dialog-comms-body"></div></div>
-      <div class="dialog-overlay" id="dialog-boarding" style="display:none"><div class="dialog dialog-boarding" id="dialog-boarding-body"></div></div>
+      <!-- Windows the game opens (adopted by js/ui/wm.js; content rendered by JS) -->
+      <div class="wm-layer" id="wm-layer">
+        <div class="dialog-overlay" id="dialog-generic" style="display:none"><div class="dialog" id="dialog-generic-body"></div></div>
+        <div class="dialog-overlay" id="dialog-event" style="display:none"><div class="dialog dialog-event" id="dialog-event-body"></div></div>
+        <div class="dialog-overlay" id="dialog-station" style="display:none"><div class="dialog dialog-station" id="dialog-station-body"></div></div>
+        <div class="dialog-overlay" id="dialog-comms" style="display:none"><div class="dialog dialog-comms" id="dialog-comms-body"></div></div>
+        <div class="dialog-overlay" id="dialog-boarding" style="display:none"><div class="dialog dialog-boarding" id="dialog-boarding-body"></div></div>
+      </div>
     </div>
   </div>
 

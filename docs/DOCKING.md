@@ -70,7 +70,7 @@ Clearances are asked for by hailing traffic control (the comms window, or the HA
 
 Citations (`law.cite`) are fines owed to the station's power: paid at its stations, or settled by an inspection. A week unpaid makes us SUSPECT there. Undocking without a departure clearance is a citation; a collision with a berth over 1 m/s is another.
 
-Near a hub the radio is busy, and it is the real traffic: traffic control clears the ships actually due out of their berths and the arrivals on its filed plans, posts its berth board and the day's advisories, every 5 to 13 minutes (half as often in the outer control space). Our nav computer calls out zone changes, ranges (2,000 km down to 2 km, closing only) and clearance timers. All of it goes to the log and the radio ticker on the main view. The radio's background chatter is in the full log, not the three latest entries.
+Near a hub the radio is busy, and it is the real traffic: traffic control clears the ships actually due out of their berths and the arrivals on its filed plans, posts its berth board and the day's advisories, every 5 to 13 minutes (half as often in the outer control space). Our nav computer calls out zone changes, ranges (2,000 km down to 2 km, closing only) and clearance timers. All of it goes to the log and to the radio in the console's bottom bar, which shows the last two transmissions for a few seconds each.
 
 ## Docking
 

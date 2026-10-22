@@ -66,7 +66,7 @@ export class ThreatView {
     ctx.fillStyle = '#0A0608';
     ctx.fillRect(0, 0, W, H);
     if (state.reactor.blackout) {
-      ctx.fillStyle = '#331111'; ctx.font = '10px "Press Start 2P", monospace'; ctx.textAlign = 'center';
+      ctx.fillStyle = '#331111'; ctx.font = '13px "IBM Plex Sans Condensed", sans-serif'; ctx.textAlign = 'center';
       ctx.fillText('FIRE CONTROL OFFLINE — NO POWER', cx, cy);
       return;
     }
@@ -74,7 +74,7 @@ export class ThreatView {
 
     // Decade rings, PDC envelope, torpedo launch range
     ctx.lineWidth = 1;
-    ctx.font = '10px "Share Tech Mono", monospace';
+    ctx.font = '10px "IBM Plex Mono", monospace';
     ctx.textAlign = 'left';
     for (let d = 1; d <= DECADES; d++) {
       ctx.strokeStyle = `rgba(90,40,40,${0.35 + d * 0.05})`;
@@ -83,18 +83,19 @@ export class ThreatView {
       ctx.fillText(fmtKm(10 ** d), cx + R * d / DECADES + 3, cy - 3);
     }
     const p = profile(state, PLAYER);
-    ctx.fillStyle = 'rgba(79,209,197,0.07)';
+    ctx.fillStyle = 'rgba(95,211,141,0.06)';
     ctx.beginPath(); ctx.arc(cx, cy, radius(p.pdc.rangeM / 1000), 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(79,209,197,0.35)'; ctx.setLineDash([2, 3]);
+    ctx.strokeStyle = 'rgba(95,211,141,0.4)'; ctx.setLineDash([2, 3]);
     ctx.beginPath(); ctx.arc(cx, cy, radius(p.pdc.strafeM / 1000), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
 
     // Own ship
-    ctx.fillStyle = '#4FD1C5';
+    ctx.fillStyle = '#5FD38D';
     ctx.beginPath(); ctx.moveTo(cx, cy - 6); ctx.lineTo(cx - 4, cy + 4); ctx.lineTo(cx + 4, cy + 4); ctx.closePath(); ctx.fill();
 
     const world = getWorld(state);
     const facing = state.flight.facing;
     const hostile = new Set(hostilesOfPlayer(state).map(e => e.id));
+    const labels = [];             // drawn last, most important first, none over another
     const at = (c) => {
       const rel = c.bearing - facing;
       const r = radius(c.dist * AU_KM);
@@ -105,13 +106,13 @@ export class ThreatView {
       const e = world.get(c.id);
       if (c.ordnance) {
         const inbound = e?.ord?.target === PLAYER, ours = e?.ord?.owner === PLAYER;
-        const col = inbound ? '#FF5555' : ours ? '#4FD1C5' : '#E2A355';
+        const col = inbound ? '#EF5350' : ours ? '#5FD38D' : '#F0A93A';
         if (inbound) { ctx.strokeStyle = 'rgba(255,85,85,0.35)'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(cx, cy); ctx.stroke(); }
         ctx.fillStyle = col;
         ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x + 3, y); ctx.lineTo(x, y + 4); ctx.lineTo(x - 3, y); ctx.closePath(); ctx.fill();
         if (inbound) {
           const eta = timeToGo(state, e);
-          ctx.fillText(`${c.name}${isFinite(eta) ? ' ' + formatDuration(eta / 60) : ''}`, x + 6, y + 3);
+          labels.push({ text: `${c.name}${isFinite(eta) ? ' ' + formatDuration(eta / 60) : ''}`, x: x + 6, y: y + 3, col, pri: 3 });
         }
         continue;
       }
@@ -119,16 +120,14 @@ export class ThreatView {
       const col = c.wreck ? '#5A5A5A' : c.faction ? factionColor(c.faction) : '#8A8A6A';
       ctx.fillStyle = col;
       ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
-      if (hostile.has(c.id)) { ctx.strokeStyle = '#FF5555'; ctx.strokeRect(x - 7, y - 7, 14, 14); }
+      if (hostile.has(c.id)) { ctx.strokeStyle = '#EF5350'; ctx.strokeRect(x - 7, y - 7, 14, 14); }
       if (state.combat.target === c.id) {
         ctx.save(); ctx.translate(x, y); ctx.rotate(t);
-        ctx.strokeStyle = '#FF8C42';
+        ctx.strokeStyle = '#EF5350';
         ctx.beginPath(); for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2; ctx.moveTo(Math.cos(a) * 7, Math.sin(a) * 7); ctx.lineTo(Math.cos(a) * 13, Math.sin(a) * 13); } ctx.stroke();
         ctx.restore();
       }
-      ctx.fillStyle = col; ctx.globalAlpha = 0.85;
-      ctx.fillText(c.name || c.signature || 'CONTACT', x + 8, y + 3);
-      ctx.globalAlpha = 1;
+      labels.push({ text: c.name || c.signature || 'CONTACT', x: x + 8, y: y + 3, col, pri: state.combat.target === c.id ? 4 : hostile.has(c.id) ? 2 : c.wreck ? 0 : 1 });
       this._hits.push({ id: c.id, x, y });
     }
     // Our own torpedoes on their way, toward their targets
@@ -141,9 +140,9 @@ export class ThreatView {
         return { x: cx - Math.sin(b) * r, y: cy - Math.cos(b) * r };
       };
       const a = rel(o.pos), b = rel(tk.pos);
-      ctx.strokeStyle = 'rgba(79,209,197,0.3)'; ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = 'rgba(62,199,230,0.35)'; ctx.setLineDash([3, 3]);
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]);
-      ctx.fillStyle = '#4FD1C5'; ctx.fillRect(a.x - 1.5, a.y - 1.5, 3, 3);
+      ctx.fillStyle = '#5FD38D'; ctx.fillRect(a.x - 1.5, a.y - 1.5, 3, 3);
     }
     // Point-defense fire right now
     for (const fx of fxList()) {
@@ -152,9 +151,24 @@ export class ThreatView {
       ctx.beginPath(); ctx.arc(cx, cy, radius(p.pdc.rangeM / 1000) * (0.3 + 0.7 * fx.age), 0, Math.PI * 2); ctx.stroke();
     }
 
-    ctx.fillStyle = '#E25555'; ctx.font = '11px "Share Tech Mono", monospace'; ctx.textAlign = 'left';
+    // Names: a crowd at one range (a station's berths) would print on top
+    // of itself, so a name that would cover one already drawn is left off
+    // (the dot is still there to click)
+    labels.sort((a, b) => b.pri - a.pri);
+    const placed = [];
+    ctx.globalAlpha = 0.85;
+    for (const l of labels) {
+      const w = ctx.measureText(l.text).width;
+      const box = { x0: l.x - 1, x1: l.x + w + 1, y0: l.y - 10, y1: l.y + 3 };
+      if (placed.some(b => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
+      placed.push(box);
+      ctx.fillStyle = l.col; ctx.fillText(l.text, l.x, l.y);
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = '#EF5350'; ctx.font = '11px "IBM Plex Mono", monospace'; ctx.textAlign = 'left';
     ctx.fillText('THREAT BOARD — LOG RANGE 1 km … 10M km', 10, 18);
-    ctx.fillStyle = 'rgba(160,90,90,0.8)'; ctx.font = '10px "Share Tech Mono", monospace';
+    ctx.fillStyle = 'rgba(160,90,90,0.8)'; ctx.font = '10px "IBM Plex Mono", monospace';
     ctx.fillText('filled: PDC envelope · dashed: PDC gun range · click a contact to target', 10, 31);
   }
 }

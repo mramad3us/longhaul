@@ -19,7 +19,53 @@ import { hullOf } from '../sim/hulls.js';
 import { drawHull as drawHullArt } from './hull-art.js';
 import { fxList } from './fx.js';
 import { FitCanvas } from './dom.js';
-import { buildHullPath } from './ship-view.js';
+import { TileType } from '../svg-icons.js';
+import { DECK_GAP } from '../sim/ship-layout.js';
+
+const TILE = 32;
+
+// ---- OUR HULL'S OUTLINE (from the deck plan) ----
+
+export function buildHullPath(decks, offsetX = 0, offsetY = 0) {
+  const segments = [];
+  let y = 0;
+  for (const deck of decks) {
+    deck.tiles.forEach((row, ry) => {
+      let l = -1, r = -1;
+      row.forEach((t, rx) => { if (t !== TileType.EMPTY) { if (l < 0) l = rx; r = rx; } });
+      if (l >= 0) segments.push({ y: y + ry, left: l, right: r + 1 });
+    });
+    y += deck.tiles.length + DECK_GAP;
+  }
+  if (!segments.length) return '';
+  const T = TILE, m = 3, pts = [];
+  segments.forEach((s, i) => {
+    const x = offsetX + s.left * T - m;
+    if (i === 0) { pts.push(`M ${offsetX + s.left * T} ${offsetY + s.y * T - m}`, `L ${x} ${offsetY + s.y * T}`); }
+    else {
+      const px = offsetX + segments[i - 1].left * T - m;
+      if (x !== px) pts.push(`L ${px} ${offsetY + s.y * T}`, `L ${x} ${offsetY + s.y * T}`);
+    }
+    pts.push(`L ${x} ${offsetY + (s.y + 1) * T}`);
+  });
+  const last = segments[segments.length - 1];
+  const bottom = offsetY + (last.y + 1) * T + m;
+  pts.push(`L ${offsetX + last.left * T} ${bottom}`, `L ${offsetX + last.right * T} ${bottom}`);
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const s = segments[i];
+    const x = offsetX + s.right * T + m;
+    pts.push(`L ${x} ${offsetY + (s.y + 1) * T}`);
+    if (i > 0) {
+      const px = offsetX + segments[i - 1].right * T + m;
+      if (x !== px) pts.push(`L ${x} ${offsetY + s.y * T}`, `L ${px} ${offsetY + s.y * T}`);
+    }
+    pts.push(`L ${x} ${offsetY + s.y * T}`);
+  }
+  const first = segments[0];
+  pts.push(`L ${offsetX + first.right * T} ${offsetY + first.y * T - m}`, 'Z');
+  return pts.join(' ');
+}
+
 
 export const TAC_RANGES_M = [1000, 5000, 25000];
 export const TAC_LABELS = ['1 km', '5 km', '25 km'];
@@ -101,30 +147,30 @@ export class TacView {
     const f = state.flight;
     const big = W > 400;
 
-    ctx.fillStyle = '#04080E';
+    ctx.fillStyle = '#05070A';
     ctx.fillRect(0, 0, W, H);
 
     if (state.reactor.blackout) {
       ctx.fillStyle = '#331111';
-      ctx.font = '8px "Press Start 2P", monospace';
+      ctx.font = '11px "IBM Plex Sans Condensed", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('NO POWER', cx, cy);
       return;
     }
 
     // Grid & range rings
-    ctx.strokeStyle = 'rgba(79,209,197,0.06)';
+    ctx.strokeStyle = 'rgba(42,56,70,0.32)';
     ctx.lineWidth = 1;
     const step = rangeM / 4 * px;
     ctx.beginPath();
     for (let x = cx % step; x < W; x += step) { ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, H); }
     for (let y = cy % step; y < H; y += step) { ctx.moveTo(0, Math.round(y) + 0.5); ctx.lineTo(W, Math.round(y) + 0.5); }
     ctx.stroke();
-    ctx.strokeStyle = 'rgba(79,209,197,0.10)';
+    ctx.strokeStyle = 'rgba(42,56,70,0.7)';
     for (let k = 1; k <= 3; k++) { ctx.beginPath(); ctx.arc(cx, cy, rangeM * k / 3 * px, 0, Math.PI * 2); ctx.stroke(); }
     if (big) {
-      ctx.fillStyle = 'rgba(58,106,122,0.8)';
-      ctx.font = '10px "Share Tech Mono", monospace';
+      ctx.fillStyle = 'rgba(94,109,124,0.95)';
+      ctx.font = '10px "IBM Plex Mono", monospace';
       ctx.textAlign = 'left';
       for (let k = 1; k <= 3; k++) ctx.fillText(`${(rangeM * k / 3 / 1000).toFixed(rangeM < 5000 ? 2 : 1)} km`, cx + rangeM * k / 3 * px + 3, cy - 3);
     }
@@ -142,7 +188,7 @@ export class TacView {
       drawPlume(ctx, cx, cy + shipH / 2, shipH, f.thrustG, t, big && this.zoom === 0);
     }
     if (this.zoom < 2) drawHull(ctx, state, cx, cy, shipH);
-    else { ctx.fillStyle = '#4FD1C5'; ctx.fillRect(cx - 1.5, cy - 1.5, 3, 3); }
+    else { ctx.fillStyle = '#5FD38D'; ctx.fillRect(cx - 1.5, cy - 1.5, 3, 3); }
     if (this.zoom < 2 && (Math.abs(f.turning) > 0.001 || f.rcsG > 0.0005)) drawRcs(ctx, cx, cy, shipH, t, Math.abs(f.turning) > 0.2);
 
     // Contacts
@@ -160,7 +206,7 @@ export class TacView {
       hits.push({ id: e.id, x: sx, y: sy });
       const heading = (e.heading || 0) + rot;   // screen-frame heading
       if (e.type === 'ordnance') { drawOrdnance(ctx, e, sx, sy, heading, t); continue; }
-      const color = e.sos ? '#E25555' : e.tags?.wreck ? '#5A5A5A' : factionColor(e.faction);
+      const color = e.sos ? '#EF5350' : e.tags?.wreck ? '#5A5A5A' : factionColor(e.faction);
       const seed = hashString(e.id);
       if (this.zoom === 0) drawSilhouette(ctx, e, sx, sy, heading, color, seed, t, big);
       else if (this.zoom === 1) drawIcon(ctx, e, sx, sy, heading, color, t);
@@ -173,7 +219,7 @@ export class TacView {
       const label = e.transponder ? e.name : null;
       let room = false;
       if (label && (this.zoom < 2 || big)) {
-        ctx.font = `${big ? 10 : 7}px "Share Tech Mono", monospace`;
+        ctx.font = `${big ? 10 : 7}px "IBM Plex Mono", monospace`;
         const text = label.length > 22 ? label.slice(0, 21) + '…' : label;
         const r = { x: sx + 8, y: sy - (big ? 7 : 5), w: ctx.measureText(text).width + 4, h: big ? 22 : 9 };
         room = e.id === pick || !placed.some(p => r.x < p.x + p.w && p.x < r.x + r.w && r.y < p.y + p.h && p.y < r.y + r.h);
@@ -191,13 +237,13 @@ export class TacView {
         }
       }
       if (opts.highlight === e.id) {
-        ctx.strokeStyle = '#4FD1C5';
+        ctx.strokeStyle = '#5FD38D';
         ctx.setLineDash([3, 3]);
         ctx.beginPath(); ctx.arc(sx, sy, 16, 0, Math.PI * 2); ctx.stroke();
         ctx.setLineDash([]);
       }
       if (opts.selected === e.id) {
-        ctx.strokeStyle = '#6EEAE0';
+        ctx.strokeStyle = '#3EC7E6';
         ctx.lineWidth = 1.5;
         const r = 20 + Math.sin(t * 4) * 1.5;
         ctx.beginPath();
@@ -259,14 +305,14 @@ export class TacView {
       if (sx < 0 || sx > W || sy < 0 || sy > H) {
         const ang = Math.atan2(sy - cy, sx - cx);
         const ex = cx + Math.cos(ang) * (Math.min(W, H) / 2 - 10), ey = cy + Math.sin(ang) * (Math.min(W, H) / 2 - 10);
-        ctx.fillStyle = '#4FD1C5';
+        ctx.fillStyle = '#5FD38D';
         ctx.beginPath();
         ctx.moveTo(ex + Math.cos(ang) * 6, ey + Math.sin(ang) * 6);
         ctx.lineTo(ex + Math.cos(ang + 2.4) * 6, ey + Math.sin(ang + 2.4) * 6);
         ctx.lineTo(ex + Math.cos(ang - 2.4) * 6, ey + Math.sin(ang - 2.4) * 6);
         ctx.fill();
         if (big) {
-          ctx.font = '10px "Share Tech Mono", monospace';
+          ctx.font = '10px "IBM Plex Mono", monospace';
           ctx.textAlign = 'center';
           ctx.fillText(r.name, ex - Math.cos(ang) * 30, ey - Math.sin(ang) * 14);
         }
@@ -275,8 +321,8 @@ export class TacView {
 
     // Scale bar / heading
     if (big) {
-      ctx.fillStyle = 'rgba(79,209,197,0.7)';
-      ctx.font = '9px "Press Start 2P", monospace';
+      ctx.fillStyle = 'rgba(148,163,178,0.9)';
+      ctx.font = '12px "IBM Plex Sans Condensed", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('FWD', cx, 14);
     }
@@ -289,13 +335,13 @@ function drawHull(ctx, state, cx, cy, shipH) {
   ctx.save();
   ctx.translate(cx - hullSize.w * s / 2, cy - shipH / 2);
   ctx.scale(s, s);
-  ctx.fillStyle = '#0C1420';
+  ctx.fillStyle = '#0F151C';
   ctx.fill(path);
   ctx.lineWidth = 1.5 / s;
-  ctx.strokeStyle = '#3D7A8A';
+  ctx.strokeStyle = '#5FD38D';
   ctx.stroke(path);
   ctx.restore();
-  ctx.fillStyle = '#4FD1C5';
+  ctx.fillStyle = '#5FD38D';
   ctx.fillRect(cx - 1, cy - 1, 2, 2);
 }
 
@@ -350,7 +396,7 @@ function drawTorchStar(ctx, cx, cy, g, t, big) {
 
 function drawRcs(ctx, cx, cy, shipH, t, flip) {
   const w = shipH * 0.2;
-  ctx.fillStyle = '#E2A355';
+  ctx.fillStyle = '#F0A93A';
   const jets = [[-1, -0.35], [1, -0.35], [-1, 0.35], [1, 0.35]];
   jets.forEach(([sx, sy], i) => {
     const on = flip ? Math.sin(t * 50 + i) > -0.2 : Math.sin(t * 3 + i * 1.7) > 0.6;
@@ -401,7 +447,7 @@ function drawSilhouette(ctx, e, x, y, heading, color, seed, t, big) {
 function drawOrdnance(ctx, e, x, y, heading, t) {
   const ours = e.ord?.owner === 'player';
   const inbound = e.ord?.target === 'player';
-  const color = inbound ? '#FF5555' : ours ? '#4FD1C5' : '#E2A355';
+  const color = inbound ? '#EF5350' : ours ? '#5FD38D' : '#F0A93A';
   if (e.ord?.kind === 'slug') {
     ctx.strokeStyle = color;
     ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - Math.cos(-heading) * 8, y - Math.sin(-heading) * 8); ctx.stroke();

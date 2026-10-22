@@ -3,7 +3,9 @@
 // Entries live in the game state (they're part of the save). The same line
 // again within a couple of hours isn't a new entry: the one there moves up
 // to the latest time and counts the repeats (×N), so a message the sim
-// repeats can't bury the rest of the log.
+// repeats can't bury the rest of the log. On the console the log is a
+// drawer under the main view (console.js): drawn only while it is open,
+// in full, by date.
 // ============================================================
 
 import { ui } from './context.js';
@@ -11,7 +13,6 @@ import { esc, setText } from './dom.js';
 import { formatTime, formatDate } from '../core/clock.js';
 
 const MAX = 300;
-const COLLAPSED = 24;           // (collapsed, as many of the latest as the panel has room for: overflow hidden)
 const REPEAT_WITHIN = 120;      // minutes: the same line again within this is counted, not added
 const REPEAT_LOOK = 8;          // …looking this far back (a radio call in between doesn't break the run)
 const ICON = {
@@ -34,30 +35,26 @@ export function logEntry(text, cat = 'system') {
   dirty = true;
 }
 
-export function initLog() {
-  const btn = document.getElementById('log-expand-btn');
-  btn.addEventListener('click', () => {
-    expanded = !expanded;
-    document.getElementById('log-container').classList.toggle('expanded', expanded);
-    setText(document.getElementById('log-expand-text'), expanded ? 'COLLAPSE' : 'SHOW FULL LOG');
-    dirty = true;
-    renderLog();
-  });
+export function initLog() {}
+
+/** The drawer opened or closed (console.js). */
+export function setLogExpanded(on) {
+  expanded = on;
+  dirty = true;
+  renderLog();
 }
 
 export function resetLogView() {
-  expanded = false;
-  document.getElementById('log-container')?.classList.remove('expanded');
-  setText(document.getElementById('log-expand-text'), 'SHOW FULL LOG');
   dirty = true;
 }
 
 export function renderLog() {
-  if (!dirty || !ui.state) return;
+  if (!ui.state) return;
+  setText(document.getElementById('log-count'), ui.state.log.length);
+  if (!dirty || !expanded) return;
   dirty = false;
   const s = ui.state;
-  // (the radio's background chatter is in the full log, not the glance at the latest)
-  const list = expanded ? s.log.slice(0, MAX) : s.log.filter(e => e.cat !== 'chatter').slice(0, COLLAPSED);
+  const list = s.log.slice(0, MAX);
   let lastDate = null;
   const html = list.map(e => {
     const date = formatDate(s.clock, e.m);
@@ -70,5 +67,4 @@ export function renderLog() {
     </div>`;
   }).join('');
   document.getElementById('log-entries').innerHTML = html;
-  setText(document.getElementById('log-count'), s.log.length);
 }

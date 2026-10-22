@@ -1,5 +1,9 @@
 // ============================================================
-// LONGHAUL — HUD bar, ship status, resources
+// LONGHAUL — The console's top rail and SHIP panel
+// The rail: the clock, time warp, the nav status, the annunciators
+// (master caution and warning, battle stations, suits), the flag chip.
+// The SHIP panel: drive, attitude, the reference velocity, hull, mass,
+// cargo, the systems' health, stores.
 // ============================================================
 
 import { suitedCount } from '../sim/life-support.js';

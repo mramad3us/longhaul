@@ -1,6 +1,10 @@
 // ============================================================
-// LONGHAUL — Sensor display (canvas radar)
-// Nose-up, ship-centred; contacts from the sim's sensor picture.
+// LONGHAUL — Sensor display
+// Nose-up, ship-centred; contacts from the sim's sensor picture: the
+// fused board, so no sweeping beam (nothing on the ship scans in a
+// circle), range rings in the band's units, bearing ticks, contacts in
+// their faction's colours, a target box round the selection, the lock
+// as an amber ring, what is coming at us in red with its time to impact.
 // ============================================================
 
 import { AU_KM } from '../core/constants.js';
@@ -12,6 +16,10 @@ import { timeToGo } from '../sim/ordnance.js';
 import { hostilesOfPlayer } from '../sim/agents.js';
 import { formatDuration } from '../core/clock.js';
 import { FitCanvas, fmtKm } from './dom.js';
+
+const C = { void: '#05070A', line: '#1C2632', line2: '#2A3846', text: '#D8E1EA', text2: '#94A3B2', text3: '#5E6D7C', own: '#5FD38D', sel: '#3EC7E6', caution: '#F0A93A', warn: '#EF5350' };
+const UI = (px, w = 500) => `${w} ${px}px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif`;
+const MONO = (px) => `${px}px "IBM Plex Mono", ui-monospace, monospace`;
 
 export class ScannerView {
   constructor(container, { onSelect } = {}) {
@@ -32,49 +40,39 @@ export class ScannerView {
     if (!fc.fit()) return;
     const ctx = fc.ctx, W = fc.w, H = fc.h;
     const cx = W / 2, cy = H / 2;
-    const R = Math.min(cx, cy) - 24;
+    const R = Math.min(cx, cy) - 30;
     const s = state.sensors;
     const band = SENSOR_RANGES[s.range];
     const t = performance.now() / 1000;
     this._hits.length = 0;
 
-    ctx.fillStyle = '#080C0F';
+    ctx.fillStyle = C.void;
     ctx.fillRect(0, 0, W, H);
-    if (state.reactor.blackout) {
-      ctx.fillStyle = '#331111'; ctx.font = '10px "Press Start 2P", monospace'; ctx.textAlign = 'center';
-      ctx.fillText('SENSORS OFFLINE — NO POWER', cx, cy);
-      return;
-    }
+    if (state.reactor.blackout) return;
 
-    // Rings, cross-hairs, sweep
+    // Range rings and the ship's axes (the display is nose-up)
     ctx.lineWidth = 1;
     for (let i = 1; i <= 3; i++) {
-      ctx.strokeStyle = `rgba(26,58,74,${0.5 + i * 0.15})`;
+      ctx.strokeStyle = i === 3 ? C.line2 : C.line;
       ctx.beginPath(); ctx.arc(cx, cy, R * i / 3, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = '#3A6A7A'; ctx.font = '10px "Share Tech Mono", monospace'; ctx.textAlign = 'left';
-      ctx.fillText(fmtKm(band.au * AU_KM * i / 3), cx + R * i / 3 + 3, cy - 3);
+      ctx.fillStyle = C.text3; ctx.font = MONO(10); ctx.textAlign = 'left';
+      ctx.fillText(fmtKm(band.au * AU_KM * i / 3), cx + R * i / 3 + 4, cy - 4);
     }
-    ctx.strokeStyle = 'rgba(26,58,74,0.7)';
+    ctx.strokeStyle = C.line;
+    ctx.setLineDash([2, 5]);
     ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
-    // Sweep turns clockwise; the afterglow trails behind the beam, brightest at the beam itself
-    const sweep = (t * 0.8) % (Math.PI * 2);
-    const TRAIL = 0.6;                                   // radians of afterglow
-    const beam = sweep - Math.PI / 2;                    // canvas angle of the beam (0 = east)
-    const g = ctx.createConicGradient ? ctx.createConicGradient(beam - TRAIL, cx, cy) : null;
-    if (g) {
-      const f = TRAIL / (Math.PI * 2);
-      g.addColorStop(0, 'rgba(79,209,197,0)'); g.addColorStop(f * 0.999, 'rgba(79,209,197,0.2)');
-      g.addColorStop(f, 'rgba(79,209,197,0)'); g.addColorStop(1, 'rgba(79,209,197,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = 'rgba(79,209,197,0.45)';
-      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(beam) * R, cy + Math.sin(beam) * R); ctx.stroke();
+    ctx.setLineDash([]);
+    // bearing ticks every 30°
+    for (let a = 0; a < 360; a += 30) {
+      const r = a * Math.PI / 180;
+      ctx.strokeStyle = C.line2;
+      ctx.beginPath(); ctx.moveTo(cx + Math.sin(r) * R, cy - Math.cos(r) * R); ctx.lineTo(cx + Math.sin(r) * (R + 6), cy - Math.cos(r) * (R + 6)); ctx.stroke();
+      if (a % 90 === 0) { ctx.fillStyle = C.text3; ctx.font = MONO(10); ctx.textAlign = 'center'; ctx.fillText(a === 0 ? 'NOSE' : `${a}°`, cx + Math.sin(r) * (R + 16), cy - Math.cos(r) * (R + 16) + 3); }
     }
 
-    // Own ship
-    ctx.fillStyle = '#4FD1C5';
+    // Our ship
+    ctx.fillStyle = C.own;
     ctx.beginPath(); ctx.moveTo(cx, cy - 6); ctx.lineTo(cx - 4, cy + 4); ctx.lineTo(cx + 4, cy + 4); ctx.closePath(); ctx.fill();
-    ctx.font = '8px "Press Start 2P", monospace'; ctx.textAlign = 'center';
-    ctx.fillText('FWD', cx, cy - R - 8);
 
     const facing = state.flight.facing;
     const world = getWorld(state);
@@ -88,60 +86,64 @@ export class ScannerView {
         // Ordnance: a small diamond — red when it is coming for us
         const o = world.get(c.id)?.ord;
         const inbound = o?.target === PLAYER;
-        ctx.fillStyle = inbound ? '#FF5555' : o?.owner === PLAYER ? '#4FD1C5' : '#E2A355';
+        ctx.fillStyle = inbound ? C.warn : o?.owner === PLAYER ? C.own : C.caution;
         ctx.beginPath(); ctx.moveTo(px, py - 4); ctx.lineTo(px + 3, py); ctx.lineTo(px, py + 4); ctx.lineTo(px - 3, py); ctx.closePath(); ctx.fill();
         if (inbound) {
           const eta = timeToGo(state, world.get(c.id));
-          ctx.font = '10px "Share Tech Mono", monospace'; ctx.textAlign = 'left';
-          ctx.fillText(`${c.name} ${isFinite(eta) ? formatDuration(eta / 60) : ''}`, px + 6, py + 3);
+          ctx.font = MONO(11); ctx.textAlign = 'left';
+          ctx.fillText(`${c.name} ${isFinite(eta) ? formatDuration(eta / 60) : ''}`, px + 7, py + 4);
         }
         this._hits.push({ id: c.id, x: px, y: py });
         continue;
       }
-      const color = c.sos ? '#E25555' : c.faction ? factionColor(c.faction) : c.station ? '#4FD1C5' : '#8A8A6A';
+      const color = c.sos ? C.warn : c.faction ? factionColor(c.faction) : c.station ? C.text : C.text2;
       const sz = c.station ? 4 : 3;
       if (hostile.has(c.id)) {
-        ctx.strokeStyle = '#FF5555'; ctx.lineWidth = 1.5;
+        ctx.strokeStyle = C.warn; ctx.lineWidth = 1.5;
         ctx.strokeRect(px - sz - 4, py - sz - 4, (sz + 4) * 2, (sz + 4) * 2);
         ctx.lineWidth = 1;
       }
       if (state.combat.target === c.id) {
-        ctx.strokeStyle = '#FF8C42';
+        ctx.strokeStyle = C.warn;
         ctx.beginPath(); ctx.moveTo(px - 12, py); ctx.lineTo(px - 6, py); ctx.moveTo(px + 6, py); ctx.lineTo(px + 12, py);
         ctx.moveTo(px, py - 12); ctx.lineTo(px, py - 6); ctx.moveTo(px, py + 6); ctx.lineTo(px, py + 12); ctx.stroke();
       }
       if (c.sos) {
         const ph = (t % 2) / 2;
-        ctx.strokeStyle = `rgba(226,85,85,${0.6 * (1 - ph)})`;
+        ctx.strokeStyle = `rgba(239,83,80,${0.6 * (1 - ph)})`;
         ctx.beginPath(); ctx.arc(px, py, sz + ph * 16, 0, Math.PI * 2); ctx.stroke();
       }
       ctx.fillStyle = color;
-      ctx.beginPath(); ctx.arc(px, py, sz, 0, Math.PI * 2); ctx.fill();
+      if (c.station) ctx.fillRect(px - sz, py - sz, sz * 2, sz * 2);
+      else { ctx.beginPath(); ctx.arc(px, py, sz, 0, Math.PI * 2); ctx.fill(); }
       if (c.plume) { ctx.strokeStyle = color; ctx.globalAlpha = 0.45; ctx.beginPath(); ctx.arc(px, py, sz + 3, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
       if (s.selected === c.id) {
-        ctx.strokeStyle = color; ctx.beginPath(); ctx.arc(px, py, sz + 6 + Math.sin(t * 3) * 1.5, 0, Math.PI * 2); ctx.stroke();
+        const r = sz + 8, k = 4;
+        ctx.strokeStyle = C.sel; ctx.lineWidth = 1.5; ctx.beginPath();
+        for (const [dx, dy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const qx = px + dx * r, qy = py + dy * r; ctx.moveTo(qx - dx * k, qy); ctx.lineTo(qx, qy); ctx.lineTo(qx, qy - dy * k); }
+        ctx.stroke(); ctx.lineWidth = 1;
       }
       if (s.locked === c.id) {
-        ctx.save(); ctx.translate(px, py); ctx.rotate(t * 1.5);
-        ctx.strokeStyle = '#E2A355'; ctx.setLineDash([3, 2]);
-        ctx.beginPath(); ctx.arc(0, 0, sz + 9, 0, Math.PI * 2); ctx.stroke();
-        ctx.restore(); ctx.setLineDash([]);
+        ctx.strokeStyle = C.caution; ctx.setLineDash([3, 2]);
+        ctx.beginPath(); ctx.arc(px, py, sz + 11, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]);
       }
-      const label = c.name || c.signature || 'UNKNOWN';
+      const label = c.name || c.signature || 'Unknown';
       if (frac < 0.9 && s.contacts.length < 60) {
-        ctx.fillStyle = color; ctx.globalAlpha = 0.8; ctx.font = '10px "Share Tech Mono", monospace'; ctx.textAlign = 'left';
-        ctx.fillText(label + (c.sos ? '  SOS' : ''), px + sz + 4, py + 3);
+        ctx.fillStyle = color; ctx.globalAlpha = 0.85; ctx.font = UI(11); ctx.textAlign = 'left';
+        ctx.fillText(label + (c.sos ? '  SOS' : ''), px + sz + 5, py + 4);
         ctx.globalAlpha = 1;
       }
       this._hits.push({ id: c.id, x: px, y: py });
     }
 
     ctx.textAlign = 'left';
-    ctx.fillStyle = '#4FD1C5'; ctx.font = '11px "Share Tech Mono", monospace';
-    ctx.fillText(`${band.name} RANGE — ${band.label}`, 10, 18);
-    ctx.fillStyle = '#3A6A7A'; ctx.font = '10px "Share Tech Mono", monospace';
-    ctx.fillText(band.description, 10, 31);
+    ctx.fillStyle = C.text; ctx.font = UI(12, 600);
+    ctx.fillText(`${band.name} RANGE · ${band.label}`, 12, 20);
+    ctx.fillStyle = C.text3; ctx.font = UI(11);
+    ctx.fillText(band.description, 12, 35);
     ctx.textAlign = 'right';
-    ctx.fillText(`${s.contacts.length} CONTACT${s.contacts.length === 1 ? '' : 'S'}`, W - 10, 18);
+    ctx.fillStyle = C.text2; ctx.font = MONO(11);
+    ctx.fillText(`${s.contacts.length} contact${s.contacts.length === 1 ? '' : 's'}`, W - 12, 20);
   }
 }

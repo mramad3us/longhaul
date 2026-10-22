@@ -1,13 +1,13 @@
 // ============================================================
-// LONGHAUL — The radio ticker
-// The last few transmissions near a hub (traffic control, our nav
-// computer's callouts, warnings), over the main view for a few seconds
-// each. Everything also goes in the ship's log.
+// LONGHAUL — The radio, in the console's bottom bar
+// The last couple of transmissions near a hub (traffic control, our nav
+// computer's callouts, warnings), in the console's bottom bar for a few
+// seconds each. Everything also goes in the ship's log.
 // ============================================================
 
 import { $, esc } from './dom.js';
 
-const MAX = 4, LIFE_MS = 14_000;
+const MAX = 2, LIFE_MS = 14_000;
 
 export function pushTicker(text, kind = 'comms', from = '') {
   const box = $('#comms-ticker');

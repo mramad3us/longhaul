@@ -9,6 +9,16 @@
 // Layers can be filtered (stations, ships, the plot's reports), stations
 // are drawn over the traffic crowding them, and a click on a crowd offers
 // the list of what is under the pointer (onPickList) rather than guessing.
+//
+// It is the console's main display, drawn the way a nav display is:
+// no starfield (stars tell a navigator nothing here), hairline orbits,
+// the Belt as the band it is, colour that means something (green is us,
+// magenta our route, cyan what is selected, amber and red the trouble
+// spots, faction colours for who owns what), labels that thin out with
+// the zoom, and nothing that moves unless the thing it shows does (a
+// distress beacon's pulse is the one exception: it is an alarm). Zoom
+// eases toward where the wheel asked for, about the point under the
+// pointer.
 // ============================================================
 
 import { AU_KM, DAY_MIN } from '../core/constants.js';
@@ -35,18 +45,16 @@ const MAX_SCALE = 4e8;        // px per AU (~0.4 km per px)
 const _q = [];
 const _bp = { x: 0, y: 0 };
 
-// Fixed starfield (screen space)
-const STARS = Array.from({ length: 220 }, (_, i) => ({
-  x: (Math.sin(i * 127.1 + 311.7) * 0.5 + 0.5),
-  y: (Math.sin(i * 269.5 + 183.3) * 0.5 + 0.5),
-  a: 0.12 + (Math.sin(i * 43.7) * 0.5 + 0.5) * 0.4,
-  s: Math.sin(i * 91.3) > 0.7 ? 2 : 1,
-}));
-// Asteroid belt dust (orbital elements, drawn rotating with time)
-const DUST = Array.from({ length: 900 }, (_, i) => {
-  const r = 2.1 + ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1 * 1.25;
-  return { r, a: (i * 2.39996) % (Math.PI * 2), w: 1 / Math.pow(r, 1.5) };
-});
+// The display's colours (the console's: css/console.css)
+const COL = {
+  void: '#05070A', ring: 'rgba(42,56,70,0.55)', ringText: 'rgba(94,109,124,0.9)', orbit: 'rgba(52,70,88,0.75)', orbitMinor: 'rgba(42,56,70,0.6)',
+  text: '#D8E1EA', text2: '#94A3B2', text3: '#5E6D7C', own: '#5FD38D', sel: '#3EC7E6', route: '#D46BE0', caution: '#F0A93A', warn: '#EF5350', mil: '#E07B4F',
+  belt: 'rgba(150,135,110,0.06)', light: 'rgba(240,169,58,0.35)', lightText: 'rgba(240,169,58,0.7)',
+};
+const UI = (px, w = 500) => `${w} ${px}px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif`;
+const MONO = (px) => `${px}px "IBM Plex Mono", ui-monospace, monospace`;
+/** A hot zone's colour: what it means for a ship going near it. */
+const ZONE_COL = { front: COL.warn, skirmish: COL.warn, blockade: COL.caution, standoff: COL.caution, proxy: COL.mil, insurgency: COL.caution, pirates: '#C05AA0' };
 
 export class SolarMap {
   constructor(container, { onSelect, onHover, onPickList } = {}) {
@@ -65,6 +73,7 @@ export class SolarMap {
     this.onPickList = onPickList || null;
     this.filter = { stations: true, ships: true };   // layers drawn (reports: showIntel)
     this._pickables = [];
+    this._zoom = null;                  // { target scale, sx, sy (the point to keep still) }
     this._bind(container);
   }
 
@@ -87,7 +96,19 @@ export class SolarMap {
   focusOn(pos, scale) {
     this.follow = null;
     this.cx = pos.x; this.cy = pos.y;
+    this._zoom = null;
     if (scale) this.scale = scale;
+  }
+
+  /** A step of the eased zoom: a quarter of the way there a frame, the point under the pointer kept still. */
+  _ease() {
+    const z = this._zoom;
+    if (!z) return;
+    const before = this.toWorld(z.sx, z.sy);
+    const ratio = z.target / this.scale;
+    this.scale = Math.abs(Math.log(ratio)) < 0.004 ? z.target : this.scale * Math.pow(ratio, 0.28);
+    if (!this.follow) { const after = this.toWorld(z.sx, z.sy); this.cx += before.x - after.x; this.cy += before.y - after.y; }
+    if (this.scale === z.target) this._zoom = null;
   }
 
   _bind(el) {
@@ -96,12 +117,9 @@ export class SolarMap {
       e.preventDefault();
       const r = el.getBoundingClientRect();
       const mx = e.clientX - r.left, my = e.clientY - r.top;
-      const before = this.toWorld(mx, my);
-      const k = Math.exp(-e.deltaY * 0.0015);
-      this.scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, this.scale * k));
-      const after = this.toWorld(mx, my);
-      // keep the point under the cursor fixed (unless following, then just zoom)
-      if (!this.follow) { this.cx += before.x - after.x; this.cy += before.y - after.y; }
+      const k = Math.exp(-e.deltaY * 0.0018);
+      const from = this._zoom?.target ?? this.scale;
+      this._zoom = { target: Math.min(MAX_SCALE, Math.max(MIN_SCALE, from * k)), sx: mx, sy: my };
     }, { passive: false });
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
@@ -117,7 +135,7 @@ export class SolarMap {
           this.follow = null;
           this.cx = drag.cx - dx / this.scale;
           this.cy = drag.cy + dy / this.scale;
-          el.style.cursor = 'grabbing';
+          el.style.cursor = 'var(--cur-move, grabbing)';
         }
       } else {
         const hit = this.pick(e.clientX - r.left, e.clientY - r.top);
@@ -126,7 +144,7 @@ export class SolarMap {
           this.hover = hit;
           this.onHover(hit);
         }
-        el.style.cursor = hit ? 'pointer' : 'grab';
+        el.style.cursor = hit ? 'var(--cur-hand, pointer)' : 'var(--cur-cross, crosshair)';
       }
     });
     el.addEventListener('pointerup', (e) => {
@@ -142,7 +160,7 @@ export class SolarMap {
         }
       }
       drag = null;
-      el.style.cursor = 'grab';
+      el.style.cursor = 'var(--cur-cross, crosshair)';
     });
   }
 
@@ -215,7 +233,6 @@ export class SolarMap {
       cloud.ctx.putImageData(img, 0, 0);
       ctx.drawImage(cloud.canvas, 0, 0, W, H);
     }
-    const font = (px) => `${px}px "Share Tech Mono", monospace`;
     for (let i = 0; i < inView.length; i += 4) {
       const r = inView[i];
       const focus = r.id === opts.targetId || r.id === this.selected?.id || r.id === this.hover?.id;
@@ -223,7 +240,7 @@ export class SolarMap {
       if (crowd && !focus) { pick.push({ kind: 'entity', id: r.id, sx: x, sy: y, report: true }); continue; }   // a dot in the cloud, still clickable
       const age = now - r.at;
       const a = Math.max(0.25, 0.75 - 0.5 * age / REPORT_FADE_MIN);
-      const col = r.wreck ? '#5A5A5A' : r.faction ? factionColor(r.faction) : '#8A9AAA';
+      const col = r.wreck ? '#5E6D7C' : r.faction ? factionColor(r.faction) : COL.text2;
       ctx.globalAlpha = a;
       ctx.strokeStyle = col;
       ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.stroke();
@@ -235,8 +252,8 @@ export class SolarMap {
         ctx.setLineDash([]);
       }
       if (focus || S > 3e4) {
-        ctx.fillStyle = col; ctx.font = font(10);
-        ctx.fillText(`${r.name || 'TRACK'} · ${ageLabel(age)}`, x + 7, y + 3);
+        ctx.fillStyle = col; ctx.font = UI(11);
+        ctx.fillText(`${r.name || 'Track'} · ${ageLabel(age)} old`, x + 7, y + 4);
       }
       ctx.globalAlpha = 1;
       pick.push({ kind: 'entity', id: r.id, sx: x, sy: y, report: true });
@@ -246,6 +263,7 @@ export class SolarMap {
   render(state, opts = {}) {
     const fc = this.fc;
     if (!fc.fit()) return;
+    this._ease();
     const ctx = fc.ctx, W = fc.w, H = fc.h;
     const days = state.clock.minute / DAY_MIN;
     const S = this.scale;
@@ -255,73 +273,67 @@ export class SolarMap {
     const pick = this._pickables;
     pick.length = 0;
 
-    ctx.fillStyle = '#030810';
+    ctx.fillStyle = COL.void;
     ctx.fillRect(0, 0, W, H);
-    for (const s of STARS) { ctx.fillStyle = `rgba(255,255,255,${s.a})`; ctx.fillRect(s.x * W | 0, s.y * H | 0, s.s, s.s); }
 
     const view = { x0: this.cx - W / 2 / S, x1: this.cx + W / 2 / S, y0: this.cy - H / 2 / S, y1: this.cy + H / 2 / S };
     const sp = (x, y) => [W / 2 + (x - this.cx) * S, H / 2 - (y - this.cy) * S];
-    const font = (px) => `${px}px "Share Tech Mono", monospace`;
-
-    // Distance rings
-    ctx.strokeStyle = 'rgba(26,42,58,0.9)';
-    ctx.setLineDash([3, 5]);
-    ctx.lineWidth = 1;
     const [sx0, sy0] = sp(0, 0);
+    const inside = (x, y, m = 0) => x >= -m && x <= W + m && y >= -m && y <= H + m;
+
+    // The Belt: the band it is (2.1–3.3 AU), not a spray of dots
+    if (S < 4000) {
+      const r0 = 2.1 * S, r1 = 3.3 * S;
+      ctx.strokeStyle = COL.belt; ctx.lineWidth = r1 - r0;
+      ctx.beginPath(); ctx.arc(sx0, sy0, (r0 + r1) / 2, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+
+    // Distance from the Sun, in AU
+    ctx.strokeStyle = COL.ring; ctx.setLineDash([2, 6]);
     for (const r of [0.5, 1, 1.5, 2, 3, 5, 10, 20, 30]) {
       const rp = r * S;
-      if (rp < 20 || rp > Math.hypot(W, H) * 4) continue;
+      if (rp < 24 || rp > Math.hypot(W, H) * 4) continue;
       ctx.beginPath(); ctx.arc(sx0, sy0, rp, 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = 'rgba(42,74,90,0.9)'; ctx.font = font(10);
-      ctx.fillText(`${r} AU`, sx0 + 4, sy0 - rp + 12);
+      ctx.fillStyle = COL.ringText; ctx.font = MONO(10);
+      ctx.fillText(`${r} AU`, sx0 + 4, sy0 - rp - 4);
     }
     ctx.setLineDash([]);
 
-    // Belt dust
-    if (S < 2000 && S > 15) {
-      ctx.fillStyle = 'rgba(140,130,110,0.35)';
-      for (const d of DUST) {
-        const a = d.a + days * d.w * 0.0172;
-        const [x, y] = sp(d.r * Math.cos(a), d.r * Math.sin(a));
-        if (x >= 0 && x < W && y >= 0 && y < H) ctx.fillRect(x | 0, y | 0, 1, 1);
-      }
-    }
-
-    // Orbits
-    ctx.lineWidth = 1;
+    // Orbits: hairlines (the minor bodies' dotted)
     for (const b of BODIES) {
       if (!b.a) continue;
       let ox, oy;
       if (b.parent) { bodyPos(b.parent, days, _bp); ox = _bp.x; oy = _bp.y; } else { ox = 0; oy = 0; }
       const rp = b.a * S;
-      if (rp < 3) continue;
+      if (rp < 4) continue;
       const [cx, cy] = sp(ox, oy);
       if (cx + rp < 0 || cx - rp > W || cy + rp < 0 || cy - rp > H) continue;
       if (rp > 20000) continue;   // effectively a straight line through the view; skip
-      ctx.strokeStyle = b.type === 'asteroid' ? 'rgba(18,31,42,1)' : b.type === 'moon' ? 'rgba(42,74,90,0.6)' : 'rgba(21,37,53,1)';
-      ctx.setLineDash(b.type === 'asteroid' || b.type === 'moon' ? [2, 4] : []);
+      const minor = b.type === 'asteroid' || b.type === 'moon';
+      ctx.strokeStyle = minor ? COL.orbitMinor : COL.orbit;
+      ctx.setLineDash(minor ? [1, 4] : []);
       ctx.beginPath(); ctx.arc(cx, cy, rp, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.setLineDash([]);
 
-    // Spheres of influence: each source as a soft disc in its power's color
+    // Who holds the space, and where the trouble is
     if (this.showPolitics) {
       for (const src of INFLUENCE_SOURCES) {
-        let cx, cy, r;
         const col = factionColor(src.faction);
         if (src.ring) {
-          ctx.strokeStyle = col; ctx.globalAlpha = 0.07 * src.s;
+          ctx.strokeStyle = col; ctx.globalAlpha = 0.045 * src.s;
           ctx.lineWidth = Math.max(1, src.ring.w * 1.6 * S);
           ctx.beginPath(); ctx.arc(sx0, sy0, src.ring.a * S, 0, Math.PI * 2); ctx.stroke();
           ctx.lineWidth = 1; ctx.globalAlpha = 1;
           continue;
         }
         bodyPos(getBody(src.body), days, _bp);
-        [cx, cy] = sp(_bp.x, _bp.y);
-        r = src.r * S;
+        const [cx, cy] = sp(_bp.x, _bp.y);
+        const r = src.r * S;
         if (cx + r < 0 || cx - r > W || cy + r < 0 || cy - r > H || r < 2) continue;
         const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.5);
-        g.addColorStop(0, col + '30'); g.addColorStop(1, col + '00');
+        g.addColorStop(0, col + '1C'); g.addColorStop(1, col + '00');
         ctx.fillStyle = g;
         ctx.beginPath(); ctx.arc(cx, cy, r * 1.5, 0, Math.PI * 2); ctx.fill();
       }
@@ -333,23 +345,27 @@ export class SolarMap {
         if (z.r == null) continue;
         const p = zonePos(z, state.clock.minute);
         const [zx, zy] = sp(p.x, p.y);
-        const zr = Math.max(8, z.radius * S);
+        const zr = Math.max(10, z.radius * S);
         if (zx + zr < 0 || zx - zr > W || zy + zr < 0 || zy - zr > H) continue;
-        const col = z.kind === 'pirates' ? '#C05AA0' : z.kind === 'skirmish' || z.kind === 'front' ? '#FF5555' : z.kind === 'insurgency' ? '#E2A355' : z.kind === 'proxy' ? '#D0784A' : '#E8D56B';
-        ctx.strokeStyle = col; ctx.globalAlpha = 0.65; ctx.setLineDash([5, 4]);
+        const col = ZONE_COL[z.kind] || COL.caution;
+        ctx.fillStyle = col; ctx.globalAlpha = 0.05;
+        ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 0.75; ctx.strokeStyle = col; ctx.setLineDash([6, 4]);
         ctx.beginPath(); ctx.arc(zx, zy, zr, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
-        ctx.fillStyle = col; ctx.font = font(10);
-        ctx.fillText(`${ZONE_KINDS[z.kind].label} · ${z.body}`, zx + zr * 0.72 + 4, zy - zr * 0.72);
+        ctx.globalAlpha = 0.95; ctx.fillStyle = col; ctx.font = UI(11, 600);
+        ctx.fillText(`${ZONE_KINDS[z.kind].label}`, zx + zr * 0.72 + 5, zy - zr * 0.72 - 2);
+        ctx.fillStyle = COL.text3; ctx.font = UI(10);
+        ctx.fillText(z.body.toUpperCase(), zx + zr * 0.72 + 5, zy - zr * 0.72 + 10);
         ctx.globalAlpha = 1;
       }
     }
 
-    // Sun
+    // The Sun
     {
       const r = Math.max(4, 696_000 / AU_KM * S);
-      const g = ctx.createRadialGradient(sx0, sy0, 0, sx0, sy0, r * 4);
-      g.addColorStop(0, 'rgba(255,248,224,1)'); g.addColorStop(0.25, 'rgba(253,184,19,0.9)'); g.addColorStop(1, 'rgba(192,96,0,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sx0, sy0, r * 4, 0, Math.PI * 2); ctx.fill();
+      const g = ctx.createRadialGradient(sx0, sy0, 0, sx0, sy0, r * 2.4);
+      g.addColorStop(0, 'rgba(255,244,214,1)'); g.addColorStop(0.4, 'rgba(255,214,120,0.85)'); g.addColorStop(1, 'rgba(255,170,60,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sx0, sy0, r * 2.4, 0, Math.PI * 2); ctx.fill();
       pick.push({ kind: 'body', id: 'Sol', sx: sx0, sy: sy0 });
     }
 
@@ -358,23 +374,19 @@ export class SolarMap {
       if (!b.a) continue;
       bodyPos(b, days, _bp);
       const [x, y] = sp(_bp.x, _bp.y);
-      if (x < -50 || x > W + 50 || y < -50 || y > H + 50) continue;
+      if (!inside(x, y, 50)) continue;
       if (b.type === 'moon' && b.parent && b.a * S < 6) continue;          // hidden inside the planet's dot
       const trueR = (b.radius || 0) / AU_KM * S;
       const r = Math.max(b.type === 'planet' ? 3.5 : b.type === 'moon' ? 2 : 1.6, trueR);
       ctx.fillStyle = b.color;
-      if (b.type === 'asteroid' && r < 4) {
-        ctx.beginPath(); ctx.moveTo(x, y - r - 1); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r + 1); ctx.lineTo(x - r, y); ctx.closePath(); ctx.fill();
-      } else {
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-        if (b.rings && r > 2) { ctx.strokeStyle = 'rgba(212,196,154,0.5)'; ctx.beginPath(); ctx.ellipse(x, y, r * 2.2, r * 0.6, 0, 0, Math.PI * 2); ctx.stroke(); }
-      }
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      if (b.rings && r > 2) { ctx.strokeStyle = 'rgba(212,196,154,0.45)'; ctx.beginPath(); ctx.ellipse(x, y, r * 2.2, r * 0.6, 0, 0, Math.PI * 2); ctx.stroke(); }
       pick.push({ kind: 'body', id: b.name, sx: x, sy: y });
       const showLabel = b.type === 'planet' || (b.type === 'asteroid' && S > 40) || (b.type === 'moon' && b.a * S > 30);
       if (showLabel) {
-        ctx.fillStyle = b.color; ctx.globalAlpha = 0.75; ctx.font = font(b.type === 'planet' ? 11 : 10);
-        ctx.fillText(b.type === 'planet' ? b.name.toUpperCase() : b.name, x + r + 4, y + 3);
-        ctx.globalAlpha = 1;
+        const planet = b.type === 'planet';
+        ctx.fillStyle = planet ? COL.text2 : COL.text3; ctx.font = planet ? UI(12, 600) : UI(11);
+        ctx.fillText(planet ? b.name.toUpperCase() : b.name, x + r + 5, y + 4);
       }
     }
 
@@ -405,24 +417,25 @@ export class SolarMap {
       if (!keep && e.type === 'station' && !this.filter.stations) continue;
       if (!keep && e.type === 'ship' && !this.filter.ships) continue;
       const [x, y] = sp(e.pos.x, e.pos.y);
-      const color = e.sos ? '#FF5555' : e.tags?.wreck ? '#5A5A5A' : factionColor(e.faction);
+      const color = e.sos ? COL.warn : e.tags?.wreck ? '#5E6D7C' : factionColor(e.faction);
       if (e.type === 'ordnance') {
         const tgt = e.ord.target === 'player' ? state.flight.pos : world.get(e.ord.target)?.pos;
-        const c = e.ord.target === 'player' ? 'rgba(255,85,85,' : e.ord.owner === 'player' ? 'rgba(79,209,197,' : 'rgba(226,163,85,';
+        const c = e.ord.target === 'player' ? COL.warn : e.ord.owner === 'player' ? COL.own : COL.caution;
         if (tgt && e.ord.kind === 'torpedo') {
           const [tx, ty] = sp(tgt.x, tgt.y);
-          ctx.strokeStyle = c + '0.35)'; ctx.setLineDash([2, 4]);
-          ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.stroke(); ctx.setLineDash([]);
+          ctx.strokeStyle = c; ctx.globalAlpha = 0.4; ctx.setLineDash([2, 4]);
+          ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
         }
-        ctx.fillStyle = c + '1)';
+        ctx.fillStyle = c;
         ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
         continue;
       }
       if (e.type === 'station') {
-        ctx.fillStyle = color;
-        ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 5); ctx.lineTo(x - 5, y); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = COL.void; ctx.fillRect(x - 5, y - 5, 10, 10);
+        ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.strokeRect(x - 4, y - 4, 8, 8); ctx.lineWidth = 1;
+        ctx.fillStyle = color; ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
       } else if (e.type === 'nav') {
-        ctx.strokeStyle = '#E8D56B'; ctx.setLineDash([2, 2]);
+        ctx.strokeStyle = COL.caution; ctx.setLineDash([2, 2]);
         ctx.beginPath(); ctx.arc(x, y, Math.max(6, 0.001 * S), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
       } else {
         const hd = e.thrust > 0 ? e.heading : Math.atan2(e.vel.vy, e.vel.vx);
@@ -433,21 +446,21 @@ export class SolarMap {
         ctx.lineTo(x + Math.cos(-hd - 2.5) * 3.5, y + Math.sin(-hd - 2.5) * 3.5);
         ctx.closePath(); ctx.fill();
         if (e.thrust > 0) {
-          ctx.strokeStyle = 'rgba(200,220,255,0.6)';
+          ctx.strokeStyle = 'rgba(216,225,234,0.5)';
           ctx.beginPath(); ctx.moveTo(x - Math.cos(-hd) * 4, y - Math.sin(-hd) * 4); ctx.lineTo(x - Math.cos(-hd) * 12, y - Math.sin(-hd) * 12); ctx.stroke();
         }
       }
       if (e.sos) {
         const ph = (performance.now() / 1000) % 1;
-        ctx.strokeStyle = `rgba(255,68,68,${0.7 * (1 - ph)})`;
+        ctx.strokeStyle = `rgba(239,83,80,${0.7 * (1 - ph)})`;
         ctx.beginPath(); ctx.arc(x, y, 6 + ph * 10, 0, Math.PI * 2); ctx.stroke();
       }
       pick.push({ kind: 'entity', id: e.id, sx: x, sy: y, station: e.type === 'station' });
       const label = e.type === 'station' || e.sos || e.tags?.missionId || e.tags?.contract || S > 3e4 || e.id === opts.targetId;
       const named = e.type === 'station' || e.type === 'nav' || e.tags?.contract || contactName(state, e.id);
       if (label && named) {
-        ctx.fillStyle = color; ctx.globalAlpha = 0.8; ctx.font = font(10);
-        ctx.fillText(named === true ? e.name : named, x + 8, y + 3);
+        ctx.fillStyle = e.type === 'station' ? COL.text : color; ctx.globalAlpha = e.type === 'station' ? 0.9 : 0.85; ctx.font = UI(11, e.type === 'station' ? 600 : 500);
+        ctx.fillText(named === true ? e.name : named, x + 9, y + 4);
         ctx.globalAlpha = 1;
       }
     }
@@ -456,56 +469,80 @@ export class SolarMap {
     // one light-minute (about our sensor reach), ten (news across the Belt)
     if (this.showIntel) {
       const [ux, uy] = sp(state.flight.pos.x, state.flight.pos.y);
-      ctx.setLineDash([1, 5]);
+      ctx.setLineDash([1, 6]);
       for (const [r, txt] of LIGHT_RINGS) {
         const rp = r * S;
-        if (rp < 24 || rp > Math.hypot(W, H) * 1.5) continue;
-        ctx.strokeStyle = 'rgba(232,213,107,0.28)';
+        if (rp < 30 || rp > Math.hypot(W, H) * 1.5) continue;
+        ctx.strokeStyle = COL.light;
         ctx.beginPath(); ctx.arc(ux, uy, rp, 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = 'rgba(232,213,107,0.55)'; ctx.font = font(9);
-        ctx.fillText(txt, ux + rp * 0.71 + 3, uy - rp * 0.71 - 3);
+        ctx.fillStyle = COL.lightText; ctx.font = MONO(10);
+        ctx.fillText(txt.toLowerCase(), ux + rp * 0.71 + 4, uy - rp * 0.71 - 4);
       }
       ctx.setLineDash([]);
     }
 
-    // Planned paths
-    const drawPath = (path, color, dash) => {
+    // The route under way (magenta), and the one being planned (cyan, dashed)
+    const drawPath = (path, color, dash, width) => {
       if (!path || path.length < 2) return;
-      ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash(dash);
+      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash);
       ctx.beginPath();
       path.forEach((p, i) => { const [x, y] = sp(p.x, p.y); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
       ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1;
     };
-    drawPath(this.routePath, 'rgba(226,85,85,0.75)', []);
-    drawPath(this.preview, 'rgba(79,209,197,0.8)', [6, 4]);
+    drawPath(this.routePath, COL.route, [], 2);
+    drawPath(this.preview, COL.sel, [7, 5], 1.5);
 
-    // Our ship
+    // Our ship: where it points, and where it is going (an hour of coasting)
     {
       const f = state.flight;
       const [x, y] = sp(f.pos.x, f.pos.y);
-      const ph = (performance.now() / 1000) % 2 / 2;
-      ctx.fillStyle = `rgba(79,209,197,${0.15 + 0.2 * Math.sin(ph * Math.PI)})`;
-      ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#4FD1C5';
+      const vx = f.vel.vx * 3600 / 1000 / AU_KM * S, vy = f.vel.vy * 3600 / 1000 / AU_KM * S;
+      const vl = Math.hypot(vx, vy);
+      if (vl > 3) {
+        const k = Math.min(1, 160 / vl);
+        ctx.strokeStyle = COL.own; ctx.globalAlpha = 0.6;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + vx * k, y - vy * k); ctx.stroke(); ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = COL.void;
+      ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = COL.own;
       ctx.beginPath();
       ctx.moveTo(x + Math.cos(-f.facing) * 7, y + Math.sin(-f.facing) * 7);
-      ctx.lineTo(x + Math.cos(-f.facing + 2.5) * 5, y + Math.sin(-f.facing + 2.5) * 5);
-      ctx.lineTo(x + Math.cos(-f.facing - 2.5) * 5, y + Math.sin(-f.facing - 2.5) * 5);
+      ctx.lineTo(x + Math.cos(-f.facing + 2.5) * 5.5, y + Math.sin(-f.facing + 2.5) * 5.5);
+      ctx.lineTo(x + Math.cos(-f.facing - 2.5) * 5.5, y + Math.sin(-f.facing - 2.5) * 5.5);
       ctx.closePath(); ctx.fill();
-      ctx.font = font(11);
-      ctx.fillText(state.ship.name.toUpperCase(), x + 10, y - 8);
+      ctx.font = UI(12, 600);
+      ctx.fillText(state.ship.name, x + 11, y - 8);
     }
 
-    // Hover + selection rings
-    const ring = (sel, color, dash, r) => {
-      if (!sel) return;
-      const p = this._pickables.find(q => q.kind === sel.kind && q.id === sel.id);
-      if (!p) return;
-      ctx.strokeStyle = color; ctx.setLineDash(dash);
-      ctx.beginPath(); ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
-    };
-    ring(this.hover, 'rgba(79,209,197,0.4)', [], 11);
-    ring(this.selected, '#4FD1C5', [4, 3], 14 + Math.sin(performance.now() / 300) * 1.5);
+    // Hover, and a target box round the selection
+    const at = (sel) => sel && this._pickables.find(q => q.kind === sel.kind && q.id === sel.id);
+    const hv = at(this.hover);
+    if (hv && (!this.selected || this.hover.id !== this.selected.id)) {
+      ctx.strokeStyle = 'rgba(62,199,230,0.45)';
+      ctx.beginPath(); ctx.arc(hv.sx, hv.sy, 10, 0, Math.PI * 2); ctx.stroke();
+      // what it is, beside it (the display's own tooltip)
+      const label = opts.hoverLabel?.(this.hover);
+      if (label) {
+        ctx.font = UI(12, 500);
+        const w = ctx.measureText(label).width + 14, h = 22;
+        const lx = Math.min(hv.sx + 14, W - w - 6), ly = Math.max(6, hv.sy - h - 8);
+        ctx.fillStyle = 'rgba(18,26,35,0.96)'; ctx.fillRect(lx, ly, w, h);
+        ctx.strokeStyle = '#2A3846'; ctx.strokeRect(lx + 0.5, ly + 0.5, w - 1, h - 1);
+        ctx.fillStyle = COL.text; ctx.fillText(label, lx + 7, ly + 15);
+      }
+    }
+    const sl = at(this.selected);
+    if (sl) {
+      const r = 12, c = 5;
+      ctx.strokeStyle = COL.sel; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (const [dx, dy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        const cx = sl.sx + dx * r, cy = sl.sy + dy * r;
+        ctx.moveTo(cx - dx * c, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy - dy * c);
+      }
+      ctx.stroke(); ctx.lineWidth = 1;
+    }
 
     // Scale bar
     const targetPx = 120;
@@ -513,10 +550,12 @@ export class SolarMap {
     const pow = Math.pow(10, Math.floor(Math.log10(raw)));
     const nice = [1, 2, 5, 10].map(k => k * pow).find(v => v >= raw * 0.6) || pow;
     const len = nice / AU_KM * S;
-    ctx.strokeStyle = 'rgba(79,209,197,0.6)';
-    ctx.beginPath(); ctx.moveTo(14, H - 16); ctx.lineTo(14 + len, H - 16); ctx.moveTo(14, H - 20); ctx.lineTo(14, H - 12); ctx.moveTo(14 + len, H - 20); ctx.lineTo(14 + len, H - 12); ctx.stroke();
-    ctx.fillStyle = 'rgba(79,209,197,0.8)'; ctx.font = font(10);
-    ctx.fillText(fmtKm(nice), 18 + len, H - 12);
+    const bx = W - 24 - len, by = H - 18;
+    ctx.strokeStyle = COL.text3;
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + len, by); ctx.moveTo(bx, by - 4); ctx.lineTo(bx, by + 4); ctx.moveTo(bx + len, by - 4); ctx.lineTo(bx + len, by + 4); ctx.stroke();
+    ctx.fillStyle = COL.text2; ctx.font = MONO(10);
+    const lbl = fmtKm(nice);
+    ctx.fillText(lbl, bx + len / 2 - ctx.measureText(lbl).width / 2, by - 7);
   }
 }
 

@@ -51,13 +51,14 @@ export function formatStamp(clock, minute) {
 export function formatDuration(minutes) {
   if (!isFinite(minutes)) return '—';
   if (minutes < 1) return '< 1 min';
-  if (minutes < 60) return `${Math.round(minutes)} min`;
-  if (minutes < DAY_MIN) {
-    const h = Math.floor(minutes / 60);
-    const m = Math.round(minutes % 60);
+  // (rounded to the unit shown first, then split: 59.6 min is "1h", not "0h 60m"; 23.6 h is "1d", not "0d 24h")
+  if (minutes < 59.5) return `${Math.round(minutes)} min`;
+  if (minutes < DAY_MIN - 30) {
+    const total = Math.round(minutes);
+    const h = Math.floor(total / 60), m = total % 60;
     return m > 0 ? `${h}h ${m}m` : `${h}h`;
   }
-  const d = Math.floor(minutes / DAY_MIN);
-  const h = Math.round((minutes % DAY_MIN) / 60);
+  const hours = Math.round(minutes / 60);
+  const d = Math.floor(hours / 24), h = hours % 24;
   return h > 0 ? `${d}d ${h}h` : `${d}d`;
 }

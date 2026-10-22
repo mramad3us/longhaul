@@ -121,7 +121,7 @@ Each system's effects are listed in `SYSTEMS[id].effects` and applied through sm
 
 Each deck has its own atmosphere (pressure, O₂, N₂, CO₂). The plant scrubs CO₂ and injects O₂ and N₂ from tanks. Gas exchanges through the ladder shaft, and pressure doors hold across a big difference.
 - A breach vents a deck within minutes. Crew in bad air go for EVA suits (48 h of O₂); couches and station seats have a 2-hour emergency hood.
-- **Venting** any deck on its own (the compartment menu: click the deck's name, or right-click the deck) opens it to space at 10% of its pressure a minute; closing the vents repressurizes it from the tanks.
+- **Venting** any deck on its own (the compartment menu: right-click the compartment's camera) opens it to space at 10% of its pressure a minute; closing the vents repressurizes it from the tanks.
 - **The SUITS order** (the switch beside COMBAT, key U) sends every hand to a locker for a suit and keeps it on, whatever the job, until it is lifted (then suits come off where the air is good). Under 1.5 G they leave a couch for it. With everyone suited a deck can be vented, or holed in a fight, with its people on it.
 - An engineer in a suit seals the breach, then the deck repressurizes from the tanks (the deck's menu shows who is on the patch; it is the top-priority job). Lifting the SUITS order leaves suits on whoever is working a breach, a fire or a boarding.
 - Hypoxia, CO₂ poisoning and decompression act on the body.
