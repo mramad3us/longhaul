@@ -10,6 +10,7 @@ Nothing in LONGHAUL glows. There are three weapon families: point-defense cannon
 | `sim/ordnance.js` | torpedoes and slugs in flight; terminal resolution; PDC strafing |
 | `sim/damage.js` | hits, aim, sections, reactor failures, fusion detonations |
 | `sim/combat.js` | our fire control and the per-minute fight |
+| `sim/telescope.js` | what our telescope can hold, and what it sees of it (`ui/telescope.js` draws it) |
 | `sim/agents.js` | NPC pilots: how they fight, flee, demand and surrender |
 
 ## Seeing
@@ -31,6 +32,23 @@ An observer sees a target inside signature × its sensor quality. Quality depend
 Everything on the board is under a light-minute away, so it is live to within one sim step; the scanner shows each contact's light time. Only what the sensors hold is drawn on the tactical view and live on the solar map. A contact that drops off the board stays on the plot as its last fix, aging (WORLD.md, *Light lag and the plot*).
 
 Whether a contact squawks is known the moment the board holds it: the radio hears its transponder or it doesn't (a distress beacon counts). Every display marks a ship running **dark** (no transponder, wrecks included) the same way: its mark hollow where a squawking ship's is solid, and DARK (or WRECK) after its name, or in place of a name we don't know yet; a lost contact's last fix on the plot keeps it, as a broken ring. The nav computer also marks what our signed work points at (a magenta diamond and the job: BOUNTY, SALVAGE, CARGO, TURN IN, DISTRESS, CALL-UP; a hunted ship only once it is named, its last-seen mark until then) and the captain's own **flags**: up to 26, lettered A to Z, on any ship or station we have a track of (`F`, or FLAG on the card and the contact panel). A flag lasts as long as the track: the nav computer calls a flagged contact out when it comes back on the board, and drops the flag when the plot forgets the ship (sim/flags.js).
+
+## The telescope
+
+The board says where a contact is; the telescope shows it (`sim/telescope.js`, drawn by `ui/telescope.js` on the EXTERIOR display: `Z`, or LOOK on a contact's card or panel). One thing at a time, from where we are, as the optics make it:
+
+| TL | Mirror | Resolves | Reaches (a video frame) | Holds a target to |
+|---|---|---|---|---|
+| 1 | 0.3 m | 2.2 µrad | mag 14.9 | 400,000 km |
+| 2 | 0.5 m | 1.3 µrad | mag 16.0 | 1,000,000 km |
+| 3 | 0.8 m | 0.8 µrad | mag 17.0 | 1,500,000 km |
+| 4 | 1.2 m | 0.6 µrad | mag 17.9 | 2,000,000 km |
+
+- **Resolution** is the diffraction limit, 1.22 λ/D at 550 nm, worsened by the mount's shake: 0.4 µrad on a quiet ship, 2 µrad more per G of our own thrust, more with the sensors damaged. A hull six or more resolution elements long is a shape, drawn side on, foreshortened by the angle we see it at and blurred to the resolution; from 1.5, a smudge; less, a point. Twelve elements and more, the frame closes in on it; otherwise it is the camera's native field, 512 elements across.
+- **Light.** A hull shines by reflected sunlight: its area across the line of sight, albedo 0.15 times its TL's stealth, the Sun's distance and the phase (a Lambert sphere: the Sun behind us shows its day side, behind it its night side, a silhouette with a lit limb). A 100 m hull in the Belt is magnitude 0.6 at 1,000 km, 8 at 30,000 km, 13 at 300,000 km and 15.6 at a million: at TL2's limit. A drive is a star: 500 W of light per newton of thrust, so a ship at 1 G is magnitude 4 at 700,000 km, some fourteen magnitudes brighter than its own hull; the hull is lost in the glare unless it is resolved. Flashes (averaged over a frame): a nuclear detonation 10¹⁵ W, a reactor letting go 3·10¹⁵ W (each blinds the frame at any range it can hold), a torpedo striking home 3·10¹¹ W (its speed more than its charge: brighter than a drive), a slug's impact 2·10¹⁰ W, a torpedo shredded by a PDC 10¹⁰ W.
+- **Exposure.** The camera is exposed for the brightest thing in the frame: with a sunlit hull resolved there are no stars; with a plume, only the bright ones; with nothing, the sky down to the limit and the sensor's noise. Something under the limit is not drawn: what is shown is what the camera would see, which far out is mostly black.
+- **Lock.** The mount holds a target in a field a few arcseconds across only on a fine track (the board's fix and the ranging laser on one mount), to the range above (times the sensors' condition), and only a contact the board holds. Past it the display says how far it is and how far the mount reaches. Looking aft through our own lit drive (15° round its axis), it is blind.
+- **The arrival.** When our torpedoes are in their last 3 minutes to a target the telescope can hold, the EXTERIOR display comes up on it by itself (or its window, if it floats), time runs at 1×, and it stays through whatever happens to them, shot down, hit or missed, and a few seconds after, then goes back to what was showing. A torpedo drawn past its target in the minute being drawn is not drawn (the sim settles that minute whole; the flash follows when it does).
 
 ## Torpedoes
 
@@ -158,7 +176,7 @@ The panel shows only what the ship carries. A hull without tubes has no torpedo 
 
 At **battle stations** the best shot takes the weapons console, the best engineer the engineering station, the next best eye ops, and the pilot the helm. Everyone else goes to a couch.
 
-Time warp is capped by the tactical picture: 1× when a torpedo is under 30 minutes out, a hostile is inside 75,000 km, or a demand awaits an answer; 2× within six hours or 750,000 km.
+Time warp is capped by the tactical picture: 1× when a torpedo is under 30 minutes out, a hostile is inside 75,000 km, a demand awaits an answer, or one of our own torpedoes is in its last 3 minutes to its target (`OWN_ARRIVAL_S`: its arrival is watched, below); 2× within six hours or 750,000 km.
 
 Shooting at a lawful ship is a crime (WORLD.md). Shooting back at whoever fired first never is.
 

@@ -319,6 +319,8 @@ const RES = [
   { key: 'parts', name: 'Spare parts', icon: iconParts, bar: 'bar-parts', fmt: (r, s) => `${r.current.toFixed(1)} · scrap ${s.resources.scrap.current.toFixed(1)}`,
     level: (r) => r.current < 2 ? 'critical' : r.current < 5 ? 'warning' : 'ok' },
   { key: 'pdcRounds', name: 'PDC rounds', icon: iconParts, bar: 'bar-ammo', fmt: (r, s) => `${fmtNum(r.current)} · torps ${s.magazine.he} HE ${s.magazine.nuke} NUKE` },
+  // (a drone out is counted with the rack: it is ours until a burn leaves it)
+  { key: 'drones', name: 'Drones', icon: iconParts, bar: 'bar-parts', fmt: (r, s) => `${r.current}/${r.max}${s.drone ? ' · one out' : ''}`, level: () => 'ok' },
 ];
 // Gross water per person per minute (drinking, galley, a shower a day) — reclamation recovers most of it
 const WATER_GROSS = 0.004 + 12 / 1440;

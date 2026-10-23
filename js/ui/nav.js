@@ -11,7 +11,8 @@
 // never as it is. The nav computer's marks (DARK, a mission's job, the
 // captain's lettered flags: sim/flags.js, marks.js) go with a ship's name
 // wherever it is listed; F (or FLAG on the card and the panel) flags what
-// is picked, and the CONTEXT panel lists the flags.
+// is picked, and the CONTEXT panel lists the flags. LOOK on a contact's
+// card or panel (or Z) puts the telescope on it (stage.js).
 // ============================================================
 
 import { ui } from './context.js';
@@ -33,6 +34,7 @@ import { missionForEntity } from '../sim/missions.js';
 import { dockedStation } from '../sim/contracts.js';
 import { beginDocking, shipDockable, isDocked, dockedTo } from '../sim/docking.js';
 import { boardable } from '../sim/boarding.js';
+import { droneStatus } from '../sim/drones.js';
 import { clearanceFor, requestDeparture } from '../sim/traffic-control.js';
 import { knownCrew } from '../sim/manifest.js';
 import { hullOf, portSummary } from '../sim/hulls.js';
@@ -56,7 +58,7 @@ let etaCache = { at: 0, key: '', minutes: null, path: null };
 let hooks = {};
 
 export function initNav(h) {
-  hooks = h;   // { hail(entityId), openStation(), board(id), dock(target), showPanel(id) }
+  hooks = h;   // { hail(entityId), openStation(), board(id), dock(target), showPanel(id), look(id) }
   tacModal = new TacView($('[data-nav-screen="tactical"]'), { onSelect: (id) => selectOnBoard(id) });
   map = new SolarMap($('[data-nav-screen="solar"]'), {
     onSelect: (sel) => { ui.nav.target = sel; ui.nav.card = !!sel; hidePickList(); renderSelection(); },
@@ -352,6 +354,7 @@ function cardHTML(s, t) {
     if (dockable && !(isDocked(s) && dockedTo(s)?.id === e.id)) acts.push('<button class="btn-mini" data-act="dock">DOCK</button>');
   }
   if (t.kind === 'entity' && inRadio(s, t.id)) acts.push('<button class="btn-mini" data-act="hail">HAIL</button>');
+  if (t.kind === 'entity' && !d.report && contactById(s, t.id)) acts.push(lookButton('btn-mini'));
   if (flaggable(e)) acts.push(flagButton(s, t.id, 'btn-mini'));
   acts.push('<button class="btn-mini" data-act="details" title="The full picture, in the CONTEXT panel">DETAILS</button>');
   const dot = d.faction ? `<i class="card-dot" style="background:${factionColor(d.faction)}"></i>` : '';
@@ -408,6 +411,9 @@ function flagButton(state, id, cls) {
   const f = flagOf(state, id);
   return `<button class="${cls} ${f ? 'flagged' : ''}" data-act="flag" title="${f ? `Clear flag ${f}` : 'Flag it on every display'} (F)">${f ? `FLAG ${f} ✕` : 'FLAG'}</button>`;
 }
+
+/** LOOK: the telescope on the contact (stage.js). */
+const lookButton = (cls) => `<button class="${cls}" data-act="look" title="The telescope on it, from here (Z)">LOOK</button>`;
 
 /** Flag what is picked, or take its flag off (F). */
 export function toggleFlagOnPick() {
@@ -495,6 +501,7 @@ function renderSelection() {
         ${!c.ordnance ? `<button class="scanner-track-btn ${s.combat.target === t.id ? 'tracking' : ''}" data-act="target">${s.combat.target === t.id ? 'TARGETED' : 'TARGET'}</button>` : ''}
         ${dockButton(s, d.entity)}
         ${!c.ordnance && !c.station && boardable(s, d.entity).ok ? `<button class="scanner-track-btn" data-act="board">${d.entity?.tags?.wreck ? 'SALVAGE' : 'BOARD'}</button>` : ''}
+        ${lookButton('scanner-track-btn')}
         ${flaggable(d.entity) ? flagButton(s, t.id, 'scanner-track-btn') : ''}
       </div>`;
     if (setHTML(scanPanel, html)) {
@@ -614,6 +621,7 @@ function onPanelClick(e) {
     case 'station': hooks.openStation(); break;
     case 'open-nav': openNav('solar'); break;
     case 'flag': toggleFlagOnPick(); break;
+    case 'look': if (t?.kind === 'entity') hooks.look?.(t.id); break;
     case 'flag-pick': selectTarget({ kind: 'entity', id: btn.dataset.id }); break;
     case 'flag-clear': {
       const r = toggleFlag(s, btn.dataset.id);
@@ -973,9 +981,12 @@ function renderPrompt(state) {
     : unsecured > 0 ? `<span class="mp-status mp-caution">${unsecured} CREW UNSECURED</span>`
     : '<span class="mp-status mp-ready">ALL HANDS SECURED</span>';
   const helpless = st.helpless.length ? `<span class="mp-status mp-caution">${st.helpless.length} INCAPACITATED — WILL RIDE UNSECURED</span>` : '';
+  // (the route waits for a drone out too: EXECUTE NOW leaves it behind, sim/drones.js)
+  const ds = droneStatus(state);
+  const drone = ds ? `<span class="mp-status mp-waiting">DRONE ${ds.phase === 'recover' ? `COMING HOME · ${formatDuration(ds.left)}` : 'OUT'} — EXECUTE NOW LEAVES IT</span>` : '';
   const canEngage = st.pilotReady || (!st.pilot && !fcDown);
   setHTML(box, `<div class="mp-header">SECURE FOR BURN</div>
-    <div class="mp-crew-row">${dots}</div>${status}${helpless}
+    <div class="mp-crew-row">${dots}</div>${status}${helpless}${drone}
     <div class="mp-actions">
       <button class="mp-engage-btn" data-act="engage" ${canEngage && !ap.override ? '' : 'disabled'}>${ap.override ? 'ENGAGING…' : canEngage ? 'EXECUTE NOW' : 'WAITING FOR PILOT'}</button>
       <button class="route-abort-btn" data-act="abort">ABORT</button>

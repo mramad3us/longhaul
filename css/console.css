@@ -293,9 +293,26 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .mv-info { position: absolute; left: 10px; bottom: 8px; display: flex; gap: 6px; font-family: var(--f-data); font-size: 11px; color: var(--c-text3); pointer-events: none; z-index: 3; }
 .mv-info .tac-info-sep { color: var(--c-line2); }
 .mv-exterior { background: #000; }
-.mv-exterior .stage-exterior { position: absolute; inset: 0; }
-.mv-exterior .dock-hud, .win-body .dock-hud { position: absolute; right: 12px; top: 12px; width: 360px; z-index: 4; }
-.win-body .stage-exterior { position: absolute; inset: 0; }
+/* The cameras and their bar, one block: in the main view, or in the window when floated */
+.cam-deck { position: absolute; inset: 0; display: flex; flex-direction: column; background: #000; }
+.cam-bar { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; row-gap: 3px; min-height: 30px; padding: 3px 8px; background: var(--c-bg); border-bottom: 1px solid var(--c-line); }
+.cam-bar .mv-btn { min-height: 22px; padding: 1px 8px; font-size: 11px; }
+.cam-bar .mv-btn:disabled { opacity: 0.4; }
+.cam-bar .mv-btn.active { color: var(--c-sel); border-color: rgba(62, 199, 230, 0.55); background: rgba(62, 199, 230, 0.08); }
+.cam-srcs { display: flex; gap: 2px; }
+.cam-note { font-family: var(--f-data); font-size: 11px; color: var(--c-text3); margin-left: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cam-view { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.cam-view .stage-exterior, .cam-view .stage-scope { position: absolute; inset: 0; }
+.stage-scope { background: #000; }
+.scope-canvas { display: block; width: 100%; height: 100%; }
+.cam-view .dock-hud { position: absolute; right: 12px; top: 12px; width: 360px; z-index: 4; }
+/* No picture: why, and what would give one */
+.cam-nofeed { position: absolute; inset: 0; z-index: 3; align-items: center; justify-content: center; padding: 16px; pointer-events: none; }
+.cam-nofeed-box { pointer-events: auto; max-width: 420px; padding: 16px 18px; background: rgba(10, 14, 19, 0.92); border: 1px solid var(--c-line2); border-radius: 2px; text-align: center; }
+.cam-nofeed-head { font-family: var(--f-data); font-size: 12px; letter-spacing: 0.16em; color: var(--c-caution); margin-bottom: 8px; }
+.cam-nofeed-text { font-size: 13px; line-height: 1.45; color: var(--c-text2); margin-bottom: 12px; }
+.cam-why { font-size: 11px; color: var(--c-text3); margin-top: 6px; }
+.cam-nofeed-alt { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--c-line); }
 
 /* ---- THE FLIGHT STATUS BAND ----
    One line between the display's tabs and the display, like the mode
@@ -485,9 +502,9 @@ button.flagged { color: var(--c-flag); border-color: var(--c-flag); }
 .ctx-selection { margin-top: 4px; }
 .route-idle { margin-top: 4px; }
 
-/* The docking display, bottom right of the exterior camera */
-.mv-exterior .dock-hud, .win-body .dock-hud { top: auto; bottom: 14px; right: 14px; width: 340px; background: rgba(10, 14, 19, 0.94); border: 1px solid var(--c-line2); border-radius: 2px; box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5); }
-.win-body .dock-hud { width: 300px; transform-origin: 100% 100%; }
+/* The docking display, bottom right of the exterior cameras */
+.cam-view .dock-hud { top: auto; bottom: 14px; right: 14px; width: 340px; background: rgba(10, 14, 19, 0.94); border: 1px solid var(--c-line2); border-radius: 2px; box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5); }
+.win-body .cam-view .dock-hud { width: 300px; transform-origin: 100% 100%; }
 [data-nav-screen="exterior"]:not([style*="none"]) ~ .mv-info { display: none; }
 
 /* ---- THE SHIP'S AI ---- */

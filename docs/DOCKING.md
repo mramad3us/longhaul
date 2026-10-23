@@ -2,6 +2,8 @@
 
 Modules: `sim/stations.js` (where stations are, their models, berths, gates, the anchorage), `sim/mating.js` (how two hulls meet at a collar), `sim/traffic-control.js` (zones, clearances, the rules, the radio), `sim/docking.js` (the final approach, proximity operations, the hard seal, undocking), `sim/station-defense.js` (stations' guns), `sim/boarding.js` (our people aboard another hull), `sim/leases.js` (berth leases), `sim/crew-services.js` (the hiring hall, shore leave). The UI is `ui/stage.js`, `ui/exterior.js`, `ui/docking-hud.js`, `ui/comms.js`, `ui/boarding.js`.
 
+The outside view of a dock is a camera's: from the final approach until we are through the gate again, a station lends us its approach and berth cameras (the PORT camera on the EXTERIOR display, which comes up by itself), and while we lie in its berth. Docking with a ship there is no such camera: our own drone's, if one is out (sim/drones.js), or the docking display's collar camera alone.
+
 ## Stations
 
 There are two kinds, as there would be: **surface ports** built on an asteroid or a small moon, and **orbital stations**. A surface port sits on its body at the body's true radius and turns with it (sim/ephemeris.js carries every body's radius, rotation, GM and atmosphere); an orbital station is on a Keplerian orbit.

@@ -162,7 +162,7 @@ Every class has a physical hull (`hullOf`, `sim/hulls.js`): parts in metres, bui
 | Torch raider | 3–6 | 4 | 35 × 6 × 5 m | S nose · S port flank | — |
 | Armed runner (stolen courier) | 2–5 | 3 | 40 × 7 × 6 m | S nose · S port flank | belly |
 
-The tactical display, the exterior view, the docking camera, the ship picker and the library draw hulls from these models (`ui/hull-art.js`): from above, from below or along a flank as the pose shows it.
+The tactical display, the exterior view (a drone's or a port's camera), the telescope, the docking camera, the ship picker and the library draw hulls from these models (`ui/hull-art.js`): from above, from below or along a flank as the pose shows it.
 
 ## Our ship
 
@@ -171,7 +171,7 @@ At a new game we pick a military license (none, UN, MCR or OPA: WORLD.md, milita
 - **Interior.** Each playable class has its own deck program (sim/ship-layout.js): which decks, bow to stern, each drawn from a deck template and fitted to the class (SHIPBOARD.md). Small craft are 7 tiles wide, the rest 9. Without point defense the turret wells are plated over, without tubes the launcher bay is hold space, a ship with nothing to fire has a couch where fire control would be. The hull is cut for airlocks where its collars are, and for a cargo door.
 - **Machinery.** Systems follow the fit (`systemsFor`): no PDCs means no `pdc` system to wear, no tubes means no `launcher`. They start in the condition of the class's TL and wear, fault and are repaired at its rates.
 - **Drive.** The class's maximum G is the limit (`flight.maxG`). The drive is rated for 70% of it (`ratedG`); past that it is overdriven, with double fuel and a containment risk. Route options above the limit aren't offered.
-- **Stores.** Hold, berths, PDC rounds (20,000 per mount) and magazine come from the class. A navy hull in private hands starts without its nuclear warheads.
+- **Stores.** Hold, berths, PDC rounds (20,000 per mount) and magazine come from the class, and a rack of camera drones by size (S 2, M 3, L 4, XL 6; sim/drones.js). A navy hull in private hands starts without its nuclear warheads.
 - **Upkeep.** Spare parts at a station are priced at the ship's TL (`priceOf`), and a dockside overhaul is billed at its TL and structure (`overhaulQuote`).
 
 The default is the armed light freighter: two PDCs and two tubes, an M collar on the nose and one on the port flank by the hold. Its nine decks are the bridge (helm, ops, the weapons console), crew quarters (four racks for a crew of eight on watches), the mess, utility, two passenger decks (twelve berths), the hold (the launcher with its magazine, the crew airlock, a cargo door), the engine deck (two PDC turrets in its hull) and the reactor. A new game starts in a berth at Ceres.

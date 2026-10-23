@@ -166,7 +166,7 @@
               <button class="mv-tab" data-nav-tab="tactical" title="Local space: kilometres round the ship (T)">LOCAL</button>
               <button class="mv-tab" data-nav-tab="scanner" title="Sensor contacts (R)">SCANNER</button>
               <button class="mv-tab mv-tab-combat" data-nav-tab="combat" title="Weapons and the threat board (W)">WEAPONS</button>
-              <button class="mv-tab" data-nav-tab="exterior" id="mv-tab-exterior" title="The exterior cameras: what is outside (X)">EXTERIOR</button>
+              <button class="mv-tab" data-nav-tab="exterior" id="mv-tab-exterior" title="The exterior cameras: a drone, a port's cameras, the telescope (X; Z: the telescope on the pick)">EXTERIOR</button>
             </div>
             <div class="mv-controls" data-tab-controls="tactical">
               <button class="tac-zoom-btn-modal" data-tac-zoom-modal="0">1 km</button>
@@ -203,7 +203,7 @@
               <button class="scanner-range-btn" data-scanner-range="2">LONG</button>
             </div>
             <div class="mv-controls" data-tab-controls="exterior">
-              <button class="mv-btn" id="exterior-float" title="Float the exterior camera in its own window">FLOAT</button>
+              <button class="mv-btn" id="exterior-float" title="Float the exterior cameras in their own window">FLOAT</button>
             </div>
           </div>
           <!-- The flight status band: what the ship is doing, and what wants an answer (a line of the layout, never over the display) -->
@@ -221,8 +221,16 @@
             <div class="mv-screen" data-nav-screen="scanner"></div>
             <div class="mv-screen" data-nav-screen="combat"></div>
             <div class="mv-screen mv-exterior" data-nav-screen="exterior" id="mv-exterior">
-              <div class="stage-exterior" id="stage-exterior"></div>
-              <div class="dock-hud" id="dock-hud" style="display:none"></div>
+              <!-- (the cameras and their bar go together: into the window when the display floats) -->
+              <div class="cam-deck" id="cam-deck">
+                <div class="cam-bar" id="cam-bar"></div>
+                <div class="cam-view">
+                  <div class="stage-exterior" id="stage-exterior"></div>
+                  <div class="stage-scope" id="stage-scope" style="display:none"></div>
+                  <div class="cam-nofeed" id="cam-nofeed" style="display:none"></div>
+                  <div class="dock-hud" id="dock-hud" style="display:none"></div>
+                </div>
+              </div>
             </div>
             <div class="combat-panel" id="combat-panel" style="display:none"></div>
             <div class="map-picklist" id="map-picklist" style="display:none"></div>

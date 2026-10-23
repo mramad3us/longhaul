@@ -17,8 +17,8 @@
 //                do about it; the radio; the log, which opens as a drawer
 //   WINDOWS      everything else floats (wm.js): engineering, the roster,
 //                missions, comms, a station, boarding, the library, the
-//                service record, an enlarged camera, the exterior camera
-//                when it is pulled out of the main view.
+//                service record, an enlarged camera, the exterior cameras
+//                (with their bar) when they are pulled out of the main view.
 //
 // Panels and windows are laid out by the viewer and remembered (wm.js);
 // none of this touches the simulation.
@@ -62,8 +62,8 @@ export function initConsole(h) {
   adoptWindow('library', $('#library'), { onClose: () => hooks.closeLibrary?.(), title: "SHIP'S LIBRARY", w: 980, h: 640 });
   $('#wm-layer').appendChild($('#library'));
 
-  // The exterior camera, pulled out of the main view
-  createWindow('exterior', { title: 'EXTERIOR CAMERA', w: 640, h: 440, dockable: true, onDock: () => setExteriorFloating(false), onClose: () => setExteriorFloating(false),
+  // The exterior cameras, pulled out of the main view
+  createWindow('exterior', { title: 'EXTERIOR CAMERAS', w: 640, h: 460, dockable: true, onDock: () => setExteriorFloating(false), onClose: () => setExteriorFloating(false),
     onResize: () => window.dispatchEvent(new Event('resize')) });
   $('#exterior-float').addEventListener('click', () => setExteriorFloating(true));
 
@@ -77,13 +77,12 @@ export function toggleLog(on = !$('#log-container').classList.contains('open')) 
   setLogExpanded(on);
 }
 
-/** The exterior camera in its own window (true) or in the main view's EXTERIOR display. */
+/** The exterior cameras in their own window (true) or in the main view's EXTERIOR display. */
 export function setExteriorFloating(on) {
   if (on === exteriorFloating) return;
   exteriorFloating = on;
-  const cam = $('#stage-exterior'), hud = $('#dock-hud');
   const host = on ? document.querySelector('[data-win="exterior"] .win-body') : $('#mv-exterior');
-  host.append(cam, hud);
+  host.append($('#cam-deck'));
   if (on) openWindow('exterior'); else closeWindow('exterior');
   toggleClass($('#mv-tab-exterior'), 'floated', on);
   hooks.onExteriorPlaced?.(on);

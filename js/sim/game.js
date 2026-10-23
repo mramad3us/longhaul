@@ -53,6 +53,7 @@ import { leaveTick } from './crew-services.js';
 import { leaseTick } from './leases.js';
 import { setGravityEpoch } from './gravity.js';
 import { fireTick } from './fire.js';
+import { createDroneStores, dronesTick } from './drones.js';
 
 export const SAVE_SCHEMA = 7;
 
@@ -107,6 +108,7 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
       parts: { current: 12, max: 40, unit: 'parts' },
       scrap: { current: 0, max: 30, unit: 'units' },
       pdcRounds: { current: cls.pdc * PDC_ROUNDS_PER_MOUNT * 0.6, max: cls.pdc * PDC_ROUNDS_PER_MOUNT, unit: 'rds' },
+      drones: createDroneStores(classId),
     },
     hull: { integrity: 100 },
     magazine: { ...createMagazine(classId), nuke: 0 },
@@ -131,6 +133,7 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
     traffic: createTraffic(traffic),
     tc: createTrafficControl(),
     dock: null,
+    drone: null,
     boarding: null,
     dossier: createDossier(),
     entities: createDefaultEntities(),
@@ -168,6 +171,8 @@ export function upgradeState(state) {
   state.service ??= createService(null);
   state.dossier ??= createDossier();
   state.navFlags ??= createNavFlags();
+  state.resources.drones ??= createDroneStores(state.ship.classId);
+  if (state.drone === undefined) state.drone = null;
   if (state.dock === undefined) state.dock = null;
   if (state.boarding === undefined) state.boarding = null;
   const fresh = state.traffic && !state.traffic.v;
@@ -201,7 +206,8 @@ function handFlown(cmd, pilot, ap) {
 /**
  * Advance the whole game by one minute.
  * Order matters: decide (autopilot) → move ship → advance clock & world →
- * NPC ships fly → hold station → ordnance flies and strikes → people →
+ * NPC ships fly → hold station → ordnance flies and strikes → a drone out
+ * keeps up or is left behind → people →
  * systems → sensors → combat decisions, politics, missions.
  */
 export function minuteTick(state, { lite = false } = {}) {
@@ -317,6 +323,8 @@ export function minuteTick(state, { lite = false } = {}) {
   combatMove(state, emit);
   // Flying free near a body: the ground (terrain.js)
   terrainTick(state, emit, { free: !held && !f.hold && !dockHolds(state) });
+  // A drone out can't keep up with a burn (drones.js)
+  dronesTick(state, emit);
 
   // Overdriven drive: each minute past the rated limit risks the magnetic bottle
   const rated = ratedG(cls);

@@ -20,6 +20,11 @@
 // Shooting at a lawful ship is a crime, and it makes enemies of its
 // friends nearby. Shooting back never is.
 //
+// Time warp drops to real time for a torpedo inbound, a hostile close by,
+// and the last minutes of our own torpedoes (OWN_ARRIVAL_S): their
+// arrival is watched, through the telescope when it can hold the target
+// (ui/stage.js).
+//
 // Per minute, in order (see game.js):
 //   moveAgents → (our station-keeping) → moveOrdnance → … → combatTick
 // so every ship has moved before any torpedo is checked against it,
@@ -29,7 +34,7 @@
 import { AU_M, MIN_S } from '../core/constants.js';
 import { getWorld } from './world.js';
 import { PLAYER, profile, kinematics, isOutOfFight } from './combatants.js';
-import { launchTorpedo, moveOrdnance, strafe, fireGear, inboundTo, timeToGo } from './ordnance.js';
+import { launchTorpedo, moveOrdnance, strafe, fireGear, inboundTo, launchedBy, timeToGo } from './ordnance.js';
 import { moveAgents, agentsTick, wake, makeHostile, hostilesOfPlayer } from './agents.js';
 import { recordAttack, lawfulTarget } from './law.js';
 import { rouse } from './forces.js';
@@ -213,10 +218,13 @@ export function threats(state) {
   return out.sort((a, b) => a.etaS - b.etaS);
 }
 
+export const OWN_ARRIVAL_S = 3 * MIN_S;      // our own torpedoes this close to their target: real time
+
 /** Time warp allowed by the tactical situation (1–3). */
 function warpLimit(state, inbound) {
   const eta = inbound.length ? inbound[0].etaS : Infinity;
   if (eta < 30 * MIN_S || state.comms.requests.length) return 1;
+  for (const e of launchedBy(state, PLAYER)) if (e.ord.kind === 'torpedo' && timeToGo(state, e) < OWN_ARRIVAL_S) return 1;
   const hostiles = hostilesOfPlayer(state);
   let nearest = Infinity;
   for (const h of hostiles) nearest = Math.min(nearest, Math.hypot(h.pos.x - state.flight.pos.x, h.pos.y - state.flight.pos.y));

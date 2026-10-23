@@ -250,6 +250,13 @@ const HANDLERS = {
   'station-destroyed': ({ name }) => { logEntry(`${name} is broken. Its people are in the dark.`, 'danger'); toast(`${name.toUpperCase()} DESTROYED`, 'danger'); },
   'berth-damaged': ({ station, berth }) => logEntry(`${station}: berth ${berth} damaged — out of service`, 'warn'),
 
+  // ---- The camera drone (sim/drones.js)
+  'drone-deployed': ({ left }) => logEntry(`Drone away (${left} left in the rack)`, 'nav'),
+  'drone-on-station': () => { logEntry('Drone on station: the exterior camera is up', 'nav'); pushTicker('Drone on station: exterior camera up.', 'nav', 'DRONE'); },
+  'drone-recalled': ({ why, minutes }) => logEntry(why === 'burn' ? `Drone called home for the burn: aboard in ${minutes} min` : why === 'endurance' ? `Drone's cells are low: coming home, aboard in ${minutes} min` : `Drone recalled: aboard in ${minutes} min`, 'nav'),
+  'drone-recovered': () => logEntry('Drone back aboard', 'nav'),
+  'drone-lost': () => { logEntry('The drone is left behind by the burn: lost', 'warn'); toast('DRONE LEFT BEHIND', 'warn'); },
+
   // ---- Docking
   'dock-begun': ({ target, phase }) => logEntry(phase === 'inbound' ? `Docking: inbound to ${target}` : `Docking: ${target}`, 'nav'),
   'dock-awaiting': ({ target }) => { logEntry(`Holding at ${target}'s gate — docking clearance needed. Hail traffic control.`, 'warn'); pushTicker(`Holding at the gate: request docking clearance from ${target}.`, 'warn', 'NAV'); toast('HAIL FOR DOCKING CLEARANCE', 'warn'); },

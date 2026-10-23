@@ -2,7 +2,7 @@
 // LONGHAUL — Combat effects for the renderers
 // The sim reports detonations, intercepts, hits and gunfire as events
 // with positions; this keeps a short real-time list of them for the
-// tactical display, the solar map and the threat board to draw.
+// tactical display, the threat board and the telescope to draw.
 // ============================================================
 
 import { bus } from '../core/events.js';
@@ -22,7 +22,8 @@ export function initFx() {
 }
 
 function add(kind, p) {
-  list.push({ kind, ...p, at: performance.now() });
+  // (a detonation's own kind, nuclear or fusion, is kept as `blast`: `kind` is the effect's)
+  list.push({ ...p, blast: p.kind, kind, at: performance.now() });
   if (list.length > MAX) list.shift();
 }
 

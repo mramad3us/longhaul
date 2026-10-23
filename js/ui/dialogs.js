@@ -14,7 +14,7 @@ import { formatDuration } from '../core/clock.js';
 import { getWorld } from '../sim/world.js';
 import { hailDialogue, signalBars } from '../sim/comms.js';
 import { acceptMission, declineMission, activeMissions } from '../sim/missions.js';
-import { contractsAt, acceptContract, completeContract, deliverable, needsBerth, inPort, dockedStation, dockedPort, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, torpedoPrice, priceOf, CONTRACT_LABEL } from '../sim/contracts.js';
+import { contractsAt, acceptContract, completeContract, deliverable, needsBerth, inPort, dockedStation, dockedPort, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, torpedoPrice, buyDrones, droneQuote, dronePrice, priceOf, CONTRACT_LABEL } from '../sim/contracts.js';
 import { milRefusal } from '../sim/military.js';
 import { FACTIONS, SUBFACTIONS, factionColor } from '../sim/factions.js';
 import { rankName, supplyPriceFactor, openCallups } from '../sim/service.js';
@@ -385,8 +385,12 @@ function renderStation() {
           <span class="service-price">${fmtNum(torpedoPrice(s, w))} MCR</span>
           <button class="station-mission-accept" data-act="buy-torp" data-w="${w}" ${no || full ? 'disabled' : ''}>${full ? 'FULL' : 'LOAD ONE'}</button></div>`;
       }).join('');
+      const dq = droneQuote(s);
+      const drones = `<div class="service-row"><span class="service-name">Camera drones</span><span class="service-stock">${s.resources.drones.current} / ${s.resources.drones.max} aboard${s.drone ? ' · one out' : ''}</span>
+          <span class="service-price">${fmtNum(dronePrice(s))} MCR each</span>
+          <button class="station-mission-accept" data-act="buy-drones" ${dq.qty < 1 ? 'disabled' : ''}>${dq.qty < 1 ? 'FULL' : `FILL · ${fmtNum(dq.cost)} MCR`}</button></div>`;
       const cheap = supplyPriceFactor(s) < 1 ? `<div class="station-mission-desc">Forward command supplies its contractors at a tenth of the price while the fight lasts.</div>` : '';
-      content = `<div class="service-list">${cheap}${rows}${torps}
+      content = `<div class="service-list">${cheap}${rows}${drones}${torps}
         <div class="service-row"><span class="service-name">${command ? 'Field repairs' : 'Dockside overhaul'}</span><span class="service-stock">Hull ${Math.round(s.hull.integrity)}% · every system to spec, suits, containment</span><span class="service-price">${fmtNum(overhaulQuote(s))} MCR</span>
         <button class="station-mission-accept" data-act="overhaul">OVERHAUL</button></div>
         <div class="service-credits">Credits: <b>${fmtNum(s.resources.credits.current)} MCR</b></div></div>`;
@@ -480,6 +484,12 @@ function onStationClick(e) {
     }
     case 'buy': {
       const r = buy(s, b.dataset.key);
+      toast(r.text, r.ok ? 'ok' : 'warn');
+      if (r.ok) logEntry(r.text, 'system');
+      break;
+    }
+    case 'buy-drones': {
+      const r = buyDrones(s);
       toast(r.text, r.ok ? 'ok' : 'warn');
       if (r.ok) logEntry(r.text, 'system');
       break;

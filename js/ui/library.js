@@ -45,6 +45,9 @@ import { SUBFACTIONS, SUB_IDS, subsOf } from '../sim/factions.js';
 import { ZONE_KINDS } from '../sim/conflict.js';
 import { RANKS, RANK_REP, RANK_FOR, PAY_PER_RANK, CALLUP_AU } from '../sim/service.js';
 import { FLAG_LETTERS } from '../sim/flags.js';
+import { DRONE_RACK, DRONE_FOLLOW_G, DRONE_LAUNCH_MIN, DRONE_RECOVER_MIN, DRONE_ENDURANCE_MIN, DRONE_PRICE } from '../sim/drones.js';
+import { SCOPES, WAVELENGTH_M, MAG_LIMIT, reflectMag, HULL_ALBEDO } from '../sim/telescope.js';
+import { OWN_ARRIVAL_S } from '../sim/combat.js';
 
 const CATEGORIES = [
   { id: 'ships', label: 'SHIP CLASSES' },
@@ -340,6 +343,20 @@ function navigation(add) {
       'News of hot zones and losses travels at light speed too. A zone is on the plot once its news has arrived, and stays there until news of its end does.'],
     specs: [['One light-second', '299,792 km'], ['One light-minute', `${fmtNum(LIGHT_MINUTE_AU * AU_KM / 1e6, 1)} M km`], ['Earth to Ceres', '≈ 10–30 light-minutes'], ['Ceres to Jupiter', '≈ 15–50 light-minutes']],
     links: [['Who is out there', 'nav:population']] });
+  add({ id: 'nav:drones', cat: 'nav', group: 'The cameras', title: 'Camera drones',
+    text: ['Nothing aboard sees our own hull from outside. To look at the ship in its surroundings, alongside another hull, in a berth, over a rock, a camera drone goes out (DEPLOY on the EXTERIOR display\'s bar), climbs to a standoff off the plane and looks down: that is the exterior picture. Docking with a station, its own cameras lend us the same picture without one.',
+      `A drone keeps up with the RCS and a docking's final approach (up to ${DRONE_FOLLOW_G} G), not with the drive: a burn leaves it behind, and it is lost. A route waits for it as for the crew to strap in, calling it home as it is engaged; EXECUTE NOW goes without it. Coasting on a route, it is called home ahead of the flip. When its cells run low it comes home by itself.`],
+    specs: [['Rack', Object.entries(DRONE_RACK).map(([k, n]) => `${SIZES[k].label} ${n}`).join(' · ')], ['Out to its standoff', `${DRONE_LAUNCH_MIN} min`], ['Home and in its bay', `${DRONE_RECOVER_MIN} min`],
+      ['Endurance', `${DRONE_ENDURANCE_MIN / 60} h`], ['Keeps up with', `${DRONE_FOLLOW_G} G`], ['Price', `${fmtNum(DRONE_PRICE)} MCR, any port`]],
+    links: [['The telescope', 'nav:telescope']] });
+  add({ id: 'nav:telescope', cat: 'nav', group: 'The cameras', title: 'The telescope',
+    text: ['Every ship carries a telescope on a stabilized mount, part of its sensor suite. LOOK on a contact (or Z) puts it on the screen: one thing, from where we are. Space is big, and it shows that.',
+      `A mirror D across resolves 1.22 λ/D (λ ${WAVELENGTH_M * 1e9} nm); the ship's machinery shakes the mount a little, a lit drive a lot. A hull many resolution elements long is a shape, blurred to what the optics resolve; a few, a smudge; less than one, a point. A hull shines by the sunlight it throws back: its size across the line of sight, its paint (stealthy hulls are darker), the Sun's distance, and the phase: with the Sun behind us we see its lit side, with the Sun behind it its night side. A video frame reaches magnitude ${MAG_LIMIT} with half a metre of mirror; fainter is black sky. A lit drive is a star you can see across the system, and outshines the hull; a nuclear or fusion flash outshines everything.`,
+      'The mount holds a target in a field a few arcseconds across only on a fine track, the board\'s fix and the ranging laser together, and only to a range (cut by damage to the sensors). Past it, or for something the board doesn\'t hold, it holds nothing. Looking aft through our own lit drive, it is blind.',
+      `When our torpedoes are in their last ${OWN_ARRIVAL_S / 60} minutes to a target the telescope can hold, it comes up on the target by itself, through whatever happens to them, shot down, hit or missed, and time runs at 1× for it.`],
+    specs: [...Object.entries(SCOPES).map(([tl, S]) => [`TL${tl}`, `${S.apertureM} m mirror · resolves ${(1.22 * WAVELENGTH_M / S.apertureM * 1e6).toFixed(1)} µrad · mag ${(MAG_LIMIT + 5 * Math.log10(S.apertureM / 0.5)).toFixed(1)} · holds to ${fmtNum(S.lockKm)} km`]),
+      ...[1_000, 30_000, 300_000, 1_000_000].map(km => [`100 m hull at ${fmtNum(km)} km (Belt)`, `mag ${reflectMag(100 * 20, HULL_ALBEDO, 2.7, km * 1000, 0.6).toFixed(1)}, ${(100 / km / 1000 / (1.22 * WAVELENGTH_M / 0.5)).toFixed(km < 10_000 ? 0 : 2)} resolution elements (TL2)`])],
+    links: [['Camera drones', 'nav:drones']] });
   add({ id: 'nav:marks', cat: 'nav', group: 'The plot', title: 'The nav computer\'s marks',
     text: ['Every display, and every list that names a ship, marks the same three things, so a contact that matters is never lost in a crowd.',
       'DARK: a ship with no transponder. Whether a contact squawks is known as soon as the board holds it; one running dark (pirates, smugglers, warships on business, wrecks) is drawn hollow where a squawking ship is solid, and called DARK until we know its name. Its last fix on the plot is a broken ring.',

@@ -1,13 +1,17 @@
 // ============================================================
-// LONGHAUL — The exterior view: what is outside, at true scale
+// LONGHAUL — The exterior view: our ship and what is round it, at true scale
 //
-// Close to other things (docking, alongside another ship, and in time a
-// world's atmosphere) the ship's surroundings are drawn as they are, in
-// metres: the rock a port is built on, the station's structure and its
-// berths with the ships lying in them, other hulls nearby, and our own
-// hull, posed as the sim has it (mated at a collar, or flying). The
-// camera frames what matters and follows it smoothly; near a station
-// the view is turned so the station's up is up (the ground below).
+// The picture a camera outside the hull sends us: a drone of ours on
+// station off the plane, looking down (sim/drones.js), or, docking with a
+// station, its own approach and berth cameras (stage.js chooses). Close to
+// other things (docking, alongside another ship, and in time a world's
+// atmosphere) the ship's surroundings are drawn as they are, in metres:
+// the rock a port is built on, the station's structure and its berths
+// with the ships lying in them, other hulls nearby, and our own hull,
+// posed as the sim has it (mated at a collar, or flying). The camera
+// (the drone flies where it frames this) frames what matters and follows
+// it smoothly; near a station the view is turned so the station's up is
+// up (the ground below).
 //
 // Overlays for docking: the corridor down the berth's axis with its
 // marks, the berth's collar, ours. Names go beside the hulls, never on
@@ -366,7 +370,7 @@ export class ExteriorView {
  * last thrust and the pull, as the sim flies everything else.
  */
 const _op = { x: 0, y: 0 }, _ov = { vx: 0, vy: 0 };
-function ourPlace(state, tm, dtS) {
+export function ourPlace(state, tm, dtS) {
   const f = state.flight;
   if (f.hold) {
     const t = targetStateAt(state, f.hold, tm);

@@ -2,9 +2,11 @@
 // LONGHAUL — Autopilot & station-keeping
 //
 // Lifecycle of a route:
-//   prepare — all hands to crash couches, pilot at the helm. Engages
-//             automatically when everyone able is strapped in, or on
-//             the captain's override (unsecured crew may get hurt).
+//   prepare — all hands to crash couches, pilot at the helm, a drone
+//             out called home. Engages automatically when everyone able
+//             is strapped in and the drone is aboard, or on the
+//             captain's override (unsecured crew may get hurt; the drone
+//             is left behind: drones.js).
 //             Leaving a port, the docking computer climbs out of its
 //             gate on RCS meanwhile (docking.js outbound).
 //   depart  — leaving a port, the route's first leg: on the RCS out of
@@ -270,7 +272,9 @@ export function autopilotTick(state, emit = () => {}) {
     // (not with a boarding party aboard another hull: they would be left there)
     const partyOut = state.ship.crew.some(m => m.away?.op && !m.away.captured);
     if (partyOut && !ap.partyNoted) { ap.partyNoted = true; emit('nav-callout', { level: 'warn', text: 'A boarding party is aboard the other ship: the route waits for them.' }); }
-    if (!partyOut && ((st.pilotReady || !st.pilot) && (allIn || ap.override) || (ap.override && !st.pilot))) {
+    // (and for a drone out, called home meanwhile: drones.js; EXECUTE NOW leaves it behind)
+    const droneHome = !state.drone || ap.override;
+    if (!partyOut && droneHome && ((st.pilotReady || !st.pilot) && (allIn || ap.override) || (ap.override && !st.pilot))) {
       ap.phase = 'active';
       ap.engagedAt = now;
       // (lifting off a rock: stood on its tail, nose up, so the drive lifts at once; a turn first would

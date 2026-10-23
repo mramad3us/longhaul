@@ -46,6 +46,7 @@ import { zonePos } from './conflict.js';
 import { spawnAgent, wake, makeHostile } from './agents.js';
 import { PLAYER } from './combatants.js';
 import { WARHEADS, AMMO_PRICES } from './weapons.js';
+import { DRONE_PRICE } from './drones.js';
 import { adjustStanding } from './law.js';
 import { dockedStationEntity, dockedTo } from './docking.js';
 import { MIL_TYPES, MIL_LABEL, milShare, milRefusal, generateMil, spawnMil, milProgress, milTurnIn } from './military.js';
@@ -752,4 +753,27 @@ export function buyTorpedo(state, warhead) {
   state.resources.credits.current -= price;
   M[warhead]++;
   return { ok: true, text: `${WARHEADS[warhead].name} loaded (${price.toLocaleString()} MCR)` };
+}
+
+// ---- DRONES ----
+// Camera drones (drones.js) are chandlery: every port sells them, whole.
+
+export const dronePrice = (state) => Math.round(DRONE_PRICE * supplyPriceFactor(state));
+
+/** What filling the drone rack costs: { qty, cost } (as many as there is room for). */
+export function droneQuote(state) {
+  const r = state.resources.drones;
+  const qty = Math.max(0, r.max - r.current - (state.drone ? 1 : 0));
+  return { qty, cost: qty * dronePrice(state) };
+}
+
+/** Fill the rack (a drone out keeps its slot), or as many as credits allow. */
+export function buyDrones(state) {
+  if (!dockedPort(state)) return { ok: false, text: 'Not docked.' };
+  const price = dronePrice(state);
+  const n = Math.min(droneQuote(state).qty, Math.floor(state.resources.credits.current / price));
+  if (n < 1) return { ok: false, text: droneQuote(state).qty < 1 ? 'The rack is full.' : 'Not enough credits.' };
+  state.resources.credits.current -= n * price;
+  state.resources.drones.current += n;
+  return { ok: true, text: `${n} camera drone${n > 1 ? 's' : ''} loaded (${(n * price).toLocaleString()} MCR)` };
 }
