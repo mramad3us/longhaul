@@ -133,7 +133,7 @@ export async function boot() {
   ui.toggleCombat = toggleCombat;
   initLog();
   setResourceAlertHandler(resourceAlert);
-  initNav({ hail: (id) => openComms(id), openStation: () => openStation(), board: (id) => openBoarding(id), dock: (target) => dockWith(target), showPanel, look: (id) => lookAt(id) });
+  initNav({ hail: (id) => openComms(id), openStation: () => openStation(), board: (id) => openBoarding(id), dock: (target) => dockWith(target), showPanel, look: (t) => lookAt(t) });
   initSelection({ hail: (id) => openComms(id), openNav, showPanel });
   initDialogs({ plotRoute: (t, o) => openRoutePanel(t, o), setPaused, openComms: (id) => openComms(id), crewChanged: rebuildCrewViews, beginDocking: (id) => dockWith({ kind: 'station', id }) });
   initComms({ openStation: (e, tab) => openStation(e, tab), openBoarding: (id) => openBoarding(id), openDialog, openLibrary: (id) => openLibrary(id), plotRoute: (t) => openRoutePanel(t), dock: (id) => dockWith({ kind: 'station', id }) });
@@ -142,7 +142,7 @@ export async function boot() {
   initBoarding();
   initService({ openDialog, closeDialog, plotRoute: (t, o) => openRoutePanel(t, o) });
   setHailHandler((id) => openComms(id));
-  initStage({ state: () => ui.state, select: (id) => showOnBoard(id), currentTab, setTab, isFloating: exteriorIsFloating, pick: pickedEntity,
+  initStage({ state: () => ui.state, select: (id) => showOnBoard(id), currentTab, setTab, isFloating: exteriorIsFloating, pick: pickedTarget,
     back: () => { if (!exteriorIsFloating()) openNav('solar'); } });
   initPresenter();
   initLibrary();
@@ -151,7 +151,7 @@ export async function boot() {
     systems: openSystems, roster: openRoster,
     station: () => dockedStation(ui.state) ? openStation() : toast('Not docked', 'warn'),
     combat: toggleCombat, suits: toggleSuits, weapons: () => toggleNav('combat'), library: toggleLibrary, service: openService, escape: onEscape, save: () => quickSave(), devFlip, devCut,
-    exterior: () => exteriorIsFloating() ? setExteriorFloating(false) : toggleNav('exterior'), scope: () => toggleScope(pickedEntity()), log: () => toggleLog(), flag: toggleFlagOnPick,
+    exterior: () => exteriorIsFloating() ? setExteriorFloating(false) : toggleNav('exterior'), scope: () => toggleScope(pickedTarget()), log: () => toggleLog(), flag: toggleFlagOnPick,
     comms: () => commsOpen() ? closeComms() : openComms(),
   });
   $$('[data-action]').forEach(b => {
@@ -286,8 +286,8 @@ function rebuildCrewViews() {
  * final approach; far off, the route planner plots the way to the gate
  * (or to the ship) first.
  */
-/** What is picked on the displays, if it is a contact (the telescope's target for LOOK and Z). */
-const pickedEntity = () => ui.nav.target?.kind === 'entity' ? ui.nav.target.id : null;
+/** What is picked on the displays, if the telescope can hold it: a contact or a world (LOOK and Z). */
+const pickedTarget = () => ui.nav.target?.kind === 'entity' || ui.nav.target?.kind === 'body' ? ui.nav.target : null;
 
 function dockWith(target) {
   const s = ui.state;

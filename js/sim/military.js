@@ -284,9 +284,11 @@ export function milProgress(state, c, emit, { fail, done }) {
     }
     case 'STRIKE': {
       const t = world.get(c.targetId);
-      if (!t) { fail(`The ${c.targetName} got away`); return; }
-      if (identifyHunt(state, c)) emit('contract-progress', { contract: c, text: huntNamed(c) });
-      if (t.combat?.status === 'wreck' || t.combat?.status === 'surrendered') done(`${c.targetName} ${t.combat.status === 'wreck' ? 'destroyed' : 'has struck'} — report to any ${FACTIONS[c.faction].short} port`);
+      // (a reactor's fireball leaves no wreck: damage.js marks the contract)
+      const status = t ? t.combat?.status : c.targetGone === 'destroyed' ? 'wreck' : null;
+      if (!t && !status) { fail(`The ${c.targetName} got away`); return; }
+      if (t && identifyHunt(state, c)) emit('contract-progress', { contract: c, text: huntNamed(c) });
+      if (status === 'wreck' || status === 'surrendered') done(`${c.targetName} ${status === 'wreck' ? 'destroyed' : 'has struck'} — report to any ${FACTIONS[c.faction].short} port`);
       return;
     }
     case 'COVERT': {

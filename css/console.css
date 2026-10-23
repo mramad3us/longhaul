@@ -299,6 +299,8 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .cam-bar .mv-btn { min-height: 22px; padding: 1px 8px; font-size: 11px; }
 .cam-bar .mv-btn:disabled { opacity: 0.4; }
 .cam-bar .mv-btn.active { color: var(--c-sel); border-color: rgba(62, 199, 230, 0.55); background: rgba(62, 199, 230, 0.08); }
+.cam-bar .mv-btn.suggest { color: var(--c-caution); border-color: rgba(240, 169, 58, 0.7); animation: cam-suggest 1.4s ease-in-out infinite; }
+@keyframes cam-suggest { 50% { background: rgba(240, 169, 58, 0.14); } }
 .cam-srcs { display: flex; gap: 2px; }
 .cam-note { font-family: var(--f-data); font-size: 11px; color: var(--c-text3); margin-left: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cam-view { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }

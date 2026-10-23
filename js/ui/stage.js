@@ -11,9 +11,11 @@
 //              outside: the display is blank, and says how to get one (a
 //              line in its corner while the docking display is up). A burn
 //              leaves the drone behind; none goes out with the drive lit.
-//   TELESCOPE  ours (sim/telescope.js, telescope.js): one contact, from
-//              where we are. It holds what it was pointed at (LOOK on a
-//              contact's panel or card, Z, or the bar's LOOK AT PICK).
+//   TELESCOPE  ours (sim/telescope.js, telescope.js): one contact or one
+//              world, from where we are. It holds what it was pointed at
+//              (LOOK on a contact's or a world's panel or card, Z, or the
+//              bar's LOOK AT PICK); FILTER on the bar steps through its
+//              plume filters (lit when one would help).
 //
 // The docking display goes over it while a dock is under way
 // (docking-hud.js), with its own collar camera. The display comes up by
@@ -25,8 +27,10 @@
 //   torpedoes  ours, in their last OWN_ARRIVAL_S to their target (time runs
 //              at 1× for it: sim/combat.js): the telescope on the target,
 //              if it can hold it, through whatever happens to them, shot
-//              down, hit or missed, and a few seconds after
-// The tab is marked when there is something close outside.
+//              down, hit or missed, and until what followed has played out
+//              (a target blown apart is held on a while)
+// The tab is marked when there is something close outside. A target can be
+// a world: LOOK on a body's card or panel (the pick, for Z and LOOK AT PICK).
 //
 // A camera draws only while it can be seen: its tab is up, or its window
 // is open.
@@ -41,7 +45,7 @@ import { getWorld } from '../sim/world.js';
 import { stationModel } from '../sim/stations.js';
 import { hullOf } from '../sim/hulls.js';
 import { deployDrone, recallDrone, deployRefusal, droneFeed, droneStatus, DRONE_LAUNCH_MIN } from '../sim/drones.js';
-import { scopeOf, scopeLock } from '../sim/telescope.js';
+import { scopeOf, scopeLock, FILTERS } from '../sim/telescope.js';
 import { launchedBy, timeToGo } from '../sim/ordnance.js';
 import { PLAYER } from '../sim/combatants.js';
 import { OWN_ARRIVAL_S } from '../sim/combat.js';
@@ -57,9 +61,9 @@ const SRC_LABEL = { drone: 'DRONE', scope: 'TELESCOPE' };
 
 let el = {}, exterior = null, scope = null, mode = null, hooks = {};
 let src = 'drone';             // the camera on the display: 'drone' | 'scope'
-let scopeId = null;            // what the telescope holds
+let scopeTarget = null;        // what the telescope holds: { kind: 'entity' | 'body', id }
 let dockReturn = null;         // { tab, src }: what showed before a dock took the display over
-let auto = null;               // the telescope come up for our torpedoes: { id, until, back: { tab, src, scopeId } }
+let auto = null;               // the telescope come up for our torpedoes: { id, until, back: { tab, src, scopeTarget } }
 let watchAt = 0, barAt = 0, barKey = '', lostAt = -1e9;
 
 export function initStage(h = {}) {
@@ -78,7 +82,7 @@ export function resetStage() {
   dockReturn = null;
   auto = null;
   src = 'drone';
-  scopeId = null;
+  scopeTarget = null;
   barKey = '';
   lostAt = -1e9;
   exterior?.reset();
@@ -154,17 +158,18 @@ function watchTorpedoes(state) {
   if (soon) {
     if (!auto) {
       if (dockHolds(state) && state.dock.phase !== 'docked') return;      // (a dock under way keeps the display)
-      auto = { id: soon, back: { tab: floating() ? null : hooks.currentTab?.(), src, scopeId } };
-      look(soon);
-    } else if (auto.id !== soon && scopeId === auto.id) { auto.id = soon; look(soon); }
+      auto = { id: soon, back: { tab: floating() ? null : hooks.currentTab?.(), src, scopeTarget } };
+      look({ kind: 'entity', id: soon });
+    } else if (auto.id !== soon && holds(auto.id)) { auto.id = soon; look({ kind: 'entity', id: soon }); }
     auto.until = now + AUTO_HOLD_MS;
     return;
   }
-  if (auto && now > auto.until) {
+  // (and not before what followed has played out: the flashes, a hull blown apart held on a while)
+  if (auto && now > Math.max(auto.until, scope.busyUntil())) {
     // back to what was showing, unless the captain moved the display meanwhile
-    if (src === 'scope' && scopeId === auto.id && onDisplay()) {
+    if (src === 'scope' && holds(auto.id) && onDisplay()) {
       src = auto.back.src;
-      scopeId = auto.back.scopeId;
+      scopeTarget = auto.back.scopeTarget;
       if (auto.back.tab && auto.back.tab !== 'exterior' && hooks.currentTab?.() === 'exterior') hooks.setTab?.(auto.back.tab);
       barKey = '';
     }
@@ -172,28 +177,34 @@ function watchTorpedoes(state) {
   }
 }
 
-/** Point the telescope at `id` and bring it up. */
-function look(id) {
-  if (id !== scopeId) scope.reset();
-  scopeId = id;
+/** A telescope target from a pick ({ kind, id }, or an entity's id), or null. */
+const asTarget = (t) => !t ? null : typeof t === 'string' ? { kind: 'entity', id: t } : t.kind === 'entity' || t.kind === 'body' ? { kind: t.kind, id: t.id } : null;
+const holds = (id) => scopeTarget?.kind === 'entity' && scopeTarget.id === id;
+const same = (a, b) => !!a && !!b && a.kind === b.kind && a.id === b.id;
+
+/** Point the telescope at a target and bring it up (the mount slews to it: telescope.js). */
+function look(t) {
+  scopeTarget = asTarget(t);
   src = 'scope';
   barKey = '';
   raise();
 }
 
-/** LOOK: the telescope on a contact (the pick, from a panel or a key). */
-export function lookAt(id) {
-  if (!id) { toast('Pick a contact to look at', 'warn'); return; }
+/** LOOK: the telescope on a contact or a world (the pick, from a panel or a key). */
+export function lookAt(t) {
+  const target = asTarget(t);
+  if (!target) { toast('Pick a contact or a world to look at', 'warn'); return; }
   auto = null;
-  look(id);
+  look(target);
 }
 
 /** Z: the telescope on the pick; again (or with nothing picked), back from it. */
-export function toggleScope(pickId) {
-  if (src === 'scope' && onDisplay() && (!pickId || pickId === scopeId)) { hooks.back?.(); return; }
-  if (pickId) lookAt(pickId);
-  else if (scopeId) { auto = null; look(scopeId); }
-  else toast('Pick a contact to look at', 'warn');
+export function toggleScope(pick) {
+  const target = asTarget(pick);
+  if (src === 'scope' && onDisplay() && (!target || same(target, scopeTarget))) { hooks.back?.(); return; }
+  if (target) lookAt(target);
+  else if (scopeTarget) { auto = null; look(scopeTarget); }
+  else toast('Pick a contact or a world to look at', 'warn');
 }
 
 export function updateStage(state, alpha) {
@@ -206,7 +217,7 @@ export function updateStage(state, alpha) {
   show(el.scope, feed === 'scope');
   if (onDisplay()) {
     if (feed === 'drone') exterior.render(state, alpha, { labels: mode !== 'near' });
-    else if (feed === 'scope') scope.render(state, alpha, scopeId);
+    else if (feed === 'scope') scope.render(state, alpha, scopeTarget);
     const now = performance.now();
     if (now - barAt > 250 || !barKey) { barAt = now; renderBar(state, feed); }
   }
@@ -223,7 +234,9 @@ function renderBar(state, feed) {
   let act = '', note = '';
   if (src === 'scope') {
     const sc = scopeOf(state);
-    act = `<button class="mv-btn" data-cam-act="look" title="Point the telescope at what is picked on the displays">LOOK AT PICK</button>`;
+    const f = FILTERS[scope.filter];
+    act = `<button class="mv-btn" data-cam-act="look" title="Point the telescope at what is picked on the displays (a contact or a world)">LOOK AT PICK</button>
+      <button class="mv-btn ${f.id !== 'off' ? 'active' : ''} ${scope.hint && f.id === 'off' ? 'suggest' : ''}" data-cam-act="filter" title="The plume filter: OFF, PLUME (a drive's lines cut 5 magnitudes, a hull's light half of one), DEEP (9 against 1.2, darker and noisier). It brings a hull out of its own drive's glare, and lets us see, degraded, through our own exhaust">FILTER ${f.label}</button>`;
     note = `${sc.apertureM} m mirror · holds a target to ${fmtKm(sc.lockM / 1000)}${auto ? ' · TORPEDOES CLOSING' : ''}`;
   } else {
     act = ds ? `<button class="mv-btn" data-cam-act="recall" ${ds.phase === 'recover' ? 'disabled' : ''} title="Call the drone home">RECALL</button>`
@@ -265,13 +278,14 @@ function onClick(e) {
   if (b.dataset.cam) {
     src = b.dataset.cam;
     auto = null;
-    if (src === 'scope' && !scopeId) { const p = hooks.pick?.(); if (p) look(p); }
+    if (src === 'scope' && !scopeTarget) { const p = asTarget(hooks.pick?.()); if (p) look(p); }
   }
   const emit = (t, p) => bus.emit(t, p);
   switch (b.dataset.camAct) {
     case 'deploy': { const r = deployDrone(s, emit); toast(r.text, r.ok ? 'ok' : 'warn'); if (r.ok) src = 'drone'; break; }
     case 'recall': { const r = recallDrone(s, emit); toast(r.text, r.ok ? 'ok' : 'warn'); break; }
-    case 'look': { const p = hooks.pick?.(); if (p) lookAt(p); else toast('Pick a contact on the displays first', 'warn'); break; }
+    case 'look': { const p = asTarget(hooks.pick?.()); if (p) lookAt(p); else toast('Pick a contact or a world on the displays first', 'warn'); break; }
+    case 'filter': { const f = FILTERS[scope.cycleFilter()]; toast(f.id === 'off' ? 'Telescope: filter out' : `Telescope: ${f.label} filter in (a drive's light −${f.plume} mag, a hull's −${f.hull})`, 'info'); break; }
   }
   barKey = '';
 }

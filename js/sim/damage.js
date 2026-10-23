@@ -34,7 +34,7 @@ import { CLASSES, SIZES, PLAYER_CLASS, classOf, hullPoints } from './ship-classe
 import { PLAYER, ensureHull, profile, DISABLED_BELOW } from './combatants.js';
 import { recordAttack } from './law.js';
 import { creditKill } from './service.js';
-import { sizeForMass } from './sensors.js';
+import { sizeForMass, huntsOf } from './sensors.js';
 
 export const AIM = {
   disable: { id: 'disable', label: 'DISABLE', desc: 'Aim for the drive — cripple the ship, leave the crew alive to surrender.', weights: { drive: 0.6, weapons: 0.1, hull: 0.25, reactor: 0.05 } },
@@ -272,6 +272,9 @@ export function explodeNpc(state, e, by, emit = () => {}) {
   const blast = SIZES[c?.size || sizeForMass(e.mass)].reactor;
   const pos = { x: e.pos.x, y: e.pos.y };
   if (e.combat) e.combat.status = 'wreck';
+  // (a fireball leaves no wreck to find: a contract hunting the ship is told it died, not that it got away)
+  const hunt = huntsOf(state).get(e.id);
+  if (hunt) hunt.targetGone = 'destroyed';
   world.remove(e);
   emit('ship-destroyed', { id: e.id, name: e.name, by, how: 'reactor' });
   if (by === PLAYER) { creditKill(state, e, emit); recordAttack(state, e, 'destroyed', emit); }

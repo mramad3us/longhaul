@@ -9,6 +9,8 @@ import { getBody, bodyPos } from '../js/sim/ephemeris.js';
 import { controlAt, spaceLabel } from '../js/sim/factions.js';
 import { zoneCandidates, spawnZone, zonePos, zonesAt, director, spawnEncounter, ZONE_CAP } from '../js/sim/conflict.js';
 import { acceptContract, ContractType, contractsTick } from '../js/sim/contracts.js';
+import { explodeNpc } from '../js/sim/damage.js';
+import { spawnAgent } from '../js/sim/agents.js';
 
 function game(seed = 5) {
   seedRandom(seed);
@@ -96,6 +98,33 @@ export default [
       pirate.combat.status = 'wreck';
       contractsTick(s);
       assert(c.phase === 'return', 'bounty earned, return to the station');
+    },
+  },
+  {
+    name: 'a bounty or a strike target blown apart by its reactor is destroyed, not got away (it leaves no wreck)',
+    fn: () => {
+      const s = game(14);
+      const world = getWorld(s);
+      const st = world.get('ceres-station');
+      const c = { id: 'c-r', type: ContractType.BOUNTY, station: st.id, stationName: st.name, phase: 'offered', zone: null,
+        ship: { cls: 'pirate-raider', name: 'Wolfish Ferret', faction: 'pirate', tl: 1, shipClass: 'Pirate raider', mass: 700 },
+        body: 'Ceres', distAU: 0.01, reward: { credits: 5000 }, aliveBonus: 0.5, deadline: 10 * DAY_MIN, expires: s.clock.minute + DAY_MIN, title: 'Bounty: Wolfish Ferret' };
+      st.board.missions.push(c);
+      st.board.lastRefresh = s.clock.minute;
+      assert(acceptContract(s, st.id, c.id).ok, 'accepted');
+      // and a strike on another ship, the same way
+      const other = spawnAgent(s, { role: 'pirate', faction: 'pirate', pos: { x: s.flight.pos.x + 0.003, y: s.flight.pos.y }, vel: { ...s.flight.vel } });
+      const k = { id: 'c-s', type: 'STRIKE', mil: true, phase: 'active', faction: 'UN', targetId: other.id, targetName: other.name, title: 'Strike', dueAt: s.clock.minute + DAY_MIN, deadline: DAY_MIN, reward: { credits: 1 } };
+      s.contracts.active.push(k);
+      const failed = [];
+      const emit = (t, p) => { if (t === 'contract-failed') failed.push(p.contract?.id); };
+      explodeNpc(s, world.get(c.targetId), 'player', emit);
+      explodeNpc(s, other, 'player', emit);
+      assert(!world.get(c.targetId) && !world.get(other.id), 'both are gone from space');
+      contractsTick(s, emit);
+      console.log(`      bounty ${c.phase} (${c.outcome}) · strike ${k.phase} · failed: ${failed.join(', ') || 'none'}`);
+      assert(c.phase === 'return' && c.outcome === 'destroyed', 'the bounty is earned: return to the station');
+      assert(k.phase !== 'failed' && !failed.length, 'the strike is done, not failed');
     },
   },
 ];

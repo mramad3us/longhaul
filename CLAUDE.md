@@ -24,7 +24,7 @@ A hard sci-fi ship-captain browser game (Expanse-inspired). Vanilla ES modules, 
 - Balance is checked by the tests' printed numbers (combat.test.mjs, factions.test.mjs). Re-read them after tuning.
 - Suites not about encounters switch them off: `s.politics.quietUntil = Infinity; s.missions.cooldown = 1e9;`.
 - Gravity is real near bodies (`sim/gravity.js`): a test that flies its own minute loop instead of `minuteTick` calls `setGravityEpoch(minute)` each minute, and a test of flight or combat that isn't about the rocks moves 0.02 AU away from them (a ship let go at Ceres' gate falls).
-- Work happens on branch `overhaul` (current version v0.24.0). `main` was last fast-forwarded to it at v0.10.0. Every round of changes bumps `js/version.js` (minor, or major), and a bump is committed as `vX.Y.Z: short summary` and pushed. Other commits, and merges, only when asked.
+- Work happens on branch `overhaul` (current version v0.25.0). `main` was last fast-forwarded to it at v0.10.0. Every round of changes bumps `js/version.js` (minor, or major), and a bump is committed as `vX.Y.Z: short summary` and pushed. Other commits, and merges, only when asked.
 - The user often plays from the working copy while asking for changes. Then build and test in a scratch copy and apply the patch only when they say go. The untracked `memory/` folder at the repo root is old and is never committed.
 - Kill any server you start for a smoke test.
 - If an auto-mode safety check blocks running commands (combat-heavy conversations have triggered it), say so and ask the user to switch permission modes, rather than working around it.

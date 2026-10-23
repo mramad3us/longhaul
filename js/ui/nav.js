@@ -12,7 +12,7 @@
 // captain's lettered flags: sim/flags.js, marks.js) go with a ship's name
 // wherever it is listed; F (or FLAG on the card and the panel) flags what
 // is picked, and the CONTEXT panel lists the flags. LOOK on a contact's
-// card or panel (or Z) puts the telescope on it (stage.js).
+// card or panel, or a world's (or Z), puts the telescope on it (stage.js).
 // ============================================================
 
 import { ui } from './context.js';
@@ -58,7 +58,7 @@ let etaCache = { at: 0, key: '', minutes: null, path: null };
 let hooks = {};
 
 export function initNav(h) {
-  hooks = h;   // { hail(entityId), openStation(), board(id), dock(target), showPanel(id), look(id) }
+  hooks = h;   // { hail(entityId), openStation(), board(id), dock(target), showPanel(id), look(target) }
   tacModal = new TacView($('[data-nav-screen="tactical"]'), { onSelect: (id) => selectOnBoard(id) });
   map = new SolarMap($('[data-nav-screen="solar"]'), {
     onSelect: (sel) => { ui.nav.target = sel; ui.nav.card = !!sel; hidePickList(); renderSelection(); },
@@ -354,7 +354,7 @@ function cardHTML(s, t) {
     if (dockable && !(isDocked(s) && dockedTo(s)?.id === e.id)) acts.push('<button class="btn-mini" data-act="dock">DOCK</button>');
   }
   if (t.kind === 'entity' && inRadio(s, t.id)) acts.push('<button class="btn-mini" data-act="hail">HAIL</button>');
-  if (t.kind === 'entity' && !d.report && contactById(s, t.id)) acts.push(lookButton('btn-mini'));
+  if ((t.kind === 'entity' && !d.report && contactById(s, t.id)) || t.kind === 'body') acts.push(lookButton('btn-mini'));
   if (flaggable(e)) acts.push(flagButton(s, t.id, 'btn-mini'));
   acts.push('<button class="btn-mini" data-act="details" title="The full picture, in the CONTEXT panel">DETAILS</button>');
   const dot = d.faction ? `<i class="card-dot" style="background:${factionColor(d.faction)}"></i>` : '';
@@ -412,7 +412,7 @@ function flagButton(state, id, cls) {
   return `<button class="${cls} ${f ? 'flagged' : ''}" data-act="flag" title="${f ? `Clear flag ${f}` : 'Flag it on every display'} (F)">${f ? `FLAG ${f} ✕` : 'FLAG'}</button>`;
 }
 
-/** LOOK: the telescope on the contact (stage.js). */
+/** LOOK: the telescope on the contact, or the world (stage.js). */
 const lookButton = (cls) => `<button class="${cls}" data-act="look" title="The telescope on it, from here (Z)">LOOK</button>`;
 
 /** Flag what is picked, or take its flag off (F). */
@@ -526,6 +526,7 @@ function renderSelection() {
       ${t.id === 'Sol' ? '' : '<button class="route-zoom-btn" data-act="stance">STANCE</button>'}
       <button class="route-zoom-btn" data-act="focus">FOCUS</button>
       ${canHail ? '<button class="route-zoom-btn" data-act="hail">HAIL</button>' : ''}
+      ${t.kind === 'body' || (t.kind === 'entity' && contactById(s, t.id)) ? lookButton('route-zoom-btn') : ''}
       ${flaggable(d.entity) ? flagButton(s, t.id, 'route-zoom-btn') : ''}
     </div>`;
   setHTML(mapPanel, html);
@@ -621,7 +622,7 @@ function onPanelClick(e) {
     case 'station': hooks.openStation(); break;
     case 'open-nav': openNav('solar'); break;
     case 'flag': toggleFlagOnPick(); break;
-    case 'look': if (t?.kind === 'entity') hooks.look?.(t.id); break;
+    case 'look': if (t?.kind === 'entity' || t?.kind === 'body') hooks.look?.(t); break;
     case 'flag-pick': selectTarget({ kind: 'entity', id: btn.dataset.id }); break;
     case 'flag-clear': {
       const r = toggleFlag(s, btn.dataset.id);

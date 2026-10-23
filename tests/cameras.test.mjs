@@ -20,7 +20,8 @@ import { buyDrones } from '../js/sim/contracts.js';
 import {
   deployDrone, recallDrone, deployRefusal, droneFeed, DRONE_LAUNCH_MIN, DRONE_RECOVER_MIN, DRONE_ENDURANCE_MIN,
 } from '../js/sim/drones.js';
-import { scopeOf, scopeLock, sightOf, flashMag, ownPlumeBlinds, SCOPES } from '../js/sim/telescope.js';
+import { scopeOf, scopeLock, sightOf, flashMag, ownPlumeBlinds, ownPlume, bodySight, occulter, lockOn, sunOffAxis, SCOPES, FILTERS } from '../js/sim/telescope.js';
+import { getBody, bodyPos } from '../js/sim/ephemeris.js';
 
 function game(seed = 3, opts = {}) {
   seedRandom(seed);
@@ -201,6 +202,48 @@ export default [
       // Looking aft through our own lit drive: blind
       s.flight.thrustG = 1; s.flight.facing = 0;
       assert(ownPlumeBlinds(s, Math.PI) && !ownPlumeBlinds(s, 0), 'blind aft, not ahead');
+    },
+  },
+  {
+    name: 'telescope: worlds as they are from the Belt (size, brightness, phase); a world hides what is behind it',
+    fn: () => {
+      const s = game(9);
+      const tm = s.clock.minute, from = s.flight.pos;
+      const row = (n) => { const v = bodySight(getBody(n), tm, from); return `${n} ${(v.distM / 1.496e11).toFixed(2)} AU ${(v.angRad * 206265).toFixed(1)}″ mag ${v.mag.toFixed(1)} phase ${Math.round(v.phase * 57.3)}°`; };
+      console.log('      ' + ['Sol', 'Jupiter', 'Saturn', 'Mars', 'Earth', 'Vesta'].map(row).join(' · '));
+      const sun = bodySight(getBody('Sol'), tm, from), jup = bodySight(getBody('Jupiter'), tm, from);
+      assert(sun.mag < -24 && sun.mag > -25.5 && sun.angRad * 206265 > 600 && sun.angRad * 206265 < 760, 'the Sun from the Belt: about −24.5, a third of its size from Earth');
+      assert(jup.mag < -1.5 && jup.mag > -3 && jup.angRad * 206265 > 30 && jup.angRad * 206265 < 50, 'Jupiter: a bright planet, tens of arcseconds');
+      assert(jup.lagS > 1000, 'its picture is half an hour old');
+      assert(lockOn(s, { kind: 'body', id: 'Jupiter' }).ok, 'the sky is always held');
+      // a point on the far side of Ceres, seen from this side: Ceres is in the way
+      const ce = bodyPos(getBody('Ceres'), tm / 1440), KM = 1000 / AU_M;
+      const near = { x: ce.x + 2000 * KM, y: ce.y }, far = { x: ce.x - 2000 * KM, y: ce.y };
+      const hidden = occulter(tm, near, Math.PI, 4000 * 1000);
+      const clear = occulter(tm, near, Math.PI / 2, 4000 * 1000);
+      console.log(`      behind Ceres from 2,000 km: ${hidden?.body.name || 'nothing in the way'} · to the side: ${clear?.body.name || 'clear'}`);
+      assert(hidden?.body.name === 'Ceres' && !clear, 'what is behind a world is hidden; beside it is not');
+      assert(sunOffAxis(far, Math.atan2(-far.y, -far.x)) < 1e-9, 'the Sun is on the boresight looking sunward');
+    },
+  },
+  {
+    name: 'telescope: the plume filters cut a drive far more than a hull; through our own exhaust, blind, or degraded with a filter',
+    fn: () => {
+      const s = game(10);
+      freeSpace(s);
+      setSensorRange(s, 2);
+      const t = shipAt(s, 1500, 0.4, { transponder: true });
+      t.thrust = 1; t.heading = 0.4;
+      sensorsTick(s);
+      const off = sightOf(s, t, t.pos, s.flight.pos, scopeOf(s), FILTERS.off);
+      const deep = sightOf(s, t, t.pos, s.flight.pos, scopeOf(s), FILTERS.deep);
+      console.log(`      plume ${off.plumeMag.toFixed(1)} → ${deep.plumeMag.toFixed(1)} · hull ${off.hullMag.toFixed(1)} → ${deep.hullMag.toFixed(1)} · the gap ${(off.hullMag - off.plumeMag).toFixed(1)} → ${(deep.hullMag - deep.plumeMag).toFixed(1)} mag`);
+      assert(deep.plumeMag - off.plumeMag === 9 && Math.abs(deep.hullMag - off.hullMag - 1.2) < 1e-9, 'DEEP: the drive −9, the hull −1.2');
+      s.flight.thrustG = 1; s.flight.facing = 0;
+      const blind = ownPlume(s, Math.PI, FILTERS.off), plume = ownPlume(s, Math.PI, FILTERS.plume), dp = ownPlume(s, Math.PI, FILTERS.deep);
+      console.log(`      aft through our own exhaust: off wash ${blind.wash.toFixed(2)} (sees ${blind.see}) · plume ${plume.wash.toFixed(2)} · deep ${dp.wash.toFixed(2)}, blur ×${dp.blur.toFixed(1)}`);
+      assert(!blind.see && plume.see && dp.see && dp.wash < plume.wash && plume.wash < blind.wash, 'blind without a filter; with one, washed and blurred, less so the deeper');
+      assert(ownPlume(s, 0, FILTERS.off) === null, 'ahead, nothing in the way');
     },
   },
   {

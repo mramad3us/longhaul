@@ -237,7 +237,7 @@ Stations near hot zones (within 0.6 AU) also post conflict work, up to 40% of th
 
 | Contract | Work | Pay |
 |---|---|---|
-| BOUNTY | find a wanted pirate near the last reported position (it runs cold and dark: named only by its transponder, or by its drive signature seen in its plume when the brief has it on file, 60% of them); destroy it, or disable it and accept its surrender (+50%); return | 3,000–8,000 |
+| BOUNTY | find a wanted pirate near the last reported position (it runs cold and dark: named only by its transponder, or by its drive signature seen in its plume when the brief has it on file, 60% of them); destroy it (a wreck, or a reactor's fireball, which leaves none), or disable it and accept its surrender (+50%); return | 3,000–8,000 |
 | ESCORT | join a convoy ship within 10 km at its station. It departs at ≤ 0.5G, and raiders strike partway along the route. Keep it alive; collect at the destination | 2,500–5,000 + distance, PDC rounds |
 | SMUGGLE | carry contraband through a blockade, or into inner-planet space. An inspection that finds it ends the job | 6,000–12,000 + distance |
 | RECON | get within 300,000 km of a navy picket and hold a sensor lock on it for 30–90 minutes. Identification by that navy blows the job (and costs standing) | 4,000–9,000 |

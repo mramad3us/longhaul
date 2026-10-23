@@ -310,10 +310,12 @@ function hotProgress(state, c, emit) {
   switch (c.type) {
     case ContractType.BOUNTY: {
       if (c.phase !== 'active') return;
-      if (!t) { failContract(state, c, `The ${c.targetName} got away`, emit); return; }
-      if (identifyHunt(state, c)) emit('contract-progress', { contract: c, text: huntNamed(c) });
-      if (t.combat?.status === 'wreck' || t.combat?.status === 'surrendered') {
-        c.outcome = t.combat.status === 'surrendered' ? 'captured' : 'destroyed';
+      // (gone from space: got away, unless its reactor took it, which leaves no wreck: damage.js says so)
+      const status = t ? t.combat?.status : c.targetGone === 'destroyed' ? 'wreck' : null;
+      if (!t && !status) { failContract(state, c, `The ${c.targetName} got away`, emit); return; }
+      if (t && identifyHunt(state, c)) emit('contract-progress', { contract: c, text: huntNamed(c) });
+      if (status === 'wreck' || status === 'surrendered') {
+        c.outcome = status === 'surrendered' ? 'captured' : 'destroyed';
         c.phase = 'return';
         if (c.outcome === 'captured') { c.reward = { ...c.reward, credits: Math.round(c.reward.credits * (1 + c.aliveBonus)) }; t.tags.despawnAt = now + DAY_MIN; }
         retireMark(world, c, now);
