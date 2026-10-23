@@ -313,6 +313,10 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .cam-nofeed-text { font-size: 13px; line-height: 1.45; color: var(--c-text2); margin-bottom: 12px; }
 .cam-why { font-size: 11px; color: var(--c-text3); margin-top: 6px; }
 .cam-nofeed-alt { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--c-line); }
+.cam-nofeed.compact { align-items: flex-start; justify-content: flex-start; padding: 10px; }
+.cam-nofeed.compact .cam-nofeed-box { display: flex; align-items: center; gap: 10px; padding: 5px 8px; max-width: none; }
+.cam-nofeed.compact .cam-nofeed-head { margin: 0; font-size: 11px; }
+.cam-nofeed.compact .mv-btn { min-height: 22px; padding: 1px 8px; font-size: 11px; }
 
 /* ---- THE FLIGHT STATUS BAND ----
    One line between the display's tabs and the display, like the mode

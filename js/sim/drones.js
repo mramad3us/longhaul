@@ -13,9 +13,11 @@
 //   recover   called home: it flies back and is caught in its bay
 //             (DRONE_RECOVER_MIN), its camera on until it is aboard
 //
-// It keeps up with anything gentle (the RCS, a docking's final approach:
-// DRONE_FOLLOW_G) but not with the drive. A burn leaves it behind, and it
-// is lost: the exterior view is for a ship that isn't burning. A route
+// It goes out only with the drive cold (it would launch into our own
+// exhaust). Out, it keeps up with anything gentle (the RCS, a docking's
+// final approach, hovering at a gate: DRONE_FOLLOW_G) but not with a burn:
+// that leaves it behind, and it is lost. The exterior view is for a ship
+// that isn't burning; without a drone out, there is none. A route
 // waits for the drone as it waits for the crew to strap in (it is called
 // home the minute the route is engaged, and the burn waits: autopilot.js);
 // EXECUTE NOW goes without it, unless the way out of port on the RCS
@@ -28,6 +30,7 @@ import { CLASSES, PLAYER_CLASS } from './ship-classes.js';
 
 export const DRONE_RACK = { S: 2, M: 3, L: 4, XL: 6 };   // drones a hull carries, by size
 export const DRONE_FOLLOW_G = 0.12;      // what its thrusters can keep up with (a docking's final approach is 0.1G)
+export const DRONE_LAUNCH_G = 0.01;      // and the drive must be cold to launch one
 export const DRONE_LAUNCH_MIN = 2;       // out of the bay and up to its standoff
 export const DRONE_RECOVER_MIN = 4;      // home and caught in the bay
 export const DRONE_ENDURANCE_MIN = 6 * 60;
@@ -55,7 +58,7 @@ export function deployRefusal(state) {
   if (state.drone) return 'A drone is already out.';
   if ((state.resources.drones?.current || 0) < 1) return 'No drones aboard: buy them in port.';
   if (state.reactor?.blackout) return 'No power to the drone bay.';
-  if (ourG(state) > DRONE_FOLLOW_G) return 'Not under thrust: it couldn\'t keep up with us.';
+  if (ourG(state) > DRONE_LAUNCH_G) return 'Not under thrust: it would launch into our exhaust. Cut the drive first.';
   if (state.autopilot?.phase === 'prepare') return 'Securing for a burn: it would be left behind.';
   return null;
 }

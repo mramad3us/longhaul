@@ -2,26 +2,26 @@
 // LONGHAUL — The exterior cameras: what feeds them, and when they come up
 //
 // The EXTERIOR display (or its window, when the captain pulls it out:
-// console.js) shows one camera at a time, chosen on its own bar, which
+// console.js) shows one of our two cameras, chosen on its own bar, which
 // goes where the display goes:
 //
 //   DRONE      a camera drone out (sim/drones.js): our ship and what is
 //              round it, at true scale (exterior.js). The bar deploys and
-//              recalls it. With none out there is no picture of our hull
-//              from outside, and the display says how to get one; a burn
-//              leaves the drone behind.
-//   PORT       docking with a station (or docked at one), its approach and
-//              berth cameras feed us the same picture
+//              recalls it. With none out nothing sees our hull from
+//              outside: the display is blank, and says how to get one (a
+//              line in its corner while the docking display is up). A burn
+//              leaves the drone behind; none goes out with the drive lit.
 //   TELESCOPE  ours (sim/telescope.js, telescope.js): one contact, from
 //              where we are. It holds what it was pointed at (LOOK on a
 //              contact's panel or card, Z, or the bar's LOOK AT PICK).
 //
 // The docking display goes over it while a dock is under way
-// (docking-hud.js). The display comes up by itself, and goes back to what
-// was showing when it is over (unless the captain moved it meanwhile):
+// (docking-hud.js), with its own collar camera. The display comes up by
+// itself, and goes back to what was showing when it is over (unless the
+// captain moved it meanwhile):
 //   a dock     under way (final approach, proximity operations, capture,
-//              undocking, holding off, the climb out): the port's camera
-//              (a ship's dock: the drone's, if one is out)
+//              undocking, holding off, the climb out): the docking display,
+//              over the drone's picture if one is out
 //   torpedoes  ours, in their last OWN_ARRIVAL_S to their target (time runs
 //              at 1× for it: sim/combat.js): the telescope on the target,
 //              if it can hold it, through whatever happens to them, shot
@@ -53,13 +53,13 @@ import { initDockingHud, updateDockingHud } from './docking-hud.js';
 const PROX_PHASES = new Set(['approach', 'prox', 'capture', 'seal', 'undock', 'separate', 'holding', 'outbound']);
 const NEAR_STATION_M = 8_000, NEAR_SHIP_M = 5_000;
 const AUTO_HOLD_MS = 4500;     // the telescope stays on a target this long after the last torpedo is done with it
-const SRC_LABEL = { drone: 'DRONE', port: 'PORT', scope: 'TELESCOPE' };
+const SRC_LABEL = { drone: 'DRONE', scope: 'TELESCOPE' };
 
 let el = {}, exterior = null, scope = null, mode = null, hooks = {};
-let chosen = null;             // the camera chosen on the bar ('drone' | 'port' | 'scope'); null: srcOf decides
+let src = 'drone';             // the camera on the display: 'drone' | 'scope'
 let scopeId = null;            // what the telescope holds
-let dockReturn = null;         // { tab, chosen }: what showed before a dock took the display over
-let auto = null;               // the telescope come up for our torpedoes: { id, until, back: { tab, chosen, scopeId } }
+let dockReturn = null;         // { tab, src }: what showed before a dock took the display over
+let auto = null;               // the telescope come up for our torpedoes: { id, until, back: { tab, src, scopeId } }
 let watchAt = 0, barAt = 0, barKey = '', lostAt = -1e9;
 
 export function initStage(h = {}) {
@@ -77,7 +77,7 @@ export function resetStage() {
   mode = null;
   dockReturn = null;
   auto = null;
-  chosen = null;
+  src = 'drone';
   scopeId = null;
   barKey = '';
   lostAt = -1e9;
@@ -93,12 +93,6 @@ export function stageMode(state) {
   if (somethingNear(state)) return 'near';
   return 'cruise';
 }
-
-/** A station we dock with (or are docked at) lends us its cameras. */
-export const portFeed = (state) => !!state.dock && state.dock.target.kind === 'station' && state.dock.phase !== 'inbound' && state.dock.phase !== 'awaiting';
-
-/** The camera on the display: the one chosen, or the drone's if one is out, else the port's, else the drone's (and there is none). */
-const srcOf = (state) => chosen ?? (state.drone ? 'drone' : portFeed(state) ? 'port' : 'drone');
 
 const _q = [];
 function somethingNear(state) {
@@ -123,19 +117,19 @@ const onDisplay = () => floating() || hooks.currentTab?.() === 'exterior';
 /** Bring the display up (its tab, unless it floats in its window). */
 function raise() { if (!floating() && hooks.currentTab?.() !== 'exterior') hooks.setTab?.('exterior'); }
 
-/** A dock under way takes the display, on the port's camera; when it is over, the display goes back. */
-function enter(m, state) {
+/** A dock under way takes the display (the docking display, over the drone's camera); when it is over, the display goes back. */
+function enter(m) {
   const was = mode;
   mode = m;
   toggleClass(el.tab, 'marked', m !== 'cruise');
   toggleClass(el.tab, 'urgent', m === 'prox');
   if (m === 'prox' && was !== 'prox') {
-    dockReturn = { tab: floating() ? null : hooks.currentTab?.(), chosen };
-    chosen = null;
+    dockReturn = { tab: floating() ? null : hooks.currentTab?.(), src };
+    src = 'drone';
     raise();
   } else if (was === 'prox' && m !== 'prox' && dockReturn) {
-    // (a camera chosen during the dock stays chosen)
-    if (chosen === null && !(dockReturn.chosen === 'port' && !portFeed(state))) chosen = dockReturn.chosen;
+    // (the telescope chosen during the dock stays up)
+    if (src === 'drone') src = dockReturn.src;
     if (dockReturn.tab && dockReturn.tab !== 'exterior' && hooks.currentTab?.() === 'exterior') hooks.setTab?.(dockReturn.tab);
     dockReturn = null;
   }
@@ -160,7 +154,7 @@ function watchTorpedoes(state) {
   if (soon) {
     if (!auto) {
       if (dockHolds(state) && state.dock.phase !== 'docked') return;      // (a dock under way keeps the display)
-      auto = { id: soon, back: { tab: floating() ? null : hooks.currentTab?.(), chosen, scopeId } };
+      auto = { id: soon, back: { tab: floating() ? null : hooks.currentTab?.(), src, scopeId } };
       look(soon);
     } else if (auto.id !== soon && scopeId === auto.id) { auto.id = soon; look(soon); }
     auto.until = now + AUTO_HOLD_MS;
@@ -168,8 +162,8 @@ function watchTorpedoes(state) {
   }
   if (auto && now > auto.until) {
     // back to what was showing, unless the captain moved the display meanwhile
-    if (chosen === 'scope' && scopeId === auto.id && onDisplay()) {
-      chosen = auto.back.chosen;
+    if (src === 'scope' && scopeId === auto.id && onDisplay()) {
+      src = auto.back.src;
       scopeId = auto.back.scopeId;
       if (auto.back.tab && auto.back.tab !== 'exterior' && hooks.currentTab?.() === 'exterior') hooks.setTab?.(auto.back.tab);
       barKey = '';
@@ -182,7 +176,7 @@ function watchTorpedoes(state) {
 function look(id) {
   if (id !== scopeId) scope.reset();
   scopeId = id;
-  chosen = 'scope';
+  src = 'scope';
   barKey = '';
   raise();
 }
@@ -196,7 +190,7 @@ export function lookAt(id) {
 
 /** Z: the telescope on the pick; again (or with nothing picked), back from it. */
 export function toggleScope(pickId) {
-  if (chosen === 'scope' && onDisplay() && (!pickId || pickId === scopeId)) { hooks.back?.(); return; }
+  if (src === 'scope' && onDisplay() && (!pickId || pickId === scopeId)) { hooks.back?.(); return; }
   if (pickId) lookAt(pickId);
   else if (scopeId) { auto = null; look(scopeId); }
   else toast('Pick a contact to look at', 'warn');
@@ -205,27 +199,26 @@ export function toggleScope(pickId) {
 export function updateStage(state, alpha) {
   if (!el.exterior) return;
   const m = stageMode(state);
-  if (m !== mode) enter(m, state);
+  if (m !== mode) enter(m);
   watchTorpedoes(state);
-  const src = srcOf(state);
-  const feed = src === 'scope' ? 'scope' : src === 'port' ? (portFeed(state) ? 'port' : null) : droneFeed(state) ? 'drone' : null;
-  show(el.exterior, feed === 'drone' || feed === 'port');
+  const feed = src === 'scope' ? 'scope' : droneFeed(state) ? 'drone' : null;
+  show(el.exterior, feed === 'drone');
   show(el.scope, feed === 'scope');
   if (onDisplay()) {
-    if (feed === 'drone' || feed === 'port') exterior.render(state, alpha, { labels: mode !== 'near' });
+    if (feed === 'drone') exterior.render(state, alpha, { labels: mode !== 'near' });
     else if (feed === 'scope') scope.render(state, alpha, scopeId);
     const now = performance.now();
-    if (now - barAt > 250 || !barKey) { barAt = now; renderBar(state, src, feed); }
+    if (now - barAt > 250 || !barKey) { barAt = now; renderBar(state, feed); }
   }
   updateDockingHud(state);
 }
 
 /** The camera's own bar (sources, the drone, the telescope's target) and, without a picture, why. */
-function renderBar(state, src, feed) {
+function renderBar(state, feed) {
   const ds = droneStatus(state);
   const r = state.resources.drones;
-  const port = portFeed(state);
   const no = deployRefusal(state);
+  const docking = el.hud.style.display !== 'none';
   const srcBtn = (k, title, dis) => `<button class="mv-btn ${src === k ? 'active' : ''}" data-cam="${k}" title="${title}" ${dis ? 'disabled' : ''}>${SRC_LABEL[k]}</button>`;
   let act = '', note = '';
   if (src === 'scope') {
@@ -237,19 +230,17 @@ function renderBar(state, src, feed) {
       : `<button class="mv-btn" data-cam-act="deploy" ${no ? `disabled title="${esc(no)}"` : 'title="Send a camera drone out: a view of our ship from outside"'}>DEPLOY DRONE</button>`;
     note = `${r?.current ?? 0}/${r?.max ?? 0} aboard`;
     if (ds) note += ` · ${ds.phase === 'launch' ? `launching, on station in ${formatDuration(ds.left)}` : ds.phase === 'recover' ? `coming home, aboard in ${formatDuration(ds.left)}` : `on station · cells ${formatDuration(ds.endurance)}`}`;
-    if (src === 'port' && port) note = `${esc(getWorld(state).get(state.dock.target.id)?.name || 'Port')} cameras · ${note}`;
   }
-  const html = `<div class="cam-srcs">${srcBtn('drone', 'The drone\'s camera: our ship and what is round it')}${srcBtn('port', 'The port\'s cameras, while we dock with a station', !port)}${srcBtn('scope', 'The telescope: one contact, from here (Z)')}</div>
+  const html = `<div class="cam-srcs">${srcBtn('drone', 'The drone\'s camera: our ship and what is round it')}${srcBtn('scope', 'The telescope: one contact, from here (Z)')}</div>
     <span class="mv-sep"></span>${act}<span class="cam-note">${note}</span>`;
-  const key = html + '|' + (feed || '') + '|' + (ds?.phase || '') + (performance.now() - lostAt < 20_000 ? 'lost' : '');
+  const key = html + '|' + (feed || '') + '|' + (ds?.phase || '') + (docking ? 'dock' : '') + (performance.now() - lostAt < 20_000 ? 'lost' : '');
   if (key === barKey) return;
   barKey = key;
   setHTML(el.bar, html);
   // No picture: say why, and what would give one
   let msg = null;
   if (!feed) {
-    if (src === 'port') msg = { head: 'NO PORT CAMERA', text: 'A station lends us its cameras while we dock with it, and while we lie in its berth.' };
-    else if (ds?.phase === 'launch') msg = { head: 'DRONE LAUNCHING', text: `Out of its bay and climbing to its standoff: a picture in ${formatDuration(ds.left)}.` };
+    if (ds?.phase === 'launch') msg = { head: 'DRONE LAUNCHING', text: `Out of its bay and climbing to its standoff: a picture in ${formatDuration(ds.left)}.` };
     else {
       const lost = performance.now() - lostAt < 20_000;
       msg = { head: lost ? 'DRONE LOST' : 'NO DRONE OUT',
@@ -259,7 +250,10 @@ function renderBar(state, src, feed) {
     }
   }
   show(el.nofeed, !!msg, 'flex');
-  if (msg) setHTML(el.nofeed, `<div class="cam-nofeed-box"><div class="cam-nofeed-head">${msg.head}</div><div class="cam-nofeed-text">${msg.text}</div>${msg.btn || ''}
+  // (under the docking display, which has its own camera: the view stays blank but for a line in its corner)
+  toggleClass(el.nofeed, 'compact', docking);
+  if (msg && docking) setHTML(el.nofeed, `<div class="cam-nofeed-box"><span class="cam-nofeed-head">${msg.head}</span>${ds ? '' : no ? '' : '<button class="mv-btn" data-cam-act="deploy">DEPLOY DRONE</button>'}</div>`);
+  else if (msg) setHTML(el.nofeed, `<div class="cam-nofeed-box"><div class="cam-nofeed-head">${msg.head}</div><div class="cam-nofeed-text">${msg.text}</div>${msg.btn || ''}
     <div class="cam-nofeed-alt"><button class="btn btn-secondary" data-cam="scope">TELESCOPE</button></div></div>`);
 }
 
@@ -269,13 +263,13 @@ function onClick(e) {
   if (!b || !s || b.disabled) return;
   e.stopPropagation();
   if (b.dataset.cam) {
-    chosen = b.dataset.cam;
+    src = b.dataset.cam;
     auto = null;
-    if (chosen === 'scope' && !scopeId) { const p = hooks.pick?.(); if (p) look(p); }
+    if (src === 'scope' && !scopeId) { const p = hooks.pick?.(); if (p) look(p); }
   }
   const emit = (t, p) => bus.emit(t, p);
   switch (b.dataset.camAct) {
-    case 'deploy': { const r = deployDrone(s, emit); toast(r.text, r.ok ? 'ok' : 'warn'); if (r.ok) chosen = null; break; }
+    case 'deploy': { const r = deployDrone(s, emit); toast(r.text, r.ok ? 'ok' : 'warn'); if (r.ok) src = 'drone'; break; }
     case 'recall': { const r = recallDrone(s, emit); toast(r.text, r.ok ? 'ok' : 'warn'); break; }
     case 'look': { const p = hooks.pick?.(); if (p) lookAt(p); else toast('Pick a contact on the displays first', 'warn'); break; }
   }

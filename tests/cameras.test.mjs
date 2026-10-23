@@ -56,15 +56,21 @@ function freeSpace(s, auOut = 0.03) {
 
 export default [
   {
-    name: 'a drone goes out, is on station after its launch, and comes home to the rack',
+    name: 'a drone goes out only with the drive cold, is on station after its launch, and comes home to the rack',
     fn: () => {
       const s = game(1);
       const n0 = s.resources.drones.current;
+      // hovering at Ceres' gate is a lit drive: no launch into our exhaust
+      advance(s, 1);
+      const hover = s.flight.thrustG;
+      assert(hover > 0.01 && deployRefusal(s), `refused hovering at the gate on ${hover.toFixed(3)} G`);
+      freeSpace(s);
+      s.flight.thrustG = 0;
       const r = deployDrone(s, (t, p) => bus.emit(t, p));
       assert(r.ok, r.text);
       assert(s.resources.drones.current === n0 - 1 && s.drone?.phase === 'launch' && !droneFeed(s), 'out of the rack, launching, no picture yet');
       advance(s, DRONE_LAUNCH_MIN);
-      assert(s.drone?.phase === 'station' && droneFeed(s), `on station after ${DRONE_LAUNCH_MIN} min (holding at the gate on ${s.flight.thrustG.toFixed(3)} G)`);
+      assert(s.drone?.phase === 'station' && droneFeed(s), `on station after ${DRONE_LAUNCH_MIN} min`);
       assert(deployRefusal(s), 'one at a time');
       recallDrone(s, (t, p) => bus.emit(t, p));
       assert(droneFeed(s), 'its camera stays on while it comes home');
@@ -97,6 +103,7 @@ export default [
     name: 'a route waits for the drone as for the crew: called home, aboard before the drive lights',
     fn: () => {
       const s = game(3);
+      freeSpace(s);
       const lost = heard('drone-lost'), recalled = heard('drone-recalled');
       const n0 = s.resources.drones.current;
       deployDrone(s);
@@ -119,6 +126,7 @@ export default [
     name: 'a drone runs out of cells and comes home by itself; a drone out survives a save',
     fn: () => {
       const s = game(4);
+      freeSpace(s);
       const recalled = heard('drone-recalled');
       deployDrone(s);
       advance(s, 10);

@@ -2,7 +2,7 @@
 
 Modules: `sim/stations.js` (where stations are, their models, berths, gates, the anchorage), `sim/mating.js` (how two hulls meet at a collar), `sim/traffic-control.js` (zones, clearances, the rules, the radio), `sim/docking.js` (the final approach, proximity operations, the hard seal, undocking), `sim/station-defense.js` (stations' guns), `sim/boarding.js` (our people aboard another hull), `sim/leases.js` (berth leases), `sim/crew-services.js` (the hiring hall, shore leave). The UI is `ui/stage.js`, `ui/exterior.js`, `ui/docking-hud.js`, `ui/comms.js`, `ui/boarding.js`.
 
-The outside view of a dock is a camera's: from the final approach until we are through the gate again, a station lends us its approach and berth cameras (the PORT camera on the EXTERIOR display, which comes up by itself), and while we lie in its berth. Docking with a ship there is no such camera: our own drone's, if one is out (sim/drones.js), or the docking display's collar camera alone.
+A dock under way brings up the EXTERIOR display with the docking display over it (its collar camera looks down the collar's axis). The outside view of the dock is our drone's, if one is out (sim/drones.js); without one it is blank. A drone already out keeps up with the final approach (0.1 G), but none can be launched with the drive lit.
 
 ## Stations
 
