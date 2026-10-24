@@ -64,7 +64,9 @@
 // deck, canvas size and lighting state into offscreen layers, one per
 // tile row, so people are drawn between them and hidden by what stands
 // nearer (their bodies rendered in one GPU pass per camera first, then
-// copied in, each in its place among the rows). A frame draws those layers, the people, the faint changing
+// copied in, each in its place among the rows; within a row the furniture
+// round each person is drawn into that pass's depth, so the back of the
+// seat they sit in hides them where it stands between them and the lens). A frame draws those layers, the people, the faint changing
 // content of screens, status lamps (machines by their system's state,
 // the hatch over a docked collar, the head's door) and the overlay: a
 // few hundredths of a millisecond of script. Rebuilding a layer set is
@@ -513,7 +515,7 @@ function placer(fx) {
 
 // ---- LENS ----
 
-class Lens {
+export class Lens {
   constructor(room, W, H, pad) {
     const w = room.x1 - room.x0, d = room.z1 - room.z0;
     const tgt = [(room.x0 + room.x1) / 2 + w * 0.03, 0.5, (room.z0 + room.z1) / 2 + d * 0.04];
@@ -1417,7 +1419,7 @@ function buildStatic(state, room, Wd, Hd, dpr, mode) {
   layers[0] = { c: base, x: 0, y: 0 };
   // picks: nearest first
   picks.sort((a, b) => b.z - a.z);
-  return { lens, layers, rowsDyn, picks, env, mode, dpr, Wd, Hd };
+  return { lens, layers, rowsDyn, picks, env, mode, dpr, Wd, Hd, fixtures };
 }
 
 /** Pixel bounds of a row's fixtures (with room for their edges), clipped to the canvas. */
@@ -1484,8 +1486,8 @@ export function posture(room, fig, t, floating) {
   } else if (fx && (sk === 'helm' || sk === 'ops' || sk === 'weapons' || sk === 'engStation')) {
     const pl = inFixture({
       // (sat up to the console, hands on its edge, elbows bent at the sides)
-      ftL: [0.42, 0.3, 0.02], ftR: [0.58, 0.3, 0.02], knL: [0.42, 0.36, 0.5], knR: [0.58, 0.36, 0.5],
-      hpL: [0.42, 0.62, 0.48], hpR: [0.58, 0.62, 0.48], shL: [0.36, 0.58, 0.86], shR: [0.64, 0.58, 0.86],
+      ftL: [0.42, 0.28, 0.02], ftR: [0.58, 0.28, 0.02], knL: [0.42, 0.32, 0.5], knR: [0.58, 0.32, 0.5],
+      hpL: [0.42, 0.55, 0.49], hpR: [0.58, 0.55, 0.49], shL: [0.36, 0.55, 0.86], shR: [0.64, 0.55, 0.86],
       elL: [0.31, 0.5, 0.66], elR: [0.69, 0.5, 0.66], haL: [0.4, 0.33, 0.73], haR: [0.6, 0.33, 0.73],
       nk: [0.5, 0.58, 0.9], hd: [0.5, 0.56, 0.99],
     });
@@ -1859,6 +1861,37 @@ function drawPool(g, lens, env, m, x, z) {
   g.fill();
 }
 
+/**
+ * A fixture's solid as triangles (world tiles): the furniture a person can be
+ * behind (the back of the chair they sit in, the table their legs are under,
+ * a bunk's boards). The GPU draws these into the depth before each person
+ * (gl/figures.js), so what stands nearer the lens hides them pixel by pixel.
+ */
+const _solids = new WeakMap();
+export function solidOf(f) {
+  let tri = _solids.get(f);
+  if (tri) return tri;
+  const pl = placer(f), out = [];
+  for (const p of f.parts) for (const face of partFaces(p, pl).faces) {
+    const w = face.world;
+    for (let i = 1; i < w.length - 1; i++) out.push(...w[0], ...w[i], ...w[i + 1]);
+  }
+  tri = new Float32Array(out);
+  _solids.set(f, tri);
+  return tri;
+}
+
+/** The furniture near someone at (x, z): what could stand between them and the lens. */
+export function occludersNear(fixtures, x, z) {
+  const out = [];
+  for (const f of fixtures) {
+    if (!f.parts) continue;
+    const dx = f.x + 0.5 - x, dz = f.z + 0.5 - z;
+    if (dx * dx + dz * dz < 2.6) out.push(solidOf(f));
+  }
+  return out;
+}
+
 /** A soft shadow on the deck under someone standing (fainter as they float off it). */
 function drawShadow(g, lens, x, z, lift, k) {
   const c = lens.p(x, 0, z);
@@ -2066,6 +2099,7 @@ function drawCam(cam, state, alpha, now) {
       fig.P = P;
       fig.sel = selId != null && selId === fig.m.id;
       fig.spec = figureSpec(lens, env, fig, P, fig.sel, c.Wd, c.Hd);
+      fig.spec.occluders = occludersNear(c.fixtures, (P.J.hpL[0] + P.J.hpR[0]) / 2, (P.J.hpL[2] + P.J.hpR[2]) / 2);
       posed.push(fig);
     }
   }

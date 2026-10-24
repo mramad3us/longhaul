@@ -41,7 +41,11 @@
 // Every figure a camera shows is rendered into its own rectangle of the
 // shared GPU canvas (gl.js) in one pass, before the camera draws its rows:
 // it copies each in, in its place in the draw order, so the furniture
-// nearer the lens still hides it. The bodies load once, from the game's own
+// nearer the lens still hides it; and the furniture round each person (the
+// chair they sit in, a table, a bunk's boards: roomcam.js solidOf) is drawn
+// into the depth first, so the part of it in front of them (a seat back
+// seen from behind) hides them pixel by pixel, the room's own picture of it
+// showing through. The bodies load once, from the game's own
 // folder (nothing from the network); until they have, or without WebGL2,
 // renderFigures answers null and the camera draws its 2D figures.
 // ============================================================
@@ -69,7 +73,8 @@ function setup() {
   try {
     const gl = ctx.gl;
     const prog = program(gl, VS, FS, ['aPos', 'aNrm', 'aUV', 'aJ', 'aW', 'aTag']);
-    R = { gl, ctx, prog, ready: false, failed: false, blanket: null };
+    const occl = program(gl, OCC_VS, OCC_FS, ['aPos']);
+    R = { gl, ctx, prog, occl, occBufs: new WeakMap(), ready: false, failed: false, blanket: null };
     const r = R;
     load(r).catch(e => { console.error('[figures]', e.message); r.failed = true; });
   } catch (e) {
@@ -451,6 +456,46 @@ function drawBlanket(gl, geo) {
   gl.drawArrays(gl.TRIANGLES, 0, geo.pos.length / 3);
 }
 
+// ---- WHAT STANDS IN FRONT ----
+// The furniture round someone (roomcam.js solidOf: the chair they sit in, the
+// table, a bunk's boards) is drawn into the depth only, before them: where it
+// is nearer the lens, their pixels are dropped, and the room's own picture of
+// it, under theirs, shows through.
+
+const _freed = typeof FinalizationRegistry !== 'undefined'
+  ? new FinalizationRegistry(({ gl, vao, buf }) => { if (R?.gl === gl) { gl.deleteVertexArray(vao); gl.deleteBuffer(buf); } }) : null;
+
+function occluder(gl, tri) {
+  let o = R.occBufs.get(tri);
+  if (o) return o;
+  const vao = gl.createVertexArray(), buf = gl.createBuffer();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, tri, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  for (const l of [1, 2, 3, 4, 5]) gl.disableVertexAttribArray(l);
+  gl.bindVertexArray(null);
+  o = { vao, count: tri.length / 3 };
+  R.occBufs.set(tri, o);
+  _freed?.register(tri, { gl, vao, buf });
+  return o;
+}
+
+function drawOccluders(gl, list, vp) {
+  if (!list?.length) return;
+  gl.useProgram(R.occl.p);
+  gl.uniformMatrix4fv(R.occl.u.uVP, false, vp);
+  gl.colorMask(false, false, false, false);
+  // (pushed a hair back: a body resting on a cushion is not cut by it)
+  gl.enable(gl.POLYGON_OFFSET_FILL);
+  gl.polygonOffset(1.5, 4);
+  for (const tri of list) { const o = occluder(gl, tri); gl.bindVertexArray(o.vao); gl.drawArrays(gl.TRIANGLES, 0, o.count); }
+  gl.disable(gl.POLYGON_OFFSET_FILL);
+  gl.colorMask(true, true, true, true);
+  gl.useProgram(R.prog.p);
+}
+
 // ---- RENDERING ----
 
 /**
@@ -546,7 +591,9 @@ export function renderFigures(cam, figs) {
       gl.scissor(pl.vx, pl.vy, pl.w, pl.h);
       gl.clear(gl.DEPTH_BUFFER_BIT);
       const zc = dot(cam.f, sub(at, cam.eye));
-      gl.uniformMatrix4fv(u.uVP, false, viewProj(cam, pl.bx, pl.by, pl.w, pl.h, Math.max(0.05, zc - 2.5), zc + 2.5));
+      const vp = viewProj(cam, pl.bx, pl.by, pl.w, pl.h, Math.max(0.05, zc - 2.5), zc + 2.5);
+      drawOccluders(gl, f.occluders, vp);
+      gl.uniformMatrix4fv(u.uVP, false, vp);
       gl.uniform3fv(u.uEye, cam.eye);
       gl.uniform4fv(u.uLand, body.land);
       gl.uniform1f(u.uChestY, body.chestY);
@@ -610,6 +657,16 @@ export function renderFigures(cam, figs) {
 }
 
 // ---- SHADERS ----
+
+const OCC_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+uniform mat4 uVP;
+void main() { gl_Position = uVP * vec4(aPos, 1.0); }`;
+
+const OCC_FS = `#version 300 es
+precision mediump float;
+out vec4 frag;
+void main() { frag = vec4(0.0); }`;
 
 const VS = `#version 300 es
 layout(location=0) in vec3 aPos;

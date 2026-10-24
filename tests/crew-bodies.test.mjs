@@ -24,7 +24,7 @@ import { bus } from '../js/core/events.js';
 import { createGame } from '../js/sim/game.js';
 import { shipGeometry } from '../js/sim/ship-layout.js';
 import { TileType } from '../js/sim/tiles.js';
-import { roomFor, posture } from '../js/ui/roomcam.js';
+import { roomFor, posture, Lens, occludersNear } from '../js/ui/roomcam.js';
 import { makeRig, pose, skinning, blanketMesh, lookOf, LIE_LIFT } from '../js/ui/gl/figures.js';
 
 const ROOT = new URL('../', import.meta.url);
@@ -138,9 +138,66 @@ function poseScene(sc, sex) {
   return { P, f, posed, S, body };
 }
 
+/** A room's fixtures with their parts (as the camera builds them), for what stands in front of people. */
+function furnished(room) {
+  return room.fixtures.map(f => ({ ...f, parts: f.model({ x: f.x, z: f.z, h: 0.5, zone: room.zone, suit: false, glow: false }) }));
+}
+
+/** Of a mesh's skinned vertices, the share the lens can't see for the furniture in the way (ray to each, Möller–Trumbore). */
+function hiddenShare(eye, v, tris) {
+  let hidden = 0;
+  const n = v.length / 3;
+  for (let i = 0; i < n; i++) {
+    const px = v[i * 3], py = v[i * 3 + 1], pz = v[i * 3 + 2];
+    const dx = px - eye[0], dy = py - eye[1], dz = pz - eye[2];
+    let blocked = false;
+    for (const t of tris) {
+      for (let k = 0; k < t.length && !blocked; k += 9) {
+        const e1x = t[k + 3] - t[k], e1y = t[k + 4] - t[k + 1], e1z = t[k + 5] - t[k + 2];
+        const e2x = t[k + 6] - t[k], e2y = t[k + 7] - t[k + 1], e2z = t[k + 8] - t[k + 2];
+        const hx = dy * e2z - dz * e2y, hy = dz * e2x - dx * e2z, hz = dx * e2y - dy * e2x;
+        const a = e1x * hx + e1y * hy + e1z * hz;
+        if (Math.abs(a) < 1e-9) continue;
+        const f = 1 / a, sx = eye[0] - t[k], sy = eye[1] - t[k + 1], sz = eye[2] - t[k + 2];
+        const u = f * (sx * hx + sy * hy + sz * hz);
+        if (u < 0 || u > 1) continue;
+        const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+        const w = f * (dx * qx + dy * qy + dz * qz);
+        if (w < 0 || u + w > 1) continue;
+        const tt = f * (e2x * qx + e2y * qy + e2z * qz);
+        if (tt > 1e-4 && tt < 0.985) blocked = true;          // (between the lens and the point, not at it)
+      }
+      if (blocked) break;
+    }
+    if (blocked) hidden++;
+  }
+  return hidden / n;
+}
+
 const LYING = new Set(['lying', 'down']);
 
 export default [
+  {
+    name: 'what stands nearer the lens hides them: the seat back at a station seen from behind, a table over a diner\'s legs; nobody hidden in the open',
+    fn: () => {
+      const s = ship();
+      const want = { helm: [0.12, 0.9], ops: [0.12, 0.9], weapons: [0.12, 0.9], table: [0.03, 0.9], stand: [0, 0.02], couch: [0, 0.9], bunk: [0, 0.9] };
+      for (const sc of scenes(s)) {
+        if (!want[sc.name]) continue;
+        const lens = new Lens(sc.room, 1600, 900, { l: 40, r: 40, t: 54, b: 45 });
+        const fx = furnished(sc.room);
+        for (const sex of ['male', 'female']) {
+          const { P, S } = poseScene(sc, sex);
+          const v = skinned(kit().meta.bodies[sex].meshes.body, S);
+          const tris = occludersNear(fx, (P.J.hpL[0] + P.J.hpR[0]) / 2, (P.J.hpL[2] + P.J.hpR[2]) / 2);
+          const h = hiddenShare(lens.eye, v, tris);
+          console.log(`      ${sc.name.padEnd(8)} ${sex.padEnd(6)} hidden by the furniture: ${fmt(100 * h, 1)}% of the body (${tris.length} pieces near)`);
+          const [lo, hi] = want[sc.name];
+          assert(h >= lo && h <= hi, `${sc.name} ${sex}: ${fmt(100 * h, 1)}% hidden (want ${lo * 100}–${hi * 100}%)`);
+        }
+      }
+    },
+  },
   {
     name: 'the kit as packed: a skeleton the posing can run down, every vertex bound, bound at rest, tagged for a jumpsuit',
     fn: () => {
