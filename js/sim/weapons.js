@@ -68,16 +68,25 @@ export const FAST_VC = { 1: 15_000, 2: 20_000, 3: 25_000, 4: 30_000 };
 export const PROFILES = {
   fast: {
     id: 'fast', label: 'FAST', vcFrac: 1,
-    desc: 'Close as fast as the seeker allows (15–30 km/s by tech level) and hold it. Short flight, little time under the PDCs — but the plume is seen early and a target that runs drains the torpedo.',
+    desc: 'Close at up to 15–30 km/s by tech level (what the seeker can hold); against a ship running, burn at full G early and coast in. Short flight, little time under the PDCs — but the plume is seen early, and in datalink with us it shows to their short-range sensors even coasting.',
   },
   cold: {
     id: 'cold', label: 'COLD COAST', vcFrac: 0.4,
-    desc: 'Boost to 40% of that, then coast dark: invisible beyond ~30,000 km until the last minutes. Slow, and point defense gets a long look.',
+    desc: 'Boost to 40% of that, then coast dark, its datalink listening only: invisible beyond ~30,000 km until the last minutes. Slow, and point defense gets a long look.',
   },
 };
 
 /** Closing speed (m/s) a torpedo of tech level `tl` holds on a profile. */
 export const profileVc = (profile, tl) => FAST_VC[tl] * PROFILES[profile].vcFrac;
+
+/**
+ * A seeker holds its terminal lock up to this much past FAST_VC; closing
+ * faster, the chance it holds falls with the square of the excess
+ * (ordnance.js). So a torpedo too fast (a runner that stopped running, a
+ * launch from a ship closing hard) brakes down to it on the way in.
+ */
+export const SEEKER_SLACK = 1.25;
+export const seekerVc = (tl) => FAST_VC[tl] * SEEKER_SLACK;
 
 export const TERMINAL_S = 8;               // seconds of terminal homing: sets the capture basket
 export const TORPEDO_ARM_MIN = 1;          // minutes after launch before the drive lights

@@ -25,6 +25,7 @@ import { stanceStep } from './stance.js';
 import { solveLambert } from './lambert.js';
 import { collarFrame } from './docking.js';
 import { knownName } from './flags.js';
+import { trackOf } from './intel.js';
 
 // Standoff distances (m)
 export const STANDOFF = {
@@ -46,12 +47,17 @@ export const STANDOFF = {
 //              | { kind:'port', id, berth, offsetM, dockKind } (the mouth of a
 //                berth's corridor: a point out along a collar's axis, moving and
 //                turning with the station or ship it belongs to: docking.js)
+//              | { kind:'fix', id } (where a lost contact's last fix has coasted
+//                to, as the plot has it: intel.js. Flown to on the plot's
+//                numbers, never the ship's own; the autopilot hands the route
+//                to the contact the minute our sensors hold it again)
 
 export function targetName(state, target) {
   if (target.kind === 'body') return target.id;
   if (target.kind === 'surface') return `the surface of ${target.id}`;
   if (target.kind === 'slot') return `${getWorld(state).get(target.id)?.name || 'port'} holding ${target.slot}`;
   if (target.kind === 'player') return state.ship.name;
+  if (target.kind === 'fix') return `${knownName(state, target.id) || trackOf(state, target.id)?.name || 'unidentified contact'} · last fix`;
   // (a ship by the name we know it by: an unidentified contact is no more than that)
   const e = getWorld(state).get(target.id);
   const name = !e ? 'Unknown' : e.type === 'ship' ? knownName(state, e.id) || 'unidentified contact' : e.name;
@@ -61,6 +67,7 @@ export function targetName(state, target) {
 export function targetExists(state, target) {
   if (target.kind === 'player') return !state.lost;
   if (target.kind === 'slot') return !!getWorld(state).get(target.id) && !!slotOrbit(target.id, target.slot);
+  if (target.kind === 'fix') return !!trackOf(state, target.id);
   return target.kind === 'body' || target.kind === 'surface' ? !!getBody(target.id) : !!getWorld(state).get(target.id);
 }
 
@@ -76,6 +83,7 @@ function portPoint(state, target, minute) {
 /** Default stop distance for a target. Bodies: a parking orbit well clear of the surface. */
 export function defaultStandoff(state, target) {
   if (target.kind === 'slot') return STANDOFF.SLOT;
+  if (target.kind === 'fix') return STANDOFF.SHIP;
   if (target.kind === 'body') {
     const b = getBody(target.id);
     return Math.max(2_000_000, (b?.radius || 0) * 1000 * 3);
@@ -156,6 +164,16 @@ function stateOfTarget(state, target, minute, live) {
     if (minute > state.clock.minute) propagateFree(pos, vel, state.clock.minute, minute, f.thrustG, f.facing, f.thrustG > 0 ? 1 : 10);
     return { pos, vel, ax: a * Math.cos(f.facing), ay: a * Math.sin(f.facing) };
   }
+  if (target.kind === 'fix') {
+    // the plot's dead reckoning (intel.estimate): a straight coast on the
+    // last fix's velocity. A record that is a filed plan or a berth now is
+    // flown to as the ship it names (the nav computer has the same public data)
+    const r = trackOf(state, target.id);
+    if (!r) return null;
+    if (r.kind !== 'fix') return stateOfTarget(state, { kind: 'entity', id: target.id }, minute, live);
+    const s = (minute - r.at) * MIN_S;
+    return { pos: { x: r.x + r.vx * s / AU_M, y: r.y + r.vy * s / AU_M }, vel: { vx: r.vx, vy: r.vy }, ax: 0, ay: 0, atx: 0, aty: 0, swings: [] };
+  }
   if (target.kind === 'port') {
     if (live) { const e = getWorld(state).get(target.id); if (e) { getWorld(state).refresh(e, minute); getWorld(state).hash.update(e); } }
     const p0 = portPoint(state, target, minute);
@@ -203,7 +221,7 @@ function stateOfTarget(state, target, minute, live) {
  * incrementally from a private copy (O(1) per step, never mutates the world).
  */
 export function targetTracker(state, target, t0) {
-  if (target.kind === 'body' || target.kind === 'port' || target.kind === 'surface' || target.kind === 'slot') return (t) => targetStateAt(state, target, t);
+  if (target.kind === 'body' || target.kind === 'port' || target.kind === 'surface' || target.kind === 'slot' || target.kind === 'fix') return (t) => targetStateAt(state, target, t);
   const e = getWorld(state).get(target.id);
   if (!e) return () => null;
   if (e.orbit || e.transit) return (t) => targetStateAt(state, target, t);
@@ -654,7 +672,7 @@ export function planRoutes(state, target, opts = {}) {
     options.push(opt);
   }
 
-  const ballisticOK = opts.includeBallistic !== false &&
+  const ballisticOK = opts.includeBallistic !== false && target.kind !== 'fix' &&
     (target.kind === 'body' || getWorld(state).get(target.id)?.orbit) &&
     distM > 0.02 * AU_M;
   if (ballisticOK) {

@@ -39,7 +39,8 @@ import { PLAYER, isOutOfFight, profile, strength } from './combatants.js';
 import { leaseSummary, extendLease } from './leases.js';
 import { requestApproach, requestHolding, requestDocking, requestDeparture, cancelClearance, clearanceFor, stationTraffic, voice as stationVoice } from './traffic-control.js';
 import { isDocked, dockedTo } from './docking.js';
-import { crewAboard, passengersAboard, declaredSouls, learn } from './manifest.js';
+import { crewAboard, passengersAboard, declaredSouls, learn, freeBerths } from './manifest.js';
+import { heldGroups, ransomOffer, ransom, turnOver } from './prisoners.js';
 import { finesOwed, payFines, recordOffense, adjustStanding, wantedBy, WANTED_LABEL } from './law.js';
 import { wake, makeHostile, respondToRequest } from './agents.js';
 import { STATIONS } from './stations.js';
@@ -162,7 +163,13 @@ export function topics(state, conv = channel(state)) {
     if (STATIONS[e.id]?.services.includes('leave')) out.push(T('leave', 'Shore leave for the crew', { group: 'station', why: docked ? null : 'dock first' }));
     const owed = finesOwed(state, e.faction);
     if (owed.length) out.push(T('fines', `Pay citations (${owed.reduce((s, f) => s + f.amount, 0).toLocaleString()} MCR)`, { group: 'station' }));
-    if (state.passengers.some(x => x.kind === 'prisoners')) out.push(T('prisoners', 'Hand over prisoners', { group: 'station', why: docked ? null : 'dock first' }));
+    const held = heldGroups(state);
+    if (held.length) {
+      // turned over to the authority here; their officers ransomed to their own side, through the brokers
+      const sub = [{ id: 'turn', label: `Turn them over to ${FACTIONS[e.faction]?.police || 'station security'}` }];
+      held.forEach((g, i) => { const o = ransomOffer(state, e, i); if (o.ok) sub.push({ id: `ransom:${i}`, label: `Ransom the ${o.notables === 1 ? 'captain' : `${o.notables} officers`} of the ${g.name} to ${o.who} (${o.amount.toLocaleString()} MCR)` }); });
+      out.push(T('prisoners', `Prisoners aboard (${held.reduce((s, g) => s + g.count, 0)})`, { group: 'station', sub, why: docked ? null : 'dock first' }));
+    }
     // Military licenses are a power's business, at any of its stations
     if (POWERS.includes(e.faction) && licenseOf(state) !== e.faction) out.push(T('license-apply', `Apply for a ${FACTIONS[e.faction].navy} contractor's license`, { group: 'service', why: inPort(state, e) ? null : 'come into port' }));
     if (licenseOf(state) === e.faction) out.push(T('license-resign', `Hand back our ${FACTIONS[e.faction].short} license`, { group: 'service' }));
@@ -213,7 +220,6 @@ export function topics(state, conv = channel(state)) {
 /** Topics that are answered once a channel. */
 const ONCE = new Set(['ident', 'souls', 'route', 'news', 'traffic', 'status', 'haggle', 'threaten', 'warn', 'report', 'passage']);
 
-const freeBerths = (state) => state.berths - state.passengers.reduce((s, p) => s + p.count, 0);
 
 /** Are we in real trouble (fuel, hull, someone dying, a reactor)? */
 function inNeed(state) {
@@ -357,14 +363,12 @@ const TALK = {
     }
     return { lines: [them(r.text)] };
   },
-  prisoners(state, e) {
-    const held = state.passengers.filter(x => x.kind === 'prisoners');
-    let pay = 0, n = 0;
-    for (const p of held) { n += p.count; pay += p.pirate ? 800 * p.count : 0; if (!p.pirate && STATIONS[e.id] && p.faction in state.law.standing) adjustStanding(state, p.faction, -2 * p.count); }
-    state.passengers = state.passengers.filter(x => x.kind !== 'prisoners');
-    state.resources.credits.current += pay;
-    if (pay && e.faction in state.law.standing) adjustStanding(state, e.faction, 1 + n / 2);
-    return { lines: [them(`Security will take them at the lock. ${n} prisoner${n > 1 ? 's' : ''} logged.${pay ? ` Bounty: ${pay.toLocaleString()} MCR.` : ''}`)] };
+  prisoners(state, e, conv, arg, emit) {
+    if (String(arg || '').startsWith('ransom:')) {
+      const r = ransom(state, e, +arg.slice(7), emit);
+      return { lines: [them(r.text)] };
+    }
+    return { lines: [them(turnOver(state, e, emit).text)] };
   },
 
   // ---- ships ----
@@ -483,7 +487,7 @@ const TALK = {
   bribe(state, e, conv, arg, emit) {
     const amount = Math.max(500, Math.round(state.resources.credits.current * 0.15 / 100) * 100);
     state.resources.credits.current -= Math.min(state.resources.credits.current, amount);
-    if (e.agent) { e.agent.mode = 'leave'; e.agent.hostile = e.agent.hostile.filter(x => x !== PLAYER); }
+    if (e.agent) { e.agent.mode = 'leave'; e.agent.threat = null; e.agent.hostile = e.agent.hostile.filter(x => x !== PLAYER); }
     const rq = state.comms.requests.find(r => r.from === e.id);
     if (rq) state.comms.requests = state.comms.requests.filter(r => r !== rq);
     return { lines: [them(`"${amount.toLocaleString()}. Pleasure doing business."`), sys('They are peeling away.')] };
@@ -491,7 +495,7 @@ const TALK = {
   threaten(state, e, conv, arg, emit) {
     const ours = strength(profile(state, PLAYER)), theirs = strength(profile(state, e.id));
     if (ours > theirs * 1.5) {
-      if (e.agent) { e.agent.mode = 'leave'; e.agent.hostile = e.agent.hostile.filter(x => x !== PLAYER); }
+      if (e.agent) { e.agent.mode = 'leave'; e.agent.threat = null; e.agent.hostile = e.agent.hostile.filter(x => x !== PLAYER); }
       return { lines: [them('"...Not worth it. We\'re gone."')] };
     }
     if (e.agent) makeHostile(state, e, PLAYER);

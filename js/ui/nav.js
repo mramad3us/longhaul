@@ -348,7 +348,7 @@ function cardHTML(s, t) {
   if (routing && etaCache.minutes != null) facts.push(['ETA', formatDuration(etaCache.minutes)]);
   const acts = [];
   if (routing) acts.push('<button class="btn-mini warn" data-act="abort">ABORT</button>');
-  else if (t.id !== 'Sol' && !(d.report && d.report.kind === 'fix')) acts.push('<button class="btn-mini primary" data-act="plot">PLOT</button>');
+  else if (t.id !== 'Sol') acts.push('<button class="btn-mini primary" data-act="plot">PLOT</button>');
   if (e && t.kind === 'entity' && (e.type === 'station' || e.type === 'ship') && !d.report) {
     const dockable = e.type === 'station' || shipDockable(s, e).ok;
     if (dockable && !(isDocked(s) && dockedTo(s)?.id === e.id)) acts.push('<button class="btn-mini" data-act="dock">DOCK</button>');
@@ -375,6 +375,8 @@ function reportFor(state, t) {
 }
 
 function describeTarget(state, t) {
+  // (a route to a lost contact's last fix: the contact, as the plot has it)
+  if (t.kind === 'fix') { const d = describeTarget(state, { kind: 'entity', id: t.id }); return d && { ...d, name: targetName(state, t) }; }
   if (t.kind === 'slot') return { name: targetName(state, t), kind: 'Holding slot', faction: getWorld(state).get(t.id)?.faction || null, entity: null };
   if (t.kind === 'body') {
     const b = getBody(t.id);
@@ -535,9 +537,10 @@ function renderSelection() {
 
 /**
  * A ship known only from the plot: what was reported, by whom, how old it
- * is, and how far off it could be by now. A filed plan or a berth can be
- * flown to (the nav computer works from the same public data); a lost
- * contact's last fix can only be looked at until our sensors find it again.
+ * is, and how far off it could be by now. A filed plan or a berth is flown
+ * to on the same public data the nav computer has; a lost contact's last
+ * fix, to where it has coasted (sim/nav.js 'fix'), and our sensors take
+ * over the route when they hold the contact again.
  */
 function renderReport(s, t, d, routing) {
   const r = d.report;
@@ -545,7 +548,8 @@ function renderReport(s, t, d, routing) {
   const est = estimate(s, r, s.clock.minute);
   const f = s.flight.pos;
   const dist = est ? Math.hypot(est.x - f.x, est.y - f.y) * AU_KM : null;
-  const plotable = !!d.entity && r.kind !== 'fix';
+  const plotable = !!d.entity;
+  const plotWhy = r.kind === 'fix' ? 'Fly to where its last fix has coasted to; our sensors take over when they hold it again' : 'Fly to its filed plan; sensors take over on approach';
   const html = `<div class="ms-header">
       <span class="ms-name">${esc(d.name)}${markChips(marksFor(s, t) || {})}</span>
       <span class="ms-kind">${esc(d.kind)}${d.faction && d.faction !== 'independent' ? ` · ${esc(d.faction)}` : ''} · <span class="ms-report">REPORTED</span></span>
@@ -561,7 +565,7 @@ function renderReport(s, t, d, routing) {
       ${est?.sigmaAU ? `<span>± <b>${fmtKm(est.sigmaAU * AU_KM)}</b></span>` : ''}
     </div>
     <div class="panel-actions">
-      ${routing ? '<button class="route-abort-btn" data-act="abort">ABORT ROUTE</button>' : plotable ? '<button class="route-plot-btn" data-act="plot" title="Fly to its filed plan; sensors take over on approach">PLOT ROUTE</button>' : '<span class="ms-hint">No live track: close in until our sensors hold it</span>'}
+      ${routing ? '<button class="route-abort-btn" data-act="abort">ABORT ROUTE</button>' : plotable ? `<button class="route-plot-btn" data-act="plot" title="${plotWhy}">PLOT ROUTE</button>` : '<span class="ms-hint">No live track: close in until our sensors hold it</span>'}
       <button class="route-zoom-btn" data-act="focus">FOCUS</button>
       ${flaggable(d.entity) ? flagButton(s, t.id, 'route-zoom-btn') : ''}
     </div>`;
@@ -580,7 +584,7 @@ function onPanelClick(e) {
       if (t) { const on = toggleLock(s, t.id); logEntry(on ? `Ranging laser locked on ${describeTarget(s, t)?.name}` : 'Sensor lock released', 'nav'); }
       renderSelection();
       break;
-    case 'plot': if (t) openRoutePanel(t); break;
+    case 'plot': if (t) openRoutePanel(reportFor(s, t)?.kind === 'fix' ? { kind: 'fix', id: t.id } : t); break;
     case 'details': hooks.showPanel?.('context'); ui.nav.card = false; show($('#map-card'), false); break;
     case 'card-close': ui.nav.card = false; show($('#map-card'), false); break;
     case 'stance': if (t) showStancePanel(t); break;
@@ -677,6 +681,7 @@ const STANDOFFS = {
 
 function standoffChoices(state, t) {
   if (t.kind === 'body') return ['orbit', 'close'];
+  if (t.kind === 'fix') return ['formation', 'close', 'scanner'];
   if (t.kind === 'slot') return ['slot'];
   const e = getWorld(state).get(t.id);
   if (e?.type === 'station') return ['dock', 'gate', 'close', 'scanner'];
@@ -689,7 +694,7 @@ export function openRoutePanel(target, opts = {}) {
   if (!s) return;
   if (s.autopilot && s.autopilot.plan.kind !== 'stance' && s.autopilot.plan.target.id === target.id) { toast('Already en route', 'info'); return; }
   closeStance();
-  ui.nav.target = target;
+  ui.nav.target = target.kind === 'fix' ? { kind: 'entity', id: target.id } : target;
   if (ui.nav.tab === 'exterior' || ui.nav.tab === 'combat') openNav(target.kind === 'entity' && contactById(s, target.id) ? 'scanner' : 'solar');
   const choices = standoffChoices(s, target);
   const key = opts.dock && choices.includes('dock') ? 'dock' : opts.dock && choices.includes('rendezvous') ? 'rendezvous' : choices[0];

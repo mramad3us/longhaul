@@ -98,7 +98,7 @@ export const TILE_DESCRIPTIONS = {
   [TileType.PDC_MOUNT]: 'Point-defense cannon: a radar-laid gatling throwing tungsten at 1.2 km/s. Shoots down torpedoes in their last seconds; at a few km it shreds hulls too. Engineers service it from inside the hull.',
   [TileType.TORPEDO_LAUNCHER]: 'Torpedo tubes and magazine with autoloader. Each tube takes a few minutes to cycle.',
   [TileType.WEAPONS_CONSOLE]: 'Fire control. A gunner here lays the PDCs by hand and makes them far deadlier than the automatic mode. Built into an acceleration couch.',
-  [TileType.PAX_BERTH]: 'Passenger acceleration berth: a gel bunk with a juice line, behind the passenger deck\'s own pressure hatch. On a police cutter these are the holding cells.',
+  [TileType.PAX_BERTH]: 'Passenger acceleration berth: a gel bunk with a juice line, behind the passenger deck\'s own pressure hatch. On a police cutter, and in a warship\'s brig, these are the holding cells.',
   [TileType.CARGO_DOOR]: 'Cargo door: a hull hatch wide enough for a pallet. Not a docking collar — cargo comes and goes through it in vacuum, or against a station\'s cargo seal.',
   [TileType.AIRLOCK]: 'Airlock and docking collar. Hard-docked, the collar seals against the other hull and the lock equalizes; otherwise it is the way out for an EVA.',
 };

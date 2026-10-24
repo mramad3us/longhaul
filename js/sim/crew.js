@@ -167,6 +167,8 @@ export function mobility(m, gForce) {
 
 /** Above this the couch gives a high dose: more protection, more supplies, real risk. */
 export const HIGH_DOSE_G = 6;
+/** On the high dose, the chance of a stroke each minute, per G past HIGH_DOSE_G (NPC crews pay it too: agents.js). */
+export const STROKE_RISK = 0.0006;
 const HIGH_DOSE_BOOSTER_MIN = 24 * 60;  // a high dose needs a booster once a day
 const JUICE_LINGER_MIN = 60;            // the drug covers a flip or a lull this long
 const HANGOVER_MAX_MIN = 10 * 1440;
@@ -301,7 +303,7 @@ export function physiologyTick(m, effectiveG, gForceRaw) {
   }
 
   // ---- High-dose juice: the drugs keep you conscious, not intact — stroke risk
-  if (m.juiceDose === 'high' && random() < 0.0006 * Math.max(0, gForceRaw - HIGH_DOSE_G)) {
+  if (m.juiceDose === 'high' && random() < STROKE_RISK * Math.max(0, gForceRaw - HIGH_DOSE_G)) {
     b.head = clamp(b.head - (8 + random() * 10));
     m.consciousness = clamp(m.consciousness - 20, 10, 100);
     ev.push('stroke');

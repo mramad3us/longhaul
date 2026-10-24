@@ -238,6 +238,12 @@ export function autopilotTick(state, emit = () => {}) {
   if (!ap) return null;
   const now = state.clock.minute;
   const plan = ap.plan;
+  // A lost contact back on our sensors: they take over from the plot's dead reckoning
+  if (plan.target.kind === 'fix' && state.sensors.$seen?.has(plan.target.id)) {
+    plan.target = { kind: 'entity', id: plan.target.id };
+    plan.$memo = undefined;
+    emit('route-reacquired', { target: targetName(state, plan.target), stance: plan.kind === 'stance' });
+  }
   const tgt = targetStateAt(state, plan.target, now, true);
   if (!tgt) {
     holdInPort(state, ap);

@@ -48,7 +48,8 @@ import { getWorld } from './world.js';
 import { classOf } from './ship-classes.js';
 import { isAble, applyImpact, overallHealth, mourn } from './crew.js';
 import { efficiency } from './needs.js';
-import { crewAboard, passengersAboard, setCrewAboard, learn } from './manifest.js';
+import { crewAboard, passengersAboard, setCrewAboard, learn, freeCells } from './manifest.js';
+import { prisonerGroup } from './prisoners.js';
 import { PLAYER, ensureHull } from './combatants.js';
 import { lawfulTarget, recordOffense } from './law.js';
 import { isDocked, dockedTo } from './docking.js';
@@ -287,7 +288,7 @@ export const BOARDING_ACTIONS = {
   search: { label: 'SEARCH', min: SEARCH_MIN, desc: 'Go through the ship: manifest, cargo, logs, anything hidden.' },
   strip: { label: 'TAKE STORES', min: STRIP_MIN, desc: 'Carry over reaction mass, spares, food, water, medical supplies and ammunition, as much as we hold.' },
   cargo: { label: 'TAKE CARGO', min: STRIP_MIN, desc: 'Move their hold into ours (docked only: nobody carries tonnes by EVA).' },
-  prisoners: { label: 'TAKE PRISONERS', min: PRISONERS_MIN, desc: 'Bring their crew aboard as prisoners, into empty berths (a brig, if we have one).' },
+  prisoners: { label: 'TAKE PRISONERS', min: PRISONERS_MIN, desc: 'Bring their crew aboard as prisoners: into the brig\'s cells (a warship has them), then any empty berths.' },
   scuttle: { label: 'SCUTTLE', min: SCUTTLE_MIN, desc: 'Set their reactor to lose containment in half an hour, and get off.' },
   salvage: { label: 'SALVAGE', min: SALVAGE_MIN, repeat: true, desc: 'Cut what is still good out of the wreck: scrap for the machine shop, spare parts, stores from tanks that held. Each run gives less. Wrecks shift: someone can get hurt.' },
   accounts: { label: 'CRACK ITS ACCOUNTS', min: ACCOUNTS_MIN, desc: 'Into the computer core for its credit store: a good engineer gets in more often, and a core can wipe itself. Theft, unless it was a pirate.' },
@@ -303,7 +304,7 @@ export function boardingActions(state) {
     if (!why && id === 'salvage' && ensureHull(e).status !== 'wreck') why = 'not a wreck: take stores';
     if (!why && id === 'salvage' && (e.tags.salvageLeft ?? 1) < 0.05) why = 'stripped bare';
     if (!why && id === 'cargo' && !(b.via === 'dock' && state.dock?.target.id === b.target && state.dock.phase === 'docked')) why = 'dock first';
-    if (!why && id === 'prisoners' && freeBerths(state) <= 0) why = 'no free berths';
+    if (!why && id === 'prisoners' && freeCells(state) <= 0) why = 'no free cells or berths';
     if (!why && id === 'prisoners' && crewAboard(e) <= 0) why = 'nobody left aboard';
     return { id, ...a, why, running: b.action?.id === id };
   });
@@ -312,7 +313,6 @@ export function boardingActions(state) {
 /** Orders that empty a hull once, whoever boards it after (its stores, its hold, its credit store). */
 const ONCE_PER_HULL = new Set(['strip', 'cargo', 'accounts']);
 
-const freeBerths = (state) => state.berths - state.passengers.reduce((s, p) => s + p.count, 0);
 
 /** Give the party an order aboard. */
 export function orderAboard(state, actionId, emit = () => {}) {
@@ -372,11 +372,12 @@ function actionMinute(state, b, e, party, emit) {
       return;
     }
     case 'prisoners': {
-      const n = Math.min(crewAboard(e), freeBerths(state));
+      const n = Math.min(crewAboard(e), freeCells(state));
       if (n <= 0) return;
+      const g = prisonerGroup(state, e, n);           // (its officers first: prisoners.js)
       setCrewAboard(e, crewAboard(e) - n);
-      state.passengers.push({ kind: 'prisoners', count: n, faction: e.faction, from: e.id, name: e.name, pirate: e.faction === 'pirate' || c?.category === 'irregular', at: state.clock.minute });
-      note(state, `${n} prisoners brought aboard${state.ship.decks.some(d => d.id === 'brig') ? ' and locked in the brig' : ''}.`, emit, 'ok');
+      state.passengers.push(g);
+      note(state, `${n} prisoner${n > 1 ? 's' : ''} brought aboard${g.notables ? `, ${g.notables === 1 ? 'its captain' : `${g.notables} of its officers`} among them` : ''}${state.ship.decks.some(d => d.id === 'brig') ? ', and locked in the brig' : ''}.`, emit, 'ok');
       return;
     }
     case 'salvage': {

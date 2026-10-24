@@ -90,7 +90,8 @@ const DECK_INFO = {
 //
 // Crew live forward (command, quarters, mess, utility); passengers have a
 // deck of their own between the crew and the hold, with their own head;
-// police cutters carry a brig there instead. Bunks are shared between
+// police cutters carry a brig there instead, and warships a brig as well
+// (its holding cells are the class's `brig`). Bunks are shared between
 // watches (two to a rack); couches seat the whole crew, passengers ride
 // out burns in their own acceleration berths.
 
@@ -112,11 +113,12 @@ function program(c) {
   if (!small && k !== 'shuttle') add('mess', 'mess');
   const flankS = small && k !== 'prospector';
   add('utility', 'utility', { ports: [flankS && k !== 'raider' ? port('y-', 'S') : null] });
-  // Passengers (or a cutter's brig) aft of the crew's decks, forward of the hold
-  if (k === 'cutter') add('brig', 'brig');
-  else if (pax > 8 && !small) { add('passengers', 'passengers-8'); add('passengers2', pax - 8 > 4 ? 'passengers-8' : 'passengers'); }
-  else if (pax > 4 && !small) add('passengers', 'passengers-8');
-  else if (pax > 0) add('passengers', 'passengers');
+  // A brig (a cutter's berths are its cells), then passengers, aft of the crew's decks and forward of the hold
+  if (k === 'cutter' || c.brig) add('brig', 'brig');
+  const paxDecks = k === 'cutter' ? 0 : pax;
+  if (paxDecks > 8 && !small) { add('passengers', 'passengers-8'); add('passengers2', pax - 8 > 4 ? 'passengers-8' : 'passengers'); }
+  else if (paxDecks > 4 && !small) add('passengers', 'passengers-8');
+  else if (paxDecks > 0) add('passengers', 'passengers');
   const holdPort = k === 'shuttle' ? port('y+', 'L', 'cargo') : null;
   const crewPort = (k === 'light-freighter' || k === 'gunship' || k === 'corvette') ? port('y-', 'M') : k === 'cutter' || k === 'raider' ? port('y-', 'S') : null;
   add('cargo', k === 'shuttle' ? 'cargo-tall' : 'cargo', { ports: [crewPort, holdPort], cargoDoor: k === 'shuttle' ? null : 'y+' });
@@ -186,9 +188,12 @@ export function createLayout(classId = PLAYER_CLASS) {
     if (ports.length) deck.ports = ports;
     return deck;
   });
-  // As many passenger berths as the class is licensed for, and a rack for
-  // every two of the crew: the rest of the template's racks are lockers
-  trimTiles(decks, T.PAX_BERTH, c.berths || 0);
+  // As many passenger berths as the class is licensed for (a cutter's are its
+  // brig), a warship's brig its cells, and a rack for every two of the crew:
+  // the rest of the template's racks are lockers
+  const cells = c.brig ? decks.filter(d => d.id === 'brig') : [];
+  trimTiles(decks.filter(d => !cells.includes(d)), T.PAX_BERTH, c.berths || 0);
+  trimTiles(cells, T.PAX_BERTH, c.brig);
   trimTiles(decks, T.BUNK, Math.max(2, Math.ceil(c.crew[1] / 2)));
   // A couch for every hand but the pilot (who has the helm), whatever the
   // watch: a full crew's couches come out of storage space, on the crew's

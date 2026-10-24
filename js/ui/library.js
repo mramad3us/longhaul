@@ -21,7 +21,10 @@ import { CLASSES, CLASS_IDS, KINDS, BUILDERS, TECH, SIZES, PLAYABLE, hullPoints,
 import { classStrength } from '../sim/combatants.js';
 import { SYSTEMS, SYSTEM_IDS } from '../sim/systems.js';
 import { TileType, TILE_NAMES, TILE_DESCRIPTIONS } from '../sim/tiles.js';
-import { PDC, TORPEDO_MOTOR, WARHEADS, PROFILES, FAST_VC, RAILGUN, RAIL_RANGE_M, MINING_GEAR, EVADE_G, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from '../sim/weapons.js';
+import { PDC, TORPEDO_MOTOR, WARHEADS, PROFILES, FAST_VC, SEEKER_SLACK, RAILGUN, RAIL_RANGE_M, MINING_GEAR, EVADE_G, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from '../sim/weapons.js';
+import { SUSTAIN_G, SPRINT_LOSS } from '../sim/agents.js';
+import { INSPECTED_MIN } from '../sim/law.js';
+import { PIRATE_BOUNTY, RANSOM } from '../sim/prisoners.js';
 import { AIM } from '../sim/damage.js';
 import { ROUTE_PROFILES } from '../sim/nav.js';
 import { STANCE_MODES } from '../sim/stance.js';
@@ -275,7 +278,9 @@ function weapons(add) {
     text: [SYSTEMS.pdc.desc, 'Torpedoes inside the envelope are shot at for as long as they take to cross it (20 s at most); salvos arriving together share the guns. Against a hull the stream must be laid inside gun range, and a jinking target spreads it.'],
     specs: tls.map(tl => [`TL${tl}`, `kill rate ${PDC[tl].lambda}/mount-s · envelope ${km(PDC[tl].rangeM)} · guns ${km(PDC[tl].strafeM)} · ${PDC[tl].sigmaRad * 1000} mrad`]) });
   add({ id: 'wpn:torpedo', cat: 'weapons', group: 'Torpedoes', title: 'Torpedo',
-    text: ['A small fusion missile with a fixed Δv. It builds up a closing speed and holds it, burning again whenever the target pulls away, and corrects its aim every minute. A torpedo that loses its target flies on the last track it had, and destroys itself if it finds nothing there.'],
+    text: ['A small fusion missile with a fixed Δv. It builds up a closing speed and holds it, burning again whenever the target pulls away, and corrects its aim every minute. A torpedo that loses its target flies on the last track it had, and destroys itself if it finds nothing there.',
+      `Against a ship running, it burns at its motor's full G early, building as much closing speed as the runner's own burn will bleed off by arrival, and coasts in. Its seeker holds the lock up to ${Math.round((SEEKER_SLACK - 1) * 100)}% past the FAST speed; arriving faster it seldom does, so a torpedo too fast brakes on the way in. Its reach is still finite: fire control's REACH says before launch whether a shot gets there.`,
+      'It talks to its ship both ways: the ship feeds it the track, it reports where it is. Talking is emitting, so a FAST torpedo in link shows to the target\'s short-range sensors with its drive cold (better kit more quietly); a COLD COAST one only listens.'],
     specs: tls.map(tl => [`TL${tl}`, `${TORPEDO_MOTOR[tl].maxG} G · Δv ${km(TORPEDO_MOTOR[tl].dv)}/s · FAST closes at ${km(FAST_VC[tl])}/s`]),
     links: [['HE warhead', 'wpn:warhead-he'], ['Nuclear warhead', 'wpn:warhead-nuke'], ...Object.keys(PROFILES).map(k => [PROFILES[k].label, `wpn:profile-${k}`])] });
   const WH_TEXT = {
@@ -325,6 +330,19 @@ function navigation(add) {
       `Soft capture, then ${CAPTURE_MIN} minutes to hard dock and ${SEAL_MIN} to equalize. Undocking vents the lock (${UNDOCK_MIN} minutes) and backs out to ${CLEAR_M} m. Docking mode runs at ${PROX_RATES.map(r => `×${r}`).join(', ')} game seconds a second.`,
       `Ship to ship: the other ship has to hold still: one that agreed to it, one that struck, a dead hull. Boarding can go through a mated collar or by EVA, at up to ${fmtNum(EVA_RANGE_M / 1000)} km.`],
     links: [['Traffic control', 'nav:traffic']] });
+  add({ id: 'nav:running', cat: 'nav', group: 'Stances', title: 'Ships that run',
+    text: [`A ship that can't win a fight runs, as a captain with people aboard would: a sprint at the drive's best while the crew can take it, then ${SUSTAIN_G} G, what a juiced crew takes for days. Past that every minute is strokes, for their crew as for ours, and a captain spends no more than ${Math.round(SPRINT_LOSS * 100)}% of the crew on the sprint: nobody holds 8 G for hours.`,
+      'A ship running without a transponder cuts its drive and coasts dark once it is out past what our sensors hold of its cold hull, and stays dark until we find it again: its last fix points down the line it coasts on. It keeps burning while torpedoes it has seen are still coming. Run down all the same, it strikes, or turns and fights.'],
+    links: [['Juice', 'crew:juice'], ['Torpedo', 'wpn:torpedo']] });
+  add({ id: 'nav:prisoners', cat: 'nav', group: 'Stations', title: 'Prisoners',
+    text: ['A beaten crew taken aboard rides in the brig (a warship has one), then in any free berth. In port they are turned over to the local authority, or their officers ransomed.',
+      `Turned over: pirates and a wanted ship\'s crew earn the bounty (${PIRATE_BOUNTY.toLocaleString()} MCR a head) and standing with the station\'s power; its enemies earn standing with it, and with our command if it is ours; anyone else is let go, and their power remembers we held them.`,
+      'Ransomed: a captain and officers are worth paying for to their own side, through the station\'s brokers. The local power doesn\'t like to see its criminals or its enemies bought free.'],
+    specs: Object.entries({ military: 'Navy officer', authority: 'Police officer', irregular: 'Pirate captain', hunted: 'A captain with a bounty on it', commander: 'A strike target\'s commander' }).map(([k, label]) => [label, `${RANSOM[k].toLocaleString()} MCR`]) });
+  add({ id: 'nav:police', cat: 'nav', group: 'Stations', title: 'Police stops',
+    text: ['A patrol stops ships only inside its jurisdiction: the space its power holds or contests, or the zone it was sent to enforce. It won\'t order a stop to a ship whose course takes it out before the cutter could be alongside, and it withdraws the order if we leave.',
+      `One stop at a time: no order while another is open or another cutter is coming alongside or searching us, none in port or in the middle of a fight. After a search the power\'s patrols wave us through for ${INSPECTED_MIN / 1440} days, unless we give them new cause. A licensed captain in one of its own navy\'s hulls, under its banner, is never stopped by that power\'s security, short of a warrant.`],
+    links: [['Traffic control', 'nav:traffic']] });
   add({ id: 'nav:doctrine', cat: 'nav', group: 'Stances', title: 'Doctrine under fire',
     text: [`With a fire-control computer that plots the threat axis (TL2 and up), a ship turns away and burns from any torpedo less than ${COUNTER_BURN_S / 60} minutes out. The torpedo then arrives slowly, spends a long time under the PDCs, and has to spend its Δv catching up.`,
       `With a torpedo inbound, close on the enemy no faster than ${UNDER_FIRE_CLOSE_MS / 1000} km/s: every m/s of closing speed is a m/s on their torpedoes.`],
@@ -338,7 +356,7 @@ function navigation(add) {
     links: [['Acceleration', 'crew:g'], ['Crash couch', `fit:${TileType.CRASH_COUCH}`]] });
   add({ id: 'nav:light', cat: 'nav', group: 'The plot', title: 'Light lag and the plot',
     text: ['Light crosses an AU in 8.3 minutes, and nothing we learn travels faster. What our own sensors hold (out to 50 light-seconds) is live. Everything else on the plot is a report, and every report has an age.',
-      'A contact that drops off the board leaves its last fix: the plot coasts it on its last velocity inside a circle that grows with the hours, since it may have burned since. A lost contact can be looked at but not flown to: close in until the sensors hold it again.',
+      'A contact that drops off the board leaves its last fix: the plot coasts it on its last velocity inside a circle that grows with the hours, since it may have burned since. PLOT ROUTE flies to where the fix has coasted to, and our sensors take the route over when they hold the contact again.',
       `Every station's traffic control publishes a digest every ${DIGEST_MIN / 60} hours: the transponder ships within ${fmtKm(TC_REACH_AU * AU_KM)} of it, berthed or with a filed flight plan. It reaches us after the light time from that station. A filed plan is flown forward on the plot, and the nav computer can plot a route to it. Ships without a transponder are never in a digest.`,
       'News of hot zones and losses travels at light speed too. A zone is on the plot once its news has arrived, and stays there until news of its end does.'],
     specs: [['One light-second', '299,792 km'], ['One light-minute', `${fmtNum(LIGHT_MINUTE_AU * AU_KM / 1e6, 1)} M km`], ['Earth to Ceres', '≈ 10–30 light-minutes'], ['Ceres to Jupiter', '≈ 15–50 light-minutes']],

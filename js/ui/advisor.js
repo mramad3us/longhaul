@@ -400,8 +400,19 @@ function ruleOrdnance(state, c, add) {
 
 function ruleHostiles(state, c, add) {
   const tracked = state.sensors.$seen;
-  const hs = hostilesOfPlayer(state).filter(e => tracked?.has(e.id) || state.sensors.contacts.some(x => x.id === e.id));
-  if (!hs.length) return;
+  const held = hostilesOfPlayer(state).filter(e => tracked?.has(e.id) || state.sensors.contacts.some(x => x.id === e.id));
+  // (one running from us isn't attacking: it is getting away, as long as its crew can take the burn)
+  const running = (e) => e.agent.mode === 'leave' || e.agent.mode === 'flee';
+  const hs = held.filter(e => !running(e));
+  if (!hs.length) {
+    const r = held.sort((a, b) => distM(c, a) - distM(c, b))[0];
+    if (r) add({
+      key: 'hostiles', level: CAUTION, rank: 62, sig: ['running', r.id], text: `${cap(knownName(state, r))} is running from us, ${fmtMeters(distM(c, r))} out${r.thrust > 0.05 ? ` at ${r.thrust.toFixed(1)}G` : ', drive cold'}.`,
+      detail: 'Nobody holds a high-G burn for long with people aboard: past 6G every hour costs its crew strokes, and it will ease off. Out of our reach it may cut its drive and coast dark; its last fix can be flown to. Fire control\'s REACH says whether a torpedo would catch it.',
+      actions: [A.weapons()],
+    });
+    return;
+  }
   hs.sort((a, b) => distM(c, a) - distM(c, b));
   const e = hs[0];
   const d = fmtMeters(distM(c, e));

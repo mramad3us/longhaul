@@ -24,10 +24,13 @@ Every target has a **signature range**, the distance at which a standard (qualit
 | station | 0.2 AU |
 | cold, silent hull | by size (SHIPS.md) × stealth of its TL |
 | torpedo, drive lit | 0.05 AU |
-| torpedo, coasting | 0.0002 AU (~30,000 km) |
+| torpedo, coasting in datalink with its ship (FAST) | 0.001 AU × its TL's stealth (~150,000 km at TL2, ~82,000 km at TL4) |
+| torpedo, coasting silent (COLD COAST, or out of link) | 0.0002 AU (~30,000 km) |
 | railgun slug | 0.00003 AU (~4,500 km) |
 
 An observer sees a target inside signature × its sensor quality. Quality depends on tech level and damage; for us it also improves with an ops watchstander. A torpedo's own seeker has quality 0.3. Our display band (SHORT/MED/LONG) caps how far the board looks. NPCs identify an unknown ship by tracking it for 60 minutes; a transponder identifies instantly. So do we, with one exception: a ship we hunt (a bounty, a strike target) is on no registry for a long look to match. Only its transponder names it, or its drive signature, when the brief has it on file and we see it in its plume (a signature is read only while the drive is lit). Until then it is one more dark contact: no name on any display or route, no mission mark, and the search box does not find it.
+
+A torpedo talks to its ship both ways: the ship feeds it the track, it reports where it is. Talking is emitting, so a FAST torpedo in link shows to the short-range suite (thermal, EM, lidar) with its drive cold; a COLD COAST one only listens. Our own torpedoes are on our board wherever the band reaches, by their telemetry, and every display draws them flying at where they have their target, not at where the target really is.
 
 Everything on the board is under a light-minute away, so it is live to within one sim step; the scanner shows each contact's light time. Only what the sensors hold is drawn on the tactical view and live on the solar map. A contact that drops off the board stays on the plot as its last fix, aging (WORLD.md, *Light lag and the plot*).
 
@@ -66,21 +69,23 @@ A torpedo is a small fusion missile: an entity of type `ordnance`, driven, integ
 
 **Profiles** set the closing speed the torpedo builds and then holds. The speed is limited by how fast its seeker can close and still hold terminal lock, which depends on tech level:
 
-- **FAST** (TL1 15, TL2 20, TL3 25, TL4 30 km/s): a short flight and little time inside point defense. The plume is seen early, though, and a target that runs makes the torpedo burn to keep up.
-- **COLD COAST** (40% of FAST): boost, then coast dark. Invisible beyond ~30,000 km until the last minutes, so the target doesn't run. Slow, and point defense gets a long look.
+- **FAST** (TL1 15, TL2 20, TL3 25, TL4 30 km/s): a short flight and little time inside point defense. The plume is seen early, though, and in datalink with us it shows to the target's short-range suite even coasting.
+- **COLD COAST** (40% of FAST): boost, then coast dark, its datalink listening only. Invisible beyond ~30,000 km until the last minutes, so the target doesn't run. Slow, and point defense gets a long look.
+
+A seeker holds its terminal lock up to a quarter past FAST (`SEEKER_SLACK`, weapons.js); closing faster, the chance it holds falls with the square of the excess. So a torpedo too fast for its seeker brakes on the way in (below).
 
 Launched at a target 6 million km away, a TL2 cold torpedo flies for about nine days; across half an AU, for weeks. Civilians run only from ordnance they can see arriving within two hours: no hauler carries the reaction mass to run for days.
 
 **Guidance** runs once a minute and is flown the next minute:
 
 1. *Track.* Update the target track if the seeker sees the target, or if the launcher still does and is within datalink (radio) range. Otherwise fly on the last known track, dead-reckoned. A target that went cold and changed course is aimed at where it would have been. If the torpedo reaches the predicted point and finds nothing, it self-destructs.
-2. *Closing.* Burn down the line of sight whenever the closing speed falls below the profile's. A ship running from a torpedo forces it to spend Δv, and a torpedo chasing a 1G target for hours runs dry.
+2. *Closing.* Burn down the line of sight whenever the closing speed falls below the profile's. Against a ship **running** (accelerating away down the line of sight), holding that speed would take matching its burn minute for minute for as long as it runs, and no torpedo has that Δv. So it builds more, at the motor's full G, on the Δv it has past a reserve for the last seconds (20 s of full thrust): as much closing speed as the runner's own burn will bleed back down to the profile's by arrival (v² = v_profile² + 2·a·d), and coasts in dark on it. Closing faster than its seeker could follow at arrival (a runner that stopped running, a launch from a ship closing hard), it brakes down to that speed, late and as hard as it must: Δv spent. A shot's reach is finite: a TL4 torpedo runs down a corvette running at 8G from 375,000 km in about an hour, and from 3 million km it runs dry (`tests/chase.test.mjs`). `torpedoForecast` says, before launch, whether a shot gets there with the target keeping its burn; fire control shows it as REACH, and NPC crews don't launch a shot that can't.
 3. *Miss.* Predict the miss at closest approach (zero-effort miss, extrapolating the target's thrust over a short horizon). When it exceeds a deadband, correct it with a deadbeat burn. Inside ten minutes, correct every minute.
 
 **Endgame.** Every minute, the closest approach between each torpedo and its target over the minute just flown is found from their start and end states (1 s segments, constant relative acceleration). If it passes inside the **capture basket** (what the torpedo's remaining acceleration can close in its last 8 seconds, plus what its spare thrust can answer of a last-minute dodge), it is resolved:
 
 - **Point defense.** Each PDC battery covering the target fires while the torpedo crosses its envelope: exposure = envelope ÷ closing speed, at most 20 s. Kill hazard = mounts × kill rate × fire-control factor × exposure. Torpedoes arriving within 5 s of each other share the guns (salvos saturate), and rounds are spent per engagement. Covering batteries are the target itself, our PDCs over ships we protect (escort charges, rescue victims), and NPC wingmen.
-- **Homing.** A survivor hits with P = 1 − (target evasive G ÷ torpedo G available)², clamped to 5–97%. A civilian that doesn't jink is all but certain to be hit.
+- **Homing.** A survivor hits with P = 1 − (target evasive G ÷ torpedo G available)², clamped to 5–97%, times the lock: 1 up to its seeker's limit, (limit ÷ closing speed)² past it. A civilian that doesn't jink is all but certain to be hit.
 - **Warheads.**
   - HE (70 DP) needs the hit and lands on a section chosen by aim.
   - Nuclear (600 DP at the core, e-folding over 300 m) fuzes at closest approach even when homing fails. Its blast hits everything nearby.
@@ -132,7 +137,13 @@ Our ship follows the same doctrine while it keeps a stance (below and FLIGHT.md)
 
 Agents fly to an enemy on where it is and how it moves, not on its thrust. That thrust is a reaction to us, and two ships each matching the other's burn would fly side by side and never meet. Against an enemy their drive also fires only once the nose is on the vector (no lit lean, FLIGHT.md): a fighting ship's commands jump about as it dodges and counter-burns, and leaning would misdirect them.
 
-Agents weigh a fight with `strength` (combatants.js). Offense is torpedoes (TL motor G ÷ 18), guns × fire control, railguns and gear. Defense is armor, point defense, drive and the square root of the structure left. A ship breaks off when its strength falls below `breakOff` (0.35) of its enemy's. Pirates stalk ships up to twice their strength (`PIRATE_NERVE` 0.5), because a demand is a bluff.
+Agents weigh a fight with `strength` (combatants.js). Offense is torpedoes (TL motor G ÷ 18), guns × fire control, railguns and gear. Defense is armor, point defense, drive and the square root of the structure left. A ship breaks off when its strength falls below `breakOff` (0.35) of its enemy's. Pirates stalk ships up to twice their strength (`PIRATE_NERVE` 0.5), because a demand is a bluff; a pirate lying dark that is found by a ship it can't take on (each holds the other, and the range is closing) runs before it is shot at.
+
+**Running** (`run`, agents.js) is done as a captain with people aboard would:
+- A sprint at the drive's best while the crew can take it, then what a juiced crew takes for days: 6G (`SUSTAIN_G`, crew.js `HIGH_DOSE_G`). Past that every minute costs strokes at the rate it costs ours (`STROKE_RISK`, 0.06% per person-minute per G past 6), NPC crews included, and fewer hands lay the guns worse. A captain spends a tenth of the crew on the sprint (`SPRINT_LOSS`): a corvette running at 8G eases off after about an hour and a half, and nobody holds 8G for hours.
+- A ship running silent (no transponder) cuts its drive and coasts dark once it is 1.2× out past what the pursuer's sensors hold of its cold hull, and stays dark until it is found again. Its last fix then points down its coasting line (the plot, and a route to it: WORLD.md). It keeps burning while torpedoes it has seen coming are still due, so they spend their Δv running it down.
+- Run down all the same (the pursuer on it within the hour, its own best burn and all), it is cornered. A crew that ever strikes, strikes: to another ship at once, to us with an offer (ACCEPT, or let it fight it out). One that doesn't (a navy's) turns and fights to the end.
+- A ship leaving with nobody after it (paid off, done looting, an inspection over) goes at its cruise G.
 
 The upshot (printed by the duel tests, SHIPS.md): between hulls of a size, the better-built ship wins. A Belt junker cannot beat a Martian frigate, and neither can our armed freighter. Only Earth's best (TL3) frigate has an outside chance against the Martian one.
 
@@ -170,7 +181,7 @@ The COMBAT tab (`W`) shows the threat board (log range, 1 km to 10M km) and the 
 
 - **Target**: any ship our sensors hold (click it on the board, or TARGET from the scanner or the tactical view, where clicking a ship opens the same contact panel).
 - **Stance**: where the nav computer keeps us relative to the target, flown until released. One click holds at a weapon's range: GUNS (60% of PDC reach, 3.6 km at TL2), GEAR for a miner, TORPEDO (50,000 km, outside guns and railguns), LONG (300,000 km). MORE… opens the stance panel: HOLD, KEEP OUT or KEEP WITHIN, any range (formation, the edge of our sensors, where we are, or typed in), the G to fly it at, a TIGHT or LOOSE band, and the doctrine under fire. That means turning away from torpedoes less than 45 minutes out (TL2 and up) and closing no faster than 5 km/s while one is inbound. Ranges inside the target's known guns are flagged.
-- **Torpedoes**: choose HE or NUKE and FAST or COLD COAST, then FIRE. One per loaded tube; the autoloader takes 3 minutes per tube (6 if the launcher is degraded).
+- **Torpedoes**: choose HE or NUKE and FAST or COLD COAST, then FIRE. One per loaded tube; the autoloader takes 3 minutes per tube (6 if the launcher is degraded). REACH says whether a torpedo launched now gets there, the target keeping its burn: in reach and about how long, or OUT OF REACH and how far short it runs dry.
 - **Point defense**: AUTO shoots down torpedoes; HOLD stays silent; ENGAGE also rakes the target whenever it comes inside gun range.
 - **Aim**: DISABLE, DISARM or KILL.
 - **Evasive** (battle stations only): 2.5G of random jinking, times our TL's jinking factor. It throws off homing, railguns and PDC aim, burns reaction mass at about half that G, and puts the load on the crew. It also lights our plume.

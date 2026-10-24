@@ -53,6 +53,7 @@ const HANDLERS = {
     toast(`${what.toUpperCase()} ${target}`, 'ok');
   },
   'route-aborted': ({ target, stance }) => logEntry(stance ? `Stance on ${target} released — drive cut, drifting` : `Route to ${target} aborted — drive cut, drifting`, 'warn'),
+  'route-reacquired': ({ target }) => logEntry(`Sensors hold the ${target} again: the route closes on the contact itself now`, 'nav'),
   'route-target-lost': () => { logEntry('Route target lost — autopilot disengaged', 'danger'); toast('TARGET LOST', 'danger'); },
   'hold-lost': ({ reason }) => { logEntry(`Lost station-keeping: ${reason}`, 'danger'); toast('STATION-KEEPING LOST', 'danger'); },
   'fuel-exhausted': () => { logEntry('Reaction mass exhausted — drive cold', 'danger'); toast('FUEL EXHAUSTED', 'danger'); },
@@ -186,7 +187,9 @@ const HANDLERS = {
   'detonation': ({ kind }) => { if (kind === 'nuclear') logEntry('Nuclear detonation', 'danger'); },
   'target-destroyed': ({ name }) => logEntry(`Fire control: ${name} — target destroyed`, 'ok'),
   'under-attack': ({ name }) => { logEntry(`${name} is firing on us!`, 'danger'); toast(`UNDER ATTACK — ${name}`, 'danger'); },
-  'agent-retreats': ({ name }) => logEntry(`${name} is breaking off`, 'nav'),
+  'agent-retreats': ({ name, seen }) => { if (seen !== false) logEntry(`${name} is breaking off`, 'nav'); },
+  'agent-runs-dark': ({ name, seen }) => { if (seen) logEntry(`${name || 'The contact'} has cut its drive: running dark. The plot coasts its last fix.`, 'warn'); },
+  'agent-eases': ({ name, g, seen }) => { if (seen) logEntry(`${name || 'The contact'}'s plume is down to ${g.toFixed(1)}G: its crew can't hold the burn any longer.`, 'nav'); },
   'agent-left': () => {},
   'encounter': ({ kind, name }) => {
     if (kind === 'battle') logEntry(`Ops: warships maneuvering for a fight nearby — ${name}`, 'warn');
@@ -196,6 +199,7 @@ const HANDLERS = {
   // ---- Comms demands & the law
   'comm-request': ({ request }) => { logEntry(`[${request.fromName}] ${request.text}`, 'comms'); openRequest(request); },
   'comm-request-expired': ({ request }) => logEntry(`No answer to ${request.fromName}`, 'warn'),
+  'comm-request-withdrawn': ({ request, text }) => logEntry(`[${request.fromName}] ${text}`, 'comms'),
   'inspection-started': ({ name }) => logEntry(`${name} alongside — inspection team boarding`, 'comms'),
   'inspection-complete': ({ name, text }) => { logEntry(`${name}: ${text}`, 'comms'); toast(text, 'info'); },
   'pirates-paid': ({ name, credits }) => logEntry(`Paid ${fmtNum(credits)} MCR to the ${name}`, 'warn'),

@@ -33,6 +33,7 @@ import { zonePos, ZONE_KINDS } from '../sim/conflict.js';
 import { getBody } from '../sim/ephemeris.js';
 import { estimate, liveKnowledge, LIGHT_SECOND_AU, LIGHT_MINUTE_AU } from '../sim/intel.js';
 import { isDark } from '../sim/sensors.js';
+import { aimPoint } from '../sim/ordnance.js';
 import { FitCanvas, fmtKm, pointAt } from './dom.js';
 import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
@@ -431,7 +432,7 @@ export class SolarMap {
       const [x, y] = sp(e.pos.x, e.pos.y);
       const color = e.sos ? COL.warn : e.tags?.wreck ? '#5E6D7C' : factionColor(e.faction);
       if (e.type === 'ordnance') {
-        const tgt = e.ord.target === 'player' ? state.flight.pos : world.get(e.ord.target)?.pos;
+        const tgt = e.ord.target === 'player' ? state.flight.pos : aimPoint(e, state.clock.minute);
         const c = e.ord.target === 'player' ? COL.warn : e.ord.owner === 'player' ? COL.own : COL.caution;
         if (tgt && e.ord.kind === 'torpedo') {
           const [tx, ty] = sp(tgt.x, tgt.y);

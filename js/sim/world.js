@@ -22,7 +22,7 @@
 //   be brought exactly up to date on demand (refresh).
 // ============================================================
 
-import { AU_M, AU_KM, G0, MIN_S, TWO_PI, DAY_MIN } from '../core/constants.js';
+import { AU_M, AU_KM, G0, MIN_S, TWO_PI, DAY_MIN, GM_SUN } from '../core/constants.js';
 import { getBody, bodyPos, bodyVel } from './ephemeris.js';
 import { gravityAt, gravityEpoch, nearestSurface } from './gravity.js';
 import { SpatialHash } from './spatial-hash.js';
@@ -77,6 +77,35 @@ export function orbitStateAt(orbit, minute, pos, vel) {
   const v = w * orbit.r * AU_M;
   vel.vx = _bv.vx - v * s;
   vel.vy = _bv.vy + v * c;
+}
+
+/**
+ * A place off a body that something can be left at: `r` AU from the centre
+ * of `bodyName` at angle `phase`, at `minute`, as an orbit for orbitStateAt.
+ * Out past a moon's own sphere of influence (its Hill sphere: Ganymede's
+ * reaches 32,000 km, Phobos' 17) the moon is no frame to rest in: a point held
+ * to it swings round the planet with it, at the moon's speed (off Phobos,
+ * 2 km/s on a 7.7-hour circle), while anything left there in free fall
+ * goes its own way. So the place is held off the planet instead. Where the
+ * host's pull beats the Sun's tide there, the place goes round it on a
+ * circular orbit, as a ship left there would; farther out it rests with
+ * the host, which the tide barely moves it from in days.
+ */
+export function restingOrbit(bodyName, r, phase, minute) {
+  const days = minute / DAY_MIN;
+  let b = getBody(bodyName);
+  let x = r * Math.cos(phase), y = r * Math.sin(phase);
+  if (b.parent && r > b.a * Math.cbrt(b.gm / (3 * b.parent.gm))) {     // (out of the moon's Hill sphere)
+    const m = bodyPos(b, days), p = bodyPos(b.parent, days);
+    x += m.x - p.x; y += m.y - p.y;
+    b = b.parent;
+  }
+  const R = Math.hypot(x, y), th = Math.atan2(y, x);
+  const h = bodyPos(b.parent || b, days);
+  const gm = b.gm * 1e9, rM = R * AU_M, sunM = Math.hypot(h.x, h.y) * AU_M;
+  if (!b.gm || !sunM || gm / (rM * rM) <= 2 * GM_SUN * rM / sunM ** 3) return { body: b.name, r: R, phase: th, period: 0 };
+  const period = TWO_PI * Math.sqrt(rM ** 3 / gm) / 86400;
+  return { body: b.name, r: R, phase: th - TWO_PI * days / period, period };
 }
 
 const _o = { pos: { x: 0, y: 0 }, vel: { vx: 0, vy: 0 } };

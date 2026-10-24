@@ -34,7 +34,7 @@
 
 import { AU_M, AU_KM, RANGE, DAY_MIN, G0, MIN_S } from '../core/constants.js';
 import { random, randInt, randRange, pick, weightedPick, chance } from '../core/rng.js';
-import { getWorld } from './world.js';
+import { getWorld, restingOrbit } from './world.js';
 import { inPortSpace, PORT_M } from './holding.js';
 import { createEntity, newSignature } from './entities.js';
 import { identifyHunt, huntNamed } from './sensors.js';
@@ -49,6 +49,7 @@ import { WARHEADS, AMMO_PRICES } from './weapons.js';
 import { DRONE_PRICE } from './drones.js';
 import { adjustStanding } from './law.js';
 import { dockedStationEntity, dockedTo } from './docking.js';
+import { freeBerths } from './manifest.js';
 import { MIL_TYPES, MIL_LABEL, milShare, milRefusal, generateMil, spawnMil, milProgress, milTurnIn } from './military.js';
 import { licenseOf, ourCommandShip, supplyPriceFactor, creditMission, rankOf, RANK_FOR } from './service.js';
 
@@ -286,8 +287,8 @@ function spawnHotTarget(state, station, c) {
     return;
   }
   if (c.type !== ContractType.BOUNTY && c.type !== ContractType.RECON) return;
-  // Somewhere off the zone's body, roughly at rest there
-  const anchor = { body: c.body, r: c.distAU || randRange(0.004, 0.012), phase: random() * Math.PI * 2, period: 0 };
+  // Somewhere off the zone's body, where a ship could lie there (world.restingOrbit: off a moon, the planet holds it)
+  const anchor = restingOrbit(c.body, c.distAU || randRange(0.004, 0.012), random() * Math.PI * 2, now);
   const mark = createEntity({ id: world.newId('mark'), name: c.type === ContractType.BOUNTY ? `Last seen: ${c.ship.name}` : `Picket station near ${c.body}`, type: 'nav', orbit: anchor, transponder: false, tags: { contract: c.id } });
   world.add(mark);
   const off = c.type === ContractType.BOUNTY ? 0.002 : 0.0003;
@@ -485,8 +486,8 @@ export function acceptContract(state, stationId, contractId) {
     state.cargo.push({ contract: c.id, name: c.cargo.name, mass: c.cargo.mass, ...(c.cargo.contraband ? { contraband: true, illegalIn: c.cargo.illegalIn } : {}) });
   }
   if (c.passengers) {
-    const aboard = state.passengers.reduce((s, x) => s + x.count, 0);
-    if (aboard + c.passengers > state.berths) return { ok: false, text: `Only ${state.berths - aboard} free berths.` };
+    const free = freeBerths(state);
+    if (c.passengers > free) return { ok: false, text: `Only ${Math.max(0, free)} free berths.` };
     if (!dockedStation(state) || dockedStation(state).id !== st.id) return { ok: false, text: `Dock at ${st.name} to board passengers.` };
     state.passengers.push({ contract: c.id, count: c.passengers });
   }
@@ -505,8 +506,8 @@ function spawnTarget(state, station, c) {
   const world = getWorld(state);
   const o = station.orbit;
   const ang = random() * Math.PI * 2;
-  // Placed relative to the station's anchor body so it stays put relative to it
-  const orbit = { body: o.body, r: c.distAU, phase: ang, period: 0 };
+  // Off the station's body, where something left there would lie (world.restingOrbit)
+  const orbit = restingOrbit(o.body, c.distAU, ang, state.clock.minute);
   let e;
   if (c.type === ContractType.SURVEY) {
     e = createEntity({ id: world.newId('mark'), name: `Survey mark ${c.sector}`, type: 'nav', orbit, transponder: false, tags: { contract: c.id } });
@@ -537,8 +538,7 @@ export function hailContractTarget(state, entityId) {
   const d = Math.hypot(e.pos.x - state.flight.pos.x, e.pos.y - state.flight.pos.y) * AU_M;
   if (!holding || d > 10_000) return { ok: false, text: 'Hold formation within 10 km first.' };
   if (c.type === ContractType.MEDEVAC) {
-    const aboard = state.passengers.reduce((s, x) => s + x.count, 0);
-    if (aboard + c.casualties > state.berths) return { ok: false, text: 'Not enough berths for the casualties.' };
+    if (c.casualties > freeBerths(state)) return { ok: false, text: 'Not enough berths for the casualties.' };
     state.passengers.push({ contract: c.id, count: c.casualties, casualties: true });
     world.setSos(e, false);
     c.phase = 'return';

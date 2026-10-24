@@ -22,6 +22,16 @@
 // not attacks (trespass in a keep-out zone, undocking without leave,
 // boarding a lawful ship) are recorded like crimes, with a severity.
 //
+// Police have a jurisdiction: the space their power holds or contests,
+// and a zone they were sent to enforce (a blockade, a standoff). Outside
+// it there is no order to heave to (agents.js: nor one to a ship whose
+// course takes it out before the cutter could come alongside). A stop is
+// one at a time, never in port or in the middle of a fight, and a power
+// whose inspectors stamped our papers waves us through for a couple of
+// days (INSPECTED_MIN) unless we give it new cause. A licensed captain in
+// one of its own navy's hulls, under its banner, its security never stops
+// (short of a warrant).
+//
 // Military service changes some of it (service.js). A contractor firing
 // on an enemy power's warships is at war, not committing a crime; firing
 // on its own side's people costs its reputation and, past a shot or two,
@@ -33,6 +43,7 @@
 
 import { DAY_MIN } from '../core/constants.js';
 import { POWERS, controlAt } from './factions.js';
+import { orbitStateAt } from './world.js';
 import { classOf } from './ship-classes.js';
 import { licenseOf, hullLegal, navyOf, enemyCombatant, ownSideCrime } from './service.js';
 
@@ -111,6 +122,27 @@ export function recordOffense(state, faction, kind, severity, emit = () => {}, w
 }
 
 /** Is shooting at this ship a crime? (With `state`: not for a contractor at war with its power.) */
+const _zp = { x: 0, y: 0 }, _zv = { vx: 0, vy: 0 };
+
+/** After an inspection, its power's patrols leave us be this long (minutes), short of new cause. */
+export const INSPECTED_MIN = 2 * DAY_MIN;
+
+/** Were our papers stamped by `faction`'s inspectors lately, and have we kept clean with it since? */
+export function recentlyInspected(state, faction) {
+  const ins = state.law.inspected?.[faction];
+  return !!ins && state.clock.minute - ins.at < INSPECTED_MIN && state.law.wanted[faction] <= ins.wanted;
+}
+
+/** May `faction`'s police stop a ship at `pos` (AU) at `minute`? Its space, held or contested, or the zone `zoneId` they enforce. */
+export function inJurisdiction(state, faction, zoneId, pos, minute) {
+  const ctl = controlAt(pos.x, pos.y, minute);
+  if (ctl.faction === faction || ctl.rival === faction) return true;
+  const z = zoneId && state.politics?.zones.find(x => x.id === zoneId);
+  if (!z) return false;
+  orbitStateAt({ body: z.body, r: z.r, phase: z.phase, period: 0 }, minute, _zp, _zv);
+  return Math.hypot(pos.x - _zp.x, pos.y - _zp.y) <= z.radius;
+}
+
 export function lawfulTarget(e, state = null) {
   if (e?.type === 'station') return e.faction !== 'pirate' && e.combat?.status !== 'wreck';
   if (!e || e.type !== 'ship') return false;
@@ -209,6 +241,8 @@ export function settleInspection(state, faction) {
   // (a hull can't be seized at sea: the record stays open on it, as long as we fly it)
   L.wanted[faction] = hull === 'stolen' ? Math.max(2, L.wanted[faction]) : hull ? Math.max(1, L.wanted[faction]) : settled ? 0 : Math.max(1, L.wanted[faction]);
   adjustStanding(state, faction, found ? -10 : 2);
+  // (papers stamped: its patrols wave us through for a while, unless we give them new cause: agents.js)
+  (L.inspected ??= {})[faction] = { at: state.clock.minute, wanted: L.wanted[faction] };
   const what = [cargo.length ? `${cargo.length} contraband consignment${cargo.length > 1 ? 's' : ''}` : '', nukes ? `${nukes} nuclear torpedo${nukes > 1 ? 'es' : ''}` : ''].filter(Boolean).join(' and ');
   const hullText = hull === 'stolen' ? 'This is a stolen navy hull: the record stays open as long as you fly it.' : hull ? 'You are flying a military hull without its license: the record stays open as long as you fly it.' : '';
   const text = found

@@ -74,7 +74,9 @@ export default [
         const fx = geo.fixtures;
         const seats = ['couch', 'helm', 'ops', 'weapons', 'engStation'].reduce((n, k) => n + (fx[k]?.length || 0), 0);
         assert(seats >= maxCrew(id), `${id}: ${seats} secure seats for a crew of ${maxCrew(id)}`);
-        assert((fx.paxBerth?.length || 0) === (c.berths || 0), `${id}: ${fx.paxBerth?.length || 0} passenger berths, licensed for ${c.berths}`);
+        // (a warship's brig cells are berths too, on a deck of their own)
+        assert((fx.paxBerth?.length || 0) === (c.berths || 0) + (c.brig || 0), `${id}: ${fx.paxBerth?.length || 0} berths and cells, for ${c.berths} passengers and a brig of ${c.brig || 0}`);
+        if (c.category === 'military') assert(c.brig > 0 && ship.decks.some(d => d.id === 'brig'), `${id}: a warship with no brig`);
         assert((fx.locker?.length || 0) >= maxCrew(id), `${id}: a suit for everyone`);
         if (c.berths) {
           const pax = ship.decks.findIndex(d => d.zone === 'pax'), crewDecks = ship.decks.map((d, i) => d.zone === 'crew' ? i : -1).filter(i => i >= 0);

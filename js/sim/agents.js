@@ -20,6 +20,18 @@
 //                  turns its gear on anyone who comes close)
 //   convoy         travel to a destination (escort contracts)
 //
+// Fight or run. A ship weighs a fight by strength (its own against the
+// enemy's) and breaks off when it is outgunned or hurt; a pirate lying
+// dark that is found by a ship it can't fight runs before it is shot at.
+// Running is done as a captain with people aboard would (run): a sprint
+// at the drive's best while the crew can take it, then what a juiced crew
+// takes for days. Past HIGH_DOSE_G every minute costs strokes, NPC crews
+// as ours (crew.js): no one holds 8G for hours. A ship running silent
+// (no transponder) cuts its drive and coasts dark as soon as it is out
+// past what the pursuer's sensors hold of a cold hull, and stays dark
+// until it is found again. Run down all the same, it strikes if its kind
+// ever does, or turns and fights it out.
+//
 // Talking to us goes through *requests* (state.comms.requests): an
 // order to heave to, a pirate's ultimatum, a warning, an offer of
 // surrender. Each has options and a deadline; silence is an answer.
@@ -50,13 +62,15 @@ import { FACTIONS } from './factions.js';
 import { flightStep, SLEW_RATE } from './flight.js';
 import { createPlan, guidanceStep, targetStateAt } from './nav.js';
 import { abortRoute } from './autopilot.js';
-import { REVEAL, canSee, signatureRange } from './sensors.js';
+import { REVEAL, canSee, signatureRange, hullSignature } from './sensors.js';
+import { HIGH_DOSE_G, STROKE_RISK } from './crew.js';
+import { knownName } from './flags.js';
 import {
   PLAYER, kinematics, profile, snapshot, sees, strength, ensureHull, isOutOfFight, sensorQuality, DISABLED_BELOW,
 } from './combatants.js';
-import { launchTorpedo, fireRailgun, strafe, fireGear, inboundTo, launchedBy, timeToGo } from './ordnance.js';
+import { launchTorpedo, fireRailgun, strafe, fireGear, inboundTo, launchedBy, timeToGo, torpedoForecast } from './ordnance.js';
 import { hullTick } from './damage.js';
-import { wantedBy, settleInspection, adjustStanding } from './law.js';
+import { wantedBy, settleInspection, adjustStanding, inJurisdiction, recentlyInspected } from './law.js';
 import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from './weapons.js';
 import { putToSleep } from './forces.js';
 import { enemyOf, hostileTo, friendOf, flagOf, hullLegal, navyOf, rankOf, RANK_FOR } from './service.js';
@@ -91,6 +105,12 @@ const CALM_MIN = 360;                 // a fleeing civilian calms down after thi
 const PANIC_S = 2 * 3600;             // civilians run from torpedoes arriving within this
 const PLAYER_THREAT_AU = 0.01;        // a civilian we fired on stays scared while we are this close
 const PIRATE_NERVE = 0.5;             // pirates stalk ships up to twice their strength: a demand is a bluff
+
+// Running (run): what a captain asks of a crew with bodies
+export const SUSTAIN_G = HIGH_DOSE_G; // juiced on the couches, a crew takes this for days (past it: strokes)
+export const SPRINT_LOSS = 0.1;       // the share of its crew a captain will spend in strokes to break contact
+const DARK_MARGIN = 1.2;              // running silent, it goes cold this far out past the pursuer's reach on its hull
+const CORNERED_S = 3600;              // a pursuer that will be on it inside this, its own best burn and all: no getting away
 
 // ---- SPAWNING ----
 
@@ -255,6 +275,7 @@ const REPLIES = {
       const take = Math.min(state.resources.credits.current, e.agent.flags.demand || 0);
       state.resources.credits.current -= take;
       e.agent.mode = 'leave';
+      e.agent.threat = null;
       emit('pirates-paid', { id: e.id, name: e.name, credits: take });
       return { ok: true, text: `${take.toLocaleString()} MCR transferred. The ${e.name} peels away.` };
     }
@@ -276,6 +297,8 @@ const REPLIES = {
       surrender(state, e, emit, { accepted: true });
       return { ok: true, text: `${e.name} has struck. Their drive is cold and their tubes are open — hold formation and hail to take them in.` };
     }
+    // (run down, and nobody takes the offer: it fights it out)
+    if (e.agent.flags.cornered === 'offered') e.agent.flags.cornered = 'fight';
     return { ok: true, text: 'You leave the channel open and say nothing.' };
   },
 };
@@ -336,6 +359,7 @@ export function moveAgents(state, emit = () => {}) {
     // its pilot keeps it off the rocks too (terrain.js); a dead drive can't
     if (p.maxG > 0) cmd = terrainGuard(e.pos, e.vel, cmd, e.agent.$toward || null, p.maxG * G0, now - 1) || cmd || hoverCmd(e.pos, e.vel, now - 1);
     flightStep(f, cmd, 1);
+    if (f.thrustG > HIGH_DOSE_G) strain(e, f.thrustG);
     e.nav.facing = f.facing;
     e.nav.turning = f.turning;
     e.thrust = f.thrustG;
@@ -344,6 +368,17 @@ export function moveAgents(state, emit = () => {}) {
     world.hash.update(e);
     groundCheck(state, e, emit);                    // come down on a rock (terrain.js)
   }
+}
+
+/**
+ * A minute past what juice covers: strokes take a share of the crew, at the
+ * rate they take ours (crew.js). Fewer hands lay the guns worse (profile)
+ * and the captain won't ask it again lightly (run).
+ */
+function strain(e, g) {
+  const h = e.combat, loss = h.crew * STROKE_RISK * (g - HIGH_DOSE_G);
+  h.crew = Math.max(0, h.crew - loss);
+  e.agent.strain = (e.agent.strain || 0) + loss;
 }
 
 // ---- PER MINUTE: THINK ----
@@ -459,8 +494,11 @@ const BRAINS = {
     const p = profile(state, e.id);
     if (a.mode === 'engage' || a.mode === 'leave' || a.mode === 'flee') return;
     // Lawmen about: slip away
-    if (lawNearby(state, e)) { a.mode = 'leave'; return; }
+    const law = lawNearby(state, e);
+    if (law) { a.mode = 'leave'; a.threat = law.id; return; }
     if (a.mode === 'lurk') {
+      // Found by a ship it can't fight, and it is coming: run before it is shot at
+      if (!state.lost && huntedBy(state, e, p, PLAYER)) { a.mode = 'leave'; a.threat = PLAYER; emit('agent-retreats', { id: e.id, name: knownName(state, e.id) || 'unidentified contact', seen: true }); return; }
       // (a proxy's raider goes only for its prey's ships, and the captains flying its flag)
       const mayStalk = !a.flags.prey || flagOf(state) === a.flags.prey;
       if (mayStalk && !state.lost && sees(state, e.id, PLAYER) && strength(p) >= PIRATE_NERVE * strength(profile(state, PLAYER))) {
@@ -487,6 +525,7 @@ const BRAINS = {
       }
     } else if (a.mode === 'loot' && state.clock.minute - a.since > LOOT_MIN) {
       a.mode = 'leave';
+      a.threat = null;
     }
   },
 
@@ -559,11 +598,16 @@ function lawman(state, e, emit, stayHome) {
     // Our own side's patrols wave a contractor of some standing through
     if (flagOf(state) === e.faction && rankOf(state) >= RANK_FOR.waveThrough) policy = 0;
     if (suspicious || identified(state, e)) {
+      // (not outside its jurisdiction, nor a ship whose course takes it out before the cutter is alongside:
+      // looked at again when we are somewhere it could stop us)
+      if (stopBarred(state, e, true) || !canStop(state, e)) return;
       a.flags.checked = true;
       if (suspicious || chance(policy)) { a.mode = 'intercept'; a.target = PLAYER; a.since = now; }
       else if (a.flags.beat !== undefined) { a.home = a.flags.beat; delete a.flags.beat; }    // sent to look at us: seen, back to its beat
     }
   } else if (a.mode === 'intercept') {
+    // Out of its reach, or a stop it can't make now: none to make here
+    if (stopBarred(state, e, false) || !canStop(state, e)) { giveUpStop(state, e, stayHome, emit); return; }
     if (!a.request && distAU(e.pos, state.flight.pos) <= HAIL_AU) {
       const who = FACTIONS[e.faction]?.police || e.faction;
       openRequest(state, e, 'inspect', `"${state.ship.name}, this is ${who} vessel ${e.name}. Cut your drive and stand by to be boarded for inspection."`,
@@ -587,6 +631,75 @@ function lawman(state, e, emit, stayHome) {
   }
 }
 
+const STOP_SAMPLES = [0.25, 0.5, 0.75, 1];
+const STOP_HORIZON_S = 2 * 86400;       // a cutter that could only be alongside in days has no stop to make
+
+/**
+ * Could patrol `e` stop us inside its jurisdiction? We must be in it now,
+ * and our course as we fly it (velocity and burn) must keep us in it until
+ * the cutter could be alongside: its time to kill the speed between us and
+ * cross the gap at its approach G, re-aimed at where we will be.
+ */
+function canStop(state, e) {
+  const now = state.clock.minute, a = e.agent, f = state.flight;
+  if (!inJurisdiction(state, e.faction, a.zone, f.pos, now)) return false;
+  const k = kinematics(state, PLAYER);
+  const acc = Math.min(ROLES[a.role]?.approachG || 1, profile(state, e.id).maxG || 1) * G0;
+  let T = 0;
+  for (let i = 0; i < 5 && T < STOP_HORIZON_S; i++) {
+    const rx = (k.pos.x - e.pos.x) * AU_M + (k.vel.vx - e.vel.vx) * T + 0.5 * k.ax * T * T;
+    const ry = (k.pos.y - e.pos.y) * AU_M + (k.vel.vy - e.vel.vy) * T + 0.5 * k.ay * T * T;
+    const w = Math.hypot(k.vel.vx - e.vel.vx + k.ax * T, k.vel.vy - e.vel.vy + k.ay * T);
+    T = w / acc + 2 * Math.sqrt(Math.hypot(rx, ry) / acc);
+  }
+  if (T >= STOP_HORIZON_S) return false;
+  for (const s of STOP_SAMPLES) {
+    const t = T * s;
+    const p = { x: k.pos.x + (k.vel.vx * t + 0.5 * k.ax * t * t) / AU_M, y: k.pos.y + (k.vel.vy * t + 0.5 * k.ay * t * t) / AU_M };
+    if (!inJurisdiction(state, e.faction, a.zone, p, now + t / MIN_S)) return false;
+  }
+  return true;
+}
+
+const STOPPING = new Set(['search-approach', 'search']);
+
+/**
+ * Is a stop on us out of the question now, whoever's cutter it is? One at a
+ * time: no order to heave to while another is open or another cutter is
+ * coming alongside or searching us (`deciding`: nor while one is already on
+ * its way to us). Never in port (on a station's approach, in a berth, the
+ * docking computer flying us), never mid-fight (a cutter comes to help with
+ * that), and not by a power whose inspectors stamped our papers lately. Nor
+ * ever by a power's own security, of a navy hull of its flown under its banner.
+ */
+function stopBarred(state, e, deciding) {
+  // (a licensed captain in one of its own navy's hulls, under its banner: its own security has no business with it, short of a warrant)
+  if (flagOf(state) === e.faction && wantedBy(state, e.faction) < 2) return true;
+  const z = state.tc?.zone, d = state.dock;
+  if (z === 'approach' || z === 'keepout' || (d && d.phase !== 'inbound' && d.phase !== 'awaiting')) return true;
+  if (state.comms.requests.some(r => r.kind === 'inspect' && r.from !== e.id)) return true;
+  for (const o of getWorld(state).driven) {
+    if (o === e || !o.agent || o.agent.target !== PLAYER) continue;
+    if (STOPPING.has(o.agent.mode) || (deciding && o.agent.mode === 'intercept')) return true;
+  }
+  if (hostilesOfPlayer(state).some(h => h.agent.mode === 'engage')) return true;
+  return recentlyInspected(state, e.faction);
+}
+
+/** A stop it can't make: back to its beat (or on its way), and any order to heave to withdrawn. */
+function giveUpStop(state, e, stayHome, emit) {
+  const a = e.agent;
+  a.mode = stayHome ? 'cruise' : 'leave';
+  a.target = null;
+  a.threat = null;
+  const i = a.request ? state.comms.requests.findIndex(r => r.id === a.request) : -1;
+  if (i >= 0) {
+    const r = state.comms.requests.splice(i, 1)[0];
+    a.request = null;
+    emit('comm-request-withdrawn', { request: r, text: `"${state.ship.name}, ${e.name}. You're clear of our jurisdiction. Order withdrawn."` });
+  }
+}
+
 function visiblePirate(state, e) {
   for (const o of getWorld(state).driven) {
     if (o === e || o.type !== 'ship' || isOutOfFight(o)) continue;
@@ -600,9 +713,22 @@ function lawNearby(state, e) {
   for (const o of getWorld(state).driven) {
     if (o.type !== 'ship' || !o.agent || isOutOfFight(o)) continue;
     if (!['patrol', 'picket', 'navy'].includes(o.agent.role)) continue;
-    if (distAU(o.pos, e.pos) < 0.005 && sees(state, e.id, o.id)) return true;
+    if (distAU(o.pos, e.pos) < 0.005 && sees(state, e.id, o.id)) return o;
   }
-  return false;
+  return null;
+}
+
+/**
+ * Is `e` found by a ship it can't fight that is coming for it? Each holds
+ * the other (so `e` lies inside that ship's reach on it), the hunter is
+ * stronger than `e` dares take on, and the range is closing.
+ */
+function huntedBy(state, e, p, id) {
+  if (!sees(state, e.id, id) || !sees(state, id, e.id)) return false;
+  if (strength(p) >= PIRATE_NERVE * strength(profile(state, id))) return false;
+  const k = kinematics(state, id);
+  const dx = e.pos.x - k.pos.x, dy = e.pos.y - k.pos.y;
+  return (k.vel.vx - e.vel.vx) * dx + (k.vel.vy - e.vel.vy) * dy > 0;
 }
 
 /** An enemy power's warship or patrol it can see (never a civilian: they are not targets in a war). */
@@ -677,9 +803,11 @@ function steer(state, e, emit) {
   switch (a.mode) {
     case 'engage': fight(state, e, emit); return;
     case 'flee': case 'leave': {
-      const from = a.mode === 'flee' ? kinematics(state, a.threat || a.target) : kinematics(state, PLAYER);
+      // running from someone; or, its business here done, away from us at its cruise
+      const from = a.mode === 'flee' ? a.threat || a.target : a.threat;
       a.evade = a.mode === 'flee' && !!CLASSES[e.cls]?.evasive;
-      fleeFrom(e, from?.pos || state.flight.pos, p.maxG);
+      if (from && kinematics(state, from)) run(state, e, from, p, emit);
+      else fleeFrom(e, state.flight.pos, Math.min(p.maxG, CLASSES[e.cls]?.drive.cruiseG || 1));
       return;
     }
     case 'stalk': case 'demand': goTo(state, e, spec(a.target), a.mode === 'demand' ? 50_000_000 : 40_000_000, R.approachG, true); break;
@@ -744,6 +872,85 @@ function holdWith(tgt) {
   return Math.hypot(ax, ay) > 1e-4 ? { ax, ay, maxG: Math.hypot(ax, ay) / G0 } : null;
 }
 
+/**
+ * Breaking contact with `fromId`, as a captain with people aboard would
+ * (the header has the doctrine). Out past the pursuer's reach on our cold
+ * hull, a ship running silent coasts dark; found, it burns away, at the
+ * drive's best while the sprint lasts (SPRINT_LOSS of the crew to strokes),
+ * then at SUSTAIN_G; caught all the same, it is cornered.
+ */
+function run(state, e, fromId, p, emit) {
+  const a = e.agent;
+  const k = kinematics(state, fromId);
+  if (p.maxG <= 0) { a.cmd = null; return; }
+  const dx = e.pos.x - k.pos.x, dy = e.pos.y - k.pos.y;
+  const d = Math.hypot(dx, dy) || 1e-12;
+  // Torpedoes it has seen coming are still coming once their plumes go out:
+  // until they are due it keeps burning, so they spend their Δv running it down
+  const now = state.clock.minute;
+  const seen = seenInbound(state, e);
+  if (seen.length) a.waryUntil = Math.max(a.waryUntil || 0, now + Math.min(...seen.map(o => timeToGo(state, o))) / MIN_S + 10);
+  // (dark already, it stays dark while unseen; burning, it goes cold with a margin, or it would flicker)
+  const reach = hullSignature(e) * sensorQuality(state, fromId);
+  if (!e.transponder && !e.sos && !(now < (a.waryUntil || 0)) && d > reach * (a.dark ? 1 : DARK_MARGIN)) {
+    if (!a.dark) { a.dark = true; emit('agent-runs-dark', { id: e.id, name: knownName(state, e.id), seen: !!state.sensors.$seen?.has(e.id) }); }
+    a.cmd = null; a.$toward = null;
+    return;
+  }
+  a.dark = false;
+  const sprint = (a.strain || 0) < SPRINT_LOSS;
+  const g = sprint ? p.maxG : Math.min(p.maxG, SUSTAIN_G);
+  if (!sprint && p.maxG > SUSTAIN_G && !a.flags.eased) {
+    a.flags.eased = true;
+    emit('agent-eases', { id: e.id, name: knownName(state, e.id), g, seen: !!state.sensors.$seen?.has(e.id) });
+  }
+  if (!sprint && caughtWithin(e, k, d * AU_M, g) < CORNERED_S && cornered(state, e, fromId, emit)) return;
+  fleeFrom(e, k.pos, g);
+}
+
+/**
+ * Seconds until a pursuer `k` is on `e` (Infinity if never) with `e` burning
+ * away from it at `g`: the closing speed now, and the pursuer's own burn
+ * toward it against ours.
+ */
+function caughtWithin(e, k, dM, g) {
+  const ux = (e.pos.x - k.pos.x) * AU_M / dM, uy = (e.pos.y - k.pos.y) * AU_M / dM;
+  const vc = (k.vel.vx - e.vel.vx) * ux + (k.vel.vy - e.vel.vy) * uy;
+  const aRel = Math.max(0, k.ax * ux + k.ay * uy) - g * G0;
+  if (Math.abs(aRel) < 1e-6) return vc > 0 ? dM / vc : Infinity;
+  const disc = vc * vc + 2 * aRel * dM;
+  if (disc < 0) return Infinity;                       // it brakes the gap open before it closes
+  const t = (-vc + Math.sqrt(disc)) / aRel;
+  const t2 = (-vc - Math.sqrt(disc)) / aRel;
+  const best = [t, t2].filter(x => x > 0);
+  return best.length ? Math.min(...best) : Infinity;
+}
+
+/**
+ * Run down with nowhere to go. A crew that ever strikes, strikes: to another
+ * ship at once, to us with an offer (ACCEPT, or let it fight). One that
+ * doesn't, turns and fights it out. True when it has stopped running.
+ */
+function cornered(state, e, fromId, emit) {
+  const a = e.agent;
+  const R = ROLES[a.role] || {};
+  if (R.surrenders && a.flags.cornered !== 'fight') {
+    if (fromId !== PLAYER) { surrender(state, e, emit); return true; }
+    if (!a.flags.cornered && !a.request) {
+      a.flags.cornered = 'offered';
+      openRequest(state, e, 'surrender', `"${knownName(state, e.id) || e.name} to ${state.ship.name}: you've run us down. We strike — hold your fire!"`,
+        [{ id: 'accept', label: 'ACCEPT SURRENDER' }, { id: 'ignore', label: 'IGNORE' }], emit);
+    }
+    return false;                                       // (it keeps running while the offer stands)
+  }
+  if (!R.aim) return false;
+  a.flags.cornered = 'fight';
+  if (!a.hostile.includes(fromId)) a.hostile.push(fromId);
+  a.target = fromId;
+  a.mode = 'engage';
+  return true;
+}
+
 function fleeFrom(e, from, maxG) {
   const dx = e.pos.x - from.x, dy = e.pos.y - from.y;
   const d = Math.hypot(dx, dy) || 1;
@@ -763,11 +970,11 @@ function fight(state, e, emit) {
   const dAU = distAU(e.pos, tk.pos), dM = dAU * AU_M;
   const now = state.clock.minute;
 
-  // Break off: badly hurt, or hopelessly outgunned
-  if (p.maxG > 0 && (h.hp / h.hpMax < R.retreatHp || strength(p) < R.breakOff * strength(tp))) {
+  // Break off: badly hurt, or hopelessly outgunned (cornered, it has already tried)
+  if (p.maxG > 0 && a.flags.cornered !== 'fight' && (h.hp / h.hpMax < R.retreatHp || strength(p) < R.breakOff * strength(tp))) {
     a.mode = a.role === 'navy' ? 'flee' : 'leave';
     a.threat = tid;
-    emit('agent-retreats', { id: e.id, name: e.name });
+    emit('agent-retreats', { id: e.id, name: knownName(state, e.id) || 'unidentified contact', seen: !!state.sensors.$seen?.has(e.id) });
     return;
   }
 
@@ -804,11 +1011,15 @@ function fight(state, e, emit) {
   if (p.tubes > 0 && p.torps > 0 && dAU <= R.launchAU && !holdTorps) {
     const inFlight = launchedBy(state, e.id).filter(o => o.ord.kind === 'torpedo' && o.ord.target === tid).length;
     const salvo = Math.max(1, Math.min(p.tubes, Math.ceil(tp.pdc.mounts * tp.pdc.lambda * tp.pdc.factor * 2) + 1));
+    const prof = dAU > 0.002 ? 'cold' : 'fast';
+    let reach = null;                                    // (asked once, when a tube is ready: a ship running hard from far out isn't worth a torpedo)
     for (let i = 0; i < h.tubes.length && inFlight + (fired ? 1 : 0) < salvo; i++) {
       if (h.tubes[i] > now) continue;
       const warhead = pickWarhead(R, h, tp);
       if (!warhead) break;
-      if (!launchTorpedo(state, e.id, tid, { warhead, profile: dAU > 0.002 ? 'cold' : 'fast', aim: R.aim }, emit)) break;
+      reach ??= !!torpedoForecast(state, e.id, tid, prof)?.reach;
+      if (!reach) break;
+      if (!launchTorpedo(state, e.id, tid, { warhead, profile: prof, aim: R.aim }, emit)) break;
       h.magazine[warhead]--;
       h.tubes[i] = now + TORPEDO_RELOAD_MIN;
       fired = true;

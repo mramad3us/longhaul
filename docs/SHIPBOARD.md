@@ -16,7 +16,8 @@ Each class a small crew can fly has a **deck program** (`DECK_PROGRAMS`, sim/shi
 | Quarters | racks (one for every two of the crew: bunks are shared between watches), a head; on small craft the galley too | crew |
 | Mess | galley, tables, exercise rig, autodoc | crew |
 | Utility | life support, water reclamation, machine shop | crew |
-| Passengers | passenger acceleration berths (as many as the class is licensed for) and their own head, behind the deck's hatch; a police cutter's brig | pax |
+| Brig | a warship's holding cells (its class's `brig`), behind the deck's own hatch; a police cutter's brig is its berths | pax |
+| Passengers | passenger acceleration berths (as many as the class is licensed for) and their own head, behind the deck's hatch | pax |
 | Cargo | the launcher bay, storage, the crew airlock, a cargo door | cargo |
 | Engine | engineering station, drives, PDC turrets set in the hull | machinery |
 | Reactor | reactor | reactor |

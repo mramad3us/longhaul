@@ -12,11 +12,29 @@
 //              neither, the torpedo flies on its last known track,
 //              dead-reckoned: a target that went cold and changed
 //              course is aimed at where it would have been.
+//   Datalink — a torpedo and its ship talk both ways: the ship feeds it
+//              the track, it reports where it is. Talking is emitting: a
+//              FAST torpedo in link shows to a target's short-range suite
+//              (thermal, EM, lidar: sensors.js) with its drive cold. A
+//              COLD COAST one only listens, and stays a few metres of
+//              cold metal. Ours are on our board by their telemetry.
 //   Boost    — accelerate down the line of sight to the profile's
 //              closing speed (FAST 15–30 km/s by tech level, COLD COAST
-//              40% of that), then
-//              go dark; burn again whenever the target pulls away, so a
-//              ship running from a torpedo spends its Δv for it.
+//              40% of that), then go dark; burn again whenever the target
+//              pulls away.
+//   Pursuit  — a target burning away down the line of sight would have
+//              the torpedo match its burn minute for minute to hold that
+//              speed, for as long as it runs: no torpedo carries that Δv.
+//              So against a runner it builds more, at the motor's full G
+//              while it has Δv to spare: as much closing speed as the
+//              runner's own burn will bleed back down to the profile's by
+//              arrival (v² = vp² + 2·a·d), and coasts in dark on it. A
+//              runner that stops running would meet it too fast for its
+//              seeker to hold the lock (weapons.js SEEKER_SLACK): it brakes
+//              down to what the seeker can follow, late and as hard as it
+//              must, and that is Δv spent. Its reach is finite
+//              (torpedoForecast says whether a shot can get there): a ship
+//              running hard from far out gets away.
 //   Midcourse— predict the miss at closest approach (zero-effort
 //              miss, with the target's own thrust for a short
 //              horizon) and correct it impulsively when it grows past
@@ -38,7 +56,8 @@
 //     (salvos saturate). Rounds are spent.
 //   • Homing: a survivor hits unless the target out-jinks it:
 //     P = 1 − (target evasive G ÷ torpedo G available)². A civilian
-//     that doesn't jink is all but certain to be hit.
+//     that doesn't jink is all but certain to be hit. A seeker closing
+//     faster than it can follow seldom holds the lock to the end.
 //   • A nuclear warhead fuzes at its closest approach even when the
 //     homing fails — a near miss still hurts.
 //
@@ -60,13 +79,15 @@ import { getWorld, stepFree } from './world.js';
 import { createEntity } from './entities.js';
 import {
   TORPEDO_MOTOR, WARHEADS, PROFILES, TERMINAL_S, TORPEDO_LIFE_DAYS, PDC_RPS, PDC_MAX_EXPOSURE_S,
-  PDC_MUZZLE, PDC_STRAFE_DUTY, PDC_BURST_DP, RAILGUN, RAIL_DP, jinkSigma, hitChance, profileVc,
+  PDC_MUZZLE, PDC_STRAFE_DUTY, PDC_BURST_DP, RAILGUN, RAIL_DP, jinkSigma, hitChance, profileVc, seekerVc,
 } from './weapons.js';
 import { PLAYER, kinematics, profile, snapshot, sees, signatureOf, isOutOfFight } from './combatants.js';
 import { applyHit, detonate } from './damage.js';
 import { canSee, SEEKER_QUALITY } from './sensors.js';
 
 const PREDICT_S = 600;            // horizon over which a target's current thrust is extrapolated
+const HOMING_RESERVE_S = 20;      // Δv kept back from a pursuit for the last seconds: this long at full thrust
+const BRAKE_LATE = 0.5;           // too fast for its seeker, it brakes once it would need this share of its motor
 const TERMINAL_MIN = 10;          // minutes-to-go when terminal guidance starts
 const SALVO_WINDOW_S = 5;         // torpedoes arriving this close together share the point defense
 const PASS_CHECK_M = 50_000;      // slugs: closest approach worth evaluating
@@ -295,6 +316,10 @@ function guide(state, e, now, emit = () => {}) {
     o.lost = true;
     emit('torpedo-track-lost', { id: e.id, target: o.target, owner: o.owner });
   }
+  // (in link with its ship, a FAST torpedo talks back; a COLD COAST one keeps its own counsel)
+  const owner = kinematics(state, o.owner);
+  o.talks = o.profile !== 'cold' && !!owner && !(owner.e && isOutOfFight(owner.e))
+    && Math.hypot(owner.pos.x - e.pos.x, owner.pos.y - e.pos.y) <= RANGE.RADIO;
   const tr = o.track;
   if (!tr || o.dv <= 0) { o.cmd = null; return; }
 
@@ -335,17 +360,103 @@ function guide(state, e, now, emit = () => {}) {
   const lat = Math.hypot(ax, ay);
   if (lat > maxA) { ax *= maxA / lat; ay *= maxA / lat; }
 
-  // Build the profile's closing speed, and burn again whenever the target pulls away
-  const want = profileVc(o.profile, e.tl || 2);
-  if (vc < want * 0.95) {
+  // Build the profile's closing speed, and burn again whenever the target
+  // pulls away; against a runner, the speed its burn will bleed back down
+  // to the profile's by arrival (on Δv to spare beyond the profile's own)
+  const want = profileVc(o.profile, e.tl || 2), top = seekerVc(e.tl || 2);
+  const away = age < PREDICT_S ? Math.max(0, tr.ax * ux + tr.ay * uy) : 0;
+  const goal = pursuitSpeed(want, away, d);
+  if (vc < goal * 0.95) {
     const room = Math.sqrt(Math.max(0, maxA * maxA - ax * ax - ay * ay));
-    const along = Math.min(room, (want - vc) / MIN_S);
+    const spare = vc < want ? Infinity : spareA(o.dv, o.maxG * G0);
+    const along = Math.min(room, (goal - vc) / MIN_S, spare);
     ax += ux * along; ay += uy * along;
-    if (o.phase !== 'terminal') o.phase = 'boost';
-  } else if (o.phase === 'boost') {
-    o.phase = 'coast';
+    if (o.phase !== 'terminal') o.phase = along > 0 ? 'boost' : 'coast';
+  } else {
+    if (o.phase === 'boost') o.phase = 'coast';
+    // Too fast for its seeker at arrival, even with the runner's burn still bleeding the speed off: brake
+    const brake = brakeNeed(vc, top, away, d, o.maxG * G0);
+    if (brake > 0) {
+      const room = Math.sqrt(Math.max(0, maxA * maxA - ax * ax - ay * ay));
+      const back = Math.min(room, brake, spareA(o.dv, o.maxG * G0));
+      ax -= ux * back; ay -= uy * back;
+    }
   }
   o.cmd = Math.hypot(ax, ay) > 1e-4 ? { ax, ay } : null;
+}
+
+/**
+ * The braking (m/s²) a torpedo closing at `vc` with `d` (m) to go needs to
+ * arrive no faster than `top`, a target accelerating away at `away` doing
+ * part of it: none until it would take BRAKE_LATE of its motor `aMax`
+ * (braking late spends no more Δv, and leaves the runner time to keep
+ * running), then a little more than it takes.
+ */
+function brakeNeed(vc, top, away, d, aMax) {
+  if (vc <= top || d <= 0) return 0;
+  const need = (vc * vc - top * top) / (2 * d) - away;
+  return need >= BRAKE_LATE * aMax ? 1.1 * need : 0;
+}
+
+/**
+ * The closing speed to build at range `d` (m) on a target accelerating away
+ * at `away` (m/s²): what its burn brings down to the profile's `want` by
+ * arrival. A target not running away is closed on at `want`.
+ */
+export const pursuitSpeed = (want, away, d) => away > 0 ? Math.sqrt(want * want + 2 * away * d) : want;
+
+/** Acceleration a pursuit may spend this minute: Δv past the homing reserve (none, short of a sliver of it). */
+function spareA(dv, aMax) {
+  const a = Math.max(0, dv - aMax * HOMING_RESERVE_S) / MIN_S;
+  return a < 0.01 * aMax ? 0 : a;
+}
+
+const FORECAST_DAYS = 3;          // a forecast looks this far ahead at most
+const FORECAST_DV = 0.9;          // …on this much of the motor's Δv (midcourse corrections take the rest)
+
+/**
+ * Would a torpedo launched now reach the target, flown as guide() flies it,
+ * the target holding the thrust it has now? A look down the line of sight
+ * (the crossing speed taken off its Δv first; no midcourse): { reach,
+ * etaS, shortM (how far short it runs dry), vcArrive }. For fire control,
+ * and for NPC crews deciding whether a shot is worth a torpedo.
+ */
+export function torpedoForecast(state, shooterId, targetId, prof = 'fast') {
+  const s = kinematics(state, shooterId), t = kinematics(state, targetId);
+  if (!s || !t) return null;
+  const tl = shooterId === PLAYER ? (state.ship.tl || 2) : (s.e?.tl || 2);
+  const motor = TORPEDO_MOTOR[tl];
+  const rx = (t.pos.x - s.pos.x) * AU_M, ry = (t.pos.y - s.pos.y) * AU_M;
+  let d = Math.hypot(rx, ry);
+  if (d < 1) return { reach: true, etaS: 0, shortM: 0, vcArrive: 0 };
+  const ux = rx / d, uy = ry / d;
+  const wx = t.vel.vx - s.vel.vx, wy = t.vel.vy - s.vel.vy;
+  let vc = -(wx * ux + wy * uy);
+  const cross = Math.abs(wx * uy - wy * ux);
+  const away = Math.max(0, t.ax * ux + t.ay * uy);
+  const want = profileVc(PROFILES[prof] ? prof : 'fast', tl), top = seekerVc(tl);
+  const aMax = motor.maxG * G0;
+  let dv = motor.dv * FORECAST_DV - cross, ts = 0;
+  if (dv <= 0) return { reach: false, etaS: Infinity, shortM: d, vcArrive: 0 };
+  for (const end = FORECAST_DAYS * 86400; ts < end;) {
+    if (d <= 0) return { reach: true, etaS: ts, shortM: 0, vcArrive: vc };
+    const goal = pursuitSpeed(want, away, d);
+    let a = 0;
+    if (vc < goal * 0.95 && dv >= 1) {
+      const spare = vc < want ? Infinity : spareA(dv, aMax);
+      a = Math.min(aMax, dv / MIN_S, (goal - vc) / MIN_S, spare);
+    } else if (dv >= 1) {
+      a = -Math.min(aMax, brakeNeed(vc, top, away, d, aMax), spareA(dv, aMax));
+    }
+    // opening, with nothing left to close on: it never gets there
+    if (vc <= 0 && a <= away) return { reach: false, etaS: Infinity, shortM: d, vcArrive: 0 };
+    const dt = a !== 0 ? 10 : Math.min(MIN_S, Math.max(10, 0.02 * d / Math.max(1, Math.abs(vc))));
+    dv -= Math.abs(a) * dt;
+    d -= vc * dt + 0.5 * (a - away) * dt * dt;
+    vc += (a - away) * dt;
+    ts += dt;
+  }
+  return { reach: false, etaS: Infinity, shortM: d, vcArrive: 0 };
 }
 
 // ---- ENDGAME ----
@@ -432,20 +543,22 @@ function resolveTorpedoes(state, targetId, group, emit) {
       const at ={ x: tk.pos.x - g.ca.rx / AU_M, y: tk.pos.y - g.ca.ry / AU_M };
       if (random() < 1 - Math.exp(-hazard[i])) {
         world.remove(e);
-        emit('torpedo-intercepted', { id: e.id, owner: o.owner, target: targetId, x: at.x, y: at.y, warhead: o.warhead });
+        emit('torpedo-intercepted', { id: e.id, owner: o.owner, target: targetId, x: at.x, y: at.y, warhead: o.warhead, vRel: g.ca.vRel });
         return;
       }
       const aAvail = Math.min(o.maxG * G0, o.dv / TERMINAL_S);
       const aEvade = tp.evadeG * G0;
       const pGuide = aAvail <= aEvade ? 0.05 : Math.max(0.05, Math.min(0.97, 1 - (aEvade / aAvail) ** 2));
-      const homed = random() < pGuide;
+      // (closing faster than its seeker can follow, the lock seldom holds to the end)
+      const top = seekerVc(e.tl || 2), pLock = g.ca.vRel <= top ? 1 : (top / g.ca.vRel) ** 2;
+      const homed = random() < pGuide * pLock;
       if (o.warhead === 'nuke') {
         const W = WARHEADS.nuke;
         const miss = homed ? random() * 150 : 300 + random() * (W.fuzeM - 300);
         const ang = random() * Math.PI * 2;
         const pos = { x: tk.pos.x + Math.cos(ang) * miss / AU_M, y: tk.pos.y + Math.sin(ang) * miss / AU_M };
         world.remove(e);
-        emit('torpedo-hit', { id: e.id, owner: o.owner, target: targetId, warhead: 'nuke', missM: miss, x: pos.x, y: pos.y });
+        emit('torpedo-hit', { id: e.id, owner: o.owner, target: targetId, warhead: 'nuke', missM: miss, x: pos.x, y: pos.y, vRel: g.ca.vRel });
         detonate(state, pos, { dp: W.dp, scaleM: W.scaleM }, e.id, emit, { kind: 'nuclear', by: o.owner });
       } else if (homed) {
         world.remove(e);
@@ -534,6 +647,21 @@ export function launchedBy(state, ownerId) {
   const out = [];
   for (const e of getWorld(state).driven) if (e.type === 'ordnance' && e.ord.owner === ownerId) out.push(e);
   return out;
+}
+
+/**
+ * Where a torpedo has its target at `minute` (AU): its track, dead-reckoned
+ * as guide() does. What its ship's displays draw it flying at (never the
+ * target's true place, which a target gone dark keeps to itself).
+ */
+export function aimPoint(e, minute) {
+  const tr = e.ord?.track;
+  if (!tr) return null;
+  const age = Math.max(0, minute - tr.t) * MIN_S, h0 = Math.min(age, PREDICT_S);
+  return {
+    x: tr.x + (tr.vx * age + tr.ax * (h0 * age - 0.5 * h0 * h0)) / AU_M,
+    y: tr.y + (tr.vy * age + tr.ay * (h0 * age - 0.5 * h0 * h0)) / AU_M,
+  };
 }
 
 /** Estimated seconds until an ordnance entity reaches its target (Infinity if opening). */

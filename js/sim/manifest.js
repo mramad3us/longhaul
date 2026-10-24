@@ -203,3 +203,19 @@ export function dossierTick(state, emit = () => {}) {
   }
 }
 
+// ---- OUR OWN BERTHS ----
+// Passengers (and survivors, casualties) ride in the berths the class is
+// licensed for. Prisoners go to the brig first (a warship's cells:
+// ship-classes.js `brig`; a police cutter's brig is its passenger deck),
+// then into whatever berths are free.
+
+const prisonersAboard = (state) => state.passengers.reduce((s, p) => s + (p.kind === 'prisoners' ? p.count : 0), 0);
+
+/** Passenger berths free (prisoners past what the brig holds take berths too). */
+export function freeBerths(state) {
+  const held = prisonersAboard(state), others = state.passengers.reduce((s, p) => s + p.count, 0) - held;
+  return (state.berths || 0) - others - Math.max(0, held - (state.brig || 0));
+}
+
+/** Room for prisoners: the brig's cells, then free berths. */
+export const freeCells = (state) => Math.max(0, (state.brig || 0) - prisonersAboard(state)) + Math.max(0, freeBerths(state));

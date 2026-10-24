@@ -35,6 +35,10 @@
 // armed light freighter has a self-defense fit, and mining ships can turn
 // their rock-cracking gear on a hull that comes close enough.
 //
+// A warship carries a brig (`brig`: holding cells, apart from any
+// passenger berths): a navy takes prisoners. A police cutter's brig is its
+// passenger deck (its `berths`).
+//
 // A navy's hulls are military kit: flying one takes that navy's license
 // (service.js); a `stolen` one no license covers. A ship's identity
 // (rollIdentity) is its class, its flag, its sub-faction (factions.js)
@@ -318,21 +322,21 @@ export const CLASSES = {
     name: 'Refit corvette (ex-UNN Harrier)', kind: 'corvette', builder: 'Belt', tl: 1, category: 'military', size: 'M',
     lengthM: 50, massT: 2900, crew: [5, 12], crewStd: 8, drive: { cruiseG: 0.8, maxG: 8 },
     armor: 1.5, pdc: 3, tubes: 2, magazine: { he: 4, nuke: 2 }, railgun: 0,
-    cargoT: 10, berths: 4, factions: { OPA: 3 }, names: 'opa', evasive: true,
+    cargoT: 10, berths: 4, brig: 6, factions: { OPA: 3 }, names: 'opa', evasive: true,
     desc: 'A decommissioned UNN corvette bought for scrap and rebuilt at Tycho with salvaged PDCs. It fights; it does not win against a navy.',
   },
   'unn-corvette': {
     name: 'Harrier-class corvette', kind: 'corvette', builder: 'UN', tl: 2, category: 'military', size: 'M',
     lengthM: 50, massT: 2900, crew: [6, 12], crewStd: 10, atmo: { entry: 'tail', shield: 'ablative ring', landing: 'legs' }, drive: { cruiseG: 1, maxG: 9 },
     armor: 2, pdc: 4, tubes: 2, magazine: { he: 6, nuke: 4 }, railgun: 0,
-    cargoT: 5, berths: 0, factions: { UN: 5 }, names: 'navy', evasive: true,
+    cargoT: 5, berths: 0, brig: 6, factions: { UN: 5 }, names: 'navy', evasive: true,
     desc: 'The UNN\'s numerous, thirty-year-old patrol corvette.',
   },
   'mcrn-corvette': {
     name: 'Tharsis-class corvette', kind: 'corvette', builder: 'MCR', tl: 4, category: 'military', size: 'M',
     lengthM: 46, massT: 2800, crew: [6, 12], crewStd: 9, atmo: { entry: 'tail', shield: 'ablative ring', landing: 'legs' }, drive: { cruiseG: 1, maxG: 12 },
     armor: 2, pdc: 6, tubes: 2, magazine: { he: 6, nuke: 6 }, railgun: 0,
-    cargoT: 5, berths: 0, factions: { MCR: 5 }, names: 'navy', evasive: true,
+    cargoT: 5, berths: 0, brig: 6, factions: { MCR: 5 }, names: 'navy', evasive: true,
     desc: 'Martian fast-attack corvette: six TL4 PDCs, a 12G drive and a stealthy hull.',
   },
   'pirate-corvette': {
@@ -346,63 +350,63 @@ export const CLASSES = {
     name: 'Refit frigate (ex-UNN Danube)', kind: 'frigate', builder: 'Belt', tl: 1, category: 'military', size: 'M',
     lengthM: 125, massT: 12_500, crew: [20, 40], crewStd: 28, drive: { cruiseG: 0.6, maxG: 6 },
     armor: 2, pdc: 5, tubes: 3, magazine: { he: 8, nuke: 4 }, railgun: 0,
-    cargoT: 100, berths: 10, factions: { OPA: 1 }, names: 'opa', evasive: true,
+    cargoT: 100, berths: 10, brig: 12, factions: { OPA: 1 }, names: 'opa', evasive: true,
     desc: 'The OPA\'s pride: an old UNN frigate with its railgun gone and half its PDCs replaced by whatever Tycho could make.',
   },
   'unn-frigate': {
     name: 'Danube-class frigate', kind: 'frigate', builder: 'UN', tl: 2, category: 'military', size: 'M',
     lengthM: 125, massT: 12_500, crew: [20, 40], crewStd: 32, drive: { cruiseG: 1, maxG: 7 },
     armor: 2.5, pdc: 8, tubes: 4, magazine: { he: 12, nuke: 8 }, railgun: 1,
-    cargoT: 20, berths: 0, factions: { UN: 5 }, names: 'navy', evasive: true,
+    cargoT: 20, berths: 0, brig: 12, factions: { UN: 5 }, names: 'navy', evasive: true,
     desc: 'The backbone of the UN Navy, a generation old.',
   },
   'unn-frigate-new': {
     name: 'Everest-class frigate', kind: 'frigate', builder: 'UN', tl: 3, category: 'military', size: 'M',
     lengthM: 120, massT: 12_000, crew: [20, 40], crewStd: 30, drive: { cruiseG: 1, maxG: 9 },
     armor: 2.5, pdc: 10, tubes: 4, magazine: { he: 12, nuke: 12 }, railgun: 1,
-    cargoT: 20, berths: 0, factions: { UN: 2 }, names: 'navy', evasive: true,
+    cargoT: 20, berths: 0, brig: 12, factions: { UN: 2 }, names: 'navy', evasive: true,
     desc: 'Earth\'s modern frigate: few in number, the equal of anything but Mars.',
   },
   'mcrn-frigate': {
     name: 'Hellas-class frigate', kind: 'frigate', builder: 'MCR', tl: 4, category: 'military', size: 'M',
     lengthM: 120, massT: 12_000, crew: [20, 40], crewStd: 26, drive: { cruiseG: 1, maxG: 10 },
     armor: 3, pdc: 12, tubes: 4, magazine: { he: 12, nuke: 12 }, railgun: 1,
-    cargoT: 20, berths: 0, factions: { MCR: 4 }, names: 'navy', evasive: true,
+    cargoT: 20, berths: 0, brig: 12, factions: { MCR: 4 }, names: 'navy', evasive: true,
     desc: 'The best frigate in the system: twelve TL4 PDCs, a keel railgun and a hull that hardly shows on radar.',
   },
   'unn-destroyer': {
     name: 'Atlas-class destroyer', kind: 'destroyer', builder: 'UN', tl: 2, category: 'military', size: 'L',
     lengthM: 230, massT: 42_000, crew: [60, 120], crewStd: 90, drive: { cruiseG: 1, maxG: 6 },
     armor: 3, pdc: 14, tubes: 6, magazine: { he: 16, nuke: 16 }, railgun: 1,
-    cargoT: 50, berths: 0, factions: { UN: 3 }, names: 'navy', evasive: true,
+    cargoT: 50, berths: 0, brig: 24, factions: { UN: 3 }, names: 'navy', evasive: true,
     desc: 'UNN destroyer, refitted twice and due for a third.',
   },
   'mcrn-destroyer': {
     name: 'Valles-class destroyer', kind: 'destroyer', builder: 'MCR', tl: 4, category: 'military', size: 'L',
     lengthM: 220, massT: 40_000, crew: [60, 120], crewStd: 80, drive: { cruiseG: 1, maxG: 8 },
     armor: 3.5, pdc: 18, tubes: 6, magazine: { he: 16, nuke: 20 }, railgun: 2,
-    cargoT: 50, berths: 0, factions: { MCR: 3 }, names: 'navy', evasive: true,
+    cargoT: 50, berths: 0, brig: 24, factions: { MCR: 3 }, names: 'navy', evasive: true,
     desc: 'Martian destroyer with two railguns.',
   },
   'unn-battleship': {
     name: 'Leviathan-class battleship', kind: 'battleship', builder: 'UN', tl: 3, category: 'military', size: 'XL',
     lengthM: 500, massT: 260_000, crew: [200, 400], crewStd: 320, drive: { cruiseG: 0.5, maxG: 4 },
     armor: 4, pdc: 32, tubes: 12, magazine: { he: 40, nuke: 60 }, railgun: 2,
-    cargoT: 500, berths: 0, factions: { UN: 3 }, names: 'navy', evasive: true,
+    cargoT: 500, berths: 0, brig: 60, factions: { UN: 3 }, names: 'navy', evasive: true,
     desc: 'Earth spends on its capital ships what it saves on everything else.',
   },
   'mcrn-battleship': {
     name: 'Olympus-class battleship', kind: 'battleship', builder: 'MCR', tl: 4, category: 'military', size: 'XL',
     lengthM: 480, massT: 250_000, crew: [200, 400], crewStd: 280, drive: { cruiseG: 0.5, maxG: 5 },
     armor: 4.5, pdc: 40, tubes: 12, magazine: { he: 40, nuke: 80 }, railgun: 3,
-    cargoT: 500, berths: 0, factions: { MCR: 3 }, names: 'navy', evasive: true,
+    cargoT: 500, berths: 0, brig: 60, factions: { MCR: 3 }, names: 'navy', evasive: true,
     desc: 'The flagship class of the Martian Navy.',
   },
   'opa-gunship': {
     name: 'Converted-freighter gunship', kind: 'gunship', builder: 'Belt', tl: 1, category: 'military', size: 'M',
     lengthM: 90, massT: 8000, crew: [15, 30], crewStd: 20, drive: { cruiseG: 0.5, maxG: 5 },
     armor: 1, pdc: 4, tubes: 2, magazine: { he: 6, nuke: 2 }, railgun: 0,
-    cargoT: 2000, berths: 20, factions: { OPA: 1 }, names: 'opa', evasive: true,
+    cargoT: 2000, berths: 20, brig: 10, factions: { OPA: 1 }, names: 'opa', evasive: true,
     desc: 'A freighter with guns welded to it, flown by people who mean it.',
   },
 

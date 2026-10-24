@@ -30,6 +30,7 @@ Main branches of the state:
 | `dock` | docking.js | the dock under way: target, berth, our collar, phase, our place in the berth's frame |
 | `tc` | traffic-control.js | the station whose space we are in, the zone, our clearances, the warnings given |
 | `boarding` | boarding.js | a boarding party's operation |
+| `passengers`, `berths`, `brig` | manifest.js, prisoners.js | who rides with us: passengers in their berths, prisoners in the brig (then any free berth), each prisoner group with its ship, its side and its officers (turned over in port, or ransomed) |
 | `dossier` | manifest.js | what we have learned about other ships (crew, passengers, routes) and from where |
 | `intel` | intel.js | the plot: reports with an age (lost contacts, traffic digests, news), the inbox of news in flight, the zones we have heard of |
 | `navFlags` | flags.js | the captain's flags on ships and stations, lettered A to Z, each for as long as we hold a track of it |
@@ -136,6 +137,7 @@ CSS: `css/main.css` (the original design system and the menus), `css/ui.css` (co
 | crew | medicine, inertial events, breaches, reactor procedures, juice, FLANK |
 | ship | watches, needs, wear and repair, hand flying, life support failures |
 | combat | classes, torpedoes and PDC, dead reckoning, railguns, damage, fire control, patrols, pirates, surrender, saves |
+| chase | torpedoes against a ship running (full G early, the reach forecast, running dry), ships that run within their crews' limits (the sprint, going dark, cornered and striking), a pirate found and running, patrols' jurisdiction and one stop at a time, a route to a lost contact's last fix, a bounty's mark off a moon, the brig |
 | factions | influence, hot zones, the director, bounties |
 | service | the powers' relations over two years, licenses and the flag, contraband, the flag in a fight, rank, command ships and call-ups, military missions (intelligence, strike, hold), the yards and traffic replacement |
 | names | name variety over 200,000 rolls, uniqueness in a game, determinism, the registry on load |

@@ -8,7 +8,10 @@
 //   broadcasting (transponder, distress beacon) — heard at long range
 //   drive lit — the plume is the brightest thing for millions of km
 //   cold and silent — radar/thermal only, by hull size, cut by stealth
-//   ordnance — a coasting torpedo is a few meters of cold metal
+//   ordnance — a coasting torpedo is a few meters of cold metal, unless it
+//              is talking to its ship (a FAST torpedo in datalink): then
+//              the short-range suite holds it (ordnance.js). Our own are
+//              on our board by their telemetry, wherever the band reaches.
 //
 // Whether a contact squawks is known as soon as it is held (a ship
 // running dark is marked so on every display: flags.js).
@@ -63,9 +66,19 @@ export function signatureRange(e) {
   if (e.type === 'station') return RANGE.LONG * 2;
   if (e.type === 'ordnance') {
     if (e.thrust > 0) return RANGE.LONG * 0.5;
-    return e.ord?.kind === 'slug' ? SLUG_RADAR_AU : TORPEDO_RADAR_AU;
+    if (e.ord?.kind === 'slug') return SLUG_RADAR_AU;
+    // (talking to its ship, it shows to the short-range suite; better kit talks more quietly)
+    return e.ord?.talks ? RANGE.SHORT * TECH[e.tl || 2].stealth : TORPEDO_RADAR_AU;
   }
   if (e.sos || e.transponder || e.thrust > 0) return RANGE.LONG;
+  return hullSignature(e);
+}
+
+/**
+ * How far (AU) a quality-1 sensor holds a ship cold and silent: radar on
+ * its hull, by size, cut by stealth. All that running dark comes down to.
+ */
+export function hullSignature(e) {
   const size = SIZES[classOf(e)?.size || sizeForMass(e.mass)];
   return size.radarAU * TECH[e.tl || 2].stealth;
 }
@@ -105,7 +118,7 @@ export function sensorsTick(state) {
   for (const e of _q) {
     const dx = e.pos.x - pos.x, dy = e.pos.y - pos.y;
     const dist = Math.hypot(dx, dy);
-    if (!canSee(dist, signatureRange(e), quality)) continue;
+    if (!canSee(dist, signatureRange(e), quality) && !(e.type === 'ordnance' && e.ord?.owner === 'player')) continue;
     seen.add(e.id);
     s.scan[e.id] = (s.scan[e.id] || 0) + (s.locked === e.id ? 3 : 1) * rate;
     contacts.push(describe(e, dist, Math.atan2(dy, dx), s.scan[e.id], isIdentified(state, e, s.scan[e.id], hunts)));

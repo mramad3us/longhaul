@@ -251,8 +251,7 @@ export function updateHud(state) {
   setText(el.mass, fmtMass(state.shipMass + cargoKg + state.resources.fuel.current));
   setText(el.hull, `${Math.round(state.hull.integrity)}%${state.hull.integrity < 50 ? ' · burns limited to 3G' : ''}`);
   toggleClass(el.hull, 'val-hot', state.hull.integrity < 50);
-  const pax = state.passengers.reduce((s, p) => s + p.count, 0);
-  setText(el.cargo, `${fmtMass(cargoKg)} / ${fmtMass(state.cargoCapacity)}${pax ? ` · ${pax} pax` : ''}`);
+  setText(el.cargo, `${fmtMass(cargoKg)} / ${fmtMass(state.cargoCapacity)}${aboardLabel(state)}`);
 
   updateResources(state);
 }
@@ -355,12 +354,19 @@ function initResources() {
 }
 
 /** Fires once when a resource crosses into low/critical (UI alerts). */
+/** Who else is aboard, for the readouts: passengers (pax) and prisoners (held), each counted apart. */
+function aboardLabel(state) {
+  let pax = 0, held = 0;
+  for (const p of state.passengers) { if (p.kind === 'prisoners') held += p.count; else pax += p.count; }
+  return `${pax ? ` · ${pax} pax` : ''}${held ? ` · ${held} held` : ''}`;
+}
+
 export let onResourceAlert = () => {};
 export function setResourceAlertHandler(fn) { onResourceAlert = fn; }
 
 function updateResources(state) {
   const alive = state.ship.crew.filter(m => !m.dead).length;
-  setText(resEls.crew.val, `${alive} / ${state.ship.crew.length}${state.passengers.length ? ` · ${state.passengers.reduce((s, p) => s + p.count, 0)} pax` : ''}`);
+  setText(resEls.crew.val, `${alive} / ${state.ship.crew.length}${aboardLabel(state)}`);
   setText(resEls.credits.val, `${fmtNum(state.resources.credits.current)} MCR`);
   let critical = false;
   for (const cfg of RES) {

@@ -81,7 +81,7 @@ import { CORRIDOR_M, clearanceFor, clearanceUsed, keepOutM, markOutbound } from 
 import { CLASSES, PLAYER_CLASS } from './ship-classes.js';
 import { applyHit } from './damage.js';
 import { flagOf } from './service.js';
-import { crewAboard, passengersAboard, setCrewAboard } from './manifest.js';
+import { crewAboard, passengersAboard, setCrewAboard, freeBerths } from './manifest.js';
 import { adjustStanding, cite } from './law.js';
 import { PLAYER, isOutOfFight } from './combatants.js';
 
@@ -824,7 +824,7 @@ function completeDock(state, emit) {
 
 /** A crew we offered to take off comes across the collar (dialogue.js 'rescue'). */
 function takeSurvivors(state, e, emit) {
-  const room = state.berths - state.passengers.reduce((s, p) => s + p.count, 0);
+  const room = freeBerths(state);
   const n = Math.min(e.tags.rescue, room, crewAboard(e) + passengersAboard(e));
   e.tags.rescue = 0;
   if (n <= 0) return;

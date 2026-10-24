@@ -32,7 +32,7 @@
 
 import { DAY_MIN } from '../core/constants.js';
 import { random, randInt, randRange, pick, weightedPick, chance } from '../core/rng.js';
-import { getWorld } from './world.js';
+import { getWorld, restingOrbit } from './world.js';
 import { createEntity, newSignature } from './entities.js';
 import { rollIdentity, CLASSES } from './ship-classes.js';
 import { FACTIONS, SUBFACTIONS, subName } from './factions.js';
@@ -196,7 +196,7 @@ export function spawnMil(state, c) {
   }
   if (c.type === 'STRIKE') {
     const mark = world.add(createEntity({ id: world.newId('mark'), name: `Last fix: ${c.ship.name}`, type: 'nav', transponder: false,
-      orbit: { body: c.body, r: Math.max(0.003, c.zoneR + randRange(0.004, 0.012)), phase: c.zonePhase + randRange(-0.6, 0.6), period: 0 }, tags: { contract: c.id } }));
+      orbit: restingOrbit(c.body, Math.max(0.003, c.zoneR + randRange(0.004, 0.012)), c.zonePhase + randRange(-0.6, 0.6), now), tags: { contract: c.id } }));
     const outlaw = c.enemy === '$proxy' || c.enemy === '$cells';
     const enemies = [c.faction];
     const at = around(mark, 0.0004);

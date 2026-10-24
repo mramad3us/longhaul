@@ -159,6 +159,8 @@ export default [
       const s = game(8, 6);
       noRepairs(s);
       atHour(s, 9);                     // the Pilot has the helm watch
+      // (hours on Ceres' approach uncleared got us reported to station security: settled, this is about the helm)
+      s.law.wanted.OPA = 0; s.law.fines = [];
       const std = planRoutes(s, { kind: 'entity', id: 'vesta-depot' }).find(o => o.name === 'STANDARD');
       engageRoute(s, std.plan, { estimate: std.estimate });
       runUntil(s, st => st.autopilot?.phase === 'active' && st.flight.thrustG > 0.5, 600);

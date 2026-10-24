@@ -171,7 +171,7 @@ At a new game we pick a military license (none, UN, MCR or OPA: WORLD.md, milita
 - **Interior.** Each playable class has its own deck program (sim/ship-layout.js): which decks, bow to stern, each drawn from a deck template and fitted to the class (SHIPBOARD.md). Small craft are 7 tiles wide, the rest 9. Without point defense the turret wells are plated over, without tubes the launcher bay is hold space, a ship with nothing to fire has a couch where fire control would be. The hull is cut for airlocks where its collars are, and for a cargo door.
 - **Machinery.** Systems follow the fit (`systemsFor`): no PDCs means no `pdc` system to wear, no tubes means no `launcher`. They start in the condition of the class's TL and wear, fault and are repaired at its rates.
 - **Drive.** The class's maximum G is the limit (`flight.maxG`). The drive is rated for 70% of it (`ratedG`); past that it is overdriven, with double fuel and a containment risk. Route options above the limit aren't offered.
-- **Stores.** Hold, berths, PDC rounds (20,000 per mount) and magazine come from the class, and a rack of camera drones by size (S 2, M 3, L 4, XL 6; sim/drones.js). A navy hull in private hands starts without its nuclear warheads.
+- **Stores.** Hold, berths, a warship's brig (holding cells apart from any passenger berths: corvettes 6, frigates 12, destroyers 24, battleships 60, on a brig deck of their own; a police cutter's brig is its passenger deck), PDC rounds (20,000 per mount) and magazine come from the class, and a rack of camera drones by size (S 2, M 3, L 4, XL 6; sim/drones.js). A navy hull in private hands starts without its nuclear warheads.
 - **Upkeep.** Spare parts at a station are priced at the ship's TL (`priceOf`), and a dockside overhaul is billed at its TL and structure (`overhaulQuote`).
 
 The default is the armed light freighter: two PDCs and two tubes, an M collar on the nose and one on the port flank by the hold. Its nine decks are the bridge (helm, ops, the weapons console), crew quarters (four racks for a crew of eight on watches), the mess, utility, two passenger decks (twelve berths), the hold (the launcher with its magazine, the crew airlock, a cargo door), the engine deck (two PDC turrets in its hull) and the reactor. A new game starts in a berth at Ceres.
@@ -186,12 +186,12 @@ The default is the armed light freighter: two PDCs and two tubes, an M collar on
   | Bout | Better ship wins | Both destroyed | Undecided | Weaker ship wins |
   |---|---|---|---|---|
   | Belt refit frigate vs Martian frigate | 30 | 0 | 0 | 0 |
-  | Earth TL2 frigate vs Martian frigate | 29 | 0 | 0 | 1 |
-  | Earth TL3 Everest vs Martian Hellas | 18 | 2 | 1 | 9 |
-  | Belt refit corvette vs Earth corvette | 30 | 0 | 0 | 0 |
-  | Earth corvette vs Martian corvette | 27 | 1 | 1 | 1 |
+  | Earth TL2 frigate vs Martian frigate | 30 | 0 | 0 | 0 |
+  | Earth TL3 Everest vs Martian Hellas | 20 | 2 | 5 | 3 |
+  | Belt refit corvette vs Earth corvette | 28 | 2 | 0 | 0 |
+  | Earth corvette vs Martian corvette | 29 | 0 | 1 | 0 |
 
-  Earth's best frigate is the only hull of its size with a real chance against Mars: it wins about one bout in four. (The duels are chaotic: the same code gives 3 to 9 Everest wins in 30 with only the crew size of the watching ship changed, so the duel test runs twelve bouts and only asserts that the Everest doesn't win most of them.)
+  Earth's best frigate is the only hull of its size with a chance against Mars: it wins about one bout in ten. Martian torpedoes talk to their ship more quietly (a FAST torpedo in datalink shows to the target's short-range suite by its TL's stealth: COMBAT.md), so the Everest sees them coming later than the Hellas sees its own. (The duels are chaotic: the same code gives 3 to 9 Everest wins in 30 with only the crew size of the watching ship changed, so the duel test runs twelve bouts and only asserts that the Everest doesn't win most of them.)
 - Flying a Belt refit corvette, or the armed light freighter, against a Martian frigate, we are crippled or killed every time, and the frigate takes no damage. The armed freighter does see off a pirate gunship.
 
 ## Identities

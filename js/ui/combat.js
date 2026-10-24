@@ -26,7 +26,7 @@ import { getWorld } from '../sim/world.js';
 import { factionColor, FACTIONS } from '../sim/factions.js';
 import { classLabel } from '../sim/ship-classes.js';
 import { PLAYER, profile, gunner } from '../sim/combatants.js';
-import { timeToGo, launchedBy } from '../sim/ordnance.js';
+import { timeToGo, launchedBy, torpedoForecast, aimPoint } from '../sim/ordnance.js';
 import { hostilesOfPlayer } from '../sim/agents.js';
 import { setFireTarget, setPdcMode, setAim, setEvasive, fireTorpedo, readyTubes, threats, PDC_MODES } from '../sim/combat.js';
 import { AIM } from '../sim/damage.js';
@@ -45,6 +45,23 @@ const DECADES = 7;                 // 1 km … 10,000,000 km
 const LABEL_FONT = '10px "IBM Plex Mono", monospace';
 const QUICK_STANCES = ['guns', 'gear', 'torpedo', 'long'];
 const choice = { warhead: 'he', profile: 'fast' };
+let reachKey = '', reachNow = null;      // the fire-control forecast, once a game-minute
+
+/**
+ * Would a torpedo get there, the target keeping its present burn
+ * (sim/ordnance.js torpedoForecast)? A ship running hard from far out
+ * outlasts any torpedo's Δv: better to know before the tube is spent.
+ */
+function reachRow(state, tgt) {
+  const key = `${state.clock.minute}:${tgt.id}:${choice.profile}`;
+  if (key !== reachKey) { reachKey = key; reachNow = torpedoForecast(state, PLAYER, tgt.id, choice.profile); }
+  const r = reachNow;
+  if (!r) return '';
+  const g = tgt.thrust > 0.05 && contactById(state, tgt.id)?.thrust ? ` against its ${tgt.thrust.toFixed(1)}G` : '';
+  return r.reach
+    ? `<div class="fc-row"><span>REACH</span><b>in reach · about ${formatDuration(Math.max(1, r.etaS / 60))}</b></div>`
+    : `<div class="fc-row"><span>REACH</span><b class="fc-warn">OUT OF REACH${g} · runs dry ${fmtKm(r.shortM / 1000)} short</b></div>`;
+}
 
 export class ThreatView {
   constructor(container, { onSelect } = {}) {
@@ -109,6 +126,7 @@ export class ThreatView {
       const e = world.get(c.id);
       if (c.ordnance) {
         const inbound = e?.ord?.target === PLAYER, ours = e?.ord?.owner === PLAYER;
+        if (ours) continue;                          // (ours are drawn below, with where they are aiming)
         const col = inbound ? '#EF5350' : ours ? '#5FD38D' : '#F0A93A';
         if (inbound) { ctx.strokeStyle = 'rgba(255,85,85,0.35)'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(cx, cy); ctx.stroke(); }
         ctx.fillStyle = col;
@@ -138,16 +156,16 @@ export class ThreatView {
         pri: (state.combat.target === c.id ? 4 : hostile.has(c.id) ? 2 : c.wreck ? 0.5 : 1) + markPri(m), tags: labelTags(bare ? { mission: m.mission } : m) });
       this._hits.push({ id: c.id, x, y });
     }
-    // Our own torpedoes on their way, toward their targets
+    // Our own torpedoes on their way, toward where they have their targets
     for (const o of launchedBy(state, PLAYER)) {
-      const tk = world.get(o.ord.target);
+      const tk = aimPoint(o, state.clock.minute);
       if (!tk) continue;
       const rel = (pos) => {
         const dx = pos.x - state.flight.pos.x, dy = pos.y - state.flight.pos.y;
         const r = radius(Math.hypot(dx, dy) * AU_KM), b = Math.atan2(dy, dx) - facing;
         return { x: cx - Math.sin(b) * r, y: cy - Math.cos(b) * r };
       };
-      const a = rel(o.pos), b = rel(tk.pos);
+      const a = rel(o.pos), b = rel(tk);
       ctx.strokeStyle = 'rgba(62,199,230,0.35)'; ctx.setLineDash([3, 3]);
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]);
       ctx.fillStyle = '#5FD38D'; ctx.fillRect(a.x - 1.5, a.y - 1.5, 3, 3);
@@ -209,6 +227,7 @@ export function renderFireControl(state, box) {
     <div class="fc-choice">${Object.values(WARHEADS).map(w => btn(`warhead:${w.id}`, w.short, choice.warhead === w.id)).join('')}
       ${Object.values(PROFILES).map(pr => btn(`profile:${pr.id}`, pr.label, choice.profile === pr.id)).join('')}</div>
     <div class="fc-desc">${esc(PROFILES[choice.profile].desc)}</div>
+    ${tgt ? reachRow(state, tgt) : ''}
     <div class="fc-actions">${btn('fire', why ? `FIRE — ${why.toUpperCase()}` : 'FIRE TORPEDO', false, why ? 'disabled' : '')}</div>`;
 
   const gear = p.gear ? `<div class="fc-row"><span>MINING GEAR</span><b>${p.gear.mounts > 1 ? p.gear.mounts + ' × ' : ''}${esc(p.gear.name)} · ${fmtKm(p.gear.rangeM / 1000)}</b></div>` : '';
