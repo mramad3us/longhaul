@@ -11,6 +11,7 @@ import { formatStamp } from '../core/clock.js';
 import { navStatus } from './hud.js';
 import { iconDelete } from '../svg-icons.js';
 import { VERSION } from '../version.js';
+import { ourName } from '../sim/service.js';
 
 let autosaveTimer = null;
 let saving = false;
@@ -24,7 +25,7 @@ export async function saveCurrent(name = 'Quicksave', id = null) {
       id: id || `save_${Date.now()}`,
       name,
       version: VERSION,
-      meta: { ship: s.ship.name, date: formatStamp(s.clock), where: navStatus(s).chip, credits: Math.round(s.resources.credits.current) },
+      meta: { ship: ourName(s), date: formatStamp(s.clock), where: navStatus(s).chip, credits: Math.round(s.resources.credits.current) },
       data: serialize(s),
     });
     return record;

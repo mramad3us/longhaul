@@ -74,7 +74,7 @@ import { hullTick } from './damage.js';
 import { wantedBy, settleInspection, adjustStanding, inJurisdiction, recentlyInspected } from './law.js';
 import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from './weapons.js';
 import { putToSleep } from './forces.js';
-import { enemyOf, hostileTo, friendOf, flagOf, hullLegal, navyOf, rankOf, RANK_FOR } from './service.js';
+import { enemyOf, hostileTo, friendOf, flagOf, hullLegal, navyOf, rankOf, RANK_FOR, ourName } from './service.js';
 import { releaseHull, parkHull, gateId } from './stations.js';
 
 /**
@@ -418,7 +418,7 @@ function think(state, e, emit) {
   observe(state, e, emit);
   const R = ROLES[a.role] || {};
   if (R.surrenders && profile(state, e.id).maxG <= 0 && h.status !== 'surrendered' && (a.hostile.length || a.mode === 'flee')) {
-    if (a.hostile.includes(PLAYER) && !a.request) openRequest(state, e, 'surrender', `"${e.name} to ${state.ship.name} — we're dead in space. We surrender, cease fire!"`, [{ id: 'accept', label: 'ACCEPT SURRENDER' }, { id: 'ignore', label: 'IGNORE' }], emit);
+    if (a.hostile.includes(PLAYER) && !a.request) openRequest(state, e, 'surrender', `"${e.name} to ${ourName(state)} — we're dead in space. We surrender, cease fire!"`, [{ id: 'accept', label: 'ACCEPT SURRENDER' }, { id: 'ignore', label: 'IGNORE' }], emit);
     else if (!a.hostile.includes(PLAYER)) surrender(state, e, emit);
     a.cmd = null;
     return;
@@ -516,7 +516,7 @@ const BRAINS = {
           const want = Math.max(500, Math.round(state.resources.credits.current * 0.3 / 100) * 100);
           a.flags.demand = want;
           a.mode = 'demand';
-          openRequest(state, e, 'demand', `"${state.ship.name}, this is the ${e.name}. Cut your drive and transfer ${want.toLocaleString()} MCR. Refuse and we take it off your wreck."`,
+          openRequest(state, e, 'demand', `"${ourName(state)}, this is the ${e.name}. Cut your drive and transfer ${want.toLocaleString()} MCR. Refuse and we take it off your wreck."`,
             [{ id: 'pay', label: `PAY ${want.toLocaleString()} MCR` }, { id: 'refuse', label: 'REFUSE' }], emit);
         } else {
           const prey = getWorld(state).get(a.target);
@@ -547,7 +547,7 @@ const BRAINS = {
     if (a.zone && (!known || flagged) && d <= WARN_AU && !a.flags.warned) {
       a.flags.warned = 'sent';
       const text = flagged
-        ? `"${state.ship.name}, this is ${e.name}. You are flying ${FACTIONS[flagOf(state)].short} colours inside our zone. Stand off now, or you will be fired upon."`
+        ? `"${ourName(state)}, this is ${e.name}. You are flying ${FACTIONS[flagOf(state)].short} colours inside our zone. Stand off now, or you will be fired upon."`
         : `"Unidentified vessel, this is ${e.name}. You are inside an active engagement zone. Turn on your transponder and stand off, or you will be fired upon."`;
       openRequest(state, e, 'warning', text, [{ id: 'comply', label: flagged ? 'STAND OFF' : 'TRANSPONDER ON · STAND OFF' }, { id: 'refuse', label: 'IGNORE' }], emit);
     }
@@ -613,7 +613,7 @@ function lawman(state, e, emit, stayHome) {
     if (stopBarred(state, e, false) || !canStop(state, e)) { giveUpStop(state, e, stayHome, emit); return; }
     if (!a.request && distAU(e.pos, state.flight.pos) <= HAIL_AU) {
       const who = FACTIONS[e.faction]?.police || e.faction;
-      openRequest(state, e, 'inspect', `"${state.ship.name}, this is ${who} vessel ${e.name}. Cut your drive and stand by to be boarded for inspection."`,
+      openRequest(state, e, 'inspect', `"${ourName(state)}, this is ${who} vessel ${e.name}. Cut your drive and stand by to be boarded for inspection."`,
         [{ id: 'comply', label: 'HEAVE TO' }, { id: 'refuse', label: 'RUN' }], emit);
     }
     if (stayHome && a.home && now - a.since > 2 * DAY_MIN) a.mode = 'cruise';
@@ -699,7 +699,7 @@ function giveUpStop(state, e, stayHome, emit) {
   if (i >= 0) {
     const r = state.comms.requests.splice(i, 1)[0];
     a.request = null;
-    emit('comm-request-withdrawn', { request: r, text: `"${state.ship.name}, ${e.name}. You're clear of our jurisdiction. Order withdrawn."` });
+    emit('comm-request-withdrawn', { request: r, text: `"${ourName(state)}, ${e.name}. You're clear of our jurisdiction. Order withdrawn."` });
   }
 }
 
@@ -947,7 +947,7 @@ function cornered(state, e, fromId, emit) {
     if (fromId !== PLAYER) { surrender(state, e, emit); return true; }
     if (!a.flags.cornered && !a.request) {
       a.flags.cornered = 'offered';
-      openRequest(state, e, 'surrender', `"${knownName(state, e.id) || e.name} to ${state.ship.name}: you've run us down. We strike — hold your fire!"`,
+      openRequest(state, e, 'surrender', `"${knownName(state, e.id) || e.name} to ${ourName(state)}: you've run us down. We strike — hold your fire!"`,
         [{ id: 'accept', label: 'ACCEPT SURRENDER' }, { id: 'ignore', label: 'IGNORE' }], emit);
     }
     return false;                                       // (it keeps running while the offer stands)
@@ -1007,7 +1007,7 @@ function fight(state, e, emit) {
   if (a.role === 'pirate' && tid === PLAYER && tp.maxG <= 0 && !a.flags.lastDemand && !a.request) {
     a.flags.lastDemand = true;
     a.flags.demand = Math.max(500, Math.round(state.resources.credits.current * 0.6 / 100) * 100);
-    openRequest(state, e, 'demand', `"You're dead in space, ${state.ship.name}. Transfer ${a.flags.demand.toLocaleString()} MCR and we leave you breathing."`,
+    openRequest(state, e, 'demand', `"You're dead in space, ${ourName(state)}. Transfer ${a.flags.demand.toLocaleString()} MCR and we leave you breathing."`,
       [{ id: 'pay', label: `PAY ${a.flags.demand.toLocaleString()} MCR` }, { id: 'refuse', label: 'REFUSE' }], emit);
   }
 

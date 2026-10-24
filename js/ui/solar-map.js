@@ -37,6 +37,7 @@ import { aimPoint } from '../sim/ordnance.js';
 import { FitCanvas, fmtKm, pointAt } from './dom.js';
 import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
+import { ourName } from '../sim/service.js';
 
 const LIGHT_RINGS = [[LIGHT_SECOND_AU, '1 LIGHT-SEC'], [LIGHT_MINUTE_AU, '1 LIGHT-MIN'], [LIGHT_MINUTE_AU * 10, '10 LIGHT-MIN']];
 const REPORT_FADE_MIN = 3 * 1440;   // a report is drawn faintest at this age
@@ -532,7 +533,7 @@ export class SolarMap {
       ctx.lineTo(x + Math.cos(-f.facing - 2.5) * 5.5, y + Math.sin(-f.facing - 2.5) * 5.5);
       ctx.closePath(); ctx.fill();
       L.block(x - 9, y - 9, x + 9, y + 9);
-      L.add(state.ship.name, x, y, { off: 12, font: UI(12, 600), color: COL.own, pri: 100 });
+      L.add(ourName(state), x, y, { off: 12, font: UI(12, 600), color: COL.own, pri: 100 });
     }
 
     // Every name, most important first, none over another (labels.js); the

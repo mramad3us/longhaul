@@ -46,7 +46,7 @@ import { wake, makeHostile, respondToRequest } from './agents.js';
 import { STATIONS } from './stations.js';
 import { hullOf } from './hulls.js';
 import { PRICES, inPort } from './contracts.js';
-import { licenseOf, flagOf, applyForLicense, resignLicense, rankName, openCallups, effectiveRelation } from './service.js';
+import { licenseOf, flagOf, applyForLicense, resignLicense, rankName, openCallups, effectiveRelation, navyOf } from './service.js';
 
 // ---- WHO THEY ARE ----
 
@@ -133,6 +133,13 @@ function greeting(state, e, p) {
 
 const T = (id, label, o = {}) => ({ id, label, ...o });
 
+/** What handing back our license costs, said before it is done (the topic's confirmation). */
+function resignCost(state) {
+  const L = licenseOf(state);
+  const hull = navyOf(state.ship.classId) === L;
+  return `Yes, hand it back: no flag, no call-ups${hull ? `, and our ${FACTIONS[L].navy} hull becomes illegal to fly` : ''}`;
+}
+
 /** What we can say now: [{ id, label, why? (disabled), group }]. */
 export function topics(state, conv = channel(state)) {
   if (!conv) return [];
@@ -172,7 +179,8 @@ export function topics(state, conv = channel(state)) {
     }
     // Military licenses are a power's business, at any of its stations
     if (POWERS.includes(e.faction) && licenseOf(state) !== e.faction) out.push(T('license-apply', `Apply for a ${FACTIONS[e.faction].navy} contractor's license`, { group: 'service', why: inPort(state, e) ? null : 'come into port' }));
-    if (licenseOf(state) === e.faction) out.push(T('license-resign', `Hand back our ${FACTIONS[e.faction].short} license`, { group: 'service' }));
+    // (not a click to make by mistake: the topic opens on what it costs, and only that confirms it)
+    if (licenseOf(state) === e.faction) out.push(T('license-resign', `Hand back our ${FACTIONS[e.faction].short} license…`, { group: 'service', sub: [{ id: 'confirm', label: resignCost(state) }] }));
   } else if (p === 'pirate') {
     out.push(T('ident', 'Who are you?'));
     const rq = state.comms.requests.find(r => r.from === e.id && r.kind === 'demand');
@@ -337,6 +345,7 @@ const TALK = {
     return { lines: [them(r.ok ? `Your application is approved. ${r.text}` : r.text)] };
   },
   'license-resign'(state, e, conv, arg, emit) {
+    if (arg !== 'confirm') return { lines: [them('Say again? Confirm you are handing back your license.')] };
     const r = resignLicense(state, emit);
     return { lines: [them(r.ok ? `Understood. ${r.text}` : r.text)] };
   },

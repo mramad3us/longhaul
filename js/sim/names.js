@@ -932,7 +932,7 @@ const CORP = { 'un-corp': 'LKC', 'mcr-corp': 'HAD', 'ind-ganymede': 'GAC', 'ind-
 const CORP_SHARE = 0.4;
 const CORP_SKIP = /'s |\{title|\{given|\{house|\{phrase|\{debt|\{ordinal|\{notX|\{neverX|\{going|\{bel/;
 const BIG = new Set(['freighter', 'tanker', 'hauler', 'liner']);
-const NAVY_PREFIX = { UN: 'UNN', MCR: 'MCRN' };
+export const NAVY_PREFIX = { UN: 'UNN', MCR: 'MCRN' };
 const POLICE_PREFIX = { UN: 'UNS', MCR: 'MSS', OPA: 'SH', independent: 'Patrol' };
 const POLICE_SUB = { 'un-security': 'UNS', 'mcr-security': 'MSS', 'opa-starhelix': 'SH', 'ind-merc': 'BSS' };
 /** Intelligence hulls fly under plain civilian names; a warship kind borrows a trade's words. */

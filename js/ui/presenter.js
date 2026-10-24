@@ -14,6 +14,7 @@ import { openDistress, openRequest } from './dialogs.js';
 import { RANGE } from '../core/constants.js';
 import { getWorld } from '../sim/world.js';
 import { pushTicker } from './ticker.js';
+import { ourName } from '../sim/service.js';
 
 let noFoodAt = null;
 
@@ -288,7 +289,7 @@ const HANDLERS = {
 const aged = (lagMin) => (lagMin >= 1 ? ` (${lagMin} min light lag)` : '');
 
 function nameOf(id) {
-  if (id === 'player') return ui.state.ship.name;
+  if (id === 'player') return ourName(ui.state);
   const e = getWorld(ui.state).get(id);
   return e ? (e.transponder ? e.name : 'contact') : 'target';
 }

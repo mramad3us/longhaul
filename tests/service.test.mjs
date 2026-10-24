@@ -19,7 +19,7 @@ import { priceOf, acceptContract, completeContract, contractsTick, torpedoRefusa
 import { generateMil } from '../js/sim/military.js';
 import {
   contractor, flagOf, effectiveRelation, enemyOf, applyForLicense, resignLicense, hullLegal, rankOf, rankName,
-  serviceTick, RANK_REP, supplyPriceFactor, COMMAND_PRICE,
+  serviceTick, RANK_REP, supplyPriceFactor, COMMAND_PRICE, ourName,
 } from '../js/sim/service.js';
 import { PLAYER } from '../js/sim/combatants.js';
 
@@ -42,6 +42,18 @@ function placeAt(s, pos, body = null) {
 }
 
 export default [
+  {
+    name: 'flying one of its navy\'s hulls under its license, our ship carries the navy\'s prefix',
+    fn: () => {
+      const name = (classId, license, shipName = 'Longhaul') => ourName(createGame({ classId, license, shipName, crewCount: 4, traffic: 0 }));
+      const got = { mcrn: name('mcrn-corvette', 'MCR'), unn: name('unn-corvette', 'UN'), opa: name('opa-corvette', 'OPA'), civil: name('light-freighter', 'MCR'), bare: name('mcrn-corvette', null), typed: name('mcrn-corvette', 'MCR', 'MCRN Longhaul') };
+      console.log(`      ${Object.entries(got).map(([k, v]) => `${k}: ${v}`).join(' · ')}`);
+      assert(got.mcrn === 'MCRN Longhaul' && got.unn === 'UNN Longhaul', 'a contractor\'s hull carries its navy\'s prefix');
+      assert(got.opa === 'Longhaul', 'OPA warships carry bare names');
+      assert(got.civil === 'Longhaul' && got.bare === 'Longhaul', 'no flag, no prefix');
+      assert(got.typed === 'MCRN Longhaul', 'a prefix the captain gave is not doubled');
+    },
+  },
   {
     name: 'politics: Earth and Mars swing between cold war and war and are never friends; the Belt stays mostly calm',
     fn: () => {

@@ -54,6 +54,7 @@ import { PLAYER, ensureHull } from './combatants.js';
 import { lawfulTarget, recordOffense } from './law.js';
 import { isDocked, dockedTo } from './docking.js';
 import { shipGeometry, airlockFor } from './ship-layout.js';
+import { ourName } from './service.js';
 
 export const EVA_RANGE_M = 2_000;
 const EVA_SPEED_MS = 2;
@@ -275,7 +276,7 @@ function secure(state, b, e, emit) {
   if (e.agent) { e.agent.mode = 'surrendered'; e.agent.cmd = null; e.agent.hostile = []; }
   e.thrust = 0;
   const crew = crewAboard(e), pax = passengersAboard(e);
-  learn(state, e, { crew, pax, note: 'Boarded and secured' }, 'boarded', { by: state.ship.name });
+  learn(state, e, { crew, pax, note: 'Boarded and secured' }, 'boarded', { by: ourName(state) });
   // freed: anyone of ours held aboard
   for (const m of state.ship.crew) if (m.away?.captured && m.away.by === e.id) { m.away = { op: b.id, aboard: e.id }; if (!b.party.includes(m.id)) b.party.push(m.id); note(state, `${m.name} found and freed.`, emit); }
   note(state, `${b.name} secured. ${crew} crew${pax ? ` and ${pax} passengers` : ''} aboard.`, emit, 'ok');

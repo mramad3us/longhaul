@@ -26,6 +26,7 @@ import { solveLambert } from './lambert.js';
 import { collarFrame } from './docking.js';
 import { knownName } from './flags.js';
 import { trackOf } from './intel.js';
+import { ourName } from './service.js';
 
 // Standoff distances (m)
 export const STANDOFF = {
@@ -56,7 +57,7 @@ export function targetName(state, target) {
   if (target.kind === 'body') return target.id;
   if (target.kind === 'surface') return `the surface of ${target.id}`;
   if (target.kind === 'slot') return `${getWorld(state).get(target.id)?.name || 'port'} holding ${target.slot}`;
-  if (target.kind === 'player') return state.ship.name;
+  if (target.kind === 'player') return ourName(state);
   if (target.kind === 'fix') return `${knownName(state, target.id) || trackOf(state, target.id)?.name || 'unidentified contact'} · last fix`;
   // (a ship by the name we know it by: an unidentified contact is no more than that)
   const e = getWorld(state).get(target.id);

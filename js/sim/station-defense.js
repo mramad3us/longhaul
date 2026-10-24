@@ -29,7 +29,7 @@ import { launchTorpedo, fireRailgun, strafe, launchedBy } from './ordnance.js';
 import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M } from './weapons.js';
 import { makeHostile } from './agents.js';
 import { wantedBy } from './law.js';
-import { enemyOf } from './service.js';
+import { enemyOf, ourName } from './service.js';
 
 const LOOK_AU = 0.01;                  // stations this near us are watched every minute
 const REACH_AU = 0.003;                // torpedo reach of a station's silos (≈450,000 km)
@@ -70,7 +70,7 @@ function stationMinute(state, st, now, emit) {
   if (playerThreat && !h.hostile.includes(PLAYER)) {
     h.hostile.push(PLAYER);
     h.alert = 'hostile';
-    emit('station-alert', { id: st.id, name: st.name, level: 'hostile', text: `${st.name}: weapons free on ${state.ship.name}.` });
+    emit('station-alert', { id: st.id, name: st.name, level: 'hostile', text: `${st.name}: weapons free on ${ourName(state)}.` });
   }
   for (const p of piratesNear(state, st)) if (!h.hostile.includes(p.id)) { h.hostile.push(p.id); h.alert = 'hostile'; }
   h.hostile = h.hostile.filter(id => id === PLAYER ? !state.lost : !isOutOfFight(world.get(id)));

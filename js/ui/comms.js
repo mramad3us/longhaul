@@ -34,6 +34,7 @@ import { contactById, isDark } from '../sim/sensors.js';
 import { isDocked, dockedTo } from '../sim/docking.js';
 import { drawHullPortrait } from './hull-art.js';
 import { frameMarks, marksOf, markChips } from './marks.js';
+import { ourName } from '../sim/service.js';
 
 const emit = (t, p) => bus.emit(t, p);
 let hooks = {};
@@ -126,7 +127,7 @@ function render() {
   if (conv) {
     const e = getWorld(s).get(conv.with);
     const who = e ? (e.type === 'station' || e.transponder ? e.name : 'UNIDENTIFIED') : 'CHANNEL';
-    const lines = conv.lines.map(l => `<div class="cm-line cm-${l.who}">${l.who === 'them' ? `<span class="cm-who">${esc(who)}</span>` : l.who === 'us' ? `<span class="cm-who">${esc(s.ship.name)}</span>` : ''}${esc(l.text)}</div>`).join('');
+    const lines = conv.lines.map(l => `<div class="cm-line cm-${l.who}">${l.who === 'them' ? `<span class="cm-who">${esc(who)}</span>` : l.who === 'us' ? `<span class="cm-who">${esc(ourName(s))}</span>` : ''}${esc(l.text)}</div>`).join('');
     const tps = topics(s).map(t => {
       if (t.sub && openSub === t.id) return `<div class="cm-sub"><span class="cm-why">${esc(t.label)}:</span>${t.sub.map(x => `<button class="cm-topic" data-act="say" data-t="${t.id}" data-arg="${x.id}">${esc(x.label)}</button>`).join('') || '<span class="cm-why">nobody in range</span>'}<button class="cm-topic" data-act="sub" data-t="">back</button></div>`;
       return `<button class="cm-topic ${t.group === 'threat' ? 'cm-threat' : ''}" data-act="${t.sub ? 'sub' : 'say'}" data-t="${t.id}" ${t.why ? 'disabled' : ''}>${esc(t.label)}${t.why ? `<span class="cm-why">${esc(t.why)}</span>` : ''}</button>`;

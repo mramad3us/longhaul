@@ -6,12 +6,13 @@
 // navy hull of its power), our rank and reputation, how every faction
 // sees us and why (our own standing, and under a flag our power's
 // relation with theirs), the state of the powers (cold war, crisis,
-// war), who has the say inside each, the orders we have been given, and
-// the political news that has reached us.
+// war), who has the say inside each, the orders we have been given, the
+// hot zones we have heard of (by faction, those needing guns first, one
+// click to the map or a route), and the political news that has reached us.
 // ============================================================
 
 import { ui } from './context.js';
-import { esc, fmtNum } from './dom.js';
+import { esc, fmtNum, fmtKm } from './dom.js';
 import { toast } from './toast.js';
 import { logEntry } from './log.js';
 import { formatDuration } from '../core/clock.js';
@@ -24,9 +25,60 @@ import {
 } from '../sim/service.js';
 import { WANTED_LABEL } from '../sim/law.js';
 import { CLASSES } from '../sim/ship-classes.js';
+import { ZONE_KINDS, zonePos } from '../sim/conflict.js';
+import { getWorld } from '../sim/world.js';
+import { AU_KM } from '../core/constants.js';
 
 let hooks = {};
-export function initService(h) { hooks = h; }   // { openDialog, closeDialog, plotRoute }
+export function initService(h) { hooks = h; }   // { openDialog, closeDialog, plotRoute, showOnMap }
+
+// ---- HOT ZONES ----
+// What we have heard of (the plot's zones: intel.js), for one faction or all,
+// those where guns are wanted first: a war front, shots fired, raiders on a
+// power's shipping, pirates on the lanes, a cell's war, a blockade, a standoff.
+const NEED = { front: 6, skirmish: 5, proxy: 4, pirates: 3, insurgency: 2, blockade: 1, standoff: 1 };
+const ZONE_FILTERS = ['flag', 'all', 'UN', 'MCR', 'OPA', 'pirate'];
+let zoneFilter = null;            // (null: our flag's, if we fly one, else all)
+let confirmResign = false;        // handing back the license takes a second, deliberate click on what it costs
+
+/** Who a zone is about, as the plot has it: the powers in it, or the pirates. */
+const zoneSides = (z) => z.kind === 'pirates' ? ['pirate'] : (z.factions || []).filter(Boolean);
+
+function zoneRows(s) {
+  const flag = flagOf(s), now = s.clock.minute, world = getWorld(s);
+  const filter = zoneFilter || (flag ? 'flag' : 'all');
+  const want = filter === 'flag' ? flag : filter === 'all' ? null : filter;
+  const f = s.flight.pos;
+  const calls = new Set(openCallups(s).map(cu => cu.body));
+  const list = Object.entries(s.intel?.zones || {}).map(([id, z]) => {
+    const sides = zoneSides(z);
+    const ours = !!flag && sides.includes(flag);
+    const p = zonePos({ ...z, id }, now);
+    return { id, z, sides, ours, call: calls.has(z.body), dist: Math.hypot(p.x - f.x, p.y - f.y), need: (NEED[z.kind] || 0) * (ours ? 2 : 1) };
+  }).filter(r => !want || r.sides.includes(want))
+    .sort((a, b) => b.need - a.need || a.dist - b.dist);
+  const btn = (k) => `<button class="svc-zf ${filter === k ? 'active' : ''}" data-act="zone-filter" data-k="${k}" ${k === 'flag' ? `title="Where the ${esc(FACTIONS[flag].navy)} is in it"` : ''}>${k === 'flag' ? 'OUR FLAG' : k === 'all' ? 'ALL' : k === 'pirate' ? 'PIRATES' : esc(FACTIONS[k].short)}</button>`;
+  const filters = ZONE_FILTERS.filter(k => k !== 'flag' || flag).map(btn).join('');
+  const rows = list.map(r => {
+    const sides = r.sides.map(x => `<span style="color:${factionColor(x)}">${esc(x === 'pirate' ? 'pirates' : FACTIONS[x]?.short || x)}</span>`).join(' · ');
+    const anchor = world.get(`anchor-${r.id}`);
+    const tags = `${r.ours ? '<span class="svc-tag ours">OUR FIGHT</span>' : ''}${r.call ? '<span class="svc-tag call">CALL-UP</span>' : ''}`;
+    return `<div class="svc-zone svc-need-${Math.min(3, Math.ceil((NEED[r.z.kind] || 0) / 2))}">
+      <span class="svc-zone-kind">${esc(ZONE_KINDS[r.z.kind]?.label || r.z.kind)}</span>
+      <span class="svc-zone-where">${esc(r.z.body)}${sides ? ` · ${sides}` : ''}${tags}</span>
+      <span class="svc-meta">${fmtKm(r.dist * AU_KM)} · heard ${formatDuration(now - r.z.heard)} ago</span>
+      <span class="svc-zone-acts"><button class="btn btn-secondary btn-small" data-act="zone-map" data-id="${esc(r.id)}">MAP</button><button class="btn btn-primary btn-small" data-act="zone-plot" data-id="${esc(r.id)}"${anchor ? '' : ' title="No fleet anchor charted there: a route to the body"'}>PLOT</button></span>
+    </div>`;
+  }).join('');
+  return `<div class="svc-zf-row">${filters}</div><p class="svc-meta">Where guns are wanted first: war fronts, shots fired, raiders on a power's shipping, pirates on the lanes${flag ? '; our own power\'s fights before others\'' : ''}.</p>${rows || `<p class="missions-empty">— no hot zone we have heard of${want ? ` for ${want === 'pirate' ? 'pirates' : esc(FACTIONS[want].short)}` : ''} —</p>`}`;
+}
+
+/** Where to go for a zone: its fleets' anchor, if one is charted, else the body it is round. */
+function zoneTarget(s, id) {
+  const z = s.intel?.zones?.[id];
+  if (!z) return null;
+  return getWorld(s).get(`anchor-${id}`) ? { kind: 'entity', id: `anchor-${id}` } : { kind: 'body', id: z.body };
+}
 
 const BAND = { own: 'OUR FLAG', friend: 'FRIEND', neutral: 'NEUTRAL', wary: 'WARY', hostile: 'HOSTILE', enemy: 'ENEMY' };
 /** Headlines older than this have reached us wherever we are in the inner system and the Belt. */
@@ -74,9 +126,14 @@ function render() {
   const orders = openCallups(s).map(cu => `<div class="svc-order"><span>${esc(cu.shipName)} · ${esc(cu.body)}</span><span>${cu.reported ? 'REPORTED' : 'REPORT ALONGSIDE'}</span>${cu.reported ? '' : `<button class="btn btn-primary btn-small" data-act="plot-cmd" data-id="${cu.ship}">PLOT</button>`}</div>`).join('');
   const news = s.politics.headlines.filter(h => now - h.at >= HEARD_AFTER_MIN).slice(-8).reverse().map(h => `<div class="svc-news"><span class="svc-meta">${formatDuration(now - h.at)} ago</span> ${esc(h.text)}</div>`).join('');
   const record = (S.record || []).slice(-8).reverse().map(x => `<div class="svc-news"><span class="svc-meta">${formatDuration(now - x.at)} ago</span> ${esc(x.text)}</div>`).join('');
+  const resign = confirmResign && L ? `<div class="svc-confirm">
+      <b>Hand back the ${esc(FACTIONS[L].navy)} license?</b>
+      <p>We give up the ${esc(FACTIONS[L].short)} flag and its call-ups${navy === L ? `, and the ${esc(CLASSES[s.ship.classId].name)} becomes unlicensed military kit: illegal to fly, and every ${esc(FACTIONS[L].short)} patrol will want to see it` : ''}. Our reputation stays on their books; the license itself is applied for again at one of their stations.</p>
+      <div class="svc-confirm-acts"><button class="btn btn-secondary btn-small" data-act="resign-cancel">KEEP IT</button><button class="btn btn-danger btn-small" data-act="resign-confirm">HAND IT BACK</button></div>
+    </div>` : '';
   return `<div class="svc">
     <div class="svc-col">
-      <div class="missions-section">LICENSE</div>${status}${rank}
+      <div class="missions-section">LICENSE</div>${resign}${status}${rank}
       ${orders ? `<div class="missions-section mil">ORDERS</div>${orders}` : ''}
       <div class="missions-section">RELATIONS</div>
       <table class="svc-table"><thead><tr><th>Faction</th><th title="Our own standing with them">Ours</th><th title="Our power's relation with them (under a flag)">Flag</th><th title="How they treat us">Relation</th><th></th><th></th></tr></thead><tbody>${rows}</tbody></table>
@@ -84,6 +141,7 @@ function render() {
       ${record ? `<div class="missions-section">SERVICE RECORD</div>${record}` : ''}
     </div>
     <div class="svc-col">
+      <div class="missions-section">HOT ZONES</div>${zoneRows(s)}
       <div class="missions-section">THE POWERS</div>${pairs}
       ${subs}
       <div class="missions-section">POLITICAL NEWS</div>${news || '<p class="missions-empty">— nothing yet —</p>'}
@@ -93,13 +151,25 @@ function render() {
 export function openService() {
   const s = ui.state;
   if (!s) return;
+  confirmResign = false;
   const L = licenseOf(s);
   const body = hooks.openDialog({
     title: 'Service & Relations', cls: 'dialog-service', html: render(),
-    buttons: [...(L ? [{ label: 'Resign license', act: 'resign', cls: 'btn-secondary' }] : []), { label: 'Close', act: 'close', cls: 'btn-primary' }],
+    buttons: [...(L ? [{ label: 'Resign license…', act: 'resign', cls: 'btn-secondary' }] : []), { label: 'Close', act: 'close', cls: 'btn-primary' }],
     onAction: (act, b) => {
       if (act === 'plot-cmd') { hooks.closeDialog(); hooks.plotRoute({ kind: 'entity', id: b.dataset.id }, { dock: true }); return; }
-      if (act === 'resign') {
+      if (act === 'zone-filter') { zoneFilter = b.dataset.k; body.querySelector('.dialog-content').innerHTML = render(); return; }
+      if (act === 'zone-map' || act === 'zone-plot') {
+        const t = zoneTarget(s, b.dataset.id);
+        if (!t) return;
+        hooks.closeDialog();
+        if (act === 'zone-map') hooks.showOnMap(t); else hooks.plotRoute(t);
+        return;
+      }
+      // (the footer's button only asks; the confirm panel's does it)
+      if (act === 'resign' || act === 'resign-cancel') { confirmResign = act === 'resign'; body.querySelector('.dialog-content').innerHTML = render(); body.querySelector('.dialog-content').scrollTop = 0; return; }
+      if (act === 'resign-confirm') {
+        confirmResign = false;
         const r = resignLicense(s, (t, p) => bus.emit(t, p));
         toast(r.text, r.ok ? 'ok' : 'warn');
         if (r.ok) logEntry(r.text, 'system');

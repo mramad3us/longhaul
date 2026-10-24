@@ -53,6 +53,7 @@ import { FACTIONS, POWERS } from './factions.js';
 import { CLASSES } from './ship-classes.js';
 import { relation, atWar, enemiesOf } from './politics.js';
 import { lightMinutes } from './intel.js';
+import { NAVY_PREFIX } from './names.js';
 
 export const LICENSE_STANDING = 10;     // standing a power wants before it licenses a captain
 export const REVOKE_DAYS = 30;          // a revoked license can't be applied for again for this long
@@ -112,6 +113,18 @@ export function contractor(state) {
 
 /** The power whose flag we carry (null without one). */
 export const flagOf = (state) => contractor(state) ? licenseOf(state) : null;
+
+/**
+ * Our ship's name as it is shown and hailed: flying one of its navy's hulls
+ * under its license, it carries the navy's prefix (MCRN Longhaul, UNN
+ * Longhaul), as the navy's own hulls do; OPA warships carry bare names
+ * (names.js). A name the captain gave with the prefix already isn't doubled.
+ */
+export function ourName(state) {
+  const n = state.ship.name;
+  const pre = NAVY_PREFIX[flagOf(state)];
+  return !pre || n.toUpperCase().startsWith(`${pre} `) ? n : `${pre} ${n}`;
+}
 
 /** Is our hull legal to fly? (A navy hull needs its navy's license.) */
 export function hullLegal(state) {
@@ -339,7 +352,7 @@ function callUps(state, emit, commandShipFor) {
 function callupText(state, cu) {
   const F = FACTIONS[cu.faction];
   const what = { front: 'the war front', skirmish: 'the fighting', standoff: 'the standoff', blockade: 'the blockade', insurgency: 'the insurgency', proxy: 'the raids on our shipping' }[cu.kind] || 'the fight';
-  return `${F.navy} COMMAND to contractor ${state.ship.name}: report to the command ship ${cu.shipName} near ${cu.body} for ${what}. Military supplies at a tenth of the price for the duration.`;
+  return `${F.navy} COMMAND to contractor ${ourName(state)}: report to the command ship ${cu.shipName} near ${cu.body} for ${what}. Military supplies at a tenth of the price for the duration.`;
 }
 
 /** Open call-ups we have heard (for the mission log). */

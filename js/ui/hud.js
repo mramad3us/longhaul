@@ -29,6 +29,7 @@ import { getWorld } from '../sim/world.js';
 import { clearanceFor } from '../sim/traffic-control.js';
 import { finesOwed } from '../sim/law.js';
 import { threatSummary } from './combat.js';
+import { ourName } from '../sim/service.js';
 
 let el = {};
 let onThreat = null;
@@ -185,7 +186,7 @@ function turningLabel(state) {
 export function updateHud(state) {
   setText(el.date, formatDate(state.clock));
   setText(el.time, formatTime(state.clock));
-  setText(el.ship, state.ship.name);
+  setText(el.ship, ourName(state));
   // The flag we fly and our rank (or what is wrong with our papers)
   const fc = flagChip(state);
   const key = fc ? `${fc.text}|${fc.cls}` : '';

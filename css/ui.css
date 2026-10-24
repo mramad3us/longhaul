@@ -513,6 +513,24 @@ body.hit-flash .ship-viewport { box-shadow: inset 0 0 120px rgba(255, 90, 60, 0.
 .svc-sub > span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .svc-sub-agenda { color: var(--text-dim); flex: 0 0 66px; }
 .svc-order { display: flex; gap: 10px; align-items: center; justify-content: space-between; font-family: var(--font-mono); font-size: 0.66rem; color: var(--warning); padding: 3px 0; }
+.svc-confirm { border: 1px solid var(--danger); background: rgba(239, 83, 80, 0.07); padding: 8px 10px; margin: 4px 0 10px; font-size: 0.72rem; color: var(--text-secondary); }
+.svc-confirm b { color: var(--danger); letter-spacing: 0.04em; }
+.svc-confirm p { margin: 6px 0 8px; line-height: 1.45; }
+.svc-confirm-acts { display: flex; gap: 8px; justify-content: flex-end; }
+.svc-zf-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
+.svc-zf { font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.08em; padding: 2px 7px; background: transparent; color: var(--text-dim); border: 1px solid rgba(80, 100, 130, 0.45); border-radius: 2px; cursor: var(--cur-hand, pointer); }
+.svc-zf.active { color: var(--text-primary); border-color: var(--info); }
+.svc-zone { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind acts" "where acts" "meta acts"; column-gap: 10px; padding: 4px 0 5px; border-bottom: 1px solid rgba(22, 32, 48, 0.6); font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-secondary); }
+.svc-zone-kind { grid-area: kind; letter-spacing: 0.1em; }
+.svc-zone-where { grid-area: where; min-width: 0; }
+.svc-zone .svc-meta { grid-area: meta; margin-top: 1px; }
+.svc-zone-acts { grid-area: acts; display: flex; gap: 4px; align-self: center; }
+.svc-need-3 .svc-zone-kind { color: var(--danger); }
+.svc-need-2 .svc-zone-kind { color: var(--warning); }
+.svc-need-1 .svc-zone-kind { color: var(--info); }
+.svc-tag { margin-left: 6px; padding: 0 4px; font-size: 0.56rem; letter-spacing: 0.08em; border-radius: 2px; }
+.svc-tag.ours { color: var(--danger); border: 1px solid currentColor; }
+.svc-tag.call { color: var(--warning); border: 1px solid currentColor; }
 .svc-news { font-family: var(--font-mono); font-size: 0.64rem; color: var(--text-secondary); padding: 3px 0; border-bottom: 1px solid rgba(22, 32, 48, 0.6); }
 .license-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .license-opt { font-family: var(--font-mono); font-size: 0.66rem; text-align: left; padding: 6px 8px; background: var(--bg-surface); color: var(--text-secondary);

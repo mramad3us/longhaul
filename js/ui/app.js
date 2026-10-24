@@ -36,7 +36,7 @@ import { initComms, openComms, closeComms, updateComms, commsOpen } from './comm
 import { initBoarding, openBoarding, closeBoarding, updateBoarding } from './boarding.js';
 import { initService, openService } from './service.js';
 import { setPhase } from '../sim/politics.js';
-import { addRep } from '../sim/service.js';
+import { addRep, ourName } from '../sim/service.js';
 import { clearTicker } from './ticker.js';
 import { beginDocking } from '../sim/docking.js';
 import { keepOutM } from '../sim/traffic-control.js';
@@ -140,7 +140,7 @@ export async function boot() {
   setRouteHandler((t) => openRoutePanel(t));
   setDockHandler((id) => dockWith({ kind: 'station', id }));
   initBoarding();
-  initService({ openDialog, closeDialog, plotRoute: (t, o) => openRoutePanel(t, o) });
+  initService({ openDialog, closeDialog, plotRoute: (t, o) => openRoutePanel(t, o), showOnMap: (t) => { setTab('solar'); selectTarget(t); } });
   setHailHandler((id) => openComms(id));
   initStage({ state: () => ui.state, select: (id) => showOnBoard(id), currentTab, setTab, isFloating: exteriorIsFloating, pick: pickedTarget,
     back: () => { if (!exteriorIsFloating()) openNav('solar'); } });
@@ -231,7 +231,7 @@ function newGame() {
   const captainName = $('#input-captain-name').value.trim() || randomCaptainName();
   const state = createGame({ shipName, captainName, crewCount, classId: shipClass, license });
   startGame(state, true);
-  logEntry(`Mission start — ${state.ship.name}, ${CLASSES[shipClass].name} (${TECH[state.ship.tl].label}), Captain ${captainName}${license ? `, ${FACTIONS[license].navy} contractor's license` : ''}`, 'system');
+  logEntry(`Mission start — ${ourName(state)}, ${CLASSES[shipClass].name} (${TECH[state.ship.tl].label}), Captain ${captainName}${license ? `, ${FACTIONS[license].navy} contractor's license` : ''}`, 'system');
   const port = getWorld(state).get(state.dock?.target.id);
   logEntry(`Docked at ${port?.name || 'port'}, berth ${state.dock?.berth}. Crew of ${state.ship.crew.length}. Hail the station (H) for contracts, clearances and the hiring hall; your service record and the powers are under SERVICE (V).`, 'nav');
   toast('Good luck, Captain.', 'ok');

@@ -117,7 +117,7 @@ The screen is the ship's flight console: a top rail, the main view (the ship's d
 | `context.js` | the shared `ui` object: live state, loop, settings, selection |
 | `library.js` | the ship's library: reference pages built from the simulation's own tables (classes, tech, systems, fittings, weapons, navigation, factions, stations); anything marked `data-lib` opens its page |
 | `dialogs.js` | generic dialog, missions log (orders, distress calls, contracts), jobs, distress calls and comm requests, the station window (board, deliveries, services, hiring, leave, the traffic board), which is also a command ship's (missions, report, supplies) |
-| `service.js` | the service record (V): license and flag, rank and reputation, relations with every faction and why, the powers' phases, the sub-factions' influence, orders, political news; the flag chip on the rail |
+| `service.js` | the service record (V): license and flag, rank and reputation, relations with every faction and why, the hot zones we have heard of (by faction, where guns are wanted first, MAP and PLOT), the powers' phases, the sub-factions' influence, orders, political news; the flag chip on the rail |
 | `shipboard.js` | engineering board, duty roster, words for activities and jobs |
 | `presenter.js`, `fx.js`, `log.js`, `toast.js` | how events are shown (`toast.js`: the latest two messages, at the flight band's free end) |
 | `persistence.js`, `settings.js`, `../storage.js` | IndexedDB saves and settings |
