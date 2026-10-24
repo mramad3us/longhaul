@@ -178,6 +178,23 @@ const LYING = new Set(['lying', 'down']);
 
 export default [
   {
+    name: 'the brig\'s cells: closed boxes round their bunks, the door shut and locked (red) on a cell held, open (green) on one free',
+    fn: () => {
+      const s = ship();
+      const di = s.ship.decks.findIndex(d => d.id === 'brig');
+      assert(di >= 0, 'a warship has a brig');
+      const room = roomFor(s.ship, di);
+      const cells = room.fixtures.filter(f => f.cell != null);
+      assert(cells.length === s.brig && cells.every((f, i) => f.cell === i), `a cell for each the class holds (${cells.length} of ${s.brig}), numbered`);
+      const shut = cells[0].model({ x: 0, z: 0, h: 0.5, held: true }), open = cells[0].model({ x: 0, z: 0, h: 0.5, held: false });
+      assert(shut.some(p => p.deco === 'cellShut' && p.occupancy) && !shut.some(p => p.deco === 'cellLeaf'), 'held: the door shut, its lock lamp');
+      assert(open.some(p => p.deco === 'cellLeaf' && p.occupancy) && !open.some(p => p.deco === 'cellShut'), 'free: the door open, its lamp');
+      assert(shut.some(p => p.t0 === 0 && p.t1 === 1 && Math.min(...p.prof.map(v => v[1])) > 1.3), 'a roof over the cell');
+      const other = roomFor(s.ship, s.ship.decks.findIndex(d => d.id === 'quarters'));
+      assert(other.fixtures.every(f => f.cell == null), 'berths elsewhere are berths');
+    },
+  },
+  {
     name: 'what stands nearer the lens hides them: the seat back at a station seen from behind, a table over a diner\'s legs; nobody hidden in the open',
     fn: () => {
       const s = ship();

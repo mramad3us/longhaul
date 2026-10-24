@@ -51,6 +51,7 @@ import { efficiency } from './needs.js';
 import { crewAboard, passengersAboard, setCrewAboard, learn, freeCells } from './manifest.js';
 import { prisonerGroup } from './prisoners.js';
 import { PLAYER, ensureHull } from './combatants.js';
+import { armFuse } from './damage.js';
 import { lawfulTarget, recordOffense } from './law.js';
 import { isDocked, dockedTo } from './docking.js';
 import { shipGeometry, airlockFor } from './ship-layout.js';
@@ -426,6 +427,7 @@ function actionMinute(state, b, e, party, emit) {
       h.scrammed = false;
       h.lastHitBy = PLAYER;
       e.tags.scuttled = true;
+      armFuse(state, e);
       note(state, `Charges set on ${e.name}'s reactor: thirty minutes. Get clear.`, emit, 'danger');
       b.phase = 'return'; b.since = state.clock.minute;
       return;

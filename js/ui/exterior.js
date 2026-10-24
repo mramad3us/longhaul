@@ -23,7 +23,9 @@
 // hull's top and one flank show). The Sun lies in the plane; its light is
 // raised out of it (SUN_RAISE) so the tops of hulls take it, and a port on
 // its rock's night side is floodlit. Without WebGL2 everything is drawn
-// flat from hull-art.js instead.
+// flat from hull-art.js instead. Damage shows as the sim left it (gl/
+// damage.js): holes, scorching, venting; a wreck tumbling, in pieces, its
+// fragments round it.
 //
 // Overlays for docking: the corridor down the berth's axis with its
 // marks, the berth's collar, ours. Names go beside the hulls, never on
@@ -70,6 +72,7 @@ import { FitCanvas, pointAt } from './dom.js';
 import { drawHull, drawHullMarks, drawStation } from './hull-art.js';
 import { has3D, renderScene, obliqueCamera, hullMatrix, stationMatrix } from './gl/ships3d.js';
 import { mat4 } from './gl/gl.js';
+import { damageLook, pieces, debrisMatrix, drawVents, mul4 } from './gl/damage.js';
 import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, MARK_COL } from './marks.js';
 
@@ -189,7 +192,7 @@ export class ExteriorView {
     if (!has3D()) return false;
     const cam = this.cam, dpr = fc.dpr;
     const Wd = fc.canvas.width, Hd = fc.canvas.height, sc = cam.scale * dpr;
-    const objs = [];
+    const objs = [], looks = [];
     for (const o of objects) {
       const e = o.e, p = o.pose;
       if (!p) continue;
@@ -197,11 +200,15 @@ export class ExteriorView {
         const model = stationModel(e.id);
         if (model) objs.push({ kind: 'station', key: e.id, model, m: stationMatrix(p.mx, p.my, p.angle), tint: factionColor(e.faction), lights: true });
       } else if (o.hull && o.hull.L * cam.scale >= 1.5) {
-        objs.push({ kind: 'hull', key: e.cls, model: o.hull, tl: CLASSES[e.cls]?.tl ?? 2, m: poseMatrix(p), tint: factionColor(e.faction), plume: e.thrust || 0, lights: !isDark(e) && !e.tags?.wreck });
+        const look = damageLook(e, o.hull, tm);
+        this.hulk(objs, looks, look, { kind: 'hull', key: e.cls, model: o.hull, tl: CLASSES[e.cls]?.tl ?? 2, m: poseMatrix(p), tint: factionColor(e.faction), plume: e.thrust || 0, lights: !isDark(e) && !e.tags?.wreck });
       }
     }
     const ourCls = state.ship.classId || PLAYER_CLASS;
-    if (ours.L * cam.scale >= 1.5) objs.push({ kind: 'hull', key: ourCls, model: ours, tl: CLASSES[ourCls]?.tl ?? 2, m: poseMatrix(mine), tint: '#5FD38D', plume: ourPlume || 0, lights: true });
+    if (ours.L * cam.scale >= 1.5) {
+      const look = damageLook({ id: 'player', hull: state.hull, decks: state.ship.decks }, ours, tm);
+      this.hulk(objs, looks, look, { kind: 'hull', key: ourCls, model: ours, tl: CLASSES[ourCls]?.tl ?? 2, m: poseMatrix(mine), tint: '#5FD38D', plume: ourPlume || 0, lights: true });
+    }
     const rock = st ? rockOf(st, us, tm) : null;
     if (!objs.length && !rock) return false;
     const camera = obliqueCamera(Wd, Hd, sc, cam.rot, cam.x, cam.y, OBLIQUE_K, Math.max(60_000, Math.max(Wd, Hd) / sc * 4));
@@ -221,7 +228,28 @@ export class ExteriorView {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(out.canvas, out.sx, out.sy, out.w, out.h, 0, 0, Wd, Hd);
     ctx.restore();
+    // the air going out of fresh holes, the glow of hot edges: over the picture, where the camera puts them
+    const cr = Math.cos(-cam.rot), sr = Math.sin(-cam.rot), W = fc.w, H = fc.h;
+    const screen = (w) => { const x = w[0] - cam.x, y = w[1] - cam.y; return [W / 2 + (x * cr - y * sr) * cam.scale + OBLIQUE_K * w[2] * cam.scale, H / 2 - (x * sr + y * cr) * cam.scale]; };
+    for (const { look, parts } of looks) {
+      const at = (q) => { const piece = parts.find(x => !x.clip || x.clip[0] * q[0] + x.clip[1] * q[1] + x.clip[2] * q[2] >= x.clip[3]) || parts[0]; const M = piece.m; return screen([M[0] * q[0] + M[4] * q[1] + M[8] * q[2] + M[12], M[1] * q[0] + M[5] * q[1] + M[9] * q[2] + M[13], M[2] * q[0] + M[6] * q[1] + M[10] * q[2] + M[14]]); };
+      drawVents(ctx, look, at, cam.scale, t);
+    }
     return true;
+  }
+
+  /**
+   * A hull for the GPU with its damage (gl/damage.js): tumbling and in pieces
+   * if it is a wreck, its fragments round it; untouched, as it is.
+   */
+  hulk(objs, looks, look, o) {
+    if (!look) { objs.push(o); return; }
+    const parts = pieces(o.m, look);
+    // (a fresh break still glows along the tear)
+    const fresh = look.debris ? Math.max(0, 1 - look.debris.sinceS / 60 / 20) : 0;
+    for (const pc of parts) objs.push({ ...o, m: pc.m, clip: pc.clip, clipHeat: fresh, damage: look, plume: look.wreck ? 0 : o.plume });
+    if (look.debris) look.debris.forEach((d, i) => objs.push({ kind: 'debris', key: String(d.shape), m: mul4(o.m, debrisMatrix(look, d, i)), tint: o.tint, tl: 1, lights: false }));
+    looks.push({ look, parts });
   }
 
   render(state, alpha, opts = {}) {
@@ -376,7 +404,7 @@ export class ExteriorView {
       }
       hits.push({ id: e.id, x: sx, y: sy });
       // (its name beside the hull, never on it or on another's: labels.js; until we know it, what it is to us)
-      const [hx, hy] = hullBox(hull, screenAngle(pose.facing), sc, solid);
+      const [hx, hy] = hullBox(hull, screenAngle(pose.facing), sc, solid, solid && !!e.tags?.wreck);
       if (hull.L * sc > 6) L.block(sx - hx, sy - hy, sx + hx, sy + hy);
       if (marks) {
         const r = Math.max(hx, hy, 4);
@@ -490,7 +518,8 @@ const LABEL_FONT = '10px "IBM Plex Mono", monospace';
 const shortName = (text) => text.length > 26 ? text.slice(0, 25) + '…' : text;
 
 /** Half the screen box a hull fills, turned to `angle`: [across, up and down] in px (solid: its height shows to the side too). */
-function hullBox(hull, angle, sc, solid = false) {
+function hullBox(hull, angle, sc, solid = false, tumbling = false) {
+  if (tumbling) { const r = Math.hypot(hull.L, hull.W) / 2 * sc; return [r, r]; }
   const c = Math.abs(Math.cos(angle)), s = Math.abs(Math.sin(angle));
   return [((c * hull.L + s * hull.W) / 2 + (solid ? OBLIQUE_K * hull.H / 2 : 0)) * sc, (s * hull.L + c * hull.W) / 2 * sc];
 }

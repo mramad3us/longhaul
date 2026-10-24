@@ -128,7 +128,7 @@ A boarding party is chosen from the crew (`sim/boarding.js`), through a mated co
 2. **cross**: 2 minutes through the collar, or the distance at 2 m/s on suit thrusters.
 3. **breach**: a hatch nobody opens is cut: 6 minutes behind a collar, 10 by EVA.
 4. **fight**, if anyone resists, minute by minute.
-5. **secured**: orders aboard. SEARCH (20 min: the exact crew and passenger count, the hold, contraband), TAKE STORES (40: reaction mass, water, rations, med, spares, PDC rounds, torpedoes, as much as we hold), TAKE CARGO (40, while still mated at the collar), TAKE PRISONERS (15: into the brig's cells, which a warship has, then any free berths; passengers keep to their berths), SCUTTLE (10: the reactor goes in 30 minutes). A hull's stores, hold and credit store are taken once: boarding it again finds them gone.
+5. **secured**: orders aboard. SEARCH (20 min: the exact crew and passenger count, the hold, contraband), TAKE STORES (40: reaction mass, water, rations, med, spares, PDC rounds, torpedoes, as much as we hold), TAKE CARGO (40, while still mated at the collar), TAKE PRISONERS (15: into the brig's cells, which a warship has, then any free berths; passengers keep to their berths; on the brig's camera a cell holding someone is shut and locked behind a red lamp, a free one open under a green one), SCUTTLE (10: the reactor goes in 30 minutes, wreck or not: get clear). A hull's stores, hold and credit store are taken once: boarding it again finds them gone.
 6. **return**, and the party is aboard again: across the collar still mated, or within EVA range. Out of reach, they wait aboard and say so; a route waits for them too.
 
 An EVA crosses open space: nobody goes without a suit. Crew ashore aren't waited for at the muster.

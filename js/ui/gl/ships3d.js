@@ -10,7 +10,10 @@
 // (each panel a shade apart), armour plates, radiator fins (glowing dull
 // red when the drive runs hot), gold foil, polished tanks, a bell of dark
 // alloy with a white-hot throat when lit, the faction's band, lit ports and
-// nav lights. The plume is its own pass: light added, a bright core
+// nav lights. Damage (damage.js) is cut and painted into the surface: holes
+// (discarded, the dark inside of the hull seen through them), their torn
+// edges bent out, scorching, pits, hot metal; a broken hull keeps its side
+// of a ragged tear (the clip, in the shadow pass too). The plume is its own pass: light added, a bright core
 // fraying out along the axis. Colours are worked in linear light, exposed
 // and tone mapped (a filmic curve) like a camera's.
 //
@@ -20,10 +23,21 @@
 // ============================================================
 
 import { sharedGL, beginRender, program, vertexArray, drawArray, onContextLost, mat4, norm, linear } from './gl.js';
-import { buildHullMesh, buildStationMesh } from './hullmesh.js';
+import { buildHullMesh, buildStationMesh, buildDebrisMesh } from './hullmesh.js';
 import { Post } from './post.js';
 
 const LAYOUT = [['aPos', 3], ['aNrm', 3], ['aCol', 3], ['aMat', 1]];
+const MAX_SCARS = 16;
+
+// A broken hull's tear: the plane it keeps one side of, made ragged (shared by the shadow and the picture)
+const CLIP_GLSL = `
+float hn(vec3 p) { p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419)); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float nz(vec3 p) {
+  vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hn(i), hn(i + vec3(1,0,0)), f.x), mix(hn(i + vec3(0,1,0)), hn(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hn(i + vec3(0,0,1)), hn(i + vec3(1,0,1)), f.x), mix(hn(i + vec3(0,1,1)), hn(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+float clipSide(vec3 p) { return dot(uClip.xyz, p) - uClip.w + (nz(p * 0.9) - 0.5) * 2.4 + (nz(p * 3.7) - 0.5) * 0.7; }`;
 const SHADOW_SIZE = 2048;
 
 let R = null;                     // { gl, lit, depth, plume, meshes: Map, shadow: { fb, tex } }
@@ -79,7 +93,7 @@ function meshFor(kind, key, model, tl) {
   const id = `${kind}:${key}`;
   let m = R.meshes.get(id);
   if (m) return m;
-  const built = kind === 'hull' ? buildHullMesh(model, tl, key) : buildStationMesh(model, key);
+  const built = kind === 'hull' ? buildHullMesh(model, tl, key) : kind === 'debris' ? buildDebrisMesh(key) : buildStationMesh(model, key);
   const va = vertexArray(R.gl, built.data, LAYOUT);
   m = { va, info: built };
   R.meshes.set(id, m);
@@ -139,6 +153,8 @@ export function renderScene(scene) {
       const m = meshFor(o.kind, o.key, o.model, o.tl || 2);
       drawn.push({ o, m });
       gl.uniformMatrix4fv(R.depth.u.uModel, false, o.m);
+      gl.uniform4fv(R.depth.u.uClip, o.clip || [1, 0, 0, -1e9]);
+      gl.uniform1f(R.depth.u.uClipOn, o.clip ? 1 : 0);
       drawArray(gl, m.va);
     }
     gl.disable(gl.POLYGON_OFFSET_FILL);
@@ -185,8 +201,21 @@ export function renderScene(scene) {
       gl.uniform3fv(u.uTint, linear(o.tint || '#8FA6BC'));
       gl.uniform1f(u.uPlume, o.plume || 0);
       gl.uniform1f(u.uHeat, o.heat ?? Math.min(1, (o.plume || 0) * 0.35));
-      gl.uniform1f(u.uLights, o.lights === false ? 0 : 1);
+      const dmg = o.damage;
+      gl.uniform1f(u.uLights, o.lights === false ? 0 : dmg ? dmg.lights : 1);
+      gl.uniform1f(u.uFlicker, dmg?.flicker ? 1 : 0);
       gl.uniform1f(u.uWear, o.tl <= 1 ? 1 : o.tl === 2 ? 0.6 : 0.3);
+      gl.uniform1f(u.uWorn, o.kind === 'debris' ? 1 : dmg ? dmg.worn : 0);
+      gl.uniform4fv(u.uClip, o.clip || [1, 0, 0, -1e9]);
+      gl.uniform1f(u.uClipOn, o.clip ? 1 : 0);
+      gl.uniform1f(u.uClipHeat, o.clipHeat || 0);
+      const sc = dmg?.scars || [];
+      gl.uniform1i(u.uScarN, sc.length);
+      if (sc.length) {
+        const A = new Float32Array(MAX_SCARS * 4), K = new Float32Array(MAX_SCARS * 4);
+        sc.forEach((x, i) => { A.set([x.p[0], x.p[1], x.p[2], x.r], i * 4); K.set([x.hole, x.heat, x.kind, x.seed], i * 4); });
+        gl.uniform4fv(u.uScar, A); gl.uniform4fv(u.uScarK, K);
+      }
       const inf = m.info;
       gl.uniform2f(u.uStern, o.kind === 'hull' ? (inf.bell ? inf.bell.xT : -inf.L / 2) : -1e9, o.kind === 'hull' ? inf.L : 1);
       drawArray(gl, m.va);
@@ -314,10 +343,15 @@ export function orthoCamera(center, dir, up, w, h, scale, depth) {
 const DEPTH_VS = `#version 300 es
 layout(location=0) in vec3 aPos;
 uniform mat4 uModel, uLight;
-void main() { gl_Position = uLight * uModel * vec4(aPos, 1.0); }`;
+out vec3 vObj;
+void main() { vObj = aPos; gl_Position = uLight * uModel * vec4(aPos, 1.0); }`;
 const DEPTH_FS = `#version 300 es
-precision mediump float;
-void main() {}`;
+precision highp float;
+in vec3 vObj;
+uniform vec4 uClip;
+uniform float uClipOn;
+${CLIP_GLSL}
+void main() { if (uClipOn > 0.5 && clipSide(vObj) < 0.0) discard; }`;
 
 const LIT_VS = `#version 300 es
 layout(location=0) in vec3 aPos;
@@ -342,7 +376,10 @@ precision highp sampler2DShadow;
 in vec3 vObj; in vec3 vONrm; in vec3 vNrm; in vec3 vCol; in vec4 vLight; in vec3 vWorld;
 flat in int vMat;
 uniform vec3 uViewDir, uSun, uBounceDir, uBounceCol, uTint;
-uniform float uSunI, uExposure, uTime, uPlume, uHeat, uLights, uWear, uPxPerM, uTonemap;
+uniform float uSunI, uExposure, uTime, uPlume, uHeat, uLights, uWear, uPxPerM, uTonemap, uFlicker, uWorn, uClipOn, uClipHeat;
+uniform vec4 uClip;
+uniform int uScarN;
+uniform vec4 uScar[${MAX_SCARS}], uScarK[${MAX_SCARS}];
 uniform vec2 uStern;
 uniform vec3 uFillDir, uFillCol;
 uniform sampler2DShadow uShadow;
@@ -380,6 +417,17 @@ vec2 panels(vec2 uv, vec2 size, float lw) {
 }
 
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+${CLIP_GLSL}
+// the nearest of a lattice of jittered points (pits from gunfire)
+float cells(vec3 p) {
+  vec3 i = floor(p), f = fract(p); float m = 1.0;
+  for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
+    vec3 g = vec3(float(x), float(y), float(z));
+    vec3 o = vec3(hash(i + g), hash(i + g + 11.3), hash(i + g + 27.1));
+    m = min(m, length(g + o - f));
+  }
+  return m;
+}
 // each panel set a hair off true, as real plating is: it catches the light a little differently
 vec3 panelTilt(vec2 uv, vec2 size, vec3 N, float k) {
   vec2 c = floor(uv / size);
@@ -416,7 +464,57 @@ vec3 brdf(vec3 N, vec3 V, vec3 L, vec3 alb, float rough, float metal) {
 void main() {
   vec3 N = normalize(vNrm);
   vec3 V = -normalize(uViewDir);
+  // a broken hull keeps its side of the tear
+  float cut = 1e9;
+  if (uClipOn > 0.5) { cut = clipSide(vObj); if (cut < 0.0) discard; }
+  // a closed hull's inside is only seen through a hole or a tear: the faces turned away, of its solid parts
+  bool solid = vMat == 0 || vMat == 1 || vMat == 2 || vMat == 4 || vMat == 9 || vMat == 10 || vMat == 16 || vMat == 17 || vMat == 21 || vMat == 22;
+  bool inside = solid && dot(N, V) < 0.0;
   if (dot(N, V) < 0.0) N = -N;                   // (thin and open parts are seen from either side)
+  // ---- the scars: holes (cut through, their edges torn and curled out), peppering, scorching, scrapes
+  float scorch = 0.0, rim = 0.0, glow = 0.0, pits = 0.0, scrape = 0.0;
+  vec3 bend = vec3(0.0);
+  for (int i = 0; i < ${MAX_SCARS}; i++) {
+    if (i >= uScarN) break;
+    vec3 d = vObj - uScar[i].xyz;
+    float r = uScar[i].w, dist = length(d) / r;
+    if (dist > 3.4) continue;
+    vec4 K = uScarK[i];
+    float jag = vnoise(d / r * 2.6 + K.w * 37.0) - 0.5;
+    if (K.z < 0.5) {
+      float hr = 0.5 + 0.4 * jag;
+      if (dist < hr && !inside) discard;
+      float rr = smoothstep(hr + 0.4, hr, dist);
+      rim = max(rim, rr);
+      bend += normalize(d) * rr;
+      // (the torn edge itself white-hot, cooling; the plating round it only warmed)
+      glow = max(glow, K.y * (smoothstep(hr + 0.16, hr, dist) + 0.25 * smoothstep(hr + 0.7, hr, dist)));
+      scorch = max(scorch, smoothstep(2.9 + jag, 0.4, dist));
+    } else if (K.z < 1.5) {
+      float area = smoothstep(1.0, 0.55, dist + jag * 0.35);
+      if (area > 0.0) {
+        // (rounds of a few centimetres: pits a hand across, with a bright lip where the plate splashed)
+        vec3 q = vObj * 2.2 + K.w * 19.0;
+        float c = cells(q);
+        float pit = smoothstep(0.3, 0.16, c) * step(0.35, hash(floor(q))) * area;
+        rim = max(rim, smoothstep(0.42, 0.3, c) * (1.0 - smoothstep(0.3, 0.2, c)) * step(0.35, hash(floor(q))) * area * 0.8);
+        pits = max(pits, pit);
+        scorch = max(scorch, area * 0.45);
+        glow = max(glow, K.y * pit * 0.6);
+      }
+    } else if (K.z < 2.5) {
+      scorch = max(scorch, smoothstep(1.15, 0.15, dist + jag * 0.6) * 0.9);
+    } else {
+      float a = smoothstep(1.0, 0.35, dist + jag * 0.3);
+      scrape = max(scrape, a * step(0.55, fract(dot(vObj, vec3(0.3, 2.1, 1.7)) * 3.0 + jag)));
+    }
+  }
+  // the tear of a broken hull: torn metal along it, scorched back from it
+  if (uClipOn > 0.5) {
+    rim = max(rim, smoothstep(0.7, 0.0, cut));
+    scorch = max(scorch, smoothstep(5.0, 0.0, cut) * 0.9);
+    glow = max(glow, uClipHeat * smoothstep(0.9, 0.0, cut));
+  }
   vec3 on = normalize(vONrm);
   vec3 p = vObj;
   vec3 alb = vCol;
@@ -467,7 +565,8 @@ void main() {
     emis = vec3(0.75, 0.85, 1.0) * uPlume * 1.6 + vec3(1.0, 0.55, 0.25) * uHeat * 0.6;
   } else if (vMat == 8) {                        // ports: lit from inside, not every one; the dark ones glass
     float h = hash(floor(p * 1.1 + 0.5));
-    float on2 = step(0.3, h) * uLights;
+    float on2 = step(1.0 - 0.7 * uLights, h) * step(0.01, uLights);
+    if (uFlicker > 0.5) on2 *= step(0.3, fract(sin(floor(uTime * 6.0 + h * 50.0)) * 43758.5));
     emis = mix(vec3(1.0, 0.7, 0.4), vec3(0.75, 0.85, 1.0), step(0.8, h)) * (0.5 + 0.9 * h) * on2 * 2.4;
     alb = vec3(0.03, 0.035, 0.04); rough = 0.06; metal = 0.0;
   } else if (vMat == 9) {                        // dark recesses, hatches
@@ -509,7 +608,35 @@ void main() {
   }
 
   alb *= 1.0 - 0.6 * soot * step(float(vMat), 4.5);
-  float sh = shadowAt(N);
+  // ---- damage on the surface
+  if (uWorn > 0.0) {
+    // a hull that has been through it: streaked with soot, its paint dulled
+    float w = uWorn * smoothstep(0.45, 0.8, fbm(p * 0.22 + 4.0));
+    alb = mix(alb, alb * vec3(0.45, 0.43, 0.4), w * 0.6);
+    rough = mix(rough, 0.85, w * 0.6);
+  }
+  if (scorch > 0.0) {
+    float s = scorch * (0.75 + 0.25 * fbm(p * 2.3));
+    alb = mix(alb, vec3(0.018, 0.016, 0.014), s * 0.92);
+    rough = mix(rough, 0.95, s); metal = mix(metal, 0.1, s);
+  }
+  if (rim > 0.0) {
+    // torn plating: bright where it tore, bent out round the hole
+    alb = mix(alb, vec3(0.5, 0.49, 0.47) * (0.7 + 0.5 * vnoise(p * 23.0)), rim * 0.75);
+    metal = mix(metal, 0.95, rim); rough = mix(rough, 0.32, rim);
+    if (length(bend) > 1e-3) N = normalize(N + normalize(bend) * rim * 1.3 + (vec3(vnoise(p * 9.0), vnoise(p * 9.0 + 3.3), vnoise(p * 9.0 + 6.1)) - 0.5) * rim * 1.2);
+  }
+  if (pits > 0.0) { alb = mix(alb, vec3(0.01), pits * 0.85); N = normalize(N + (vec3(hash(floor(p * 40.0)), hash(floor(p * 40.0) + 3.0), 0.5) - 0.5) * pits); }
+  if (scrape > 0.0) { alb = mix(alb, vec3(0.62, 0.62, 0.6), scrape * 0.7); metal = mix(metal, 1.0, scrape); rough = mix(rough, 0.25, scrape); }
+  float fl = 0.8 + 0.2 * sin(uTime * 13.0 + p.x * 2.0) * sin(uTime * 7.3 + p.z);
+  // (hot steel: dull red cooling, orange, white only in the first moments)
+  emis += mix(vec3(0.9, 0.22, 0.05), vec3(1.0, 0.8, 0.55), smoothstep(0.75, 1.0, glow)) * glow * glow * 1.7 * fl;
+  if (inside) {
+    // the inside, through the hole: dark, charred, lit by what light gets in and the glow of the fire
+    alb = vec3(0.03, 0.028, 0.026) * (0.6 + 0.8 * fbm(p * 1.7)); metal = 0.15; rough = 0.9;
+    emis = vec3(1.0, 0.38, 0.1) * glow * 0.08 * fl;
+  }
+  float sh = shadowAt(N) * (inside ? 0.25 : 1.0);
   if (uRockR > 0.0) {
     // the rock between this and the Sun (its night side, or its shadow across the field)
     vec3 q0 = vWorld - uRockS;

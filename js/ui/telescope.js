@@ -65,6 +65,7 @@ import { frameMarks, marksOf, markWords } from './marks.js';
 import { ScopeFx } from './scope-fx.js';
 import { SkyPainter, drawStars, hash } from './scope-sky.js';
 import { has3D, renderScene, orthoCamera, hullMatrix, stationMatrix } from './gl/ships3d.js';
+import { damageLook, pieces, debrisMatrix, drawVents, mul4 } from './gl/damage.js';
 
 const C_MS = 299_792_458;
 const NIGHT = 2.3;               // rad of phase: past this we see the night side
@@ -331,6 +332,13 @@ export class ScopeView {
     };
     this.fx.ingest(fxList(), {
       now, tm, pose: fxView.pose, velOf,
+      // where the newest scar on a hull is (its own frame): a hit is seen where it holed it
+      scarAt: (id) => {
+        const sc = this.poses.get(id)?.solid?.look?.scars;
+        if (!sc?.length) return null;
+        const s = sc.reduce((a, b) => (b.age < a.age ? b : a));
+        return s.age <= 2 ? s.p : null;
+      },
       between: (a, b) => {
         const p = kin(a), q = kin(b);
         if (!p || !q) return null;
@@ -488,16 +496,20 @@ export class ScopeView {
     // (a ship flying in the plane is rolled however its crew left it: a little of its back or its belly shows)
     const m = hull ? rolled(hullMatrix(0, 0, facingOf(e), 'top'), (idHash(e.id) - 0.5) * 0.9) : stationMatrix(0, 0, stationAngle(e.orbit, this.tm));
     const bb = hull ? hull.bounds : modelBounds(model);
-    // where its corners fall on the screen
+    // its damage (gl/damage.js): holes and scorching, and a wreck tumbling, in pieces, its fragments round it
+    const look = hull ? damageLook(e, hull, this.tm) : null;
+    const parts = look ? pieces(m, look) : [{ m, clip: null }];
+    // where its corners fall on the screen (every piece)
     let r0 = Infinity, r1 = -Infinity, u0 = Infinity, u1 = -Infinity;
-    for (const cx of [bb.x0, bb.x1]) for (const cy of [bb.y0, bb.y1]) for (const cz of [bb.z0, bb.z1]) {
-      const w = [m[0] * cx + m[4] * cy + m[8] * cz, m[1] * cx + m[5] * cy + m[9] * cz, m[2] * cx + m[6] * cy + m[10] * cz];
+    for (const pc of parts) for (const cx of [bb.x0, bb.x1]) for (const cy of [bb.y0, bb.y1]) for (const cz of [bb.z0, bb.z1]) {
+      const M = pc.m, w = [M[0] * cx + M[4] * cy + M[8] * cz + M[12], M[1] * cx + M[5] * cy + M[9] * cz + M[13], M[2] * cx + M[6] * cy + M[10] * cz + M[14]];
       const rr = w[0] * right[0] + w[1] * right[1];
       r0 = Math.min(r0, rr); r1 = Math.max(r1, rr); u0 = Math.min(u0, w[2]); u1 = Math.max(u1, w[2]);
     }
     const box = { x0: x + r0 * pxPerM, x1: x + r1 * pxPerM, y0: y - u1 * pxPerM, y1: y - u0 * pxPerM };
-    // (rendered only as far as the frame, and a margin for the blur)
-    const pad = Math.ceil(blurPx * 3 + 4);
+    // (rendered only as far as the frame, and a margin for the blur, and for a wreck its cloud of fragments)
+    const cloud = look?.debris ? Math.min(3 * bb.x1, Math.max(...look.debris.map(d => d.d0 + d.v * look.debris.sinceS))) * pxPerM : 0;
+    const pad = Math.ceil(blurPx * 3 + 4 + cloud);
     const cx0 = Math.max(-pad, Math.floor(box.x0 - pad)), cx1 = Math.min(W + pad, Math.ceil(box.x1 + pad));
     const cy0 = Math.max(-pad, Math.floor(box.y0 - pad)), cy1 = Math.min(H + pad, Math.ceil(box.y1 + pad));
     if (cx1 <= cx0 || cy1 <= cy0) return { ...box, solid: null };
@@ -511,7 +523,11 @@ export class ScopeView {
     const sun = [-f[0] * Math.cos(ph) + right[0] * side * Math.sin(ph), -f[1] * Math.cos(ph) + right[1] * side * Math.sin(ph), 0.04];
     const out = renderScene({
       w: wD, h: hD, ...cam, sun, sunI: 3.4, exposure: 1.15, t, pxPerM: pxPerM * k,
-      objects: [{ kind: hull ? 'hull' : 'station', key: hull ? e.cls : e.id, model: hull || model, tl: e.tl ?? 2, m, tint: factionColor(e.faction), plume: 0, heat: Math.min(1, (e.thrust || 0) * 0.35), lights: !e.tags?.wreck && !isDark(e) }],
+      objects: [
+        ...parts.map(pc => ({ kind: hull ? 'hull' : 'station', key: hull ? e.cls : e.id, model: hull || model, tl: e.tl ?? 2, m: pc.m, clip: pc.clip, damage: look, clipHeat: look?.debris ? Math.max(0, 1 - look.debris.sinceS / 1200) : 0,
+          tint: factionColor(e.faction), plume: 0, heat: Math.min(1, (e.thrust || 0) * 0.35), lights: !e.tags?.wreck && !isDark(e) })),
+        ...(look?.debris || []).map((d, i) => ({ kind: 'debris', key: String(d.shape), m: mul4(m, debrisMatrix(look, d, i)), tint: factionColor(e.faction), tl: 1, lights: false })),
+      ],
       shadowBox: { cx: 0, cy: 0, cz: 0, half: L * 0.7, depth: L * 0.7 }, fill: { dir: [0, 0, 1], col: [0.012, 0.012, 0.015] },
     });
     if (!out) return null;
@@ -520,13 +536,16 @@ export class ScopeView {
     if (blurPx > 0.35) ctx.filter = `blur(${blurPx.toFixed(1)}px)`;
     ctx.drawImage(out.canvas, out.sx, out.sy, out.w, out.h, cx0, cy0, cx1 - cx0, cy1 - cy0);
     ctx.restore();
-    // a point of its own frame (m) on the screen; is a face turned toward us
+    // a point of its own frame (m) on the screen (on whichever piece holds it); is a face turned toward us
     const proj = (p) => {
-      const w = [m[0] * p[0] + m[4] * p[1] + m[8] * p[2], m[1] * p[0] + m[5] * p[1] + m[9] * p[2], m[2] * p[0] + m[6] * p[1] + m[10] * p[2]];
+      const pc = parts.find(q => !q.clip || q.clip[0] * p[0] + q.clip[1] * p[1] + q.clip[2] * p[2] >= q.clip[3]) || parts[0], M = pc.m;
+      const w = [M[0] * p[0] + M[4] * p[1] + M[8] * p[2] + M[12], M[1] * p[0] + M[5] * p[1] + M[9] * p[2] + M[13], M[2] * p[0] + M[6] * p[1] + M[10] * p[2] + M[14]];
       return [x + (w[0] * right[0] + w[1] * right[1]) * pxPerM, y - w[2] * pxPerM];
     };
+    // the air going out of fresh holes, the glow of hot edges
+    if (look) drawVents(ctx, look, proj, pxPerM, t, alpha);
     const toUs = (n) => -(m[0] * n[0] + m[4] * n[1] + m[8] * n[2]) * f[0] - (m[1] * n[0] + m[5] * n[1] + m[9] * n[2]) * f[1];
-    return { ...box, solid: { proj, toUs, m, f, right } };
+    return { ...box, solid: { proj, toUs, m, f, right, look } };
   }
 
   /** The sensor's noise: a still pattern, moved every frame. */

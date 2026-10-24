@@ -501,7 +501,7 @@ function renderSelection() {
         ${!c.ordnance ? '<button class="scanner-track-btn" data-act="stance">STANCE</button>' : ''}
         ${!c.ordnance ? `<button class="scanner-track-btn ${s.combat.target === t.id ? 'tracking' : ''}" data-act="target">${s.combat.target === t.id ? 'TARGETED' : 'TARGET'}</button>` : ''}
         ${dockButton(s, d.entity)}
-        ${!c.ordnance && !c.station && boardable(s, d.entity).ok ? `<button class="scanner-track-btn" data-act="board">${d.entity?.tags?.wreck ? 'SALVAGE' : 'BOARD'}</button>` : ''}
+        ${!c.ordnance && !c.station && boardable(s, d.entity).ok ? `<button class="scanner-track-btn" data-act="board">BOARD</button>` : ''}
         ${board ? '' : '<button class="scanner-track-btn" data-act="focus">FOCUS</button>'}
         ${lookButton('scanner-track-btn')}
         ${flaggable(d.entity) ? flagButton(s, t.id, 'scanner-track-btn') : ''}

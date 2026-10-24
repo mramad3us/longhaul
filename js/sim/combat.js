@@ -43,7 +43,7 @@ import { knownName } from './flags.js';
 import { systemPerf } from './systems.js';
 import { isReactorOnline } from './reactor.js';
 import { WARHEADS, PROFILES, TORPEDO_RELOAD_MIN, EVADE_G } from './weapons.js';
-import { AIM } from './damage.js';
+import { AIM, fusesTick } from './damage.js';
 import { CLASSES, PLAYER_CLASS, TECH, playerClass } from './ship-classes.js';
 
 export const PDC_MODES = {
@@ -61,6 +61,7 @@ export function createCombat(classId = PLAYER_CLASS) {
     tubes: new Array(CLASSES[classId].tubes).fill(0),   // minute each tube is loaded again
     protect: [],               // ships our PDCs cover (escort charges, ships we came to rescue)
     warned: [],                // inbound ordnance already announced
+    fuses: [],                 // hulls counting down to a reactor detonation that no pilot ticks (damage.js)
   };
 }
 
@@ -164,6 +165,7 @@ export { moveAgents };
 export function combatTick(state, emit = () => {}) {
   const C = state.combat;
   agentsTick(state, emit);
+  fusesTick(state, emit);
 
   // The fire-control target can slip away, die, or strike
   if (C.target) {

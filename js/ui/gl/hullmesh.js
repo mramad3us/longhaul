@@ -722,4 +722,51 @@ function groundworks(mb, p, r) {
   }
 }
 
+// ---- DEBRIS ----
+
+/**
+ * A fragment of a broken hull, about a metre across (scaled where it is
+ * drawn: ships3d.js): shape 0 a plate bent double, 1 a torn panel, 2 a
+ * length of spar, 3 a curved piece of tank shell, 4 a chunk of machinery,
+ * 5 a radiator fin with its frame.
+ */
+export function buildDebrisMesh(shape) {
+  const mb = new MeshBuilder();
+  const k = Number(shape) || 0;
+  const r = rng(`debris${k}`);
+  const plate = weather(TONES.plateDark, 1, r), metal = weather(TONES.plate, 1, r);
+  if (k === 0) {
+    mb.box(-0.5, 0.05, -0.35, 0.35, -0.03, 0.03, plate, MAT.PLATE);
+    // (the other half folded up at an angle)
+    const a = 0.9, c = Math.cos(a), sn = Math.sin(a);
+    const P = (x, y, z) => [0.05 + x * c - z * sn, y, x * sn + z * c];
+    mb.quad(P(0, -0.35, 0.03), P(0.5, -0.35, 0.03), P(0.5, 0.3, 0.03), P(0, 0.35, 0.03), plate, MAT.PLATE);
+    mb.quad(P(0, 0.35, -0.03), P(0.5, 0.3, -0.03), P(0.5, -0.35, -0.03), P(0, -0.35, -0.03), plate, MAT.PLATE);
+  } else if (k === 1) {
+    // a panel torn out ragged: a fan of triangles round its middle, edges uneven
+    const n = 9, pts = [];
+    for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2; const rr = 0.32 + 0.22 * r(); pts.push([Math.cos(a) * rr * 1.3, Math.sin(a) * rr, (r() - 0.5) * 0.12]); }
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      mb.tri([0, 0, 0.02], a, b, metal, MAT.PLATE);
+      mb.tri([0, 0, -0.02], b, a, metal, MAT.PLATE);
+    }
+  } else if (k === 2) {
+    mb.tube([-0.6, 0, 0], [0.6, 0.05, 0.08], 0.07, 0.06, 6, TONES.truss, MAT.TRUSS);
+    mb.tube([0.2, 0, 0], [0.45, 0.3, 0.1], 0.04, 0.035, 5, TONES.truss, MAT.TRUSS);
+  } else if (k === 3) {
+    mb.lathe([[-0.4, 0.6], [0.4, 0.6]], 6, 0, -0.55, weather(TONES.tank, 1, r), MAT.TANK, false, 0.9, 2.3);
+    mb.lathe([[-0.4, 0.57], [0.4, 0.57]], 6, 0, -0.55, TONES.dark, MAT.DARK, true, 0.9, 2.3);
+  } else if (k === 4) {
+    mb.box(-0.35, 0.35, -0.25, 0.25, -0.2, 0.2, weather(TONES.machine, 1, r), MAT.MACHINE, 0.04);
+    mb.tube([0.35, 0, 0.05], [0.65, 0.1, 0.2], 0.05, 0.04, 6, TONES.dark, MAT.MACHINE);
+    mb.box(-0.2, 0.1, 0.25, 0.4, -0.1, 0.12, plate, MAT.MACHINE);
+  } else {
+    mb.box(-0.55, 0.55, -0.3, 0.3, -0.015, 0.015, TONES.radiator, MAT.RADIATOR);
+    mb.box(-0.55, 0.55, 0.3, 0.36, -0.03, 0.03, TONES.truss, MAT.MACHINE);
+  }
+  const data = mb.data();
+  return { data, count: data.length / FLOATS, L: 1, W: 1, H: 1, bell: null, lights: [], pdcs: [] };
+}
+
 export { FLOATS, MeshBuilder };

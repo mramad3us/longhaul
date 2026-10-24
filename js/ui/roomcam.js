@@ -58,7 +58,9 @@
 // with its helmet and pack, lit by the room's own lights through the same
 // lens. Without WebGL2 (or while the bodies load) they are drawn as limbs
 // of a body's width. The selected one is outlined and named. Someone in the
-// head is behind its door.
+// head is behind its door; a warship's brig is a row of closed cells,
+// a cell holding someone shut and locked behind a red lamp, a free one
+// open on its bunk under a green one (the prisoners are not drawn).
 //
 // Cost: the room (floor, walls, fixtures, light) is rendered once per
 // deck, canvas size and lighting state into offscreen layers, one per
@@ -250,13 +252,17 @@ function buildRoom(ship, di) {
   const geo = shipGeometry(ship);
   const fixtures = [];
   const wallFx = [];
+  // (a warship's brig: its berths are holding cells, numbered in the order prisoners fill them)
+  const brig = deck.id === 'brig';
+  let cellNo = 0;
   for (const [x, z] of cells) {
     const t = tiles[z][x];
-    const model = MODELS[t];
+    const cell = brig && t === T.PAX_BERTH;
+    const model = cell ? cellParts : MODELS[t];
     if (!model) continue;
     const facing = facingOf(tiles, inside, x, z);
     const kind = FIXTURE_KIND[t];
-    fixtures.push({ t, x, z, facing, row: z, tile: { x, y: z, t }, model, kind, sys: SYSTEM_BY_FIXTURE[kind] || null, id: kind ? `${kind}:${di}:${x}:${z}` : null });
+    fixtures.push({ t, x, z, facing, row: z, tile: { x, y: z, t }, model, kind, sys: SYSTEM_BY_FIXTURE[kind] || null, id: kind ? `${kind}:${di}:${x}:${z}` : null, cell: cell ? cellNo++ : null });
   }
   for (const w of walls) for (const u of w.units) {
     if (u.t !== T.AIRLOCK && u.t !== T.CARGO_DOOR && u.t !== T.PDC_MOUNT) continue;
@@ -341,6 +347,29 @@ function stationParts(ink, o = {}) {
     B(0.1, 0.16, 0.34, 0.8, 0.3, 0.55, 'metal'),
     B(0.84, 0.9, 0.34, 0.8, 0.3, 0.55, 'metal'),
   ];
+}
+
+/**
+ * A holding cell in a warship's brig: a closed box round its bunk, side
+ * walls and a roof, its door shut and locked (a red lamp) while someone is
+ * held in it, slid open (a green lamp, the bunk seen through the doorway)
+ * while it stands empty. Nobody inside is drawn: the door is what shows.
+ */
+function cellParts(c) {
+  const parts = [
+    B(0.08, 0.92, 0.04, 0.8, 0, 0.22, 'frame'),
+    B(0.1, 0.9, 0.06, 0.78, 0.22, 0.32, 'gel'),
+    B(0.0, 0.06, 0, 0.92, 0, 1.32, 'wallLow'),
+    B(0.94, 1.0, 0, 0.92, 0, 1.32, 'wallLow'),
+    B(0.0, 1.0, 0, 0.92, 1.32, 1.38, 'metalDk'),
+  ];
+  if (c.held) parts.push(B(0.06, 0.94, 0.86, 0.92, 0, 1.32, 'podDoor', { deco: 'cellShut', occupancy: [0.86, 0.98] }));
+  else parts.push(
+    B(0.06, 0.34, 0.86, 0.92, 0, 1.32, 'podDoor', { deco: 'cellLeaf', occupancy: [0.2, 0.98] }),
+    B(0.34, 0.94, 0.86, 0.92, 1.1, 1.32, 'podDoor'),
+    B(0.9, 0.94, 0.86, 0.92, 0, 1.1, 'metalDk'),
+  );
+  return parts;
 }
 
 const MODELS = {
@@ -1101,7 +1130,7 @@ function drawFixture(g, lens, env, fx, ctx2) {
     const lampAt = p.lamp && fx.sys ? onFront(p.lamp) : null;
     if (lampAt) ctx2.lamps.push({ ...lampAt, sys: fx.sys });
     const occAt = p.occupancy ? onFront(p.occupancy) : null;
-    if (occAt) ctx2.occupancy.push({ ...occAt, tx: fx.x, tz: fx.z });
+    if (occAt) ctx2.occupancy.push({ ...occAt, tx: fx.x, tz: fx.z, cell: fx.cell ?? null });
   }
   return convexHull(hull);
 }
@@ -1169,6 +1198,20 @@ function decorate(g, lens, env, fx, pl, p, f, ctx2) {
         const u = u0 + 0.08 + i * 0.13, h = 0.12 + hash(i, fx.x) * 0.16;
         quad(u, y1 - 0.08, u + 0.04, y1 - 0.08 - h, 'rgba(25,28,32,0.75)');
       }
+      break;
+    }
+    case 'cellShut': {
+      // a locked cell door: its frame, a slot of a window with bars, the lock under the lamp
+      quad(u0 + 0.06, y0 + 0.04, u1 - 0.06, y1 - 0.06, rgbaHex(ALB.podDoor, 0.85));
+      line(u0 + 0.06, y0 + 0.04, u0 + 0.06, y1 - 0.06, shade, thin);
+      line(u1 - 0.06, y0 + 0.04, u1 - 0.06, y1 - 0.06, shade, thin);
+      quad(u0 + 0.3, y1 - 0.42, u1 - 0.3, y1 - 0.24, ALB.glass);
+      for (let i = 1; i < 4; i++) { const u = u0 + 0.3 + (u1 - u0 - 0.6) * i / 4; line(u, y1 - 0.42, u, y1 - 0.24, 'rgba(150,158,166,0.9)', thin); }
+      quad(u1 - 0.14, y0 + 0.78, u1 - 0.08, y0 + 0.9, 'rgba(30,34,38,0.9)');
+      break;
+    }
+    case 'cellLeaf': {
+      line(u1 - 0.02, y0 + 0.02, u1 - 0.02, y1 - 0.24, shade, thin * 1.5);
       break;
     }
     case 'headDoor': {
@@ -1296,7 +1339,7 @@ function buildStatic(state, room, Wd, Hd, dpr, mode) {
   const glow = state.reactor?.status === 'online' && mode !== 'blackout' && mode !== 'vacuum';
   // Fixtures in this lighting (their models can depend on state: a suit in the locker)
   const fixtures = room.fixtures.map(f => {
-    const parts = f.model({ x: f.x, z: f.z, h: hash(f.x, f.z, room.di), zone: room.zone, suit: f.kind === 'locker' ? lockers[f.id]?.hasSuit !== false : false, glow });
+    const parts = f.model({ x: f.x, z: f.z, h: hash(f.x, f.z, room.di), zone: room.zone, suit: f.kind === 'locker' ? lockers[f.id]?.hasSuit !== false : false, glow, held: f.cell != null && f.cell < heldInCells(state) });
     // the footprint on the floor (for the soft shadow under it)
     const pl = placer(f);
     let fx0 = Infinity, fz0 = Infinity, fx1 = -Infinity, fz1 = -Infinity;
@@ -1892,6 +1935,12 @@ export function occludersNear(fixtures, x, z) {
   return out;
 }
 
+/** How many of the brig's cells hold someone (prisoners fill the cells first: sim/manifest.js). */
+function heldInCells(state) {
+  const n = (state.passengers || []).reduce((s, p) => s + (p.kind === 'prisoners' ? p.count : 0), 0);
+  return Math.min(state.brig || 0, n);
+}
+
 /** A soft shadow on the deck under someone standing (fainter as they float off it). */
 function drawShadow(g, lens, x, z, lift, k) {
   const c = lens.p(x, 0, z);
@@ -2034,7 +2083,9 @@ function drawCam(cam, state, alpha, now) {
   let suits = '';
   for (const f of room.fixtures) if (f.kind === 'locker') suits += lockers[f.id]?.hasSuit === false ? '0' : '1';
   const glow = state.reactor?.status === 'online' ? 1 : 0;
-  const key = `${Wd}x${Hd}@${dpr}|${mode}|${suits}|${glow}|${_fontEpoch}`;
+  // (the brig's doors: shut on the cells that hold someone)
+  const held = heldInCells(state);
+  const key = `${Wd}x${Hd}@${dpr}|${mode}|${suits}|${glow}|${room.fixtures.some(f => f.cell != null) ? held : 0}|${_fontEpoch}`;
   let c = cam.cache;
   if (!c || c.key !== key || c.room !== room) {
     if (_budgetT !== now) { _budgetT = now; _budgetUsed = 0; }
@@ -2122,7 +2173,7 @@ function drawCam(cam, state, alpha, now) {
         if (st) lamp(g, lens, l, LAMP[st], st !== 'off');
       }
       for (const o of dyn.occupancy) {
-        const busy = ship.crew.some(m => !m.away && Math.round(m.pos.sx) === o.tx && Math.round(m.pos.sy - start) === o.tz);
+        const busy = o.cell != null ? o.cell < held : ship.crew.some(m => !m.away && Math.round(m.pos.sx) === o.tx && Math.round(m.pos.sy - start) === o.tz);
         lamp(g, lens, o, busy ? C_WARN : C_OWN, true);
       }
     }

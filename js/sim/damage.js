@@ -19,6 +19,15 @@
 // weapons, sensors). A ship with no drive is disabled; with no
 // structure, a wreck. A failing reactor counts down to a fusion
 // detonation that damages everything for kilometers around.
+//
+// Every hit also leaves a scar where it landed: the section, how hard
+// (its share of the hull's points), what made it, when, and a place on
+// the section (u along it, v round it) worked from a hash of the hull
+// and the hit, not the dice (the game's random stream is the same with
+// or without them). The ship's outside is drawn from its scars (ui/gl/
+// damage.js): holes, scorching, a wreck broken-backed. NPC hulls keep
+// theirs on e.combat.scars, our ship on state.hull.scars (with the deck
+// hit); the worst SCARS_MAX are kept.
 // ============================================================
 
 import { AU_M } from '../core/constants.js';
@@ -43,6 +52,7 @@ export const AIM = {
 };
 const UNAIMED = { hull: 0.4, drive: 0.2, reactor: 0.1, weapons: 0.15, sensors: 0.15 };
 const ARMOR_PER_POINT = 0.12;
+export const SCARS_MAX = 24;
 const ARMOR_MAX = 0.6;
 
 /** Player's ship: where each section is (deck ids). */
@@ -59,6 +69,29 @@ export function pickSection(aim, precision) {
   const w = AIM[aim]?.weights || UNAIMED;
   const keys = Object.keys(UNAIMED);
   return weightedPick(keys, k => precision * (w[k] || 0) + (1 - precision) * UNAIMED[k]);
+}
+
+/** A stable number in [0, 1) from a string and two integers (where a scar lands: not the dice). */
+function hash01(id, a, b) {
+  let h = 2166136261 ^ a * 374761393 ^ b * 668265263;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  h = Math.imul(h ^ (h >>> 15), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/**
+ * Keep the mark a hit leaves: { s: section, k: kind, r: share of the hull's points,
+ * u, v: where on the section, m: minute, d?: our deck }. The worst SCARS_MAX stay.
+ */
+function scar(list, id, minute, o) {
+  const n = list.length;
+  list.push({ ...o, r: Math.round(o.r * 1000) / 1000, u: hash01(id, n, minute), v: hash01(id, n + 7919, minute), m: minute });
+  if (list.length > SCARS_MAX) {
+    // (the slightest goes first; of equals, the oldest)
+    let w = 0;
+    for (let i = 1; i < list.length - 1; i++) if (list[i].r < list[w].r) w = i;
+    list.splice(w, 1);
+  }
 }
 
 const shed = (dp, armor, spread) => dp * (1 - Math.min(ARMOR_MAX, armor * ARMOR_PER_POINT * (spread ? 0.5 : 1)));
@@ -148,6 +181,9 @@ function hitPlayer(state, hit, emit) {
   const decks = hit.spread ? state.ship.decks.map((_, i) => i) : (() => { const ds = decksFor(state, section); return [ds[randInt(0, ds.length - 1)]]; })();
   const local = hit.spread ? dp * 0.5 : dp;
   const effects = { breaches: [], systems: [], wounded: [], containment: false };
+  const scars = state.hull.scars ||= [];
+  if (hit.spread) scar(scars, 'player', state.clock.minute, { s: 'all', k: hit.kind || 'blast', r: dp / hpMax });
+  else for (const di of decks) scar(scars, 'player', state.clock.minute, { s: section, k: hit.kind || 'hit', r: dp / hpMax, d: state.ship.decks[di].id });
   for (const di of decks) {
     const deck = state.ship.decks[di];
     if (deck.atmosphere && !deck.atmosphere.breached && random() < Math.min(1, local / 40)) {
@@ -212,7 +248,7 @@ function hitNpc(state, e, hit, emit) {
   let section = 'all';
   if (hit.spread) {
     for (const k of ['drive', 'reactor', 'weapons', 'sensors']) h[k] = Math.max(0, h[k] - dp / (h.hpMax * 0.6));
-    if (h.reactor < 0.3) startContainment(h);
+    if (h.reactor < 0.3) startContainment(state, e, h);
   } else {
     section = hit.section || pickSection(hit.aim, hit.precision ?? 0.5);
     if (section !== 'hull') h[section] = Math.max(0, h[section] - dp / (h.hpMax * 0.35));
@@ -224,9 +260,10 @@ function hitNpc(state, e, hit, emit) {
         explodeNpc(state, e, hit.from, emit);
         return { section, dp, destroyed: true };
       }
-      if (h.reactor < 0.5) startContainment(h);
+      if (h.reactor < 0.5) startContainment(state, e, h);
     }
   }
+  scar(h.scars ||= [], e.id, state.clock.minute, { s: section, k: hit.kind || 'hit', r: dp / h.hpMax });
   emit('ship-hit', { id: e.id, name: e.name, section, dp, by: hit.from, weapon: hit.weapon });
   if (hit.from === PLAYER) recordAttack(state, e, 'hit', emit);
   if (h.hp <= 0) { wreckNpc(state, e, hit.from, emit); return { section, dp, destroyed: true }; }
@@ -238,8 +275,32 @@ function hitNpc(state, e, hit, emit) {
   return { section, dp, destroyed: false, disabled: h.drive < DISABLED_BELOW };
 }
 
-function startContainment(h) {
-  if (h.containment == null && !h.scrammed) h.containment = randInt(3, 30);
+function startContainment(state, e, h) {
+  if (h.containment == null && !h.scrammed) { h.containment = randInt(3, 30); armFuse(state, e); }
+}
+
+/**
+ * A hull whose reactor is counting down that no pilot ticks (a wreck, a
+ * scuttled prize): kept on state.combat.fuses, a short list, and counted
+ * down by fusesTick. (A pilot's ship is counted down by agentsTick.)
+ */
+export function armFuse(state, e) {
+  const F = state.combat.fuses ||= [];
+  if (!F.includes(e.id)) F.push(e.id);
+}
+
+/** Per minute: the countdowns no pilot ticks. */
+export function fusesTick(state, emit = () => {}) {
+  const F = state.combat.fuses;
+  if (!F?.length) return;
+  const world = getWorld(state);
+  for (const id of [...F]) {
+    const e = world.get(id);
+    if (!e || e.combat?.containment == null) { F.splice(F.indexOf(id), 1); continue; }
+    if (e.agent && world.driven.has(e)) continue;
+    hullTick(state, e, emit);
+    if (!world.get(id) || e.combat?.containment == null) F.splice(F.indexOf(id), 1);
+  }
 }
 
 /** Break-up: structure gone. The hulk drifts on (salvage). */
@@ -249,6 +310,7 @@ export function wreckNpc(state, e, by, emit = () => {}) {
   h.status = 'wreck';
   h.hp = 0;
   h.containment = null;
+  h.wreckedAt = state.clock.minute;
   getWorld(state).setDriven(e, false);
   e.t = state.clock.minute;
   e.thrust = 0;
@@ -271,13 +333,15 @@ export function explodeNpc(state, e, by, emit = () => {}) {
   const c = classOf(e);
   const blast = SIZES[c?.size || sizeForMass(e.mass)].reactor;
   const pos = { x: e.pos.x, y: e.pos.y };
+  // (a wreck blown up was already counted when it broke up: no second kill to credit)
+  const already = e.combat?.status === 'wreck';
   if (e.combat) e.combat.status = 'wreck';
   // (a fireball leaves no wreck to find: a contract hunting the ship is told it died, not that it got away)
   const hunt = huntsOf(state).get(e.id);
   if (hunt) hunt.targetGone = 'destroyed';
   world.remove(e);
   emit('ship-destroyed', { id: e.id, name: e.name, by, how: 'reactor' });
-  if (by === PLAYER) { creditKill(state, e, emit); recordAttack(state, e, 'destroyed', emit); }
+  if (by === PLAYER && !already) { creditKill(state, e, emit); recordAttack(state, e, 'destroyed', emit); }
   detonate(state, pos, blast, e.id, emit);
 }
 
@@ -310,7 +374,8 @@ export function detonate(state, pos, blast, sourceId, emit = () => {}, { kind = 
 export function hullTick(state, e, emit = () => {}) {
   const h = e.combat;
   if (!h || h.containment == null) return;
-  if (h.crew > 0.3 && (e.tl || 2) >= 2 && random() < 0.12) {
+  // (a wreck's survivors can't reach the core, nor anyone undo charges set to blow it)
+  if (h.status !== 'wreck' && !e.tags?.scuttled && h.crew > 0.3 && (e.tl || 2) >= 2 && random() < 0.12) {
     h.containment = null;
     h.scrammed = true;
     h.reactor = Math.min(h.reactor, 0.2);

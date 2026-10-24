@@ -118,9 +118,11 @@ export class ScopeFx {
       // a hit lands on the hull's face: a point on it, kept in the hull's own frame while it lasts
       const r = rng(seed);
       const local = onto ? { x: (r() - 0.5) * 0.7, z: (r() - 0.5) * 0.5 } : null;
+      // (on the solid, exactly where the sim says it holed the hull: its newest scar)
+      const at = onto ? c.scarAt?.(onto) || null : null;
       // a ship that goes up with the blast leaves its pieces (the pose of it as it last was)
       const wreck = kind === 'fusion' || kind === 'nuclear' ? c.lastPoseNear(pos) : null;
-      this.add({ kind, born, seed, pos, vel, tm: c.tm, scaleM: fx.scaleM, onto, local, wreck });
+      this.add({ kind, born, seed, pos, vel, tm: c.tm, scaleM: fx.scaleM, onto, local, at, wreck });
       if (kind === 'fusion' || kind === 'nuclear') c.burst?.(pos, (kind === 'fusion' ? Math.max(1200, (fx.scaleM || 800) * 3) * 1.15 : 2500) * 2 * 1.75, born + LIFE_MS[kind]);
     }
   }
@@ -218,6 +220,10 @@ export class ScopeFx {
 function placeOf(e, v) {
   if (e.onto) {
     const p = v.pose(e.onto);
+    if (p && p.solid && e.at) {
+      const [x, y] = p.solid.proj(e.at);
+      return { x, y, k: p.pxPerM, distM: p.distM, cx: p.x, cy: p.y };
+    }
     if (p && p.solid && p.hull) {
       // on the face of the 3D hull we see
       const side = p.solid.toUs([0, 1, 0]) >= 0 ? 1 : -1;
