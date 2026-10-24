@@ -21,9 +21,10 @@
 // friends nearby. Shooting back never is.
 //
 // Time warp drops to real time for a torpedo inbound, a hostile close by,
-// and the last minutes of our own torpedoes (OWN_ARRIVAL_S): their
-// arrival is watched, through the telescope when it can hold the target
-// (ui/stage.js).
+// the last minutes of our own torpedoes (OWN_ARRIVAL_S), and a reactor on
+// a fuse near us in its last FUSE_WATCH_MIN (one we scuttled, or a wreck's
+// a blast set failing): each is watched, through the telescope when it
+// can hold the target (ui/stage.js).
 //
 // Per minute, in order (see game.js):
 //   moveAgents → (our station-keeping) → moveOrdnance → … → combatTick
@@ -221,12 +222,28 @@ export function threats(state) {
 }
 
 export const OWN_ARRIVAL_S = 3 * MIN_S;      // our own torpedoes this close to their target: real time
+export const FUSE_WATCH_MIN = 2;             // a reactor on a fuse this close to going: real time, and the telescope on it
+const FUSE_NEAR_AU = 0.01;                   // …when it is this close to us
+
+/** A hull on a fuse near us, about to go (the nearest to going), or null. */
+export function fuseAboutToGo(state) {
+  const world = getWorld(state);
+  let best = null;
+  for (const id of state.combat.fuses || []) {
+    const e = world.get(id), c = e?.combat?.containment;
+    if (c == null || c > FUSE_WATCH_MIN) continue;
+    if (Math.hypot(e.pos.x - state.flight.pos.x, e.pos.y - state.flight.pos.y) > FUSE_NEAR_AU) continue;
+    if (!best || c < best.combat.containment) best = e;
+  }
+  return best;
+}
 
 /** Time warp allowed by the tactical situation (1–3). */
 function warpLimit(state, inbound) {
   const eta = inbound.length ? inbound[0].etaS : Infinity;
   if (eta < 30 * MIN_S || state.comms.requests.length) return 1;
   for (const e of launchedBy(state, PLAYER)) if (e.ord.kind === 'torpedo' && timeToGo(state, e) < OWN_ARRIVAL_S) return 1;
+  if (fuseAboutToGo(state)) return 1;
   const hostiles = hostilesOfPlayer(state);
   let nearest = Infinity;
   for (const h of hostiles) nearest = Math.min(nearest, Math.hypot(h.pos.x - state.flight.pos.x, h.pos.y - state.flight.pos.y));

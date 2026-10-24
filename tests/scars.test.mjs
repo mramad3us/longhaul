@@ -22,6 +22,7 @@ import { releaseHold } from '../js/sim/autopilot.js';
 import { startBoarding, orderAboard } from '../js/sim/boarding.js';
 import { hullOf } from '../js/sim/hulls.js';
 import { damageLook, pieces } from '../js/ui/gl/damage.js';
+import { fuseAboutToGo, FUSE_WATCH_MIN } from '../js/sim/combat.js';
 
 function game(seed = 21, opts = {}) {
   seedRandom(seed);
@@ -130,8 +131,15 @@ export default [
       assert(s.combat.fuses.includes(w.id), 'the wreck is on a fuse');
       // home, and well clear of it
       run(s, st => !st.boarding || st.boarding.phase === 'done', 120);
-      s.flight.pos.x += 0.01;
-      const t = run(s, st => !getWorld(st).get(w.id), 90);
+      s.flight.pos.x += 0.004;
+      // its last minutes, watched: time at 1×, the telescope's to come up on it (ui/stage.js)
+      let watched = false, warp = [];
+      const t = run(s, st => {
+        const live = getWorld(st).get(w.id);
+        if (live && fuseAboutToGo(st) === live) { watched = true; warp.push(st.$combatWarp); }
+        return !live;
+      }, 90);
+      assert(watched && warp.length >= FUSE_WATCH_MIN - 1 && warp.every(x => x === 1), `its last minutes at 1× (${warp.join(',')})`);
       assert(!getWorld(s).get(w.id), `the wreck went up (${s.clock.minute - t0} min after the order)`);
       assert(det.some(d => d.sourceId === w.id), 'a reactor detonation where it was');
       assert(s.service.kills === kills, `not counted twice (${kills} → ${s.service.kills})`);

@@ -62,7 +62,8 @@ const EVA_SPEED_MS = 2;
 const COLLAR_MIN = 2;
 const BREACH_EVA_MIN = 10;
 const BREACH_COLLAR_MIN = 6;
-const MUSTER_LIMIT_MIN = 25;
+const MUSTER_LIMIT_MIN = 25;           // past this the party goes with whoever is at the lock, unless someone is still on the way
+const MUSTER_CAP_MIN = 90;             // and past this, whatever
 const SEARCH_MIN = 20, STRIP_MIN = 40, PRISONERS_MIN = 15, SCUTTLE_MIN = 10, SALVAGE_MIN = 45, ACCOUNTS_MIN = 30;
 const SALVAGE_DECAY = 0.55;           // what a wreck still holds after a run, of what it held
 
@@ -168,10 +169,24 @@ export function boardingTick(state, emit = () => {}) {
   }
   switch (b.phase) {
     case 'muster': {
+      // (no suit left for someone who needs one to cross: they stay aboard)
+      for (const m of party) if (m.task?.type === 'board' && m.task.phase === 'nosuit') {
+        b.party = b.party.filter(id => id !== m.id);
+        m.task = null; m.path = [];
+        note(state, `${m.name}: no suit left in the lockers, stays aboard.`, emit, 'warn');
+      }
+      const left = membersOf(state, b);
       // (an EVA crosses open space: nobody goes without a suit; and nobody ashore is waited for)
-      const ready = party.filter(m => m.task?.type === 'board' && m.task.phase === 'ready' && (b.via !== 'eva' || m.suit.wearing));
-      const able = party.filter(m => isAble(m) && !m.away);
-      if ((ready.length && ready.length === able.length) || now - b.since > MUSTER_LIMIT_MIN && ready.length) {
+      const ready = left.filter(m => m.task?.type === 'board' && m.task.phase === 'ready' && (b.via !== 'eva' || m.suit.wearing));
+      const able = left.filter(m => isAble(m) && !m.away);
+      // (someone still walking to a suit or the lock is waited for, to the cap: a suit a deck away is a long walk)
+      const waited = now - b.since;
+      const underway = left.some(m => !ready.includes(m) && m.task?.type === 'board' && (m.path?.length || m.task.phase === 'suit'));
+      if ((ready.length && ready.length === able.length) || ready.length && waited > MUSTER_LIMIT_MIN && (!underway || waited > MUSTER_CAP_MIN)) {
+        // (whoever isn't at the lock by then stays behind, and goes back to the ship's work)
+        const late = left.filter(m => !ready.includes(m));
+        for (const m of late) if (m.task?.type === 'board') { m.task = null; m.path = []; }
+        if (late.length) note(state, `${late.map(m => m.name).join(', ')} not at the lock in time: stay${late.length > 1 ? '' : 's'} aboard.`, emit, 'warn');
         b.party = ready.map(m => m.id);
         for (const m of ready) { m.away = { op: b.id, aboard: e.id }; m.task = null; m.seat = null; m.path = []; m.activity = 'away'; }
         b.phase = 'cross'; b.since = now;

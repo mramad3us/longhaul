@@ -29,9 +29,14 @@ import { clearanceFor, requestDocking, stationTraffic } from '../sim/traffic-con
 import { hiringHall, hire, dismiss, shoreLeave, recallLeave, LEAVE_COST, LEAVE_MIN } from '../sim/crew-services.js';
 import { leaseSummary, extendLease, leaseShortfall, FREE_LEASE_MIN } from '../sim/leases.js';
 import { maxCrew } from '../sim/ship-classes.js';
+import { briefHTML, progressLine } from './brief.js';
 
 let hooks = {};
 let onClose = null;
+const openBriefs = new Set();     // contracts whose brief is unfolded (kept across a re-render)
+
+/** A contract's full brief, folded under its card or row (brief.js). */
+const fold = (c, opts) => `<details class="brief-fold" data-brief="${esc(c.id)}"${openBriefs.has(c.id) ? ' open' : ''}><summary>BRIEF</summary>${briefHTML(ui.state, c, opts)}</details>`;
 
 export function initDialogs(h) {
   hooks = h;   // { plotRoute(target), setPaused(reason, on), openComms(id), crewChanged(), beginDocking(stationId) }
@@ -39,6 +44,12 @@ export function initDialogs(h) {
     $(id).addEventListener('pointerdown', (e) => { if (e.target === $(id) && id !== '#dialog-event') closeDialog(id); });
   }
   $('#dialog-generic').addEventListener('click', onGenericClick);
+  // (a brief unfolded stays unfolded when the window redraws; 'toggle' doesn't bubble, so caught on the way down)
+  for (const id of ['#dialog-generic', '#dialog-station']) $(id).addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (!d?.dataset?.brief) return;
+    if (d.open) openBriefs.add(d.dataset.brief); else openBriefs.delete(d.dataset.brief);
+  }, true);
   $('#dialog-station').addEventListener('click', onStationClick);
   $('#dialog-event').addEventListener('click', onEventClick);
 }
@@ -107,13 +118,13 @@ export function openMissions() {
     const done = new Set(s.missions.list.filter(m => !open.has(m)).slice(-SOS_DONE_SHOWN));
     const sos = s.missions.list.filter(m => open.has(m) || done.has(m)).reverse();
     const act = s.contracts.active;
-    const hist = s.contracts.history.slice(-12).reverse();
+    const hist = s.contracts.history.slice(-20).reverse();
     const timer = (min) => min >= 60 ? formatDuration(min) : `${Math.max(0, Math.round(min))} min`;
-    const row = (id, title, status, cls, detail, timerTxt, actions) => `<div class="mission-row ${cls}">
+    const row = (id, title, status, cls, detail, timerTxt, actions, extra = '') => `<div class="mission-row ${cls}">
       <div class="mission-row-header"><div class="mission-status-dot status-${status}"></div>
         <div class="mission-info"><div class="mission-title">${esc(title)}</div><div class="mission-meta">${esc(detail)}</div></div>
         <div class="mission-timer">${esc(timerTxt)}</div></div>
-      ${actions ? `<div class="mission-actions">${actions}</div>` : ''}</div>`;
+      ${actions ? `<div class="mission-actions">${actions}</div>` : ''}${extra}</div>`;
     const sosRows = sos.map(m => {
       const live = m.status === 'accepted' || m.status === 'offered';
       const routing = s.autopilot?.plan.target.id === m.entityId;
@@ -128,21 +139,13 @@ export function openMissions() {
         : c.type === 'ESCORT' && c.phase !== 'arrived' ? { id: c.targetId, label: 'TO CONVOY' }
         : c.dest ? { id: c.dest, label: `TO ${c.destName}` }
         : c.markId && (c.type === 'BOUNTY' || c.type === 'RECON') ? { id: c.markId, label: 'TO LAST POSITION' } : { id: c.targetId, label: 'TO TARGET' };
-      const phase = c.phase === 'return' ? (c.mil ? `Report to ${c.stationName} (or any ${FACTIONS[c.faction].short} port)` : `Return to ${c.stationName}`)
-        : c.type === 'INTEL' ? `Lock ${c.count} enemy ships for ${c.lockMin} min each — ${Object.values(c.tracked).filter(m => m >= c.lockMin).length} of ${c.count} logged`
-        : c.type === 'HOLD' ? (c.arrived ? `Holding point ${c.point}: ${formatDuration(c.held)} of ${formatDuration(c.holdMin)}${c.away ? ` · OFF THE POINT ${c.away} min` : ''}` : `Get within 75,000 km of point ${c.point}`)
-        : c.type === 'STRIKE' ? `Find and destroy the ${c.targetName}`
-        : c.type === 'COVERT' ? `Lock the ${c.targetName} unseen — ${Math.round(c.scanned / c.scanMin * 100)}%`
-        : c.type === 'ESCORT' ? (c.phase === 'active' ? `Join the ${c.targetName} (within 10 km)` : c.phase === 'underway' ? `Escorting to ${c.destName}` : `Dock at ${c.destName}`)
-        : c.type === 'RECON' ? `Lock the picket inside 300,000 km — ${Math.round(c.scanned / c.scanMin * 100)}%`
-        : c.type === 'BOUNTY' ? `Find the ${c.targetName}: destroy it, or disable it and accept its surrender`
-        : c.dest ? `Deliver at ${c.destName}` :
-        c.type === 'SURVEY' ? `Survey ${Math.round(c.scanned / c.scanMin * 100)}%` : c.type === 'SALVAGE' && c.worked ? `Salvage ${Math.round(c.worked / c.workMin * 100)}%` : 'Proceed to target';
+      const phase = progressLine(s, c);
       return row(c.id, c.title, 'accepted', c.mil ? 'mission-mil' : '', `${CONTRACT_LABEL[c.type]} · ${phase}`, timer(c.dueAt - s.clock.minute),
         `<button class="btn btn-primary btn-small" data-act="plot" data-kind="entity" data-id="${target.id}">PLOT ${esc(target.label)}</button>
-         <button class="btn btn-secondary btn-small" data-act="abandon" data-id="${c.id}">ABANDON</button>`);
+         <button class="btn btn-secondary btn-small" data-act="abandon" data-id="${c.id}">ABANDON</button>`, fold(c));
     }).join('');
-    const hRows = hist.map(c => row(c.id, c.title, c.phase === 'complete' ? 'completed' : 'failed', `mission-done${c.mil ? ' mission-mil' : ''}`, c.phase === 'complete' ? 'COMPLETE' : `FAILED — ${c.failReason}`, '', '')).join('');
+    const hRows = hist.map(c => row(c.id, c.title, c.phase === 'complete' ? 'completed' : 'failed', `mission-done${c.mil ? ' mission-mil' : ''}`,
+      `${CONTRACT_LABEL[c.type] || c.type} · ${c.phase === 'complete' ? 'COMPLETE' : `FAILED — ${c.failReason}`}`, '', '', fold(c))).join('');
     // Orders from our command: report to a command ship
     const orders = openCallups(s).map(cu => row(`cu-${cu.zoneId}`, `Report to the ${cu.shipName}`, cu.reported ? 'completed' : 'accepted', 'mission-mil',
       `${FACTIONS[cu.faction].navy} ORDERS · ${cu.body}${cu.reported ? ' · reported aboard: supplies at a tenth while the fight lasts' : ''}`, '',
@@ -351,7 +354,7 @@ function renderStation() {
       const label = no ? 'NOT ELIGIBLE' : needsDock && !docked ? 'DOCK TO LOAD' : !port ? (command ? 'ALONGSIDE TO SIGN' : 'IN PORT TO SIGN') : 'ACCEPT';
       return `<div class="station-mission-card ${c.mil ? 'mil' : ''}" ${c.mil ? `style="--mil:${factionColor(c.faction)}"` : ''}><div class="station-mission-top"><span class="station-mission-type">${CONTRACT_LABEL[c.type]}</span><span class="station-mission-deadline">${formatDuration(c.deadline)}</span></div>
         ${c.mil ? `<div class="station-mission-mil">${esc(milMeta)}</div>` : ''}
-        <div class="station-mission-desc">${esc(c.description)}</div><div class="station-mission-meta">${esc(meta)}</div>
+        <div class="station-mission-desc">${esc(c.description)}</div><div class="station-mission-meta">${esc(meta)}</div>${fold(c, { task: false })}
         <div class="station-mission-bottom"><span class="station-mission-reward">${rewardLine(c.reward)}${c.mil && c.rep ? ` · +${c.rep} rep` : ''}</span>
         <button class="station-mission-accept" data-act="accept" data-id="${c.id}" ${blocked ? `disabled title="${esc(no || (!port ? (command ? 'Come alongside to sign' : 'Come into port space to sign') : 'Dock to load'))}"` : ''}>${label}</button></div></div>`;
     }).join('') : `<div class="station-mission-empty">${command ? 'Nothing on the board for you right now. Stand by.' : 'No contracts posted. Check back in a few hours.'}</div>`;

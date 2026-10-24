@@ -128,6 +128,7 @@ export class ScannerView {
       if (c.station) ctx.fillRect(px - sz, py - sz, sz * 2, sz * 2);
       else { ctx.beginPath(); ctx.arc(px, py, m.dark || m.wreck ? sz + 1 : sz, 0, Math.PI * 2); paintMark(ctx, color, m.dark || m.wreck, C.void); }
       if (m.mission) drawMissionMark(ctx, px, py, sz + 7);
+      else if (m.maybe) drawMissionMark(ctx, px, py, sz + 7, true);
       if (m.flag) drawFlagMark(ctx, px, py, sz + 3, m.flag, L);
       if (c.plume) { ctx.strokeStyle = color; ctx.globalAlpha = 0.45; ctx.beginPath(); ctx.arc(px, py, sz + 3, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; }
       if (s.selected === c.id) {
@@ -146,7 +147,7 @@ export class ScannerView {
       if (frac < 0.9 || m.flag || m.mission) {
         const pri = (s.selected === c.id || state.combat.target === c.id ? 9 : s.locked === c.id ? 8 : c.sos ? 7 : hostile.has(c.id) ? 6 : c.station ? 4 : 2) + markPri(m);
         const bare = !c.name && !c.signature;
-        L.add(label + (c.sos ? '  SOS' : ''), px, py, { off: sz + 5, font: UI(11), color: bare && m.dark ? MARK_COL.dark : color, alpha: 0.85, pri, tags: labelTags(bare ? { mission: m.mission } : m) });
+        L.add(label + (c.sos ? '  SOS' : ''), px, py, { off: sz + 5, font: UI(11), color: bare && m.dark ? MARK_COL.dark : color, alpha: 0.85, pri, tags: labelTags(bare ? { mission: m.mission, maybe: m.maybe } : m) });
       }
       L.block(px - sz - 1, py - sz - 1, px + sz + 1, py + sz + 1);
       this._hits.push({ id: c.id, x: px, y: py });

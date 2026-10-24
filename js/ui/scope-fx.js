@@ -55,7 +55,8 @@ const EVENT_WORDS = {
   pdc: 'POINT DEFENSE FIRING · tracer streams reaching for the torpedo',
   strafe: 'PDC FIRE ON A HULL · rounds walking over it',
 };
-const LIFE_MS = { nuclear: 5200, fusion: 6800, he: 3600, kinetic: 2200, intercept: 1900, pdc: 1100, strafe: 1300 };
+// (a reactor going is the biggest thing a camera out here sees: its fireball cools, and its pieces glow, a good while)
+const LIFE_MS = { nuclear: 7000, fusion: 12000, he: 3600, kinetic: 2200, intercept: 1900, pdc: 1100, strafe: 1300 };
 
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const ease = (t) => 1 - Math.pow(1 - clamp01(t), 3);
@@ -111,10 +112,13 @@ export class ScopeFx {
         continue;
       }
       if (fx.x == null) continue;
-      const pos = { x: fx.x, y: fx.y };
       const onto = kind === 'he' || kind === 'kinetic' ? fx.target : null;
+      // (the sim placed it at its minute: carried on, with what it happened to, to the moment this frame stands for;
+      // a close look is otherwise thrown off by kilometres, the distance an orbit covers in a fraction of a minute)
+      const vel = c.velOf({ x: fx.x, y: fx.y }, onto);
+      const dtS = fx.m != null ? (c.tm - fx.m) * 60 : 0;
+      const pos = { x: fx.x + vel.vx * dtS / AU_M, y: fx.y + vel.vy * dtS / AU_M };
       if (!c.near(pos) && !(onto && c.pose(onto))) continue;
-      const vel = c.velOf(pos, onto);
       // a hit lands on the hull's face: a point on it, kept in the hull's own frame while it lasts
       const r = rng(seed);
       const local = onto ? { x: (r() - 0.5) * 0.7, z: (r() - 0.5) * 0.5 } : null;

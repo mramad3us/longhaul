@@ -29,6 +29,9 @@
 //              if it can hold it, through whatever happens to them, shot
 //              down, hit or missed, and until what followed has played out
 //              (a target blown apart is held on a while)
+//   a reactor  on a fuse near us in its last minutes (a hull we scuttled,
+//              a wreck's core a blast set failing: time runs at 1× for it,
+//              sim/combat.js): the telescope on it, through the blast
 // The tab is marked when there is something close outside. A target can be
 // a world: LOOK on a body's card or panel (the pick, for Z and LOOK AT PICK).
 //
@@ -48,7 +51,7 @@ import { deployDrone, recallDrone, deployRefusal, droneFeed, droneStatus, DRONE_
 import { scopeOf, scopeLock, FILTERS } from '../sim/telescope.js';
 import { launchedBy, timeToGo } from '../sim/ordnance.js';
 import { PLAYER } from '../sim/combatants.js';
-import { OWN_ARRIVAL_S } from '../sim/combat.js';
+import { OWN_ARRIVAL_S, fuseAboutToGo } from '../sim/combat.js';
 import { dockHolds } from '../sim/docking.js';
 import { ExteriorView } from './exterior.js';
 import { ScopeView } from './telescope.js';
@@ -142,8 +145,9 @@ function enter(m) {
 }
 
 /**
- * Our torpedoes closing on their target: the telescope on it, if it can
- * hold it, until a few seconds after the last of them is done; then back.
+ * Our torpedoes closing on their target, or a reactor on a fuse about to
+ * go: the telescope on it, if it can hold it, until a few seconds after
+ * what followed has played out; then back.
  */
 function watchTorpedoes(state) {
   const now = performance.now();
@@ -155,6 +159,8 @@ function watchTorpedoes(state) {
     const eta = timeToGo(state, e);
     if (eta < OWN_ARRIVAL_S && eta < best && scopeLock(state, e.ord.target).ok) { best = eta; soon = e.ord.target; }
   }
+  const fuse = fuseAboutToGo(state);
+  if (fuse && fuse.combat.containment * 60 < best && scopeLock(state, fuse.id).ok) soon = fuse.id;
   if (soon) {
     if (!auto) {
       if (dockHolds(state) && state.dock.phase !== 'docked') return;      // (a dock under way keeps the display)

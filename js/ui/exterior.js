@@ -11,7 +11,9 @@
 // (mated at a collar, or flying). The camera (the drone flies where it
 // frames this) frames what matters and follows it smoothly; near a
 // station the view is turned so the station's up is up (the ground
-// below).
+// below). Called home, the drone flies back to its bay with its camera
+// on: the picture closes from wherever it was on our hull, until a few
+// metres of our own plating fill it, and goes dark as the bay takes it.
 //
 // The picture is rendered on the GPU (gl/ships3d.js): the hulls and
 // stations as lit solids, built from those same models (gl/hullmesh.js),
@@ -81,6 +83,8 @@ const IN_FRAME_PHASES = new Set(['approach', 'prox', 'separate', 'outbound']);
 const LOOK_M = 12_000;           // objects this close are candidates for the view
 const CAM_TAU_S = 0.25;          // the camera eases toward its framing over this (s)
 const ZOOM_TAU_S = 0.8;          // …and its zoom more slowly, so small changes don't make it breathe
+const RECOVER_SPAN = 0.15;       // coming home, the drone closes until this share of our hull's length fills the frame
+const RECOVER_DARK = 0.85;       // …and from this far through its flight home the bay's shadow takes the picture
 const LOCK_EASE_S = 0.8;         // a station come into view: the turn to its up eased over this, then locked
 const FAR_FRAME_M = 8_000;       // docking further than this from the berth: we are framed, the station marked
 const FAR_SPAN_M = 3_000;
@@ -320,6 +324,23 @@ export class ExteriorView {
       if (stNow && cam.lockEase <= 0) cam.rot = want.rot;
       else { let dr = want.rot - cam.rot; dr = Math.atan2(Math.sin(dr), Math.cos(dr)); cam.rot += dr * (stNow ? 1 - Math.exp(-wall / 0.2) : k); }
     }
+    // Coming home: the drone flies from where it framed the picture to its bay, closing on our hull
+    // (eased in and out, in log zoom); the minute-by-minute phase is read at the frame's moment
+    const dr = state.drone;
+    let homing = null;
+    if (dr?.phase === 'recover' && dr.until > dr.since) {
+      if (cam.recall !== dr.since) { cam.recall = dr.since; cam.from = { x: cam.x, y: cam.y, scale: cam.scale }; }
+      const p = Math.max(0, Math.min(1, (tm - dr.since) / (dr.until - dr.since)));
+      const e = p * p * (3 - 2 * p);
+      const L = hullOf(state.ship.classId || PLAYER_CLASS).L;
+      const close = Math.min(W, H) / Math.max(4, L * RECOVER_SPAN);
+      cam.scale = cam.from.scale * Math.pow(Math.max(close, cam.from.scale) / cam.from.scale, e);
+      // (our hull walks in to the middle of the screen as steadily as the zoom closes: the offset shrinks on the screen, not in metres)
+      const k = (1 - e) * cam.from.scale / cam.scale;
+      cam.x = cam.from.x * k; cam.y = cam.from.y * k;
+      cam.span = Math.min(W, H) / cam.scale;
+      homing = p;
+    } else if (cam.recall != null) { cam.recall = null; cam.ready = false; }
     const sc = cam.scale;
     const cr = Math.cos(-cam.rot), sr = Math.sin(-cam.rot);
     // our-ship-relative metres → screen
@@ -409,11 +430,12 @@ export class ExteriorView {
       if (marks) {
         const r = Math.max(hx, hy, 4);
         if (mk.mission && r < 60) drawMissionMark(ctx, sx, sy, r + 6);
+        else if (mk.maybe && r < 60) drawMissionMark(ctx, sx, sy, r + 6, true);
         if (mk.flag) drawFlagMark(ctx, sx, sy, r + 3, mk.flag, L);
       }
       const name = isIdentified(state, e) ? e.name : null;
       if (hull.L * sc > 6 && marks) L.add(shortName(name || (mk.dark ? 'DARK' : mk.wreck ? 'WRECK' : 'unidentified')), sx, sy, { off: [hx + 6, hy + 7], font: LABEL_FONT,
-        color: name ? factionColor(e.faction) : mk.dark ? MARK_COL.dark : MARK_COL.wreck, alpha: 0.85, pri: 3 - o.d / LOOK_M + markPri(mk), above: true, tags: labelTags(name ? mk : { mission: mk.mission }) });
+        color: name ? factionColor(e.faction) : mk.dark ? MARK_COL.dark : MARK_COL.wreck, alpha: 0.85, pri: 3 - o.d / LOOK_M + markPri(mk), above: true, tags: labelTags(name ? mk : { mission: mk.mission, maybe: mk.maybe }) });
     }
 
     // Docking overlays: the corridor and the two collars
@@ -471,6 +493,11 @@ export class ExteriorView {
     ctx.font = '10px "IBM Plex Mono", monospace';
     ctx.fillText(bar >= 1000 ? `${bar / 1000} km` : `${bar} m`, 18 + bar * sc, H - 12);
     if (!objects.length && !d) { ctx.fillStyle = 'rgba(122,142,162,0.6)'; ctx.fillText('Nothing within 12 km', 14, 20); }
+    // into the bay: its shadow takes the picture
+    if (homing != null && homing > RECOVER_DARK) {
+      ctx.fillStyle = `rgba(3,6,11,${Math.min(1, (homing - RECOVER_DARK) / (1 - RECOVER_DARK)).toFixed(3)})`;
+      ctx.fillRect(0, 0, W, H);
+    }
   }
 }
 

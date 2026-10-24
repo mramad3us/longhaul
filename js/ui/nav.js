@@ -35,6 +35,7 @@ import { crewSecureStatus, isSecured } from '../sim/crew-ai.js';
 import { driveLimitG, systemPerf, flightComputerState } from '../sim/systems.js';
 import { isConscious } from '../sim/crew.js';
 import { SENSOR_RANGES, REVEAL, setSensorRange, selectContact, toggleLock, contactById, isDark, signatureRange, hullSignature } from '../sim/sensors.js';
+import { huntsFor, unconfirmed } from '../sim/hunts.js';
 import { pointMag, PLUME_W_PER_N } from '../sim/telescope.js';
 import { facingOf } from '../sim/docking.js';
 import { toggleFlag, flagOf, flagList, clearFlags, missionTargets, knownName, FLAG_LETTERS } from '../sim/flags.js';
@@ -660,6 +661,15 @@ function contactSheet(s, e, c, rel) {
   if (!c.ordnance) {
     out.push(row('CLASS', c.shipClass ? libRef(e, esc(c.shipClass)) : '—'));
     out.push(row('FACTION', c.faction || '—', c.faction ? '' : 'scanner-val-dim'));
+  }
+  // ---- a ship we hunt: what the nav computer makes of this contact (hunts.js)
+  if (e) for (const { c: h, status } of huntsFor(s, e.id)) {
+    out.push(sheetHead(h.type === 'STRIKE' ? 'STRIKE TARGET' : 'BOUNTY'));
+    if (status === 'confirmed') out.push(row('TARGET', `the ${esc(h.targetName)} · confirmed by its ${h.identified === 'signature' ? 'drive signature' : 'transponder'}`, 'scanner-val-accent scanner-val-wrap'));
+    else if (status === 'possible') {
+      out.push(row('POSSIBLE', `the ${esc(h.targetName)}? Dark, seen in the search area of its last fix`, 'scanner-val-warn scanner-val-wrap', 'Not confirmed: it might be the ship we hunt, or anyone else running dark'));
+      out.push(row('WHY NOT SURE', esc(unconfirmed(s, h, e)), 'scanner-val-dim scanner-val-wrap'));
+    } else out.push(row('RULED OUT', `not the ${esc(h.targetName)}: ${esc(h.ruledOut[e.id].why)}`, 'scanner-val-dim scanner-val-wrap'));
   }
   // ---- how it moves against us
   out.push(sheetHead('MOTION'));

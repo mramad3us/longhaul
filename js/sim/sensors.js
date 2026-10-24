@@ -25,8 +25,9 @@
 // Who a contact is: its transponder says so; a long look (REVEAL.PROFILE)
 // matches its profile against the registries. A ship we are hunting (a
 // bounty, a strike) is on no registry: only its transponder names it, or
-// its drive signature, when the brief has it on file and we see it in
-// the plume (a drive signature is read only while the drive is lit).
+// its drive signature, when the brief has it on file (c.sigKnown) and we
+// see it in the plume (a drive signature is read only while the drive is
+// lit). Until then the contacts it might be are possibles: hunts.js.
 //
 // Everything on the board is under a light-minute away (long range is
 // 50 light-seconds), so the picture is live to within one sim step;
@@ -180,7 +181,7 @@ export function identifyHunt(state, c) {
   const e = getWorld(state).get(c.targetId);
   if (!e) return false;
   if (e.transponder) c.identified = 'transponder';
-  else if (c.signature && e.thrust > 0 && e.signature === c.signature) c.identified = 'signature';
+  else if ((c.sigKnown ?? !!c.signature) && e.thrust > 0 && e.signature === c.signature) c.identified = 'signature';
   return !!c.identified;
 }
 

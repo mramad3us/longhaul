@@ -142,6 +142,7 @@ export class ThreatView {
       const m = marksOf(fm, c.id, c.dark, c.wreck);
       ctx.beginPath(); ctx.arc(x, y, m.dark || m.wreck ? 4 : 3, 0, Math.PI * 2); paintMark(ctx, col, m.dark || m.wreck, '#0A0608');
       if (m.mission) drawMissionMark(ctx, x, y, 10);
+      else if (m.maybe) drawMissionMark(ctx, x, y, 10, true);
       if (m.flag) drawFlagMark(ctx, x, y, 6, m.flag, L);
       L.block(x - 4, y - 4, x + 4, y + 4);
       if (hostile.has(c.id)) { ctx.strokeStyle = '#EF5350'; ctx.strokeRect(x - 7, y - 7, 14, 14); }
@@ -153,7 +154,7 @@ export class ThreatView {
       }
       const bare = !c.name && !c.signature;
       L.add(c.name || c.signature || (m.dark ? 'DARK' : m.wreck ? 'WRECK' : 'CONTACT'), x, y, { off: 8, font: LABEL_FONT, color: bare && m.dark ? MARK_COL.dark : col, alpha: 0.85,
-        pri: (state.combat.target === c.id ? 4 : hostile.has(c.id) ? 2 : c.wreck ? 0.5 : 1) + markPri(m), tags: labelTags(bare ? { mission: m.mission } : m) });
+        pri: (state.combat.target === c.id ? 4 : hostile.has(c.id) ? 2 : c.wreck ? 0.5 : 1) + markPri(m), tags: labelTags(bare ? { mission: m.mission, maybe: m.maybe } : m) });
       this._hits.push({ id: c.id, x, y });
     }
     // Our own torpedoes on their way, toward where they have their targets

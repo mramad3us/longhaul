@@ -527,9 +527,12 @@ function reachable(state, m, deck) {
 function lockerWithSuit(state, m) {
   const geo = shipGeometry(state.ship);
   const deck = geo.deckOfRow(m.pos.sy);
+  // (a suit someone else is already on the way to is theirs: two boarders on one deck don't race for one locker)
+  const claimed = new Set();
+  for (const x of state.ship.crew) if (x !== m && x.task?.locker && (x.task.type === 'suit' || (x.task.type === 'board' && x.task.phase === 'suit'))) claimed.add(x.task.locker);
   let best = null, bestD = Infinity;
   for (const f of geo.fixtures.locker || []) {
-    if (!state.lifeSupport.lockers[f.id]?.hasSuit) continue;
+    if (!state.lifeSupport.lockers[f.id]?.hasSuit || claimed.has(f.id)) continue;
     const d = Math.abs(f.sx - m.pos.sx) + Math.abs(f.sy - m.pos.sy) + (f.deck === deck ? 0 : 6);
     if (d < bestD) { bestD = d; best = f; }
   }
@@ -612,8 +615,10 @@ function startPatrol(state, m) {
 }
 
 /**
- * Join a boarding party: a suit from the nearest locker if the crossing is
- * through open space (or the other side may fight), then to the lock.
+ * Join a boarding party: a suit from the nearest locker nobody else is
+ * going to, if the crossing is through open space (or the other side may
+ * fight), then to the lock. The task ends when the party goes, with them
+ * or without them.
  */
 function startBoard(state, m, bd) {
   abandonTask(state, m);
@@ -824,13 +829,22 @@ function stepTask(state, m, ctx, g, emit, block) {
 
   switch (t.type) {
     case 'board': {
+      // (a muster that went without them, or was called off, or never was: back to the ship's work)
+      const bd = state.boarding;
+      if (bd?.phase !== 'muster' || !bd.party.includes(m.id)) { m.task = null; m.path = []; break; }
       m.activity = t.phase === 'ready' ? 'at the lock' : t.phase === 'suit' ? 'suiting up' : 'to the lock';
-      if (t.phase === 'ready') break;
+      if (t.phase === 'ready' || t.phase === 'nosuit') break;
       if (!walk(m, speed)) break;
       if (t.phase === 'suit') {
         if (++t.timer < 3) break;
         const locker = state.lifeSupport.lockers[t.locker];
         if (locker?.hasSuit && !m.suit.wearing) { locker.hasSuit = false; m.suit = { wearing: true, o2: 48, lockerId: t.locker, keep: true }; emit('crew-suited', { member: m }); }
+        if (!m.suit.wearing) {
+          // its suit gone before they got there: the next locker with one; none left, an EVA goes without them (boarding.js says so)
+          const next = lockerWithSuit(state, m);
+          if (next) { t.locker = next.id; t.timer = 0; goToNode(state, m, next.access); break; }
+          if (bd.via === 'eva') { t.phase = 'nosuit'; break; }
+        }
         t.phase = 'goto';
         const lock = t.lock ? G.fixtureById.get(t.lock) : null;
         if (lock) goToNode(state, m, lock.access ?? standNode(G, lock));

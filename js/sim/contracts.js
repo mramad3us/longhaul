@@ -11,10 +11,15 @@
 //                                for the required time, return
 // Near hot zones (conflict.js) the boards also carry the dangerous work:
 //   BOUNTY   — find a wanted pirate; destroy it, or disable it and take
-//              its surrender (paid half again), return. It runs dark and
-//              is on no registry: it is named only by its transponder or,
-//              when the brief has it on file, its drive signature seen in
-//              its plume (sensors.js identifyHunt)
+//              its surrender (paid half again), return. Graded PETTY to
+//              MOST WANTED (BOUNTY_GRADES: its ship, its escorts, what it is
+//              wanted for, how old and loose the last fix is, the pay). It
+//              runs dark and is on no registry: it is named only by its
+//              transponder or by its drive signature seen in its plume. The
+//              brief says whether the signature is on file (c.sigKnown);
+//              only the most wanted can be posted without one, and then
+//              with the reason. Until it is named, the dark ships in the
+//              search area of its last fix are possibles (hunts.js)
 //   ESCORT   — fly formation with a convoy ship to its destination; it
 //              waits for us just outside the station's approach gate
 //              (inside it no ship comes uncleared: traffic-control.js),
@@ -33,6 +38,13 @@
 // where its holding pattern is); loading, unloading, people and fuel across
 // the collar take a hard seal. Work that ends in a report (a survey, an
 // investigation, a bounty, recon, an escort brought in) is turned in from port.
+//
+// Every contract keeps what it said and what happened: the brief's facts
+// stay on it (who posted it, the target, the last fix, the signature, the
+// terms), and a timeline of what the nav computer called out about it
+// (c.log, at most LOG_MAX lines, each stamped with its minute), signed to
+// turned in or failed. The mission log shows both (ui/brief.js), for the
+// work in hand and the last 40 finished.
 // ============================================================
 
 import { AU_M, AU_KM, RANGE, DAY_MIN, G0, MIN_S } from '../core/constants.js';
@@ -40,7 +52,7 @@ import { random, randInt, randRange, pick, weightedPick, chance } from '../core/
 import { getWorld, restingOrbit } from './world.js';
 import { inPortSpace, PORT_M } from './holding.js';
 import { createEntity, newSignature } from './entities.js';
-import { identifyHunt, huntNamed } from './sensors.js';
+import { huntTick } from './hunts.js';
 import { rollIdentity, CLASSES, TECH, hullPoints, PLAYER_CLASS } from './ship-classes.js';
 import { restockSuits } from './life-support.js';
 import { overhaulSystems, shipSystems, unit } from './systems.js';
@@ -201,7 +213,58 @@ function generate(state, station, others) {
 const STANDING_TO_TRADE = -20;        // below this a power's stations won't deal with us
 const HOT_TYPES = new Set([ContractType.BOUNTY, ContractType.ESCORT, ContractType.SMUGGLE, ContractType.RECON]);
 const HOT_SHARE = 0.4;               // share of board slots offered to conflict work when any applies
-const BOUNTY_SIG_ON_FILE = 0.6;      // share of bounties whose brief carries the pirate's drive signature
+const LOG_MAX = 30;                   // lines a contract's timeline keeps
+
+/**
+ * Who a wanted pirate is to the stations that post it. The grade sets its
+ * ship (cls: weights), the raiders that run with it, how many counts it is
+ * wanted on, how old the last fix is when posted (hours) and so how wide
+ * its search area, the pay, the days given, and the one chance a brief has
+ * no drive signature on file (only the most wanted: about 3 bounties in 100).
+ */
+export const BOUNTY_GRADES = [
+  { grade: 1, label: 'PETTY', w: 0.35, cls: { 'pirate-runner': 2, 'pirate-raider': 1 }, escorts: [0, 0], counts: [1, 2], fixH: [3, 16], pay: [2000, 4000], days: [5, 10], sigUnknown: 0 },
+  { grade: 2, label: 'WANTED', w: 0.4, cls: { 'pirate-raider': 3, 'pirate-gunship': 1 }, escorts: [0, 0], counts: [2, 4], fixH: [6, 30], pay: [3500, 7500], days: [6, 12], sigUnknown: 0 },
+  { grade: 3, label: 'NOTORIOUS', w: 0.18, cls: { 'pirate-gunship': 2, 'pirate-corvette': 1 }, escorts: [0, 1], counts: [3, 7], fixH: [12, 48], pay: [8000, 15000], days: [8, 16], sigUnknown: 0 },
+  { grade: 4, label: 'MOST WANTED', w: 0.07, cls: { 'pirate-corvette': 1 }, escorts: [1, 2], counts: [5, 12], fixH: [24, 96], pay: [18000, 32000], days: [10, 20], sigUnknown: 0.4 },
+];
+const SEARCH_KM = { base: 40_000, perHour: 5_000, min: 50_000, max: 500_000 };   // a fix's search area: older, wider
+
+/** Why the most wanted can be posted with no drive signature on file: the authorities' own words. */
+const SIG_UNKNOWN_WHY = [
+  'Its reactor and drive were swapped out at a Belt yard that keeps no books, after its last confirmed sighting: the old signature is void, and nobody has logged the new one.',
+  'A hull stolen out of a navy breakers\' yard and refitted off the record: its drive has never been catalogued anywhere.',
+  'It has never burned where a station or navy sensor could see it and report: every ship that saw its plume was taken.',
+  'Three sightings gave three different readings: whatever its engineer does to the plume, no signature on file can be trusted, so none is given.',
+  'Built new in a yard that registers nothing, and it has only ever burned in deep space, far from any sensor that keeps a log.',
+];
+
+/** Who saw it last (a station's name goes in for {station}). */
+const FIX_SOURCES = [
+  'an ore hauler that got away from it', 'traffic control radar at {station}', 'a navy picket\'s track, passed on', 'a prospector\'s report',
+  'the last position in a distress call, before it went silent', 'a tug crew who saw its plume',
+];
+
+/** What a pirate of a grade is wanted for, a line a count. */
+function wantedFor(state, g, where) {
+  const taken = randInt(g.counts[0], g.counts[1]);
+  const out = [`${taken} ship${taken > 1 ? 's' : ''} boarded and stripped ${where}`];
+  const dead = g.grade >= 2 ? randInt(0, taken * 3) : randInt(0, 1);
+  if (dead) out.push(`${dead} dead among their crews`);
+  if (g.grade >= 3) {
+    const v = rollIdentity({ category: 'civilian', state });
+    out.push(`the taking of the ${v.shipClass.toLowerCase()} ${v.name}: ${pick(['its crew spaced', 'its crew held for ransom', 'never seen again', 'its cargo sold on Ceres'])}`);
+  }
+  if (g.grade >= 4) out.push(pick(['firing on a police cutter', 'a torpedo through a passenger liner\'s drive section', 'selling stolen navy ordnance to the cells', 'the raid on a mining camp: every habitat holed']));
+  return out;
+}
+
+/** Note what happened to a contract on its timeline (the mission log keeps it). */
+export function logContract(state, c, text) {
+  const L = c.log ||= [];
+  L.push({ m: state.clock.minute, text });
+  if (L.length > LOG_MAX) L.splice(0, L.length - LOG_MAX);
+}
 const HOT_REACH_AU = 0.6;             // zones this close to a station shape its board
 const SMUGGLE_GOODS = ['unregistered weapons', 'medical supplies for the blockaded', 'protomolecule research samples', 'black-market fusion pellets', 'Belter militia ammunition', 'stolen navy parts'];
 
@@ -216,6 +279,36 @@ function stationAt(state, z) {
   let best = null, bd = 0.05;
   for (const s of getWorld(state).stations) { const d = Math.hypot(s.pos.x - p.x, s.pos.y - p.y); if (d < bd) { bd = d; best = s; } }
   return best;
+}
+
+/**
+ * A bounty for a station's board (its zone: the pirates' hot zone it is
+ * near, or null). `base`: the board's common fields (generateHot), made
+ * here when called alone.
+ */
+export function bountyOffer(state, station, zone = null, base = null) {
+  const now = state.clock.minute;
+  base ||= { id: `c-${state.contracts.nextId++}`, type: ContractType.BOUNTY, station: station.id, stationName: station.name, offeredAt: now, phase: 'offered', zone: zone?.id || null, zoneBody: zone?.body || null };
+  // (the most wanted come where the pirates are)
+  const g = weightedPick(BOUNTY_GRADES, x => x.w * (x.grade >= 3 && !zone ? 0.4 : 1));
+  const ship = rollIdentity({ cls: weightedPick(Object.keys(g.cls), k => g.cls[k]), faction: 'pirate', state });
+  const body = zone?.body || station.orbit.body;
+  const where = zone ? `near ${zone.body}` : `out past ${station.orbit.body}`;
+  const sigKnown = !chance(g.sigUnknown);
+  const signature = sigKnown ? newSignature() : null;
+  const sigWhy = sigKnown ? null : pick(SIG_UNKNOWN_WHY);
+  const distAU = randRange(0.008, 0.03);
+  const fixH = randRange(g.fixH[0], g.fixH[1]);
+  const rKm = Math.round(Math.min(SEARCH_KM.max, Math.max(SEARCH_KM.min, (SEARCH_KM.base + fixH * SEARCH_KM.perHour) * randRange(0.7, 1.3))) / 1000) * 1000;
+  const fix = { at: Math.round(now - fixH * 60), by: pick(FIX_SOURCES).replace('{station}', station.name), rKm, body, distKm: Math.round(distAU * AU_KM / 1000) * 1000 };
+  const escorts = randInt(g.escorts[0], g.escorts[1]);
+  const wanted = wantedFor(state, g, where);
+  return { ...base, ship, grade: g.grade, gradeLabel: g.label, sigKnown, signature, sigWhy, wanted, fix, escorts, body, distAU,
+    title: `Bounty: the ${ship.name}`,
+    description: `${g.label}. The ${ship.shipClass} "${ship.name}" is wanted for ${wanted.length > 1 ? `${wanted.slice(0, -1).join(', ')} and ${wanted.at(-1)}` : wanted[0]}. ${station.name} pays for it destroyed — half again if you disable it and take the crew's surrender. Last fixed ${fix.distKm.toLocaleString()} km off ${body}, ${Math.round(fixH)} hours before this posting (${fix.by}): search within ${rKm.toLocaleString()} km of the fix. It runs cold and dark${escorts ? `, with ${escorts === 1 ? 'another raider' : `${escorts} more raiders`} running with it` : ''}. ${sigKnown
+      ? `Its drive signature is on file (${signature}): we will know it when it burns.`
+      : `No drive signature on file. ${sigWhy} Only its transponder will name it: every dark hull out there is a maybe.`}`,
+    reward: { credits: Math.round(randInt(g.pay[0], g.pay[1]) / 100) * 100 }, aliveBonus: 0.5, deadline: randInt(g.days[0], g.days[1]) * DAY_MIN, expires: now + randInt(2, 4) * DAY_MIN };
 }
 
 /** Conflict contracts this station can offer right now (or null). */
@@ -234,17 +327,7 @@ function generateHot(state, station, others) {
   const now = state.clock.minute;
   const base = { id, type: o.type, station: station.id, stationName: station.name, offeredAt: now, phase: 'offered', zone: o.zone?.id || null, zoneBody: o.zone?.body || null };
   switch (o.type) {
-    case ContractType.BOUNTY: {
-      const ship = rollIdentity({ category: 'irregular', faction: 'pirate', state });
-      const where = o.zone ? `near ${o.zone.body}` : `out past ${station.orbit.body}`;
-      const signature = chance(BOUNTY_SIG_ON_FILE) ? newSignature() : null;
-      return { ...base, ship, signature, body: o.zone?.body || station.orbit.body, distAU: randRange(0.008, 0.03),
-        title: `Bounty: the ${ship.name}`,
-        description: `The ${ship.shipClass} "${ship.name}" has been taking ships ${where}. ${station.name} pays for it destroyed — half again if you disable it and take the crew's surrender. Last reported position on file; it runs cold and dark. ${signature
-          ? `Its drive signature is on file (${signature}): we will know it when it burns.`
-          : 'No drive signature on file: unless it squawks, it is one more dark contact.'}`,
-        reward: { credits: randInt(3000, 8000) }, aliveBonus: 0.5, deadline: randInt(6, 14) * DAY_MIN, expires: now + randInt(2, 4) * DAY_MIN };
-    }
+    case ContractType.BOUNTY: return bountyOffer(state, station, o.zone, base);
     case ContractType.ESCORT: {
       const dest = pick(others);
       const ship = rollIdentity({ category: 'civilian', kind: pick(['freighter', 'hauler', 'tanker']), near: station.faction, state });
@@ -290,6 +373,14 @@ const convoyWait = (stationId) => { const o = gateOrbit(stationId); return { ...
  */
 export function upgradeContracts(state) {
   const world = getWorld(state);
+  // (a hunt from before 1.1: its signature on file if it carried one; a bounty graded as the common run)
+  const hunts = [...(state.contracts?.active || []), ...(state.contracts?.history || []), ...world.stations.flatMap(st => st.board?.missions || [])]
+    .filter(c => c.type === ContractType.BOUNTY || c.type === 'STRIKE');
+  for (const c of hunts) {
+    c.sigKnown ??= !!c.signature;
+    if (!c.sigKnown) c.sigWhy ??= 'It was not on file when the contract was posted.';
+    if (c.type === ContractType.BOUNTY) { c.grade ??= 2; c.gradeLabel ??= 'WANTED'; }
+  }
   for (const c of state.contracts?.active || []) {
     if (c.type !== ContractType.ESCORT || c.phase !== 'active') continue;
     const e = world.get(c.targetId);
@@ -317,16 +408,34 @@ function spawnHotTarget(state, station, c) {
   const anchor = restingOrbit(c.body, c.distAU || randRange(0.004, 0.012), random() * Math.PI * 2, now);
   const mark = createEntity({ id: world.newId('mark'), name: c.type === ContractType.BOUNTY ? `Last seen: ${c.ship.name}` : `Picket station near ${c.body}`, type: 'nav', orbit: anchor, transponder: false, tags: { contract: c.id } });
   world.add(mark);
-  const off = c.type === ContractType.BOUNTY ? 0.002 : 0.0003;
+  // (a pirate has moved on from where it was last seen, somewhere inside the brief's search area)
+  const off = c.type === ContractType.BOUNTY ? (c.fix?.rKm ? c.fix.rKm / AU_KM * randRange(0.15, 0.75) : 0.002) : 0.0003;
   const ang = random() * Math.PI * 2;
   const pos = { x: mark.pos.x + Math.cos(ang) * off, y: mark.pos.y + Math.sin(ang) * off };
   const vel = { vx: mark.vel.vx, vy: mark.vel.vy };
+  // (a signature not on file is still a signature: it flies one of its own)
   const e = c.type === ContractType.BOUNTY
-    ? spawnAgent(state, { role: 'pirate', cls: c.ship.cls, faction: 'pirate', name: c.ship.name, pos, vel, contract: c.id, transponder: false, signature: c.signature || undefined, tags: { wanted: true, contract: c.id } })
+    ? spawnAgent(state, { role: 'pirate', cls: c.ship.cls, faction: 'pirate', name: c.ship.name, pos, vel, contract: c.id, transponder: false, signature: c.sigKnown !== false && c.signature ? c.signature : undefined, tags: { wanted: true, contract: c.id } })
     : spawnAgent(state, { role: 'navy', kind: pick(['corvette', 'frigate']), category: 'military', faction: c.watched, pos, vel, contract: c.id, home: { kind: 'entity', id: mark.id }, zone: c.zone, tags: { contract: c.id } });
+  // (the hull the brief describes: its mass is the one on file)
+  if (c.ship?.mass) e.mass = c.ship.mass;
   c.markId = mark.id;
   c.targetId = e.id; c.targetName = e.name;
   c.acceptedAt = now;
+  // the raiders that run with a notorious one: dark, close by, on no contract of ours to name
+  if (c.type === ContractType.BOUNTY && c.escorts) {
+    c.escortIds = [];
+    for (let i = 0; i < c.escorts; i++) {
+      const a = random() * Math.PI * 2, r = randRange(0.00005, 0.0003);
+      const x = spawnAgent(state, { role: 'pirate', cls: pick(['pirate-raider', 'pirate-runner']), faction: 'pirate', pos: { x: pos.x + Math.cos(a) * r, y: pos.y + Math.sin(a) * r }, vel: { ...vel }, contract: c.id, transponder: false, tags: { contract: c.id } });
+      c.escortIds.push(x.id);
+    }
+  }
+}
+
+/** The hulls a job brought out go back to their own business (the job is over). */
+function release(world, ids) {
+  for (const id of ids || []) { const a = world.get(id)?.agent; if (a) { a.contract = null; a.ambient = true; } }
 }
 
 /** Per-minute progress of hot-zone contracts. */
@@ -340,9 +449,13 @@ function hotProgress(state, c, emit) {
       // (gone from space: got away, unless its reactor took it, which leaves no wreck: damage.js says so)
       const status = t ? t.combat?.status : c.targetGone === 'destroyed' ? 'wreck' : null;
       if (!t && !status) { failContract(state, c, `The ${c.targetName} got away`, emit); return; }
-      if (t && identifyHunt(state, c)) emit('contract-progress', { contract: c, text: huntNamed(c) });
+      if (t) huntTick(state, c, emit);
       if (status === 'wreck' || status === 'surrendered') {
         c.outcome = status === 'surrendered' ? 'captured' : 'destroyed';
+        // (destroyed while only a possible: the sensor logs settle who it was)
+        if (!c.identified) c.identified = 'logs';
+        c.suspects = [];
+        release(world, c.escortIds);
         c.phase = 'return';
         if (c.outcome === 'captured') { c.reward = { ...c.reward, credits: Math.round(c.reward.credits * (1 + c.aliveBonus)) }; t.tags.despawnAt = now + DAY_MIN; }
         retireMark(world, c, now);
@@ -420,10 +533,12 @@ function retireMark(world, c, now) {
 
 // ---- TICK ----
 
-export function contractsTick(state, emit = () => {}) {
+export function contractsTick(state, emitOut = () => {}) {
   const world = getWorld(state);
   const now = state.clock.minute;
   const C = state.contracts;
+  // (what the nav computer says about a job goes on its timeline too)
+  const emit = (type, p) => { if (type === 'contract-progress' && p?.contract) logContract(state, p.contract, p.text); emitOut(type, p); };
 
   // Boards: refresh stations (and command ships) within long sensor range (where we are docked always)
   if (now % 10 === 0) {
@@ -522,6 +637,8 @@ export function acceptContract(state, stationId, contractId) {
   c.phase = 'active';
   c.acceptedAt = now;
   c.dueAt = now + c.deadline;
+  c.signedAt = st.name;
+  logContract(state, c, `Signed at ${st.name}`);
   if (c.mil) spawnMil(state, c);
   else if (HOT_TYPES.has(c.type)) spawnHotTarget(state, st, c);
   else if (c.distAU) spawnTarget(state, st, c);
@@ -618,6 +735,8 @@ export function completeContract(state, contractId, stationId = null) {
   grant(state, c.reward, bonus);
   c.phase = 'complete';
   c.completedAt = state.clock.minute;
+  c.paid = { ...c.reward, credits: (c.reward.credits || 0) + bonus };
+  logContract(state, c, `Turned in at ${st.name}: ${(c.reward.credits + bonus).toLocaleString()} MCR paid${bonus ? ` (${bonus.toLocaleString()} of it a bonus)` : ''}`);
   if (c.mil) creditMission(state, c, true);
   archive(state, c);
   return { ok: true, contract: c, bonus, text: completionText(c, bonus) };
@@ -634,6 +753,8 @@ function grant(state, reward, bonus = 0) {
 function failContract(state, c, reason, emit) {
   c.phase = 'failed';
   c.failReason = reason;
+  c.failedAt = state.clock.minute;
+  logContract(state, c, `Failed: ${reason}`);
   state.cargo = state.cargo.filter(x => x.contract !== c.id);
   state.passengers = state.passengers.filter(x => x.contract !== c.id);
   const world = getWorld(state);
@@ -641,8 +762,9 @@ function failContract(state, c, reason, emit) {
   retireMark(world, c, state.clock.minute);
   const t = c.targetId && world.get(c.targetId);
   if (t?.agent) { t.agent.contract = null; t.agent.ambient = true; }
-  // (the warships a mission brought out go back to their business: they leave when we are gone)
-  for (const id of c.allies || []) { const a = world.get(id)?.agent; if (a) { a.contract = null; a.ambient = true; } }
+  // (the warships a mission brought out, a pirate's raiders, go back to their business: they leave when we are gone)
+  release(world, c.allies);
+  release(world, c.escortIds);
   state.combat.protect = state.combat.protect.filter(id => id !== c.targetId);
   if (c.mil) creditMission(state, c, false, emit);
   archive(state, c);

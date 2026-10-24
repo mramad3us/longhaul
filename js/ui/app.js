@@ -129,7 +129,7 @@ export async function boot() {
   initCams({ selectCrew: (id) => selectCrew(id), selectTile: (t, d, x, y) => selectTile(t, d, x, y), deckMenu: (d, x, y) => showDeckMenu(d, x, y) });
   initAiLine(aiHooks());
   initHud(requestSpeed, toggleCombat, openSystems, () => openNav('combat'), toggleSuits);
-  initFx();
+  initFx(() => ui.state?.clock.minute ?? null);
   ui.toggleCombat = toggleCombat;
   initLog();
   setResourceAlertHandler(resourceAlert);

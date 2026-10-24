@@ -246,7 +246,7 @@ export class SolarMap {
     for (let i = 0; i < inView.length; i += 4) {
       const r = inView[i];
       const m = marksOf(fm, r.id, r.dark, r.wreck);
-      const focus = r.id === opts.targetId || r.id === this.selected?.id || r.id === this.hover?.id || m.flag || m.mission;
+      const focus = r.id === opts.targetId || r.id === this.selected?.id || r.id === this.hover?.id || m.flag || m.mission || m.maybe;
       const [x, y] = sp(inView[i + 1], inView[i + 2]);
       if (crowd && !focus) { pick.push({ kind: 'entity', id: r.id, sx: x, sy: y, report: true }); continue; }   // a dot in the cloud, still clickable
       const age = now - r.at;
@@ -267,6 +267,7 @@ export class SolarMap {
       }
       ctx.globalAlpha = 1;
       if (m.mission) drawMissionMark(ctx, x, y, 8);
+      else if (m.maybe) drawMissionMark(ctx, x, y, 8, true);
       if (m.flag) drawFlagMark(ctx, x, y, 5, m.flag, this.labels);
       if (focus || S > 3e4) this.labels.add(`${r.name || 'Track'} · ${ageLabel(age)} old`, x, y, { off: 7, font: UI(11), color: col, alpha: a, pri: (focus ? 5 : 1) + markPri(m), tags: labelTags(m) });
       pick.push({ kind: 'entity', id: r.id, sx: x, sy: y, report: true });
@@ -427,7 +428,7 @@ export class SolarMap {
       if (e.pos.x < view.x0 - 0.01 || e.pos.x > view.x1 + 0.01 || e.pos.y < view.y0 - 0.01 || e.pos.y > view.y1 + 0.01) continue;
       const m = marksOf(fm, e.id, isDark(e), e.tags?.wreck);
       if (e.type === 'nav' && !m.mission && e.id !== opts.targetId) continue;      // (a nav mark is drawn for the work it is for, or picked)
-      const keep = e.id === opts.targetId || e.id === this.selected?.id || m.flag || m.mission;
+      const keep = e.id === opts.targetId || e.id === this.selected?.id || m.flag || m.mission || m.maybe;
       if (!keep && e.type === 'station' && !this.filter.stations) continue;
       if (!keep && e.type === 'ship' && !this.filter.ships) continue;
       const [x, y] = sp(e.pos.x, e.pos.y);
@@ -472,18 +473,19 @@ export class SolarMap {
         ctx.beginPath(); ctx.arc(x, y, 6 + ph * 10, 0, Math.PI * 2); ctx.stroke();
       }
       if (m.mission) drawMissionMark(ctx, x, y, e.type === 'station' ? 10 : 9);
+      else if (m.maybe) drawMissionMark(ctx, x, y, e.type === 'station' ? 10 : 9, true);
       if (m.flag) drawFlagMark(ctx, x, y, 6, m.flag, L);
       pick.push({ kind: 'entity', id: e.id, sx: x, sy: y, station: e.type === 'station' });
       L.block(x - 4, y - 4, x + 4, y + 4);
       // (named as we know it: a station, a mark, what our work points at, a contact once identified)
-      const label = e.type === 'station' || e.sos || e.tags?.missionId || m.mission || m.flag || S > 3e4 || e.id === opts.targetId;
+      const label = e.type === 'station' || e.sos || e.tags?.missionId || m.mission || m.maybe || m.flag || S > 3e4 || e.id === opts.targetId;
       const named = e.type === 'station' || e.type === 'nav' || !!m.mission || contactName(state, e.id);
       if (label) {
         const pri = (e.id === opts.targetId ? 9 : e.sos || e.tags?.missionId ? 7 : e.type === 'station' ? 6 : 2) + markPri(m);
         const font = UI(11, e.type === 'station' ? 600 : 500);
         // (a ship we can't name yet is called what it is to us: DARK, or a WRECK)
         if (named) L.add(named === true ? e.name : named, x, y, { off: 9, font, color: e.type === 'station' ? COL.text : color, alpha: e.type === 'station' ? 0.9 : 0.85, pri, tags: labelTags(m) });
-        else if (m.dark || m.wreck) L.add(m.dark ? 'DARK' : 'WRECK', x, y, { off: 9, font, color: m.dark ? MARK_COL.dark : MARK_COL.wreck, alpha: 0.85, pri, tags: labelTags({ mission: m.mission }) });
+        else if (m.dark || m.wreck) L.add(m.dark ? 'DARK' : 'WRECK', x, y, { off: 9, font, color: m.dark ? MARK_COL.dark : MARK_COL.wreck, alpha: 0.85, pri, tags: labelTags({ mission: m.mission, maybe: m.maybe }) });
       }
     }
 

@@ -12,7 +12,8 @@
 //            until then its last-seen mark), the derelict, the convoy, the
 //            survey mark, the port to deliver to, the port to report at
 //            once the work is done, a distress call we answered, a navy
-//            call-up.
+//            call-up. A dark contact that might be the ship we hunt (a
+//            possible: hunts.js) is marked as a maybe, never named.
 //   FLAG     the captain's own, on any ship or station we have a track
 //            of: lettered A to Z, so one unidentified contact can be told
 //            from the next on every display. A flag lasts as long as the
@@ -61,6 +62,19 @@ export function missionTargets(state) {
   }
   for (const m of state.missions?.list || []) if (m.status === 'accepted') put(m.entityId, 'DISTRESS');
   for (const cu of state.service?.callups || []) if (cu.heard && !cu.reported && !cu.over) put(cu.ship, 'CALL-UP');
+  return out;
+}
+
+/**
+ * The contacts that might be a ship we hunt (hunts.js possibles): id → the
+ * job's tag. Kept apart from missionTargets: nothing names them.
+ */
+export function missionSuspects(state) {
+  const out = new Map();
+  for (const c of state.contracts?.active || []) {
+    if (c.phase !== 'active' || c.identified || !c.suspects?.length) continue;
+    for (const id of c.suspects) if (!out.has(id)) out.set(id, tagOf(c));
+  }
   return out;
 }
 

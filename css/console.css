@@ -391,6 +391,7 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .mk-flag { color: var(--c-flag); }
 .mk-flag::before { content: ''; display: inline-block; width: 0; height: 0; margin-right: 3px; border-left: 6px solid currentColor; border-top: 3px solid transparent; border-bottom: 3px solid transparent; }
 .mk-mission { color: var(--c-route); }
+.mk-maybe { border-style: dashed; }
 .mk-dark { color: var(--c-caution); border-style: dashed; }
 .mk-wreck { color: var(--c-text3); }
 button.flagged { color: var(--c-flag); border-color: var(--c-flag); }
@@ -504,6 +505,8 @@ button.flagged { color: var(--c-flag); border-color: var(--c-flag); }
 .scanner-detail-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px solid rgba(28, 38, 50, 0.6); }
 .scanner-detail-key { color: var(--c-text3); font-size: 11px !important; letter-spacing: 0.08em; }
 .scanner-detail-val { font-family: var(--f-data); font-size: 12px; color: var(--c-text); text-align: right; }
+/* (a sentence, not a figure: it wraps, under its key) */
+.scanner-detail-val.scanner-val-wrap { white-space: normal; text-align: left; flex: 1 1 auto; min-width: 0; }
 .scanner-detail-hull { width: 100%; height: auto; margin: 6px 0; }
 .scanner-detail-sub { margin: 9px 0 1px; font-family: var(--f-ui); font-size: 10px; letter-spacing: 0.14em; color: var(--c-text3); opacity: 0.8; }
 .ctx-selection { margin-top: 4px; }

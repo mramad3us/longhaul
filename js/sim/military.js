@@ -19,8 +19,11 @@
 //            detached duty, a proxy's ringleader, a cell's gunship; it has
 //            escorts and it fights back. Only in a war (or on a proxy or
 //            an insurgency, whose raiders are fair game). Rank 2. A navy
-//            squawks; a proxy's or a cell's runs dark and is named only by
-//            its drive signature, when the brief has it (sensors.js).
+//            squawks, and its signature is in the fleet catalogue; a
+//            proxy's or a cell's runs dark and is named only by its drive
+//            signature, on file unless the brief says why not (one in
+//            five), or its transponder; until then the dark ships near its
+//            last fix are possibles (hunts.js).
 //   COVERT   a sub-faction's quiet job against a rival inside our own
 //            power (politics.js in-fighting): hold a lock on one of the
 //            rival's ships for a while without being identified by it. If
@@ -40,7 +43,8 @@ import { zonePos } from './conflict.js';
 import { atWar, enemiesOf } from './politics.js';
 import { spawnAgent } from './agents.js';
 import { PLAYER, sees } from './combatants.js';
-import { REVEAL, identifyHunt, huntNamed } from './sensors.js';
+import { REVEAL } from './sensors.js';
+import { huntTick } from './hunts.js';
 import { proxyIdentity } from './forces.js';
 import { flagOf, payFactor, rankOf, rankName, RANK_FOR, addRep } from './service.js';
 
@@ -48,7 +52,14 @@ export const MIL_TYPES = new Set(['INTEL', 'HOLD', 'STRIKE', 'COVERT']);
 export const MIL_LABEL = { INTEL: 'MIL · INTELLIGENCE', HOLD: 'MIL · HOLD THE POINT', STRIKE: 'MIL · STRIKE (HVT)', COVERT: 'MIL · COVERT' };
 export const MIL_SHARE = 0.15;           // share of a station's board slots near our power's fights
 const MIL_REACH_AU = 0.6;                // fights this near a station shape its board
-const HVT_SIG_ON_FILE = 0.5;             // share of strikes whose brief carries the target's drive signature
+const HVT_SIG_UNKNOWN = 0.2;             // share of outlaw strike targets with no drive signature on file (a navy's are all catalogued)
+const HVT_SEARCH_KM = 150_000;           // the search area round a strike target's last fix
+/** Why an outlaw high-value target has no signature on file. */
+const HVT_SIG_WHY = [
+  'Fleet intelligence has its hull from a drone pass, never its plume: it has not burned within reach of a navy sensor since it changed hands.',
+  'Its drive was rebuilt in a cell workshop after its last engagement: the signature in the catalogue is void.',
+  'It came off a yard that builds for the cells and registers nothing; nobody has logged its plume.',
+];
 export const HOLD_RADIUS_AU = 0.0005;    // 75,000 km round a control point
 export const LOCK_RANGE_AU = 0.002;      // 300,000 km: intelligence and covert locks
 const HOLD_AWAY_MAX = 120;               // minutes off the point (after reaching it) before it is given up
@@ -139,11 +150,15 @@ export function generateMil(state, port, id) {
       const escorts = randInt(1, 2);
       const outlaw = o.E === '$proxy' || o.E === '$cells';
       const who = outlaw ? `the ${subName(ship.sub) || 'raiders'}' ${ship.shipClass}` : `the ${FACTIONS[o.E].navy} ${ship.shipClass}`;
-      const signature = chance(HVT_SIG_ON_FILE) ? newSignature() : null;
-      return { ...base, enemy: o.E, ship, signature, escorts, body: o.z.body, zoneR: o.z.r, zonePhase: o.z.phase, issuer: fleetOf(L), rankMin: RANK_FOR.strike, rep: 60,
+      const sigKnown = !outlaw || !chance(HVT_SIG_UNKNOWN);
+      const signature = sigKnown ? newSignature() : null;
+      const sigWhy = sigKnown ? null : pick(HVT_SIG_WHY);
+      const fixH = randRange(2, 12);
+      const fix = { at: Math.round(now - fixH * 60), by: outlaw ? 'fleet intelligence, from a drone pass' : 'a fleet picket\'s track', rKm: HVT_SEARCH_KM, body: o.z.body };
+      return { ...base, enemy: o.E, ship, sigKnown, signature, sigWhy, fix, escorts, body: o.z.body, zoneR: o.z.r, zonePhase: o.z.phase, issuer: fleetOf(L), rankMin: RANK_FOR.strike, rep: 60,
         title: `Strike: ${ship.name}`,
-        description: `High-value target: ${who} "${ship.name}", with ${escorts} escort${escorts > 1 ? 's' : ''}, last fixed near ${o.z.body}. Find it and destroy it (its surrender will do). Report to any ${FACTIONS[L].short} port.${signature
-          ? ` Its drive signature is on file (${signature}).` : outlaw ? ' It runs dark, and its drive signature is not on file.' : ''}`,
+        description: `High-value target: ${who} "${ship.name}", with ${escorts} escort${escorts > 1 ? 's' : ''}, last fixed near ${o.z.body} ${Math.round(fixH)} hours ago (${fix.by}). Find it and destroy it (its surrender will do). Report to any ${FACTIONS[L].short} port.${!outlaw
+          ? ` It squawks; its drive signature is in the fleet catalogue (${signature}).` : sigKnown ? ` It runs dark; its drive signature is on file (${signature}).` : ` It runs dark, and its drive signature is not on file: ${sigWhy}`}`,
         reward: { credits: Math.round(randInt(12000, 30000) * pay) }, deadline: randInt(3, 6) * DAY_MIN, expires: now + randInt(12, 36) * 60 };
     }
     case 'COVERT': {
@@ -200,7 +215,7 @@ export function spawnMil(state, c) {
     const outlaw = c.enemy === '$proxy' || c.enemy === '$cells';
     const enemies = [c.faction];
     const at = around(mark, 0.0004);
-    const t = spawnAgent(state, { role: 'navy', cls: c.ship.cls, faction: c.ship.faction, sub: c.ship.sub, name: c.ship.name, pos: at.pos, vel: at.vel, signature: c.signature || undefined,
+    const t = spawnAgent(state, { role: 'navy', cls: c.ship.cls, faction: c.ship.faction, sub: c.ship.sub, name: c.ship.name, pos: at.pos, vel: at.vel, signature: c.sigKnown !== false && c.signature ? c.signature : undefined,
       home: { kind: 'entity', id: mark.id }, zone: c.zone, enemies, contract: c.id, transponder: !outlaw, tags: { contract: c.id, hvt: true, ...(outlaw ? { wanted: true } : {}) } });
     for (let i = 0; i < c.escorts; i++) {
       const s = around(t, 0.0002);
@@ -208,6 +223,7 @@ export function spawnMil(state, c) {
       spawnAgent(state, { role: 'navy', ...esc, pos: s.pos, vel: s.vel, home: { kind: 'entity', id: mark.id }, zone: c.zone, enemies, contract: c.id, transponder: !outlaw,
         tags: { contract: c.id, ...(outlaw ? { wanted: true } : {}) } });
     }
+    if (c.ship?.mass) t.mass = c.ship.mass;
     c.markId = mark.id; c.targetId = t.id; c.targetName = t.name;
     return;
   }
@@ -287,8 +303,13 @@ export function milProgress(state, c, emit, { fail, done }) {
       // (a reactor's fireball leaves no wreck: damage.js marks the contract)
       const status = t ? t.combat?.status : c.targetGone === 'destroyed' ? 'wreck' : null;
       if (!t && !status) { fail(`The ${c.targetName} got away`); return; }
-      if (t && identifyHunt(state, c)) emit('contract-progress', { contract: c, text: huntNamed(c) });
-      if (status === 'wreck' || status === 'surrendered') done(`${c.targetName} ${status === 'wreck' ? 'destroyed' : 'has struck'} — report to any ${FACTIONS[c.faction].short} port`);
+      if (t) huntTick(state, c, emit);
+      if (status === 'wreck' || status === 'surrendered') {
+        // (destroyed while only a possible: the sensor logs settle who it was)
+        if (!c.identified) c.identified = 'logs';
+        c.suspects = [];
+        done(`${c.targetName} ${status === 'wreck' ? 'destroyed' : 'has struck'} — report to any ${FACTIONS[c.faction].short} port`);
+      }
       return;
     }
     case 'COVERT': {

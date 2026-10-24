@@ -217,6 +217,7 @@ export class TacView {
       else drawDot(ctx, e, sx, sy, color, t, hollow);
       const mr = this.zoom === 0 ? (big ? 22 : 15) : 10;
       if (m.mission) drawMissionMark(ctx, sx, sy, mr);
+      else if (m.maybe) drawMissionMark(ctx, sx, sy, mr, true);
       if (m.flag) {
         drawFlagMark(ctx, sx, sy, mr * 0.8, m.flag);
         placed.push({ x: sx + mr * 0.56, y: sy - mr * 0.56 - 14, w: 22, h: 15 });
@@ -229,7 +230,7 @@ export class TacView {
       // (its name once we know it: a transponder, or a long look; else what it is to us)
       const name = isIdentified(state, e, undefined, hunts) ? e.name : null;
       const label = name || (m.dark ? 'DARK' : m.wreck ? 'WRECK' : null);
-      const tags = labelTags(name ? m : { mission: m.mission }) || [];
+      const tags = labelTags(name ? m : { mission: m.mission, maybe: m.maybe }) || [];
       let room = false;
       if (label && (this.zoom < 2 || big)) {
         ctx.font = `${big ? 10 : 7}px "IBM Plex Mono", monospace`;

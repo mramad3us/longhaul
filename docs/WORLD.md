@@ -209,7 +209,7 @@ Rank raises military pay by 15% a step, opens the harder missions (holding a poi
 |---|---|---|---|
 | INTELLIGENCE | a sensor lock inside 300,000 km on 2–3 different enemy warships (or a proxy's raiders), held 10–20 minutes each | any | 5,000–12,000 |
 | HOLD THE POINT | at a war front, get within 75,000 km of a control point our side holds and stay 4–8 hours; three of our warships hold it with us, and the enemy sends 2–3 ships at it every 1.5–2.5 hours (four waves at most). Two hours off it and it is lost | 1 | 10,000–25,000, PDC rounds |
-| STRIKE (HVT) | destroy (or take the surrender of) a high-value target: an enemy destroyer or frigate on detached duty with 1–2 escorts (in a war only), a proxy's ringleader, a cell's gunship. A navy's squawks; a proxy's or a cell's runs dark, named only by its drive signature when the brief has it on file (half of them) | 2 | 12,000–30,000 |
+| STRIKE (HVT) | destroy (or take the surrender of) a high-value target: an enemy destroyer or frigate on detached duty with 1–2 escorts (in a war only), a proxy's ringleader, a cell's gunship. A navy's squawks (its signature in the fleet catalogue); a proxy's or a cell's runs dark, named by its transponder or its drive signature, on file four times in five (the brief says why not); until then, possibles as for a bounty | 2 | 12,000–30,000 |
 | COVERT | for one of our power's sub-factions, against a rival inside it: hold a lock on the rival's ship for 30–90 minutes without being identified by it (transponder off, keep away). If it makes us, the job is blown | 1 | 6,000–14,000 |
 
 Pay is rolled at posting and multiplied by our rank's pay factor. A mission whose fight ends before it is done fails.
@@ -237,10 +237,25 @@ Stations near hot zones (within 0.6 AU) also post conflict work, up to 40% of th
 
 | Contract | Work | Pay |
 |---|---|---|
-| BOUNTY | find a wanted pirate near the last reported position, a mark where a ship left there would lie (off a moon, held off its planet: `world.restingOrbit`) with the pirate up to 300,000 km from it (it runs cold and dark, and runs from a ship it can't fight that finds it: named only by its transponder, or by its drive signature seen in its plume when the brief has it on file, 60% of them); destroy it (a wreck, or a reactor's fireball, which leaves none), or disable it and accept its surrender (+50%); return | 3,000–8,000 |
+| BOUNTY | find a wanted pirate near its last fix, a mark where a ship left there would lie (off a moon, held off its planet: `world.restingOrbit`), somewhere inside the brief's search area round it (50,000–500,000 km, wider the older the fix); destroy it (a wreck, or a reactor's fireball, which leaves none), or disable it and accept its surrender (+50%); return. Graded (below). It runs cold and dark, and runs from a ship it can't fight that finds it | 2,000–32,000 by grade |
 | ESCORT | join a convoy ship within 10 km where it waits for us, 3 km out past its station's approach gate (inside the gate no ship comes uncleared; a route to the station ends at the gate). It departs at ≤ 0.5G for the destination's gate, raiders strike partway along the route, and it goes in to a berth there. Keep it alive; collect at the destination | 2,500–5,000 + distance, PDC rounds |
 | SMUGGLE | carry contraband through a blockade, or into inner-planet space. An inspection that finds it ends the job | 6,000–12,000 + distance |
 | RECON | get within 300,000 km of a navy picket and hold a sensor lock on it for 30–90 minutes. Identification by that navy blows the job (and costs standing) | 4,000–9,000 |
+
+**Bounties are graded** (`BOUNTY_GRADES`), the higher grades more often near the pirates' own hot zones:
+
+| Grade | Share | Ship | Runs with | Last fix (h before posting) | Pay | Days | No signature on file |
+|---|---|---|---|---|---|---|---|
+| PETTY | 35% | armed runner, torch raider | — | 3–16 | 2,000–4,000 | 5–10 | never |
+| WANTED | 40% | torch raider, gunship | — | 6–30 | 3,500–7,500 | 6–12 | never |
+| NOTORIOUS | 18% | gunship, stolen corvette | 0–1 raiders | 12–48 | 8,000–15,000 | 8–16 | never |
+| MOST WANTED | 7% | stolen corvette | 1–2 raiders | 24–96 | 18,000–32,000 | 10–20 | 40% |
+
+**The brief** says what the authorities know: what the pirate is wanted for, its hull, crew, guns and drive, the last fix (where, when, who saw it, the search area), and above all whether its **drive signature is on file** (`c.sigKnown`, always set). About two bounties in a hundred, all of them MOST WANTED, are posted with none, and the brief gives the reason (a drive swapped at a yard that keeps no books, a hull stolen and refitted off the record, a captain who never burned where a sensor that lived could see). A strike's outlaw target goes without one one time in five, with its reason; a navy's warship is always in the fleet catalogue.
+
+**Which contact is it** (`sim/hunts.js`). The hunted ship is on no registry: a long look never names it. Only its transponder names it (a crew striking its colours squawks), or the signature on file, read in its plume while its drive is lit; with none on file, a burn proves nothing. Until then, every dark ship nobody has named seen inside the search area is a **possible**, and so is anything followed from there while the board holds it: the displays mark it with a dashed diamond and BOUNTY? (STRIKE?), never with the target's name, and the contact panel says why it can't be confirmed yet. A possible is **ruled out** when it shows who it is: it squawks another name, a long look matches it on a registry, its plume carries another signature than the one on file, or its mass (a 30-minute look) is more than a third off the target's class. Destroying a possible that was the target still earns the bounty (the station reads the sensor logs); destroying one that wasn't is whatever it was, piracy if it was a lawful ship running dark. The nav computer calls each possible and each ruling out.
+
+**The mission log** keeps every contract's brief and its timeline (what the nav computer called out about it, stamped, signed to turned in or failed), folded under its row, for the work in hand and the last 40 finished; a station's board shows the same brief before signing.
 
 **UNDER ATTACK** distress calls come from the director's ambushes. Accepting puts the victim under our point defense. Once the raiders are dead, beaten, gone or have lost interest, hold formation and hail to complete.
 

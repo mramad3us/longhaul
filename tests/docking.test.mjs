@@ -307,6 +307,76 @@ export default [
     },
   },
   {
+    name: 'a boarding party crosses together: boarders on one deck don\'t race for one suit; one with no suit left, or not at the lock in time, stays aboard and goes back to work',
+    fn: () => {
+      const setup = (seed) => {
+        const s = game(seed, { classId: 'mcrn-corvette', crewCount: 10 });
+        releaseHold(s);
+        s.dock = null;
+        s.flight.pos.y += 0.02;
+        const f = s.flight;
+        const w = spawnAgent(s, { role: 'civilian', cls: 'pirate-corvette', faction: 'pirate', pos: { x: f.pos.x + 900 / AU_M, y: f.pos.y }, vel: { ...f.vel } });
+        wreckNpc(s, w, null);
+        // three of the crew, unsuited, side by side at the first suit locker
+        const geo = shipGeometry(s.ship), locker = geo.fixtures.locker[0], at = geo.nodes[locker.access];
+        const party = s.ship.crew.filter(m => m.role !== 'Captain' && m.role !== 'Pilot').slice(0, 3);
+        for (const m of party) { m.task = null; m.seat = null; m.path = []; m.pos.sx = at.sx; m.pos.sy = at.sy; m.suit.wearing = false; }
+        return { s, w, party };
+      };
+      // 1. all three, the nearest locker holding one suit: each finds their own
+      {
+        const { s, w, party } = setup(41);
+        const r = startBoarding(s, w.id, { party: party.map(m => m.id), via: 'eva' });
+        assert(r.ok, r.text);
+        const t = run(s, st => st.boarding.phase !== 'muster', 60);
+        console.log(`      three boarders from one locker: across in ${t} min, ${s.boarding.party.length} of 3`);
+        assert(s.boarding.party.length === 3 && party.every(m => m.away && m.suit.wearing), 'all three suited and across');
+      }
+      // 2. a suit gone from the lockers after the order: the one left without stays aboard
+      {
+        const { s, w, party } = setup(42);
+        startBoarding(s, w.id, { party: party.slice(0, 2).map(m => m.id), via: 'eva' });
+        advance(s, 1);
+        const L = s.lifeSupport.lockers;
+        const spare = Object.keys(L).filter(id => L[id].hasSuit && !s.ship.crew.some(m => m.task?.locker === id));
+        for (const id of spare) L[id].hasSuit = false;
+        const claimed = s.ship.crew.find(m => m.task?.type === 'board' && m.task.locker && party.slice(0, 2).includes(m) && m !== party[0]);
+        if (claimed) L[claimed.task.locker].hasSuit = false;
+        run(s, st => st.boarding.phase !== 'muster', 60);
+        assert(s.boarding.phase === 'cross' && s.boarding.party.length === 1, `one goes (${s.boarding.phase}, ${s.boarding.party.length})`);
+        assert(s.boarding.log.some(l => /no suit left/.test(l.text)), 'the other is told off, no suit');
+        advance(s, 2);
+        assert(!s.ship.crew.some(m => m.task?.type === 'board'), 'nobody left at the lock');
+      }
+      // 3. one still on the way is waited for; one held up past the cap is left aboard, back at work
+      {
+        const { s, w, party } = setup(43);
+        startBoarding(s, w.id, { party: party.slice(0, 2).map(m => m.id), via: 'eva' });
+        const slow = party[1];
+        advance(s, 1);
+        // (sent off to the far end of the ship for a suit, and held there)
+        const geo = shipGeometry(s.ship), far = geo.nodes.at(-1);
+        const hold = () => { if (slow.task?.type === 'board') { slow.task.phase = 'goto'; slow.pos.sx = far.sx; slow.pos.sy = far.sy; slow.path = [{ sx: far.sx + 10, sy: far.sy }]; } };
+        for (let i = 0; i < 40; i++) { hold(); advance(s, 1); }
+        assert(s.boarding.phase === 'muster', 'still waited for at 40 minutes: on the way');
+        s.boarding.since -= 60;
+        hold(); advance(s, 1);
+        assert(s.boarding.phase !== 'muster' && s.boarding.party.length === 1 && !slow.away, 'past the cap the party goes without them');
+        assert(s.boarding.log.some(l => /not at the lock in time/.test(l.text)), 'and says so');
+        advance(s, 2);
+        assert(slow.task?.type !== 'board' && slow.activity !== 'at the lock', `back to the ship's work (${slow.task?.type}, ${slow.activity})`);
+      }
+      // 4. a save with someone already stuck at the lock (before 1.1): they leave it
+      {
+        const { s, party } = setup(44);
+        party[0].task = { type: 'board', phase: 'ready', lock: null, locker: null, timer: 0 };
+        s.boarding = null;
+        advance(s, 2);
+        assert(party[0].task?.type !== 'board', 'a board task with no muster is dropped');
+      }
+    },
+  },
+  {
     name: 'boarding: a struck pirate taken by EVA, its crew counted, prisoners in the brig; boarding a lawful hull is piracy',
     fn: () => {
       const s = game(12, { classId: 'cutter', crewCount: 8 });

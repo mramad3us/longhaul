@@ -11,7 +11,8 @@
 //   station   holding off us on its own thrusters: the exterior view
 //             (ui/exterior.js) is its picture
 //   recover   called home: it flies back and is caught in its bay
-//             (DRONE_RECOVER_MIN), its camera on until it is aboard
+//             (DRONE_RECOVER_MIN), its camera on until it is aboard: the
+//             picture closes on our hull as it comes (ui/exterior.js)
 //
 // It goes out only with the drive cold (it would launch into our own
 // exhaust). Out, it keeps up with anything gentle (the RCS, a docking's

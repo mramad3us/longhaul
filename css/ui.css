@@ -185,7 +185,23 @@ body.inertia-active #ship-viewport::after {
 .dialog-content { max-height: 70vh; overflow-y: auto; }
 .missions-section { font-family: var(--font-pixel); font-size: 0.36rem; letter-spacing: 0.18em; color: var(--text-dim); margin: 14px 0 6px; }
 .mission-actions { display: flex; gap: 6px; padding: 0 10px 8px 26px; flex-wrap: wrap; }
-.mission-row.mission-done { opacity: 0.55; }
+.mission-row.mission-done > .mission-row-header { opacity: 0.55; }
+/* A contract's brief (js/ui/brief.js), folded under its card or its row in the log */
+.brief-fold { margin: 0 14px 8px 26px; font-family: var(--font-mono); }
+.station-mission-card .brief-fold { margin: 0 0 8px; }
+.brief-fold > summary { cursor: var(--cur-hand, pointer); list-style: none; font-family: var(--f-ui); font-size: 11px; letter-spacing: 0.12em; color: var(--accent); padding: 3px 0; user-select: none; }
+.brief-fold > summary::-webkit-details-marker { display: none; }
+.brief-fold > summary::before { content: '▸ '; }
+.brief-fold[open] > summary::before { content: '▾ '; }
+.brief { padding: 2px 0; }
+.brief-head { font-family: var(--f-ui); font-size: 11px; letter-spacing: 0.16em; color: var(--text-dim); margin: 8px 0 3px; padding-bottom: 2px; border-bottom: 1px solid var(--hull-primary); }
+.brief-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; font-family: var(--f-data); font-size: 12px; line-height: 1.45; }
+.brief-k { color: var(--text-dim); white-space: nowrap; }
+.brief-v { color: var(--text-secondary); overflow-wrap: anywhere; }
+.brief-ok { color: var(--ok); }
+.brief-warn { color: var(--warning); }
+.brief-dim { color: var(--text-dim); }
+.brief-log .brief-k { font-variant-numeric: tabular-nums; }
 .btn-small { padding: 4px 10px; font-size: 0.7rem; }
 .station-tabs { display: flex; gap: 4px; margin: 10px 0 6px; }
 .station-mission-accept:disabled { opacity: 0.45; cursor: var(--cur-default, not-allowed); }

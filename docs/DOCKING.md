@@ -124,7 +124,7 @@ Shore leave needs the berth until the crew are back: sending them ashore buys th
 
 A boarding party is chosen from the crew (`sim/boarding.js`), through a mated collar or by EVA (within 2 km, matched in motion, a suit for everyone):
 
-1. **muster**: the party suits up (always for an EVA; for a collar when the other side may fight) and goes to the lock (crew AI task `board`).
+1. **muster**: the party suits up (always for an EVA; for a collar when the other side may fight) and goes to the lock (crew AI task `board`). Each boarder takes the nearest suit nobody else is already on the way to, and if theirs is gone when they get there, the next one; with none left for an EVA they stay aboard. The party goes when everyone is at the lock; after 25 minutes it goes with whoever is there unless someone is still on the way, and after 90 regardless. Whoever it leaves goes back to the ship's work.
 2. **cross**: 2 minutes through the collar, or the distance at 2 m/s on suit thrusters.
 3. **breach**: a hatch nobody opens is cut: 6 minutes behind a collar, 10 by EVA.
 4. **fight**, if anyone resists, minute by minute.

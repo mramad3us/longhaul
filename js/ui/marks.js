@@ -10,38 +10,42 @@
 //            a wreck, silent too, is hollow and reads WRECK
 //   MISSION  a magenta diamond round the mark (magenta is the route's
 //            colour: the nav computer's "where we are going"), and the
-//            job after the name
+//            job after the name; a contact that might be the ship we hunt
+//            (a possible) a dashed diamond and the job with a question
+//            mark (BOUNTY?), and no name
 //   FLAG     a yellow pennant with its letter at the mark's shoulder. A
 //            crowded display leaves names off; it never leaves a flag off.
 // ============================================================
 
 import { esc } from './dom.js';
-import { missionTargets } from '../sim/flags.js';
+import { missionTargets, missionSuspects } from '../sim/flags.js';
 
 export const MARK_COL = { flag: '#FFE15C', mission: '#D46BE0', dark: '#F0A93A', wreck: '#7A8794' };
 const LETTER_FONT = '600 10px "IBM Plex Mono", ui-monospace, monospace';
 
 /** What is marked this frame (built once per render, then asked per contact). */
 export function frameMarks(state) {
-  return { missions: missionTargets(state), flags: state.navFlags || {} };
+  return { missions: missionTargets(state), suspects: missionSuspects(state), flags: state.navFlags || {} };
 }
 
 /**
- * One entity's marks: { dark, wreck, mission (the job's tag), flag (its
- * letter) }. Whether it is dark or a wreck is what the board (or the
+ * One entity's marks: { dark, wreck, mission (the job's tag), maybe (the
+ * job's tag, for a possible), flag (its letter) }. Whether it is dark or a wreck is what the board (or the
  * plot's record) says, so the caller passes it.
  */
 export function marksOf(fm, id, dark = false, wreck = false) {
-  return { dark: !!dark && !wreck, wreck: !!wreck, mission: fm.missions.get(id) || null, flag: fm.flags[id]?.letter || null };
+  const mission = fm.missions.get(id) || null;
+  return { dark: !!dark && !wreck, wreck: !!wreck, mission, maybe: mission ? null : fm.suspects?.get(id) || null, flag: fm.flags[id]?.letter || null };
 }
 
 /** How much a mark's name matters on a crowded display (labels.js priority), on top of its own. */
-export const markPri = (m) => (m.flag ? 3 : 0) + (m.mission ? 2.5 : 0);
+export const markPri = (m) => (m.flag ? 3 : 0) + (m.mission ? 2.5 : m.maybe ? 2 : 0);
 
 /** The tags after a name on a display (labels.js). */
 export function labelTags(m) {
   const t = [];
   if (m.mission) t.push({ text: m.mission, color: MARK_COL.mission });
+  else if (m.maybe) t.push({ text: `${m.maybe}?`, color: MARK_COL.mission });
   if (m.dark) t.push({ text: 'DARK', color: MARK_COL.dark });
   else if (m.wreck) t.push({ text: 'WRECK', color: MARK_COL.wreck });
   return t.length ? t : null;
@@ -49,7 +53,7 @@ export function labelTags(m) {
 
 /** The same, for a line of text (a display's tooltip): " · BOUNTY · DARK · FLAG A". */
 export function markWords(m) {
-  return [m.mission, m.dark ? 'DARK' : m.wreck ? 'WRECK' : null, m.flag ? `FLAG ${m.flag}` : null].filter(Boolean).map(w => ` · ${w}`).join('');
+  return [m.mission || (m.maybe ? `${m.maybe}?` : null), m.dark ? 'DARK' : m.wreck ? 'WRECK' : null, m.flag ? `FLAG ${m.flag}` : null].filter(Boolean).map(w => ` · ${w}`).join('');
 }
 
 /** The same, as chips in a list or a panel. */
@@ -57,16 +61,19 @@ export function markChips(m) {
   let h = '';
   if (m.flag) h += `<span class="mk mk-flag" title="Flagged: F on the selection clears it">${m.flag}</span>`;
   if (m.mission) h += `<span class="mk mk-mission" title="What our work points at">${esc(m.mission)}</span>`;
+  else if (m.maybe) h += `<span class="mk mk-mission mk-maybe" title="Possibly the ship we hunt: dark, seen in the search area of its last fix, not confirmed">${esc(m.maybe)}?</span>`;
   if (m.dark) h += '<span class="mk mk-dark" title="No transponder: it isn\'t saying who it is">DARK</span>';
   else if (m.wreck) h += '<span class="mk mk-wreck" title="A wreck: dead and silent">WRECK</span>';
   return h;
 }
 
-/** A magenta diamond round a mark of radius `r`. */
-export function drawMissionMark(ctx, x, y, r) {
+/** A magenta diamond round a mark of radius `r` (dashed: a possible). */
+export function drawMissionMark(ctx, x, y, r, maybe = false) {
   ctx.strokeStyle = MARK_COL.mission;
   ctx.lineWidth = 1.5;
+  if (maybe) ctx.setLineDash([3, 3]);
   ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath(); ctx.stroke();
+  if (maybe) ctx.setLineDash([]);
   ctx.lineWidth = 1;
 }
 
