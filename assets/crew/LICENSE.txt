@@ -1,0 +1,7 @@
+The crew's bodies, eyes, brows and hairstyles in this folder (crew.json, crew.bin, and the
+skin, hair and eye textures) are repacked by tools/crew-assets.py from:
+
+  Universal Base Characters (Standard), by Quaternius — https://quaternius.com
+
+License: CC0 1.0 Universal (CC0 1.0), Public Domain Dedication
+https://creativecommons.org/publicdomain/zero/1.0/

@@ -49,10 +49,11 @@
 // under a blanket, on the autodoc, at the mess table, on the treadmill,
 // down on the deck, adrift in free fall), interpolated between sim
 // minutes by `alpha`, and given bodies on the GPU (gl/figures.js): a
-// jumpsuit in their department's colour with its details, skin, hair, or a
-// white vac suit with its helmet and pack, lit by the room's own lights
-// through the same lens. Without WebGL2 they are drawn as limbs of a
-// body's width. The selected one is outlined and named. Someone in the
+// rigged human body posed to those joints, in a jumpsuit of their
+// department's colour with its details, skin and hair, or a white vac suit
+// with its helmet and pack, lit by the room's own lights through the same
+// lens. Without WebGL2 (or while the bodies load) they are drawn as limbs
+// of a body's width. The selected one is outlined and named. Someone in the
 // head is behind its door.
 //
 // Cost: the room (floor, walls, fixtures, light) is rendered once per

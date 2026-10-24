@@ -1,34 +1,45 @@
 // ============================================================
-// LONGHAUL — People on the room cameras, rendered on the GPU
+// LONGHAUL — People on the room cameras: rigged bodies on the GPU
 //
 // A person on a room camera (roomcam.js) is posed as a handful of joints
-// (feet, knees, hips, shoulders, elbows, hands, neck, head). Here those
-// joints are given a body: each figure is a distance field ray-marched per
-// pixel through the camera's own lens (the same pinhole, so a figure sits
-// exactly where the room puts it). The body is made the way an artist
-// blocks one out: tapered limbs (thigh, calf, upper arm, forearm) from
-// joint to joint, a ribcage, belly and pelvis blended into one torso,
-// shoulders, a neck, a skull and jaw with a nose and ears, hands, boots.
-// Hair is its own volume, in one of a few cuts. The jumpsuit carries its
-// details where a camera would pick them out: the collar, a zip down the
-// front, a belt and buckle, a name tape, the department's patch on chest
-// and shoulder, cuffs, thigh pockets; a vac suit is bulkier, white, with
-// its helmet and dark visor, the life-support pack on the back, joint
-// bellows, gloves and boots. Someone asleep is under a blanket that lies
-// over the shape of them.
+// (feet, knees, hips, shoulders, elbows, hands, neck, head) from what the
+// sim says they are doing. Here they are given a real body: a rigged human
+// mesh (Quaternius' Universal Base Characters, CC0, built into
+// assets/crew/ by tools/crew-assets.py), a male or a female base body on
+// one skeleton, posed to those joints and drawn through the camera's own
+// lens, so it stands exactly where the room puts it.
+//
+// Posing: the torso (pelvis and spine) turns as one to the line from the
+// hips to the shoulders, facing where the person faces; the neck and head
+// to the head's joints; each arm and leg is aimed joint to joint, its elbow
+// or knee bending the way that limb bends (the hinge worked from the three
+// joints, or from which way the body faces when the limb is straight); the
+// feet point the way the person does. The body keeps its own bone lengths,
+// placed by its hips.
+//
+// Dressing: the body is tagged at rest (skin above the collar and on the
+// hands, boots below the ankles: the converter) and shaded as a jumpsuit
+// in the department's colour between them, with its details worked from
+// where a point lies on the body at rest (the collar, a zip, the belt and
+// buckle, a name tape, the department's patches on chest and shoulder,
+// cuffs, thigh panels). Skin is the kit's own texture, toned; hair one of
+// the kit's cuts in the person's colour. A vac suit is the same body a
+// little bulkier, white, with gloves and boots, a helmet and its visor, the
+// life-support pack. Someone asleep is under a blanket that lies over the
+// shape of them.
 //
 // Light is the room's: its panels, strips, lamps and screens (the lights
-// roomcam.js lights the plating with), the strongest few at the figure,
-// with soft occlusion in the creases, a little sheen on fabric, skin and
-// hair, a gleam on boots and visors, and the camera's gain that keeps a
-// person readable in a dark room. A thin dark edge separates a figure
-// from what is behind it; the selected one is outlined instead.
+// roomcam.js lights the plating with), the strongest few at each person,
+// and the camera's gain that keeps a person readable in a dark room. A
+// thin dark edge separates a figure from what is behind it (the body drawn
+// a little larger, behind itself); the selected one is outlined instead.
 //
 // Every figure a camera shows is rendered into its own rectangle of the
-// shared GPU canvas (gl.js) in one pass, before the camera draws its
-// rows: it then copies each in, in its place in the draw order, so the
-// furniture nearer the lens still hides it. Without WebGL2 renderFigures
-// answers null and the camera draws its 2D figures.
+// shared GPU canvas (gl.js) in one pass, before the camera draws its rows:
+// it copies each in, in its place in the draw order, so the furniture
+// nearer the lens still hides it. The bodies load once, from the game's own
+// folder (nothing from the network); until they have, or without WebGL2,
+// renderFigures answers null and the camera draws its 2D figures.
 // ============================================================
 
 import { sharedGL, beginRender, program, onContextLost } from './gl.js';
@@ -37,6 +48,12 @@ import { sharedGL, beginRender, program, onContextLost } from './gl.js';
 export const TILE_M = 1.52;
 const MAX_LIGHTS = 16;
 const ATLAS_W = 2048;
+const HEIGHT_TILES = { male: 1.17, female: 1.11 };                     // how tall each body stands, in tiles
+const SKIN_REF = { male: [0.657, 0.467, 0.325], female: [0.672, 0.488, 0.338] };   // the kit's skin at the cheeks (sRGB)
+// (the kit's long cut is a solid sheet down the back, a cape at a distance: only now and then)
+const HAIR_CUTS = { male: ['simpleparted', 'buzzed', 'simpleparted', 'buzzed'], female: ['buns', 'simpleparted', 'buzzedfemale', 'buns', 'simpleparted', 'long'] };
+const LIE_LIFT = 0.075;                // tiles: a body lying down rests on its back, its joints this far off the mattress
+const ASSETS = new URL('../../../assets/crew/', import.meta.url);
 
 let R = null;
 onContextLost(() => { R = null; });
@@ -47,9 +64,10 @@ function setup() {
   if (R && R.gl === ctx.gl) return R;
   try {
     const gl = ctx.gl;
-    const prog = program(gl, VS, FS);
-    const vao = gl.createVertexArray();          // (the quad is made in the vertex shader)
-    R = { gl, ctx, prog, vao };
+    const prog = program(gl, VS, FS, ['aPos', 'aNrm', 'aUV', 'aJ', 'aW', 'aTag']);
+    R = { gl, ctx, prog, ready: false, failed: false, blanket: null };
+    const r = R;
+    load(r).catch(e => { console.error('[figures]', e.message); r.failed = true; });
   } catch (e) {
     console.error('[figures]', e.message);
     R = null;
@@ -57,75 +75,356 @@ function setup() {
   return R;
 }
 
-export const hasFigures3D = () => !!setup();
+/** Are the bodies there to draw? */
+export const hasFigures3D = () => !!setup() && R.ready;
 
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+// ---- THE BODIES ----
+
+async function load(r) {
+  const gl = r.gl;
+  const [meta, bin] = await Promise.all([
+    fetch(new URL('crew.json', ASSETS)).then(x => { if (!x.ok) throw new Error(`crew.json ${x.status}`); return x.json(); }),
+    fetch(new URL('crew.bin', ASSETS)).then(x => { if (!x.ok) throw new Error(`crew.bin ${x.status}`); return x.arrayBuffer(); }),
+  ]);
+  const tex = {};
+  const names = new Set(['eye.png', ...Object.values(meta.bodies).map(b => b.skin), ...Object.values(meta.hair).map(h => h.tex)]);
+  await Promise.all([...names].map(async (n) => { tex[n] = await texture(gl, new URL(n, ASSETS)); }));
+  if (R !== r) return;
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, bin, gl.STATIC_DRAW);
+  const rig = makeRig(meta, bin);
+  const J = rig.J;
+  for (const [key, b] of Object.entries(meta.bodies)) {
+    const body = rig.bodies[key];
+    body.meshes = {};
+    for (const [part, m] of Object.entries(b.meshes)) body.meshes[part] = meshVAO(gl, buf, bin, m);
+    body.skin = tex[b.skin];
+    body.helmet = rigid(gl, sphere(body.helmC, 0.165, 18), J.indexOf('Head'));
+    body.pack = rigid(gl, box(add(body.restAt('spine_03'), [0, -0.06, -0.19]), [0.15, 0.23, 0.075]), J.indexOf('spine_03'));
+  }
+  const hair = {};
+  for (const [key, h] of Object.entries(meta.hair)) hair[key] = { vao: meshVAO(gl, buf, bin, h.mesh), ibm: new Float32Array(bin, h.ibm, J.length * 16), tex: tex[h.tex] };
+  Object.assign(r, rig, { hair, eyeTex: tex['eye.png'], ready: true });
+}
+
+/**
+ * The skeletons, without the GPU: each body's rest pose (model metres, Y up,
+ * facing +z), every joint's rest offset in its parent's frame, its inverse
+ * binds, its height and the landmarks the jumpsuit is drawn from.
+ */
+export function makeRig(meta, bin) {
+  const J = meta.joints, parents = meta.parents;
+  const f32 = (off, n) => new Float32Array(bin, off, n);
+  const bodies = {};
+  for (const [key, b] of Object.entries(meta.bodies)) {
+    const rest = b.rest.map(m => Float32Array.from(m));
+    const restAt = (name) => { const m = rest[J.indexOf(name)]; return [m[12], m[13], m[14]]; };
+    const ys = f32(b.meshes.body.pos, b.meshes.body.count * 3);
+    let top = 0;
+    for (let i = 1; i < ys.length; i += 3) top = Math.max(top, ys[i]);
+    const head = restAt('Head');
+    const local = rest.map((m, j) => {
+      const p = parents[j];
+      if (p < 0) return [m[12], m[13], m[14]];
+      const q = rest[p], d = [m[12] - q[12], m[13] - q[13], m[14] - q[14]];
+      return [q[0] * d[0] + q[1] * d[1] + q[2] * d[2], q[4] * d[0] + q[5] * d[1] + q[6] * d[2], q[8] * d[0] + q[9] * d[1] + q[10] * d[2]];
+    });
+    bodies[key] = {
+      rest, local, restAt, ibm: f32(b.ibm, J.length * 16), height: top,
+      land: [restAt('pelvis')[1], restAt('neck_01')[1] + 0.035, restAt('upperarm_l')[1], Math.abs(restAt('hand_l')[0]) - 0.012],
+      chestY: restAt('spine_03')[1], helmC: [head[0], head[1] + 0.1, head[2] + 0.025],
+    };
+  }
+  return { J, parents, bodies };
+}
+
+function texture(gl, url) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      res(t);
+    };
+    im.onerror = () => rej(new Error(`texture ${url}`));
+    im.src = url;
+  });
+}
+
+/** A mesh from the bin: its arrays where the converter put them, and its own index buffer. */
+function meshVAO(gl, buf, bin, m) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, m.pos);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, m.nrm);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, m.uv);
+  gl.enableVertexAttribArray(3); gl.vertexAttribIPointer(3, 4, gl.UNSIGNED_BYTE, 0, m.joints);
+  gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, true, 0, m.weights);
+  gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, m.tags);
+  const ib = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.index32 ? new Uint32Array(bin, m.idx, m.indices) : new Uint16Array(bin, m.idx, m.indices), gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  return { vao, count: m.indices, type: m.index32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT };
+}
+
+/** A solid made in code (the helmet, the pack), riding one joint rigidly: its vertices at rest. */
+function rigid(gl, geo, joint) {
+  const n = geo.pos.length / 3;
+  const arrays = [
+    [0, 3, gl.FLOAT, new Float32Array(geo.pos)], [1, 3, gl.FLOAT, new Float32Array(geo.nrm)], [2, 2, gl.FLOAT, new Float32Array(n * 2)],
+    [3, 4, gl.UNSIGNED_BYTE, new Uint8Array(n * 4).map((_, i) => (i % 4 ? 0 : joint))], [4, 4, gl.UNSIGNED_BYTE, new Uint8Array(n * 4).map((_, i) => (i % 4 ? 0 : 255))],
+    [5, 4, gl.UNSIGNED_BYTE, new Uint8Array(n * 4)],
+  ];
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  for (const [loc, size, type, data] of arrays) {
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(loc);
+    if (loc === 3) gl.vertexAttribIPointer(loc, size, type, 0, 0);
+    else gl.vertexAttribPointer(loc, size, type, type !== gl.FLOAT, 0, 0);
+  }
+  gl.bindVertexArray(null);
+  return { vao, count: n, arrays: true };
+}
+
+function sphere(c, r, seg) {
+  const pos = [], nrm = [];
+  const v = (t, p) => [Math.sin(t) * Math.cos(p), Math.cos(t), Math.sin(t) * Math.sin(p)];
+  for (let i = 0; i < seg; i++) for (let k = 0; k < seg * 2; k++) {
+    const t0 = i / seg * Math.PI, t1 = (i + 1) / seg * Math.PI, p0 = k / (seg * 2) * Math.PI * 2, p1 = (k + 1) / (seg * 2) * Math.PI * 2;
+    for (const [t, p] of [[t0, p0], [t1, p0], [t1, p1], [t0, p0], [t1, p1], [t0, p1]]) { const n = v(t, p); nrm.push(...n); pos.push(c[0] + n[0] * r, c[1] + n[1] * r, c[2] + n[2] * r); }
+  }
+  return { pos, nrm };
+}
+
+/** A box with rounded-off shading (its normals leaning out at the corners). */
+function box(c, h) {
+  const pos = [], nrm = [];
+  for (const [ax, s] of [[0, 1], [0, -1], [1, 1], [1, -1], [2, 1], [2, -1]]) {
+    const u = (ax + 1) % 3, w = (ax + 2) % 3;
+    const corner = (a, b) => { const p = [0, 0, 0]; p[ax] = s * h[ax]; p[u] = a * h[u]; p[w] = b * h[w]; return p; };
+    const quad = s > 0 ? [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]] : [[-1, -1], [1, 1], [1, -1], [-1, -1], [-1, 1], [1, 1]];
+    for (const [a, b] of quad) {
+      const p = corner(a, b);
+      const n = [p[0] / h[0] * 0.35, p[1] / h[1] * 0.35, p[2] / h[2] * 0.35]; n[ax] = s;
+      const l = Math.hypot(...n);
+      pos.push(c[0] + p[0], c[1] + p[1], c[2] + p[2]); nrm.push(n[0] / l, n[1] / l, n[2] / l);
+    }
+  }
+  return { pos, nrm };
+}
+
+// ---- POSING ----
+
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const len = (a) => Math.hypot(a[0], a[1], a[2]);
 const norm = (a) => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
-const lerp = (a, b, k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
-/** `v` made square to `n` (unit), or `alt` when it nearly lies along it. */
+/** `v` made square to unit `n`, or `alt` when it nearly lies along it. */
 const square = (v, n, alt) => { const w = sub(v, mul(n, dot(v, n))); return len(w) > 1e-3 ? norm(w) : alt; };
 
-const JOINTS = ['hd', 'nk', 'shL', 'shR', 'elL', 'elR', 'haL', 'haR', 'hpL', 'hpR', 'knL', 'knR', 'ftL', 'ftR'];
+/** A frame (3×3, columns) from a primary direction and a second one squared to it. */
+function frame(a, b) {
+  a = norm(a);
+  b = square(b, a, Math.abs(a[1]) < 0.9 ? square([0, 1, 0], a) : square([1, 0, 0], a));
+  return [a, b, cross(a, b)];
+}
+/** The rotation (3×3, columns) carrying frame f onto frame g: g · fᵀ. */
+function carry(f, g) {
+  const out = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) out[c][r] = g[0][r] * f[0][c] + g[1][r] * f[1][c] + g[2][r] * f[2][c];
+  return out;
+}
+const rot = (M, v) => [M[0][0] * v[0] + M[1][0] * v[1] + M[2][0] * v[2], M[0][1] * v[0] + M[1][1] * v[1] + M[2][1] * v[2], M[0][2] * v[0] + M[1][2] * v[1] + M[2][2] * v[2]];
+const restRot = (m) => [[m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]];
+const restPos = (m) => [m[12], m[13], m[14]];
+const rmul = (A, B) => [rot(A, B[0]), rot(A, B[1]), rot(A, B[2])];
+const transpose = (M) => [[M[0][0], M[1][0], M[2][0]], [M[0][1], M[1][1], M[2][1]], [M[0][2], M[1][2], M[2][2]]];
 
 /**
- * The body a figure's joints make: everything the shader needs, in metres.
- * f: { J (tiles, y up), face, kind, vac, cover: [4 points] | null, coverKind }
+ * The skeleton posed to a figure's joints: per joint, its world rotation
+ * and position in the room (model metres; k: tiles per model metre).
  */
-function bodyOf(f) {
-  const lift = f.kind === 'lying' ? 0.07 : f.kind === 'down' ? 0.06 : 0;
-  const J = {};
-  for (const k of JOINTS) { const v = f.J[k]; J[k] = [v[0] * TILE_M, v[1] * TILE_M + lift, v[2] * TILE_M]; }
+export function pose(body, f, rig = R) {
+  const J = rig.J, parents = rig.parents;
+  const k = (HEIGHT_TILES[f.sex] || 1.15) / body.height;
+  const lift = f.kind === 'lying' || f.kind === 'down' ? LIE_LIFT : 0;
+  // the figure's joints, in model metres in the room
+  const T = {};
+  for (const n of ['hd', 'nk', 'shL', 'shR', 'elL', 'elR', 'haL', 'haR', 'hpL', 'hpR', 'knL', 'knR', 'ftL', 'ftR']) { const v = f.J[n]; T[n] = [v[0] / k, (v[1] + lift) / k, v[2] / k]; }
   const face = norm(f.face);
-  const shM = mid(J.shL, J.shR), hpM = mid(J.hpL, J.hpR);
+  const idx = (n) => J.indexOf(n);
+  const rest = body.rest;
+  const P = (n) => restPos(rest[idx(n)]);
+  // the torso turns as one: up from the hips to the shoulders, facing where the person does
+  const shM = mid(T.shL, T.shR), hpM = mid(T.hpL, T.hpR);
   const up = norm(sub(shM, hpM));
-  const fwd0 = square(face, up, square([0, 1, 0], up, [1, 0, 0]));
-  const right = norm(cross(up, fwd0));
-  const fwd = cross(right, up);
-  // the torso's masses: ribcage, belly, pelvis, down the spine
-  const chest = add(lerp(hpM, shM, 0.74), mul(fwd, 0.01));
-  const abd = add(lerp(hpM, shM, 0.36), mul(fwd, 0.005));
-  const pelv = add(hpM, mul(up, 0.02));
-  // the head: up the neck, looking where the face does
-  const hup = norm(add(sub(J.hd, J.nk), mul(up, 0.4)));
-  const hfwd = square(face, hup, fwd);
-  const hright = norm(cross(hup, hfwd));
-  const headBase = add(J.hd, mul(hup, -0.07));
-  // feet: the ankle above the floor point, the boot along the way the person faces
-  const ank = [], heel = [], toe = [], handE = [];
-  for (const s of ['L', 'R']) {
-    const ft = J['ft' + s], kn = J['kn' + s];
-    const legUp = norm(sub(kn, ft));
-    const fd = square(face, legUp, fwd);
-    const a = add(ft, mul(legUp, 0.075));
-    ank.push(a);
-    heel.push(add(add(a, mul(fd, -0.04)), mul(legUp, -0.045)));
-    toe.push(add(add(a, mul(fd, 0.16)), mul(legUp, -0.055)));
-    const ha = J['ha' + s], el = J['el' + s];
-    handE.push(add(ha, mul(norm(sub(ha, el)), 0.075)));
+  const fwd = square(face, up, square([0, 1, 0], up, [1, 0, 0]));
+  const Rt = carry(frame(sub(P('neck_01'), P('pelvis')), [0, 0, 1]), frame(up, fwd));
+  // which of the figure's sides is the body's left (+x at rest): its L and R are only labels
+  const leftW = rot(Rt, [1, 0, 0]);
+  const L = dot(sub(T.hpL, T.hpR), leftW) >= 0 ? 'L' : 'R', Rr = L === 'L' ? 'R' : 'L';
+  // the neck and head to the head's joints
+  const restNeck = sub(add(P('Head'), [0, 0.1, 0]), P('neck_01'));
+  const hup = norm(add(sub(T.hd, T.nk), mul(up, 0.3)));
+  const Rh = carry(frame(restNeck, [0, 0, 1]), frame(hup, square(face, hup, fwd)));
+  const nup = norm(add(up, hup));
+  const Rn = carry(frame(restNeck, [0, 0, 1]), frame(nup, square(face, nup, fwd)));
+  // a limb aimed joint to joint, bending about its hinge: from the three joints, or (straight) from the facing
+  const limb = (a, b, c, restA, restB, restC, side) => {
+    const d1 = sub(b, a), d2 = sub(c, b);
+    let n = cross(d1, d2);
+    if (len(n) < 0.08 * len(d1) * len(d2)) n = cross(d1, mul(fwd, side));
+    const r1 = sub(restB, restA), r2 = sub(restC, restB);
+    return [carry(frame(r1, cross(r1, [0, 0, side])), frame(d1, n)), carry(frame(r2, cross(r2, [0, 0, side])), frame(d2, n))];
+  };
+  const W = new Array(J.length);
+  const pos = new Array(J.length);
+  const set = (n, Rw) => { W[idx(n)] = rmul(Rw, restRot(rest[idx(n)])); };
+  for (const n of ['root', 'pelvis', 'spine_01', 'spine_02', 'spine_03']) set(n, Rt);
+  set('neck_01', Rn); set('Head', Rh);
+  for (const [side, s] of [['l', L], ['r', Rr]]) {
+    // arms: shoulder to elbow to hand (the hand on along the forearm)
+    const [Ru, Rf] = limb(T['sh' + s], T['el' + s], T['ha' + s], P(`upperarm_${side}`), P(`lowerarm_${side}`), P(`hand_${side}`), 1);
+    set(`upperarm_${side}`, Ru); set(`lowerarm_${side}`, Rf); set(`hand_${side}`, Rf);
+    // legs: hip to knee to ankle (a little above the foot point), the foot pointing the way the person faces
+    const ankle = add(T['ft' + s], [0, 0.075, 0]);
+    const [Rth, Rc] = limb(T['hp' + s], T['kn' + s], ankle, P(`thigh_${side}`), P(`calf_${side}`), P(`foot_${side}`), -1);
+    set(`thigh_${side}`, Rth); set(`calf_${side}`, Rc);
+    const shin = norm(sub(ankle, T['kn' + s]));
+    const footDir = norm(add(mul(square(face, shin, fwd), 0.89), mul(shin, 0.45)));
+    const restFoot = sub(P(`ball_${side}`), P(`foot_${side}`));
+    const Rfo = carry(frame(restFoot, cross(restFoot, [0, 0, -1])), frame(footDir, cross(footDir, mul(fwd, -1))));
+    set(`foot_${side}`, Rfo); set(`ball_${side}`, Rfo);
   }
-  const pts = Object.values(J);
-  const c = pts.reduce((a, b) => add(a, mul(b, 1 / pts.length)), [0, 0, 0]);
-  const rad = Math.max(...pts.map(p => len(sub(p, c)))) + (f.vac ? 0.36 : 0.26);
-  return { J, chest, abd, pelv, tor: [...right, ...up, ...fwd], hd: [...hright, ...hup, ...hfwd], headBase, ank, heel, toe, handE, c, rad, lift };
+  // the rest follow their parents rigidly (the clavicles); positions down the hierarchy, at the body's own bone lengths
+  for (let j = 0; j < J.length; j++) {
+    const p = parents[j];
+    if (!W[j]) W[j] = rmul(W[p], rmul(transpose(restRot(rest[p])), restRot(rest[j])));
+    pos[j] = p < 0 ? [0, 0, 0] : add(pos[p], rot(W[p], body.local[j]));
+  }
+  // placed by the hips: the thighs' heads between the figure's hips
+  const pv = idx('pelvis');
+  const hipsAt = add(pos[pv], mid(rot(W[pv], body.local[idx('thigh_l')]), rot(W[pv], body.local[idx('thigh_r')])));
+  const shift = sub(hpM, hipsAt);
+  // someone on their feet stands on them: the body (its legs its own length) lowered or raised to put its soles on the deck
+  if (f.kind === 'stand') {
+    const sole = Math.min(pos[idx('ball_l')][1], pos[idx('ball_r')][1]) + shift[1];
+    shift[1] += 0.015 + (T.ftL[1] + T.ftR[1]) / 2 - 0.02 / k - sole;
+  }
+  for (let j = 0; j < J.length; j++) pos[j] = add(pos[j], shift);
+  return { k, W, pos };
 }
+
+/** The skinning matrices (column-major, joints × 16) for a mesh with inverse binds `ibm`: scale(k) · world · inverse bind. */
+function skinning(P, ibm, out) {
+  const { k, W, pos } = P;
+  for (let j = 0; j < W.length; j++) {
+    const M = W[j], t = pos[j];
+    const m = [k * M[0][0], k * M[0][1], k * M[0][2], 0, k * M[1][0], k * M[1][1], k * M[1][2], 0, k * M[2][0], k * M[2][1], k * M[2][2], 0, k * t[0], k * t[1], k * t[2], 1];
+    const o = j * 16;
+    for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) out[o + c * 4 + r] = m[r] * ibm[o + c * 4] + m[4 + r] * ibm[o + c * 4 + 1] + m[8 + r] * ibm[o + c * 4 + 2] + m[12 + r] * ibm[o + c * 4 + 3];
+  }
+  return out;
+}
+
+// ---- THE BLANKET ----
+
+/** A blanket over someone lying down: a grid across its footprint, lifted over the shape of the body (tiles). */
+function blanketMesh(f) {
+  const q = f.cover, J = f.J;
+  const e1 = sub(q[1], q[0]), e2 = sub(q[3], q[0]);
+  const base = q[0][1] - 0.035;
+  // the body under it: a chain from chest to feet, with how far each part stands off the mattress
+  const chain = [[mid(J.shL, J.shR), 0.17], [mid(J.hpL, J.hpR), 0.16], [mid(J.knL, J.knR), 0.12], [mid(J.ftL, J.ftR), 0.1]];
+  const N = 22, M = 14, pos = [], nrm = [];
+  const H = (u, v) => {
+    const p = add(q[0], add(mul(e1, u), mul(e2, v)));
+    let h = 0.025;
+    for (let i = 0; i < chain.length - 1; i++) {
+      const [a, ha] = chain[i], [b, hb] = chain[i + 1];
+      const ab = [b[0] - a[0], 0, b[2] - a[2]], ap = [p[0] - a[0], 0, p[2] - a[2]];
+      const t = Math.max(0, Math.min(1, dot(ap, ab) / (dot(ab, ab) || 1)));
+      const d = Math.hypot(ap[0] - ab[0] * t, ap[2] - ab[2] * t);
+      // (flat over the body and the arms beside it, falling away past them)
+      h = Math.max(h, (ha + (hb - ha) * t + LIE_LIFT * 0.5) * Math.exp(-((d / 0.24) ** 4)) + 0.012 * Math.sin(u * 23 + v * 5));
+    }
+    // (it hangs a little over the edges)
+    const edge = Math.min(u, 1 - u, v, 1 - v);
+    return [p[0], base + h - Math.max(0, 0.05 - edge) * 0.8, p[2]];
+  };
+  const G = [];
+  for (let i = 0; i <= N; i++) { G.push([]); for (let j = 0; j <= M; j++) G[i].push(H(i / N, j / M)); }
+  const n = (i, j) => { const a = G[Math.min(N, i + 1)][j], b = G[Math.max(0, i - 1)][j], c = G[i][Math.min(M, j + 1)], d = G[i][Math.max(0, j - 1)]; const v = norm(cross(sub(c, d), sub(a, b))); return v[1] < 0 ? mul(v, -1) : v; };
+  for (let i = 0; i < N; i++) for (let j = 0; j < M; j++) {
+    for (const [a, b] of [[i, j], [i + 1, j], [i + 1, j + 1], [i, j], [i + 1, j + 1], [i, j + 1]]) { pos.push(...G[a][b]); nrm.push(...n(a, b)); }
+  }
+  return { pos: new Float32Array(pos), nrm: new Float32Array(nrm) };
+}
+
+function drawBlanket(gl, geo) {
+  let b = R.blanket;
+  if (!b) {
+    b = R.blanket = { vao: gl.createVertexArray(), pos: gl.createBuffer(), nrm: gl.createBuffer() };
+    gl.bindVertexArray(b.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, b.pos); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, b.nrm); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    for (const l of [2, 3, 4, 5]) gl.disableVertexAttribArray(l);
+  }
+  gl.bindVertexArray(b.vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, b.pos); gl.bufferData(gl.ARRAY_BUFFER, geo.pos, gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, b.nrm); gl.bufferData(gl.ARRAY_BUFFER, geo.nrm, gl.DYNAMIC_DRAW);
+  gl.vertexAttrib2f(2, 0, 0); gl.vertexAttribI4ui(3, 0, 0, 0, 0); gl.vertexAttrib4f(4, 1, 0, 0, 0); gl.vertexAttrib4f(5, 0, 0, 0, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, geo.pos.length / 3);
+}
+
+// ---- RENDERING ----
+
+/**
+ * The camera's projection for one figure's rectangle (bx, by, w, h on the
+ * camera's canvas): the Lens (roomcam.js) as a matrix, world tiles → clip.
+ */
+function viewProj(cam, bx, by, w, h, zn, zf) {
+  const { r, u, f, eye, s, ox, oy } = cam;
+  const cx = 2 * (ox - bx) / w - 1, cy = 1 - 2 * (oy - by) / h;
+  const A = (zf + zn) / (zf - zn), B = -2 * zf * zn / (zf - zn);
+  const tx = -dot(r, eye), ty = -dot(u, eye), tz = -dot(f, eye);
+  const ax = 2 * s / w, ay = 2 * s / h;
+  const row0 = [ax * r[0] + cx * f[0], ax * r[1] + cx * f[1], ax * r[2] + cx * f[2], ax * tx + cx * tz];
+  const row1 = [ay * u[0] + cy * f[0], ay * u[1] + cy * f[1], ay * u[2] + cy * f[2], ay * ty + cy * tz];
+  const row2 = [A * f[0], A * f[1], A * f[2], A * tz + B];
+  const row3 = [f[0], f[1], f[2], tz];
+  const m = new Float32Array(16);
+  for (let c = 0; c < 4; c++) { m[c * 4] = row0[c]; m[c * 4 + 1] = row1[c]; m[c * 4 + 2] = row2[c]; m[c * 4 + 3] = row3[c]; }
+  return m;
+}
+
+const hash = (n, s) => { let h = (n * 374761393 + s * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 
 /**
  * Render a camera's figures. cam: { eye (tiles), r, u, f, s, ox, oy (the
  * Lens), lights (env.lights), amb, exp, floor, tint [r, g, b] }, figs: [{
- * J, face, kind, box: { x0, y0, x1, y1 } (camera canvas px), vac, suit, accent,
- * skin, hair (rgb 0–1), hairStyle, build, cover, coverKind, coverCol,
- * outline: [r, g, b, a], outlineW (px), dead }]. Returns, per figure, where
- * its picture is in the GPU canvas ({ canvas, sx, sy, w, h, x, y }: copy
- * it to x, y) or null; null for all when there is no GPU.
+ * J, face, kind, box: { x0, y0, x1, y1 } (camera canvas px), vac, suit,
+ * accent, skin, hair (sRGB 0–1), seed, cover, coverKind, coverCol,
+ * outline: [r, g, b, a], outlineW (px) }]. Returns, per figure, where its
+ * picture is in the GPU canvas ({ canvas, sx, sy, w, h, x, y }: copy it to
+ * x, y) or null; null for all while the bodies load, or with no GPU.
  */
 export function renderFigures(cam, figs) {
-  if (!figs.length || !setup()) return null;
+  if (!figs.length || !setup() || !R.ready) return null;
   const { gl, ctx, prog } = R;
   try {
     // pack the figures' rectangles in shelves
@@ -143,68 +442,93 @@ export function renderFigures(cam, figs) {
     const H = y + shelf;
     if (!W || !H) return figs.map(() => null);
     beginRender(ctx, W, H);
-    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
     gl.disable(gl.BLEND);
     gl.disable(gl.CULL_FACE);
     gl.enable(gl.SCISSOR_TEST);
     gl.useProgram(prog.p);
     const u = prog.u;
-    const T = TILE_M;
-    gl.uniform3fv(u.uEye, mul(cam.eye, T));
-    gl.uniform3fv(u.uR, cam.r); gl.uniform3fv(u.uU, cam.u); gl.uniform3fv(u.uF, cam.f);
-    gl.uniform1f(u.uS, cam.s);
-    gl.uniform2f(u.uO, cam.ox, cam.oy);
     gl.uniform3fv(u.uAmb, cam.amb);
     gl.uniform1f(u.uExp, cam.exp);
     gl.uniform1f(u.uFloor, cam.floor);
     gl.uniform3fv(u.uTint, cam.tint || [1, 1, 1]);
-    gl.bindVertexArray(R.vao);
+    gl.uniform1i(u.uTex, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    const skin = new Float32Array(R.J.length * 16), other = new Float32Array(R.J.length * 16);
     const out = [];
     figs.forEach((f, i) => {
       const pl = place[i];
       if (!pl) { out.push(null); return; }
-      const b = bodyOf(f);
-      // the room's strongest lights at this figure
-      const at = [b.c[0] / T, b.c[1] / T, b.c[2] / T];
+      // who they are to look at: a body and a cut, kept by their id
+      const sex = hash(f.seed, 1) < 0.5 ? 'male' : 'female';
+      const body = R.bodies[sex];
+      const P = pose(body, { ...f, sex });
+      skinning(P, body.ibm, skin);
+      const cuts = HAIR_CUTS[sex];
+      const cut = R.hair[cuts[Math.floor(hash(f.seed, 2) * cuts.length)]];
+      const beard = sex === 'male' && hash(f.seed, 3) < 0.3 ? R.hair.beard : null;
+      // the room's strongest lights at them
+      const at = mid(f.J.hpL, f.J.hpR);
       const ls = cam.lights.map(l => { const d2 = (l.x - at[0]) ** 2 + (l.y - at[1]) ** 2 + (l.z - at[2]) ** 2; return { l, w: l.i / (1 + d2 / l.rad2) }; })
         .sort((a, c) => c.w - a.w).slice(0, MAX_LIGHTS);
       const LP = new Float32Array(MAX_LIGHTS * 3), LC = new Float32Array(MAX_LIGHTS * 3), LR = new Float32Array(MAX_LIGHTS), LK = new Float32Array(MAX_LIGHTS);
-      ls.forEach(({ l }, k) => { LP.set([l.x * T, l.y * T, l.z * T], k * 3); LC.set([l.r * l.i, l.g * l.i, l.b * l.i], k * 3); LR[k] = l.rad2 * T * T; LK[k] = l.cone || 0; });
+      ls.forEach(({ l }, k) => { LP.set([l.x, l.y, l.z], k * 3); LC.set([l.r * l.i, l.g * l.i, l.b * l.i], k * 3); LR[k] = l.rad2; LK[k] = l.cone || 0; });
       gl.uniform1i(u.uLN, ls.length);
       gl.uniform3fv(u.uLP, LP); gl.uniform3fv(u.uLC, LC); gl.uniform1fv(u.uLR2, LR); gl.uniform1fv(u.uLK, LK);
+      // their rectangle, and the lens onto it
       gl.viewport(pl.vx, pl.vy, pl.w, pl.h);
       gl.scissor(pl.vx, pl.vy, pl.w, pl.h);
-      gl.uniform4f(u.uBox, pl.bx, pl.by, pl.w, pl.h);
-      gl.uniform2f(u.uVP, pl.vx, pl.vy);
-      gl.uniform3fv(u.uJ, new Float32Array(JOINTS.flatMap(k => b.J[k])));
-      gl.uniformMatrix3fv(u.uTor, false, new Float32Array(b.tor));
-      gl.uniformMatrix3fv(u.uHd, false, new Float32Array(b.hd));
-      gl.uniform3fv(u.uChest, b.chest); gl.uniform3fv(u.uAbd, b.abd); gl.uniform3fv(u.uPelv, b.pelv);
-      gl.uniform3fv(u.uHeadBase, b.headBase);
-      gl.uniform3fv(u.uAnk, new Float32Array([...b.ank[0], ...b.ank[1]]));
-      gl.uniform3fv(u.uHeel, new Float32Array([...b.heel[0], ...b.heel[1]]));
-      gl.uniform3fv(u.uToe, new Float32Array([...b.toe[0], ...b.toe[1]]));
-      gl.uniform3fv(u.uHandE, new Float32Array([...b.handE[0], ...b.handE[1]]));
-      gl.uniform4f(u.uBound, b.c[0], b.c[1], b.c[2], b.rad);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      const zc = dot(cam.f, sub(at, cam.eye));
+      gl.uniformMatrix4fv(u.uVP, false, viewProj(cam, pl.bx, pl.by, pl.w, pl.h, Math.max(0.05, zc - 2.5), zc + 2.5));
+      gl.uniform3fv(u.uEye, cam.eye);
+      gl.uniform4fv(u.uLand, body.land);
+      gl.uniform1f(u.uChestY, body.chestY);
+      gl.uniform3fv(u.uHelmC, body.helmC);
       gl.uniform3fv(u.uSuitC, f.suit); gl.uniform3fv(u.uAccC, f.accent);
-      gl.uniform3fv(u.uSkinC, f.skin); gl.uniform3fv(u.uHairC, f.hair);
+      gl.uniform3fv(u.uSkinTint, [f.skin[0] / SKIN_REF[sex][0], f.skin[1] / SKIN_REF[sex][1], f.skin[2] / SKIN_REF[sex][2]]);
+      gl.uniform3fv(u.uHairC, f.hair);
       gl.uniform1i(u.uVac, f.vac ? 1 : 0);
-      gl.uniform1i(u.uHairStyle, f.hairStyle | 0);
-      gl.uniform1f(u.uBuild, f.build ?? 0.5);
-      gl.uniform1f(u.uSeed, f.seed ?? 0);
-      gl.uniform4fv(u.uOut, f.outline || [0, 0, 0, 0]);
-      gl.uniform1f(u.uOutW, f.outlineW || 0);
-      // a blanket (or the autodoc's sheet) over someone lying down: its footprint and height
+      gl.uniform1i(u.uRigid, 0);
+      const vacGrow = f.vac ? 0.035 * P.k : 0;          // (a vac suit stands off the body)
+      const draws = [{ m: body.meshes.body, part: 0, tex: body.skin, ibm: body.ibm }];
+      if (!f.vac) {
+        draws.push({ m: body.meshes.eyes, part: 1, tex: R.eyeTex, ibm: body.ibm }, { m: body.meshes.brows, part: 2, tex: null, ibm: body.ibm });
+        if (cut) draws.push({ m: cut.vao, part: 3, tex: cut.tex, ibm: cut.ibm });
+        if (beard) draws.push({ m: beard.vao, part: 3, tex: beard.tex, ibm: beard.ibm });
+      } else draws.push({ m: body.helmet, part: 4, tex: null, ibm: body.ibm }, { m: body.pack, part: 5, tex: null, ibm: body.ibm });
+      let lastIbm = null;
+      const drawMesh = (d) => {
+        if (d.ibm !== lastIbm) { gl.uniformMatrix4fv(u.uSkin, false, d.ibm === body.ibm ? skin : skinning(P, d.ibm, other)); lastIbm = d.ibm; }
+        gl.bindVertexArray(d.m.vao);
+        if (d.m.arrays) gl.drawArrays(gl.TRIANGLES, 0, d.m.count);
+        else gl.drawElements(gl.TRIANGLES, d.m.count, d.m.type, 0);
+      };
+      // the edge: the body a little larger, behind itself (the selected one's in the selection colour)
+      if (f.outline && f.outline[3] > 0) {
+        gl.depthMask(false);
+        gl.uniform1i(u.uPart, 7);
+        gl.uniform4fv(u.uOut, f.outline);
+        gl.uniform1f(u.uInflate, (f.outlineW || 1) * zc / cam.s + vacGrow);
+        for (const d of draws) drawMesh(d);
+        gl.depthMask(true);
+      }
+      for (const d of draws) {
+        gl.uniform1i(u.uPart, d.part);
+        gl.uniform1f(u.uInflate, d.part === 0 ? vacGrow : 0);
+        if (d.tex) gl.bindTexture(gl.TEXTURE_2D, d.tex);
+        drawMesh(d);
+      }
+      // a blanket, or the autodoc's sheet, over someone lying down
       if (f.cover) {
-        const P = f.cover.map(p => [p[0] * T, p[1] * T + b.lift, p[2] * T]);
-        const eu = sub(P[1], P[0]), ev = sub(P[3], P[0]);
-        gl.uniform1i(u.uCover, f.coverKind === 'sheet' ? 2 : 1);
-        gl.uniform3fv(u.uCov0, P[0]); gl.uniform3fv(u.uCovU, norm(eu)); gl.uniform3fv(u.uCovV, norm(ev));
-        gl.uniform2f(u.uCovL, len(eu), len(ev));
-        gl.uniform1f(u.uCovY, P[0][1] - 0.05);
-        gl.uniform3fv(u.uCovC, f.coverCol || [0.4, 0.47, 0.56]);
-      } else gl.uniform1i(u.uCover, 0);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.uniform1i(u.uRigid, 1);
+        gl.uniform1i(u.uPart, 6);
+        gl.uniform1f(u.uInflate, 0);
+        gl.uniform3fv(u.uCovC, f.coverKind === 'sheet' ? [0.84, 0.88, 0.9] : f.coverCol || [0.4, 0.47, 0.56]);
+        drawBlanket(gl, blanketMesh(f));
+        gl.uniform1i(u.uRigid, 0);
+      }
       out.push({ canvas: ctx.canvas, sx: pl.vx, sy: ctx.canvas.height - pl.vy - pl.h, w: pl.w, h: pl.h, x: pl.bx, y: pl.by });
     });
     gl.bindVertexArray(null);
@@ -219,31 +543,38 @@ export function renderFigures(cam, figs) {
 // ---- SHADERS ----
 
 const VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+layout(location=2) in vec2 aUV;
+layout(location=3) in uvec4 aJ;
+layout(location=4) in vec4 aW;
+layout(location=5) in vec4 aTag;
+uniform mat4 uSkin[23];
+uniform mat4 uVP;
+uniform float uInflate;
+uniform int uRigid;
+out vec3 vW; out vec3 vN; out vec2 vUV; out vec4 vTag; out vec3 vRest;
 void main() {
-  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+  mat4 M = mat4(1.0);
+  if (uRigid == 0) {
+    float ws = max(aW.x + aW.y + aW.z + aW.w, 1e-4);
+    M = (uSkin[aJ.x] * aW.x + uSkin[aJ.y] * aW.y + uSkin[aJ.z] * aW.z + uSkin[aJ.w] * aW.w) / ws;
+  }
+  vec3 n = normalize(mat3(M) * aNrm);
+  vec4 w = M * vec4(aPos, 1.0);
+  w.xyz += n * uInflate;
+  vW = w.xyz; vN = n; vUV = aUV; vTag = aTag; vRest = aPos;
+  gl_Position = uVP * w;
 }`;
 
 const FS = `#version 300 es
 precision highp float;
-uniform vec3 uEye, uR, uU, uF;
-uniform float uS;
-uniform vec2 uO;
-uniform vec4 uBox;
-uniform vec2 uVP;
-uniform vec3 uJ[14];
-uniform mat3 uTor, uHd;
-uniform vec3 uChest, uAbd, uPelv, uHeadBase;
-uniform vec3 uAnk[2], uHeel[2], uToe[2], uHandE[2];
-uniform vec4 uBound;
-uniform vec3 uSuitC, uAccC, uSkinC, uHairC;
-uniform int uVac, uHairStyle, uCover;
-uniform float uBuild, uSeed;
-uniform vec4 uOut;
-uniform float uOutW;
-uniform vec3 uCov0, uCovU, uCovV, uCovC;
-uniform vec2 uCovL;
-uniform float uCovY;
+in vec3 vW; in vec3 vN; in vec2 vUV; in vec4 vTag; in vec3 vRest;
+uniform int uPart, uVac;
+uniform sampler2D uTex;
+uniform vec3 uEye, uSuitC, uAccC, uSkinTint, uHairC, uCovC, uHelmC;
+uniform vec4 uLand, uOut;
+uniform float uChestY;
 uniform int uLN;
 uniform vec3 uLP[${MAX_LIGHTS}], uLC[${MAX_LIGHTS}];
 uniform float uLR2[${MAX_LIGHTS}], uLK[${MAX_LIGHTS}];
@@ -251,136 +582,16 @@ uniform vec3 uAmb, uTint;
 uniform float uExp, uFloor;
 out vec4 frag;
 
-// joints
-#define HD uJ[0]
-#define NK uJ[1]
-#define SHL uJ[2]
-#define SHR uJ[3]
-#define ELL uJ[4]
-#define ELR uJ[5]
-#define HAL uJ[6]
-#define HAR uJ[7]
-#define HPL uJ[8]
-#define HPR uJ[9]
-#define KNL uJ[10]
-#define KNR uJ[11]
-
-// materials
-const float M_SUIT = 1.0, M_SKIN = 2.0, M_HAIR = 3.0, M_BOOT = 4.0, M_HELM = 5.0, M_PACK = 6.0, M_GLOVE = 7.0, M_COVER = 8.0;
-
-float smin(float a, float b, float k) { float h = max(k - abs(a - b), 0.0) / k; return min(a, b) - h * h * k * 0.25; }
-float sdEll(vec3 p, vec3 r) { float k0 = length(p / r); float k1 = length(p / (r * r)); return k0 * (k0 - 1.0) / max(k1, 1e-6); }
-// a cone with round ends between a (radius r1) and b (radius r2)
-float sdRC(vec3 p, vec3 a, vec3 b, float r1, float r2) {
-  vec3 ba = b - a; float l2 = dot(ba, ba); float rr = r1 - r2; float a2 = l2 - rr * rr; float il2 = 1.0 / l2;
-  vec3 pa = p - a; float y = dot(pa, ba); float z = y - l2;
-  vec3 xv = pa * l2 - ba * y; float x2 = dot(xv, xv);
-  float y2 = y * y * l2; float z2 = z * z * l2;
-  float k = sign(rr) * rr * rr * x2;
-  if (sign(z) * a2 * z2 > k) return sqrt(x2 + z2) * il2 - r2;
-  if (sign(y) * a2 * y2 < k) return sqrt(x2 + y2) * il2 - r1;
-  return (sqrt(x2 * a2 * il2) + y * rr) * il2 - r1;
-}
-float sdRBox(vec3 p, vec3 b, float r) { vec3 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r; }
 float hash3(vec3 p) { p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419)); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 float vnoise(vec3 p) {
   vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(mix(hash3(i), hash3(i + vec3(1,0,0)), f.x), mix(hash3(i + vec3(0,1,0)), hash3(i + vec3(1,1,0)), f.x), f.y),
              mix(mix(hash3(i + vec3(0,0,1)), hash3(i + vec3(1,0,1)), f.x), mix(hash3(i + vec3(0,1,1)), hash3(i + vec3(1,1,1)), f.x), f.y), f.z);
 }
-// where a point is along a segment (0 at a, 1 at b)
-float along(vec3 p, vec3 a, vec3 b) { vec3 ba = b - a; return clamp(dot(p - a, ba) / dot(ba, ba), 0.0, 1.0); }
-
-float LS, TS;     // limb and torso scale (a vac suit is bulkier)
-
-float headD(vec3 p, out float hairD) {
-  vec3 q = transpose(uHd) * (p - HD);
-  float cran = sdEll(q - vec3(0.0, 0.012, -0.012), vec3(0.077, 0.097, 0.098));
-  float jaw = sdEll(q - vec3(0.0, -0.046, 0.024), vec3(0.058, 0.056, 0.066));
-  float d = smin(cran, jaw, 0.04);
-  d = smin(d, length((q - vec3(0.0, -0.012, 0.093)) * vec3(1.5, 1.0, 1.0)) / 1.5 - 0.013, 0.014);
-  vec3 e = vec3(abs(q.x), q.y, q.z) - vec3(0.078, -0.006, -0.008);
-  d = smin(d, length(e * vec3(2.2, 1.0, 1.4)) / 2.2 - 0.02 / 2.2 * 2.0, 0.01);
-  // hair: a cap above a hairline that runs from the brow down to the nape, by cut
-  hairD = 1e9;
-  if (uHairStyle != 3 || uVac == 1) {
-    float grow = uHairStyle == 4 ? 0.016 : uHairStyle == 3 ? 0.002 : 0.008;
-    vec3 c = q - vec3(0.0, 0.016, -0.016);
-    float cap = sdEll(c, vec3(0.077, 0.097, 0.098) + grow);
-    if (uHairStyle == 4) cap -= 0.006 * vnoise(q * 90.0);
-    float cut = (q.y - 0.042 - 0.55 * (q.z - 0.09)) * 0.87;
-    float h = max(cap, -cut);
-    if (uHairStyle == 1) h = smin(h, sdRC(q, vec3(0.0, 0.01, -0.1), vec3(0.0, -0.13, -0.115), 0.03, 0.016), 0.02);
-    if (uHairStyle == 2) h = smin(h, length(q - vec3(0.0, 0.045, -0.105)) - 0.038, 0.015);
-    hairD = h;
-  }
-  return d;
-}
-
-// the scene: distance and material
-vec2 map(vec3 p) {
-  // the torso
-  mat3 iT = transpose(uTor);
-  // a ribcage that tapers to the waist, the belly, the pelvis; the shoulders' caps a little inside the joints
-  float dT = sdEll(iT * (p - uChest), vec3(0.158 + 0.024 * uBuild, 0.15, 0.105) * TS);
-  dT = smin(dT, sdEll(iT * (p - uAbd), vec3(0.128 + 0.016 * uBuild, 0.13, 0.092) * TS), 0.045);
-  dT = smin(dT, sdEll(iT * (p - uPelv), vec3(0.148 + 0.014 * (1.0 - uBuild), 0.095, 0.098) * TS), 0.045);
-  vec3 cL = mix(SHL, uChest, 0.12), cR = mix(SHR, uChest, 0.12);
-  dT = smin(dT, length(p - cL) - 0.049 * LS, 0.04);
-  dT = smin(dT, length(p - cR) - 0.049 * LS, 0.04);
-  // arms and legs: tapered from joint to joint
-  float dA = smin(sdRC(p, SHL, ELL, 0.043 * LS, 0.034 * LS), sdRC(p, ELL, HAL, 0.035 * LS, 0.025 * LS), 0.015);
-  dA = min(dA, smin(sdRC(p, SHR, ELR, 0.043 * LS, 0.034 * LS), sdRC(p, ELR, HAR, 0.035 * LS, 0.025 * LS), 0.015));
-  float dL = smin(sdRC(p, HPL, KNL, 0.072 * LS, 0.048 * LS), sdRC(p, KNL, uAnk[0], 0.05 * LS, 0.034 * LS), 0.025);
-  dL = min(dL, smin(sdRC(p, HPR, KNR, 0.072 * LS, 0.048 * LS), sdRC(p, KNR, uAnk[1], 0.05 * LS, 0.034 * LS), 0.025));
-  float dHand = min(sdRC(p, HAL, uHandE[0], 0.026 * LS, 0.019 * LS), sdRC(p, HAR, uHandE[1], 0.026 * LS, 0.019 * LS));
-  float dBoot = min(sdRC(p, uHeel[0], uToe[0], 0.046 * LS, 0.038 * LS), sdRC(p, uHeel[1], uToe[1], 0.046 * LS, 0.038 * LS));
-  float dNeck = sdRC(p, NK - uTor[1] * 0.05, uHeadBase, 0.052, 0.046);
-  float hairD;
-  float dHead = headD(p, hairD);
-  float body = smin(dT, dA, 0.025);
-  body = smin(body, dL, 0.03);
-  float d = body, m = M_SUIT;
-  float sk = smin(dNeck, dHead, 0.03);
-  if (uVac == 1) {
-    // the helmet over the head, the pack on the back
-    float helm = length(p - HD - uHd[1] * 0.012 - uHd[2] * 0.012) - 0.158;
-    helm = smin(helm, sdRC(p, NK - uTor[1] * 0.03, HD - uHd[1] * 0.06, 0.1, 0.11), 0.03);
-    float pack = sdRBox(iT * (p - uChest) - vec3(0.0, -0.06, -0.185 * TS), vec3(0.15, 0.24, 0.075), 0.035);
-    d = smin(d, pack, 0.02); if (pack < body) m = M_PACK;
-    if (helm < d) { d = min(d, helm); m = M_HELM; } else d = smin(d, helm, 0.015);
-    if (dHand < d) m = M_GLOVE; d = smin(d, dHand, 0.02);
-    if (dBoot < d) m = M_BOOT; d = smin(d, dBoot, 0.03);
-  } else {
-    if (sk < d) m = M_SKIN; d = smin(d, sk, 0.025);
-    if (hairD < d) m = M_HAIR; d = min(d, hairD);
-    if (dHand < d) m = M_SKIN; d = smin(d, dHand, 0.015);
-    if (dBoot < d + 0.004) m = M_BOOT; d = smin(d, dBoot, 0.025);
-  }
-  if (uCover > 0) {
-    // the blanket lies over the shape of them, inside its footprint
-    vec3 v = p - uCov0;
-    vec2 ab = vec2(dot(v, uCovU), dot(v, uCovV));
-    vec2 q = abs(ab - uCovL * 0.5) - (uCovL * 0.5 - 0.03);
-    float foot = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 0.03;
-    float slab = abs(p.y - uCovY) - 0.015;
-    float drape = smin(slab, body - (uCover == 1 ? 0.04 : 0.02), 0.09);
-    drape += 0.006 * sin(ab.x * 38.0 + 2.0 * sin(ab.y * 11.0)) * smoothstep(0.0, 0.1, ab.x);
-    float cv = max(drape, foot);
-    if (cv < d) m = M_COVER;
-    d = min(d, cv);
-  }
-  return vec2(d, m);
-}
-
-vec3 normalAt(vec3 p, float e) {
-  vec2 k = vec2(1.0, -1.0);
-  return normalize(k.xyy * map(p + k.xyy * e).x + k.yyx * map(p + k.yyx * e).x + k.yxy * map(p + k.yxy * e).x + k.xxx * map(p + k.xxx * e).x);
-}
-
 float tone(float v) { return v < 0.82 ? v : 0.82 + 0.18 * (1.0 - exp(-(v - 0.82) * 5.5)); }
+float band(float x, float a, float b) { float w = fwidth(x) * 0.75 + 1e-4; return smoothstep(a - w, a + w, x) * (1.0 - smoothstep(b - w, b + w, x)); }
 
-// the light the room throws on a point: as roomcam.js lights its plating, with the downlights pooling below
+// the room's light on a point (as roomcam.js lights its plating, the downlights pooling below)
 vec3 roomLight(vec3 p, vec3 N, vec3 V, float shin, out vec3 spec) {
   vec3 E = uAmb * (0.75 + 0.25 * N.y);
   spec = vec3(0.0);
@@ -399,136 +610,90 @@ vec3 roomLight(vec3 p, vec3 N, vec3 V, float shin, out vec3 spec) {
   return E * uExp;
 }
 
+// the jumpsuit, worked from where a point lies on the body at rest (metres, the body facing +z, its left +x)
+vec3 jumpsuit(vec3 q, out float ks) {
+  float pelvisY = uLand.x, collarY = uLand.y, armY = uLand.z, wristX = uLand.w;
+  vec3 c = uSuitC, dk = uSuitC * 0.6;
+  ks = 0.05;
+  float front = smoothstep(0.02, 0.06, q.z);
+  float ax = abs(q.x);
+  // the collar, a band round the neck
+  c = mix(c, dk * 1.15, band(q.y, collarY - 0.035, collarY + 0.01));
+  // a zip down the front from the collar to the belt
+  float zip = band(ax, -1.0, 0.006) * band(q.y, pelvisY + 0.11, collarY) * front;
+  c = mix(c, vec3(0.42), zip); ks += 0.3 * zip;
+  // the belt and its buckle
+  float belt = band(q.y, pelvisY + 0.065, pelvisY + 0.11) * step(ax, 0.3);
+  c = mix(c, vec3(0.1, 0.1, 0.11), belt); ks += 0.1 * belt;
+  float buckle = belt * band(ax, -1.0, 0.03) * front;
+  c = mix(c, vec3(0.62, 0.63, 0.65), buckle); ks += 0.5 * buckle;
+  // a name tape high on one side of the chest, the department's patch on the other (above the bust)
+  float hi = front * step(0.05, q.z);
+  c = mix(c, vec3(0.82, 0.81, 0.76), band(q.y, uChestY + 0.075, uChestY + 0.1) * hi * band(q.x, 0.04, 0.12));
+  c = mix(c, uAccC, band(q.y, uChestY + 0.065, uChestY + 0.11) * hi * band(q.x, -0.11, -0.06));
+  // the department's patch on each shoulder (the arm's outside: its top, at rest)
+  c = mix(c, uAccC, band(ax, 0.26, 0.34) * step(armY + 0.025, q.y) * step(q.y, collarY));
+  // cuffs at the wrists, panels on the thighs' outsides
+  c = mix(c, dk, band(ax, wristX - 0.06, wristX + 0.01) * step(armY - 0.1, q.y));
+  c = mix(c, mix(c, dk, 0.45), band(q.y, pelvisY - 0.4, pelvisY - 0.18) * step(0.15, ax) * step(q.z, 0.06));
+  // seams down the sides
+  c *= 1.0 - 0.25 * band(abs(q.z + 0.01), -1.0, 0.004) * step(q.y, collarY - 0.05) * step(0.12, ax);
+  return c;
+}
+
 void main() {
-  LS = uVac == 1 ? 1.38 : 1.0;
-  TS = uVac == 1 ? 1.16 : 1.0;
-  vec2 px = vec2(uBox.x + gl_FragCoord.x - uVP.x, 0.0);
-  px.y = uBox.y + uBox.w - (gl_FragCoord.y - uVP.y);
-  vec3 rd = normalize(uR * ((px.x - uO.x) / uS) + uU * ((uO.y - px.y) / uS) + uF);
-  vec3 ro = uEye;
-  // into the figure's bounding sphere
-  vec3 oc = ro - uBound.xyz;
-  float b = dot(oc, rd), c = dot(oc, oc) - uBound.w * uBound.w;
-  float disc = b * b - c;
-  if (disc <= 0.0) { frag = vec4(0.0); return; }
-  float sq = sqrt(disc);
-  float t = max(-b - sq, 0.0), tEnd = -b + sq;
-  float minA = 1e9, tMin = t;
-  bool hit = false;
-  vec2 res = vec2(0.0);
-  for (int i = 0; i < 110; i++) {
-    vec3 p = ro + rd * t;
-    res = map(p);
-    float a = res.x / t;
-    if (a < minA) { minA = a; tMin = t; }
-    if (res.x < 0.25 * t / uS) { hit = true; break; }
-    t += res.x * 0.92;
-    if (t > tEnd) break;
-  }
-  float pxd = hit ? 0.0 : minA * uS;              // pixels from the silhouette
-  float cov = clamp(1.0 - pxd, 0.0, 1.0);
-  float outA = uOut.a * clamp(uOutW + 0.5 - pxd, 0.0, 1.0);
-  if (cov <= 0.0 && outA <= 0.0) { frag = vec4(0.0); return; }
-  vec3 col = vec3(0.0);
-  if (cov > 0.0) {
-    float th = hit ? t : tMin;
-    vec3 p = ro + rd * th;
-    if (!hit) res = map(p);
-    float mat = res.y;
-    vec3 N = normalAt(p, max(0.0012, 0.6 * th / uS));
-    vec3 V = -rd;
-    mat3 iT = transpose(uTor);
-    vec3 qt = iT * (p - uChest), qp = iT * (p - uPelv);
-    vec3 alb = uSuitC;
-    float shin = 14.0, ks = 0.05;
-    float bump = 0.0;
-    if (mat == M_SUIT) {
-      if (uVac == 1) {
-        alb = vec3(0.78, 0.8, 0.83);
-        // the department's band across the chest; bellows at the knees and elbows; a dark seal ring at the neck
-        if (abs(qt.y + 0.01) < 0.03 && qt.z > -0.02) alb = uAccC;
-        float bel = 0.0;
-        bel = max(bel, 1.0 - smoothstep(0.0, 0.05, min(length(p - ELL), length(p - ELR))));
-        bel = max(bel, 1.0 - smoothstep(0.0, 0.07, min(length(p - KNL), length(p - KNR))));
-        alb *= 1.0 - 0.35 * bel * step(0.5, fract(dot(p, vec3(1.0)) * 45.0));
-        ks = 0.12; shin = 22.0;
-      } else {
-        // the jumpsuit: collar, zip, belt and buckle, a name tape, the department's patches, cuffs, pockets
-        vec3 dk = uSuitC * 0.62;
-        float front = step(0.04, qt.z);
-        if (front > 0.0 && abs(qt.x) < 0.0055 && qt.y > -0.36 && qt.y < 0.13) { alb = mix(dk, vec3(0.7), 0.25); ks = 0.25; shin = 40.0; }
-        if (length(p - NK) < 0.085 && qt.y > 0.07) alb = dk * 1.1;
-        if (qp.y > 0.055 && qp.y < 0.095) { alb = vec3(0.12, 0.12, 0.13); ks = 0.12; if (abs(qp.x) < 0.024 && qp.z > 0.05) { alb = vec3(0.62, 0.64, 0.66); ks = 0.6; shin = 60.0; } }
-        if (front > 0.0 && qt.z > 0.07 && qt.x < -0.035 && qt.x > -0.125 && qt.y > -0.012 && qt.y < 0.022) alb = vec3(0.86, 0.85, 0.8);
-        if (front > 0.0 && qt.z > 0.07 && qt.x > 0.045 && qt.x < 0.105 && qt.y > -0.02 && qt.y < 0.04) alb = uAccC;
-        for (int s = 0; s < 2; s++) {
-          vec3 sh = s == 0 ? SHL : SHR, el = s == 0 ? ELL : ELR, ha = s == 0 ? HAL : HAR, hp = s == 0 ? HPL : HPR, kn = s == 0 ? KNL : KNR;
-          vec3 out3 = normalize(sh - uChest);
-          float ua = along(p, sh, el);
-          if (ua > 0.15 && ua < 0.4 && dot(p - mix(sh, el, ua), out3) > 0.02 && length(p - mix(sh, el, ua)) < 0.07) alb = uAccC;
-          float fa = along(p, el, ha);
-          if (fa > 0.84 && length(p - mix(el, ha, fa)) < 0.06) alb = dk;
-          float th2 = along(p, hp, kn);
-          vec3 outL = normalize(hp - uPelv);
-          if (th2 > 0.4 && th2 < 0.68 && dot(p - mix(hp, kn, th2), outL) > 0.035) alb = mix(alb, dk, 0.55);
-        }
-        ks = 0.04; shin = 10.0;
-        bump = 1.0;
-      }
-    } else if (mat == M_SKIN) {
-      alb = uSkinC; ks = 0.07; shin = 18.0;
-      // the face: brows, eyes, the mouth, when it shows
-      vec3 q = transpose(uHd) * (p - HD);
-      if (q.z > 0.045 && length(p - HD) < 0.13) {
-        vec2 e = vec2(abs(q.x) - 0.031, q.y - 0.006);
-        float eye = length(e * vec2(1.0, 1.8));
-        if (eye < 0.011) alb = mix(alb * 0.25, vec3(0.06), 0.5);
-        if (abs(q.y - 0.026) < 0.006 && abs(q.x) > 0.012 && abs(q.x) < 0.05) alb = mix(alb, uHairC, 0.75);
-        if (abs(q.y + 0.052) < 0.004 && abs(q.x) < 0.022) alb *= 0.6;
-      }
-    } else if (mat == M_HAIR) {
-      alb = uHairC; ks = 0.12; shin = 28.0;
-      vec3 q = transpose(uHd) * (p - HD);
-      alb *= 0.85 + 0.3 * vnoise(vec3(q.x * 180.0, q.y * 30.0, q.z * 180.0));
-    } else if (mat == M_BOOT) {
-      alb = uVac == 1 ? vec3(0.42, 0.44, 0.47) : vec3(0.1, 0.1, 0.11); ks = 0.25; shin = 36.0;
-    } else if (mat == M_GLOVE) {
-      alb = vec3(0.46, 0.48, 0.5); ks = 0.1;
-    } else if (mat == M_PACK) {
-      alb = vec3(0.58, 0.61, 0.64); ks = 0.18; shin = 30.0;
-      if (abs(qt.y + 0.06) < 0.02) alb = uAccC * 0.8;
-    } else if (mat == M_HELM) {
-      vec3 q = transpose(uHd) * (p - HD);
-      alb = vec3(0.86, 0.88, 0.9); ks = 0.35; shin = 50.0;
-      if (q.z > 0.035 && q.y > -0.095 && q.y < 0.075 && abs(q.x) < 0.125) { alb = vec3(0.03, 0.04, 0.05); ks = 1.4; shin = 140.0; }
-      if (length(p - NK) < 0.12 && q.y < -0.09) alb = vec3(0.4, 0.42, 0.45);
-    } else if (mat == M_COVER) {
-      alb = uCover == 2 ? vec3(0.84, 0.88, 0.9) : uCovC; ks = 0.03; shin = 8.0;
-      bump = 0.6;
-    }
-    if (bump > 0.0) {
+  if (uPart == 7) { frag = vec4(uOut.rgb * uOut.a, uOut.a); return; }
+  vec3 N = normalize(vN);
+  vec3 V = normalize(uEye - vW);
+  if (dot(N, V) < 0.0) N = -N;
+  vec3 alb = uSuitC;
+  float ks = 0.05, shin = 12.0;
+  float skinK = 0.0;
+  if (uPart == 0) {
+    float skin = smoothstep(0.35, 0.65, vTag.x), boot = smoothstep(0.35, 0.65, vTag.y), hand = smoothstep(0.35, 0.65, vTag.z);
+    vec3 sk = min(texture(uTex, vUV).rgb * uSkinTint, vec3(1.0));
+    if (uVac == 1) {
+      // a vac suit: white, the department's band across the chest, grey gloves and boots
+      alb = vec3(0.8, 0.82, 0.85);
+      alb = mix(alb, uAccC, band(vRest.y, uChestY - 0.03, uChestY + 0.02) * step(0.0, vRest.z));
+      alb = mix(alb, vec3(0.45, 0.47, 0.5), max(hand, boot));
+      ks = 0.12; shin = 22.0;
+    } else {
+      float k2;
+      alb = jumpsuit(vRest, k2); ks = k2;
+      skinK = max(skin, hand);
+      alb = mix(alb, sk, skinK);
+      alb = mix(alb, vec3(0.09, 0.09, 0.1), boot);
+      if (boot > 0.5) { ks = 0.25; shin = 36.0; }
+      if (skinK > 0.5) { ks = 0.08; shin = 18.0; }
       // fabric: a little creasing
-      vec3 g = vec3(vnoise(p * 26.0), vnoise(p * 26.0 + 7.1), vnoise(p * 26.0 + 13.7)) - 0.5;
-      N = normalize(N + g * 0.14 * bump);
+      if (max(skinK, boot) < 0.5) N = normalize(N + (vec3(vnoise(vRest * 60.0), vnoise(vRest * 60.0 + 7.1), vnoise(vRest * 60.0 + 13.7)) - 0.5) * 0.12);
     }
-    // soft occlusion in the creases (armpits, between the legs, under the chin)
-    float occ = 0.0, w = 1.0;
-    for (int i = 1; i <= 5; i++) { float h = 0.014 * float(i); occ += (h - map(p + N * h).x) * w; w *= 0.72; }
-    float ao = clamp(1.0 - 3.2 * occ, 0.35, 1.0);
-    vec3 spec;
-    vec3 E = roomLight(p, N, V, shin, spec);
-    // the camera's gain: a person readable in a dark room, still shaped by the light
-    vec3 lit;
-    float form = 0.62 + 0.38 * clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
-    for (int i = 0; i < 3; i++) lit[i] = max(uFloor * form, min(1.0, tone(E[i])));
-    lit *= uTint;
-    col = alb * lit * ao + spec * ks * uExp * ao;
-    // skin and the blanket: light that soaks in round the edges
-    if (mat == M_SKIN) col += alb * vec3(0.12, 0.04, 0.02) * (1.0 - abs(dot(N, V)));
-    col = min(col, vec3(1.0));
+  } else if (uPart == 1) {
+    alb = texture(uTex, vUV).rgb; ks = 0.6; shin = 80.0;
+  } else if (uPart == 2) {
+    alb = uHairC * 0.9; ks = 0.04;
+  } else if (uPart == 3) {
+    float l = dot(texture(uTex, vUV).rgb, vec3(0.3, 0.55, 0.15));
+    alb = mix(vec3(dot(uHairC, vec3(0.3, 0.55, 0.15))), uHairC, 0.8) * (0.5 + 1.0 * l); ks = 0.14; shin = 30.0;
+  } else if (uPart == 4) {
+    vec3 q = vRest - uHelmC;
+    alb = vec3(0.86, 0.88, 0.9); ks = 0.35; shin = 50.0;
+    if (q.z > 0.045 && q.y > -0.1 && q.y < 0.075 && abs(q.x) < 0.13) { alb = vec3(0.03, 0.04, 0.05); ks = 1.4; shin = 140.0; }
+  } else if (uPart == 5) {
+    alb = vec3(0.58, 0.61, 0.64); ks = 0.18; shin = 30.0;
+  } else if (uPart == 6) {
+    alb = uCovC * (0.92 + 0.12 * vnoise(vW * 18.0)); ks = 0.03; shin = 8.0;
   }
-  // premultiplied: the figure over its outline
-  vec3 pre = col * cov + uOut.rgb * outA * (1.0 - cov);
-  float a = cov + outA * (1.0 - cov);
-  frag = vec4(pre, a);
+  vec3 spec;
+  vec3 E = roomLight(vW, N, V, shin, spec);
+  // the camera's gain: a person readable in a dark room, still shaped by the light
+  vec3 lit;
+  float form = 0.62 + 0.38 * clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+  for (int i = 0; i < 3; i++) lit[i] = max(uFloor * form, min(1.0, tone(E[i])));
+  lit *= uTint;
+  vec3 col = alb * lit + spec * ks * uExp;
+  // skin: light that soaks in round the edges
+  col += alb * vec3(0.1, 0.035, 0.02) * (1.0 - abs(dot(N, V))) * skinK;
+  frag = vec4(min(col, vec3(1.0)), 1.0);
 }`;
