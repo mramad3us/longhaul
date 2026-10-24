@@ -83,6 +83,9 @@ export function showOnCamera(state, crewId) {
   if (f) enlarge({ deck: f.deck, id: `CAM-${String(f.deck + 1).padStart(2, '0')}`, label: f.label });
 }
 
+/** Where the people on the large camera are (CSS px over its canvas): for picking, and for the tools that look at them. */
+export function largeCamera() { return big ? { canvas: big.cam.canvas, hits: big.cam.hits || [], deck: big.cam.deck } : null; }
+
 function deckOf(state, sy) {
   let y = 0;
   for (let i = 0; i < state.ship.decks.length; i++) {

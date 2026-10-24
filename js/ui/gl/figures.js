@@ -11,18 +11,22 @@
 //
 // Posing: the torso (pelvis and spine) turns as one to the line from the
 // hips to the shoulders, facing where the person faces; the neck and head
-// to the head's joints; each arm and leg is aimed joint to joint, its elbow
-// or knee bending the way that limb bends (the hinge worked from the three
-// joints, or from which way the body faces when the limb is straight); the
-// feet point the way the person does. The body keeps its own bone lengths,
-// placed by its hips.
+// to the head's joints. Each arm and leg reaches by two-bone IK for the
+// posture's hand or ankle at the body's own limb lengths, the elbow or knee
+// bending toward where the posture has it (and the way that joint bends);
+// a body down, pinned, thrown or adrift lies its limbs the posture's way
+// instead, aimed joint to joint. Feet on a floor are sole-flat, the way the
+// person faces; lying, along the shin. The body keeps its own bone lengths,
+// placed by its hips, or on their feet by its soles.
 //
 // Dressing: the body is tagged at rest (skin above the collar and on the
 // hands, boots below the ankles: the converter) and shaded as a jumpsuit
 // in the department's colour between them, with its details worked from
 // where a point lies on the body at rest (the collar, a zip, the belt and
 // buckle, a name tape, the department's patches on chest and shoulder,
-// cuffs, thigh panels). Skin is the kit's own texture, toned; hair one of
+// cuffs, thigh panels), and the wounds the sim gives each part of the
+// body (blood wet on skin and soaked dark into cloth, char from burns, the
+// pallor of the dead). Skin is the kit's own texture, toned; hair one of
 // the kit's cuts in the person's colour. A vac suit is the same body a
 // little bulkier, white, with gloves and boots, a helmet and its visor, the
 // life-support pack. Someone asleep is under a blanket that lies over the
@@ -46,13 +50,13 @@ import { sharedGL, beginRender, program, onContextLost } from './gl.js';
 
 /** Metres in a room tile (roomcam.js: a person about 1.15 tiles, 1.75 m). */
 export const TILE_M = 1.52;
-const MAX_LIGHTS = 16;
+export const MAX_LIGHTS = 16;
 const ATLAS_W = 2048;
 const HEIGHT_TILES = { male: 1.17, female: 1.11 };                     // how tall each body stands, in tiles
 const SKIN_REF = { male: [0.657, 0.467, 0.325], female: [0.672, 0.488, 0.338] };   // the kit's skin at the cheeks (sRGB)
 // (the kit's long cut is a solid sheet down the back, a cape at a distance: only now and then)
 const HAIR_CUTS = { male: ['simpleparted', 'buzzed', 'simpleparted', 'buzzed'], female: ['buns', 'simpleparted', 'buzzedfemale', 'buns', 'simpleparted', 'long'] };
-const LIE_LIFT = 0.075;                // tiles: a body lying down rests on its back, its joints this far off the mattress
+export const LIE_LIFT = 0.075;               // tiles: a body lying down rests on its back, its joints this far off the mattress
 const ASSETS = new URL('../../../assets/crew/', import.meta.url);
 
 let R = null;
@@ -261,7 +265,7 @@ const transpose = (M) => [[M[0][0], M[1][0], M[2][0]], [M[0][1], M[1][1], M[2][1
 export function pose(body, f, rig = R) {
   const J = rig.J, parents = rig.parents;
   const k = (HEIGHT_TILES[f.sex] || 1.15) / body.height;
-  const lift = f.kind === 'lying' || f.kind === 'down' ? LIE_LIFT : 0;
+  const lift = f.kind === 'lying' || f.kind === 'down' || f.kind === 'pinned' ? LIE_LIFT : 0;
   // the figure's joints, in model metres in the room
   const T = {};
   for (const n of ['hd', 'nk', 'shL', 'shR', 'elL', 'elR', 'haL', 'haR', 'hpL', 'hpR', 'knL', 'knR', 'ftL', 'ftR']) { const v = f.J[n]; T[n] = [v[0] / k, (v[1] + lift) / k, v[2] / k]; }
@@ -269,6 +273,7 @@ export function pose(body, f, rig = R) {
   const idx = (n) => J.indexOf(n);
   const rest = body.rest;
   const P = (n) => restPos(rest[idx(n)]);
+  const bone = (a, b) => len(sub(P(b), P(a)));
   // the torso turns as one: up from the hips to the shoulders, facing where the person does
   const shM = mid(T.shL, T.shR), hpM = mid(T.hpL, T.hpR);
   const up = norm(sub(shM, hpM));
@@ -283,54 +288,96 @@ export function pose(body, f, rig = R) {
   const Rh = carry(frame(restNeck, [0, 0, 1]), frame(hup, square(face, hup, fwd)));
   const nup = norm(add(up, hup));
   const Rn = carry(frame(restNeck, [0, 0, 1]), frame(nup, square(face, nup, fwd)));
-  // a limb aimed joint to joint, bending about its hinge: from the three joints, or (straight) from the facing
-  const limb = (a, b, c, restA, restB, restC, side) => {
-    const d1 = sub(b, a), d2 = sub(c, b);
-    let n = cross(d1, d2);
-    if (len(n) < 0.08 * len(d1) * len(d2)) n = cross(d1, mul(fwd, side));
-    const r1 = sub(restB, restA), r2 = sub(restC, restB);
-    return [carry(frame(r1, cross(r1, [0, 0, side])), frame(d1, n)), carry(frame(r2, cross(r2, [0, 0, side])), frame(d2, n))];
-  };
   const W = new Array(J.length);
   const pos = new Array(J.length);
   const set = (n, Rw) => { W[idx(n)] = rmul(Rw, restRot(rest[idx(n)])); };
   for (const n of ['root', 'pelvis', 'spine_01', 'spine_02', 'spine_03']) set(n, Rt);
   set('neck_01', Rn); set('Head', Rh);
+  // the trunk first: down from the torso (the clavicles riding the chest), at the body's own bone lengths
+  const LIMB = new Set(['upperarm', 'lowerarm', 'hand', 'thigh', 'calf', 'foot', 'ball'].flatMap(n => [idx(`${n}_l`), idx(`${n}_r`)]));
+  const trunk = (j) => !LIMB.has(j);
+  for (let j = 0; j < J.length; j++) {
+    const p = parents[j];
+    if (p >= 0 && !trunk(p)) continue;
+    if (!W[j] && trunk(j)) W[j] = rmul(W[p], rmul(transpose(restRot(rest[p])), restRot(rest[j])));
+    pos[j] = p < 0 ? [0, 0, 0] : add(pos[p], rot(W[p], body.local[j]));
+  }
+  // placed by the hips: the thighs' heads between the figure's hips
+  const shift = sub(hpM, mid(pos[idx('thigh_l')], pos[idx('thigh_r')]));
+  // where each foot is to be: the ankle over the posture's foot point, as high off what it stands on as the body's ankle
+  const ankleUp = P('foot_l')[1] - 0.015;
+  const onFeet = f.kind === 'stand' || f.kind === 'brace' || f.kind === 'seat' || f.kind === 'fall';
+  // (lying down, the posture's foot point is the ankle itself)
+  const ankleOf = (s) => onFeet ? add(T['ft' + s], [0, ankleUp - 0.005 / k, 0]) : T['ft' + s];
+  const legLen = bone('thigh_l', 'calf_l') + bone('calf_l', 'foot_l');
+  if (f.kind === 'stand' || f.kind === 'brace') {
+    // on their feet: the hips as high as legs (nearly straight standing, bent bracing) put them over their feet
+    const straight = f.kind === 'brace' ? 0.8 : 0.985;
+    let rise = Infinity;
+    for (const side of ['l', 'r']) {
+      const s = side === 'l' ? L : Rr;
+      const hip = add(pos[idx(`thigh_${side}`)], shift), A = ankleOf(s);
+      const h = Math.hypot(hip[0] - A[0], hip[2] - A[2]);
+      rise = Math.min(rise, A[1] + Math.sqrt(Math.max(0, (straight * legLen) ** 2 - h * h)) - hip[1]);
+    }
+    shift[1] += rise;
+  }
+  for (let j = 0; j < J.length; j++) if (pos[j]) pos[j] = add(pos[j], shift);
+  // the limbs, by two-bone IK: to the posture's hands and ankles at the body's own lengths, the elbow or knee
+  // bending toward where the posture has it (and the way that joint bends: elbows back, knees forward)
+  const solve = (rootJ, midJ, endJ, target, pole, natural, flex) => {
+    const a = pos[idx(rootJ)];
+    const l1 = bone(rootJ, midJ), l2 = bone(midJ, endJ);
+    const d = sub(target, a), dl = len(d);
+    const dir = dl > 1e-6 ? mul(d, 1 / dl) : natural;
+    const reach = Math.min(l1 + l2 - 1e-4, Math.max(Math.abs(l1 - l2) + 1e-3, dl));
+    const cosA = Math.max(-1, Math.min(1, (l1 * l1 + reach * reach - l2 * l2) / (2 * l1 * reach)));
+    const sinA = Math.sqrt(1 - cosA * cosA);
+    const off = (v) => sub(v, mul(dir, dot(v, dir)));
+    const pp = off(sub(pole, a)), nat = off(natural);
+    let b = add(pp, mul(nat, 0.35 * len(pp) + 1e-4));
+    b = len(b) > 1e-6 ? norm(b) : len(nat) > 1e-6 ? norm(nat) : square([0, 1, 0], dir, [1, 0, 0]);
+    const m = add(a, add(mul(dir, l1 * cosA), mul(b, l1 * sinA)));
+    const e = add(a, mul(dir, reach));
+    let n = cross(sub(m, a), sub(e, m));
+    if (len(n) < 1e-5) n = cross(dir, mul(fwd, flex));
+    const r1 = sub(P(midJ), P(rootJ)), r2 = sub(P(endJ), P(midJ));
+    return [carry(frame(r1, cross(r1, [0, 0, flex])), frame(sub(m, a), n)), carry(frame(r2, cross(r2, [0, 0, flex])), frame(sub(e, m), n))];
+  };
+  // (a body down where it fell, pinned, thrown or adrift lies its limbs the posture's way, at their own length:
+  // aimed joint to joint, not reached for)
+  const aim = (rootJ, midJ, endJ, a, b, c, flex) => {
+    const d1 = sub(b, a), d2 = sub(c, b);
+    let n = cross(d1, d2);
+    if (len(n) < 0.08 * len(d1) * len(d2)) n = cross(d1, mul(fwd, flex));
+    const r1 = sub(P(midJ), P(rootJ)), r2 = sub(P(endJ), P(midJ));
+    return [carry(frame(r1, cross(r1, [0, 0, flex])), frame(d1, n)), carry(frame(r2, cross(r2, [0, 0, flex])), frame(d2, n))];
+  };
+  const placed = !['down', 'pinned', 'fall', 'float'].includes(f.kind);
   for (const [side, s] of [['l', L], ['r', Rr]]) {
-    // arms: shoulder to elbow to hand (the hand on along the forearm)
-    const [Ru, Rf] = limb(T['sh' + s], T['el' + s], T['ha' + s], P(`upperarm_${side}`), P(`lowerarm_${side}`), P(`hand_${side}`), 1);
+    // arms: the hand on along the forearm
+    const [Ru, Rf] = placed ? solve(`upperarm_${side}`, `lowerarm_${side}`, `hand_${side}`, T['ha' + s], T['el' + s], mul(fwd, -1), 1)
+      : aim(`upperarm_${side}`, `lowerarm_${side}`, `hand_${side}`, T['sh' + s], T['el' + s], T['ha' + s], 1);
     set(`upperarm_${side}`, Ru); set(`lowerarm_${side}`, Rf); set(`hand_${side}`, Rf);
-    // legs: hip to knee to ankle (a little above the foot point), the foot pointing the way the person faces
-    const ankle = add(T['ft' + s], [0, 0.075, 0]);
-    const [Rth, Rc] = limb(T['hp' + s], T['kn' + s], ankle, P(`thigh_${side}`), P(`calf_${side}`), P(`foot_${side}`), -1);
+    // legs: the foot pointing the way the person faces, sole-down
+    const ankle = ankleOf(s);
+    const [Rth, Rc] = placed ? solve(`thigh_${side}`, `calf_${side}`, `foot_${side}`, ankle, T['kn' + s], fwd, -1)
+      : aim(`thigh_${side}`, `calf_${side}`, `foot_${side}`, T['hp' + s], T['kn' + s], ankle, -1);
     set(`thigh_${side}`, Rth); set(`calf_${side}`, Rc);
+    // (on a floor, or a seat's footrest, sole-flat whatever the leg's angle; else along the shin, as a foot lies)
     const shin = norm(sub(ankle, T['kn' + s]));
-    const footDir = norm(add(mul(square(face, shin, fwd), 0.89), mul(shin, 0.45)));
+    const down = onFeet ? [0, -1, 0] : shin;
+    const footDir = norm(add(mul(square(face, down, fwd), 0.89), mul(down, 0.45)));
     const restFoot = sub(P(`ball_${side}`), P(`foot_${side}`));
     const Rfo = carry(frame(restFoot, cross(restFoot, [0, 0, -1])), frame(footDir, cross(footDir, mul(fwd, -1))));
     set(`foot_${side}`, Rfo); set(`ball_${side}`, Rfo);
   }
-  // the rest follow their parents rigidly (the clavicles); positions down the hierarchy, at the body's own bone lengths
-  for (let j = 0; j < J.length; j++) {
-    const p = parents[j];
-    if (!W[j]) W[j] = rmul(W[p], rmul(transpose(restRot(rest[p])), restRot(rest[j])));
-    pos[j] = p < 0 ? [0, 0, 0] : add(pos[p], rot(W[p], body.local[j]));
-  }
-  // placed by the hips: the thighs' heads between the figure's hips
-  const pv = idx('pelvis');
-  const hipsAt = add(pos[pv], mid(rot(W[pv], body.local[idx('thigh_l')]), rot(W[pv], body.local[idx('thigh_r')])));
-  const shift = sub(hpM, hipsAt);
-  // someone on their feet stands on them: the body (its legs its own length) lowered or raised to put its soles on the deck
-  if (f.kind === 'stand') {
-    const sole = Math.min(pos[idx('ball_l')][1], pos[idx('ball_r')][1]) + shift[1];
-    shift[1] += 0.015 + (T.ftL[1] + T.ftR[1]) / 2 - 0.02 / k - sole;
-  }
-  for (let j = 0; j < J.length; j++) pos[j] = add(pos[j], shift);
+  for (let j = 0; j < J.length; j++) if (!trunk(j)) pos[j] = add(pos[parents[j]], rot(W[parents[j]], body.local[j]));
   return { k, W, pos };
 }
 
 /** The skinning matrices (column-major, joints × 16) for a mesh with inverse binds `ibm`: scale(k) · world · inverse bind. */
-function skinning(P, ibm, out) {
+export function skinning(P, ibm, out) {
   const { k, W, pos } = P;
   for (let j = 0; j < W.length; j++) {
     const M = W[j], t = pos[j];
@@ -344,23 +391,36 @@ function skinning(P, ibm, out) {
 // ---- THE BLANKET ----
 
 /** A blanket over someone lying down: a grid across its footprint, lifted over the shape of the body (tiles). */
-function blanketMesh(f) {
+export function blanketMesh(f) {
   const q = f.cover, J = f.J;
   const e1 = sub(q[1], q[0]), e2 = sub(q[3], q[0]);
   const base = q[0][1] - 0.035;
-  // the body under it: a chain from chest to feet, with how far each part stands off the mattress
-  const chain = [[mid(J.shL, J.shR), 0.17], [mid(J.hpL, J.hpR), 0.16], [mid(J.knL, J.knR), 0.12], [mid(J.ftL, J.ftR), 0.1]];
+  // the body under it, part by part (the trunk, thighs, shins, feet, arms), each as high as its joints and the flesh
+  // over them; the head stays out (on their back the body lies its own thickness up from its joints: pose)
+  const lift = f.kind === 'lying' || f.kind === 'down' ? LIE_LIFT : 0;
+  const up = (p, flesh) => p[1] + lift + flesh - base;
+  // (a foot lies the way the posing points it: on along the shin, turned the way the body faces)
+  const toe = (s) => {
+    const shin = norm(sub(J['ft' + s], J['kn' + s]));
+    return add(J['ft' + s], mul(norm(add(mul(square(norm(f.face), shin, shin), 0.89), mul(shin, 0.45))), 0.13));
+  };
+  // (the trunk as high as its higher shoulder and hip: on their side, the upper ones)
+  const hi = (a, b) => { const m2 = mid(a, b); m2[1] = Math.max(a[1], b[1]); return m2; };
+  const parts = [[hi(J.shL, J.shR), hi(J.hpL, J.hpR), 0.1, 0.2]];
+  for (const s of ['L', 'R']) parts.push(
+    [J['hp' + s], J['kn' + s], 0.08, 0.13], [J['kn' + s], J['ft' + s], 0.065, 0.11], [J['ft' + s], toe(s), 0.09, 0.11],
+    [J['sh' + s], J['el' + s], 0.06, 0.1], [J['el' + s], J['ha' + s], 0.05, 0.09]);
   const N = 22, M = 14, pos = [], nrm = [];
   const H = (u, v) => {
     const p = add(q[0], add(mul(e1, u), mul(e2, v)));
     let h = 0.025;
-    for (let i = 0; i < chain.length - 1; i++) {
-      const [a, ha] = chain[i], [b, hb] = chain[i + 1];
+    for (const [a, b, flesh, r] of parts) {
       const ab = [b[0] - a[0], 0, b[2] - a[2]], ap = [p[0] - a[0], 0, p[2] - a[2]];
       const t = Math.max(0, Math.min(1, dot(ap, ab) / (dot(ab, ab) || 1)));
       const d = Math.hypot(ap[0] - ab[0] * t, ap[2] - ab[2] * t);
-      // (flat over the body and the arms beside it, falling away past them)
-      h = Math.max(h, (ha + (hb - ha) * t + LIE_LIFT * 0.5) * Math.exp(-((d / 0.24) ** 4)) + 0.012 * Math.sin(u * 23 + v * 5));
+      const top = up(a, flesh) + (up(b, flesh) - up(a, flesh)) * t;
+      // (flat over the part, falling away past it; a crease or two)
+      h = Math.max(h, top * Math.exp(-((d / r) ** 4)) + 0.01 * Math.sin(u * 23 + v * 5));
     }
     // (it hangs a little over the edges)
     const edge = Math.min(u, 1 - u, v, 1 - v);
@@ -414,6 +474,13 @@ function viewProj(cam, bx, by, w, h, zn, zf) {
 
 const hash = (n, s) => { let h = (n * 374761393 + s * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 
+/** Who someone is to look at: a body, a hair cut, a beard or not; kept by their id. */
+export function lookOf(seed) {
+  const sex = hash(seed, 1) < 0.5 ? 'male' : 'female';
+  const cuts = HAIR_CUTS[sex];
+  return { sex, cut: cuts[Math.floor(hash(seed, 2) * cuts.length)], beard: sex === 'male' && hash(seed, 3) < 0.3 };
+}
+
 /**
  * Render a camera's figures. cam: { eye (tiles), r, u, f, s, ox, oy (the
  * Lens), lights (env.lights), amb, exp, floor, tint [r, g, b] }, figs: [{
@@ -460,14 +527,12 @@ export function renderFigures(cam, figs) {
     figs.forEach((f, i) => {
       const pl = place[i];
       if (!pl) { out.push(null); return; }
-      // who they are to look at: a body and a cut, kept by their id
-      const sex = hash(f.seed, 1) < 0.5 ? 'male' : 'female';
+      const look = lookOf(f.seed), sex = look.sex;
       const body = R.bodies[sex];
       const P = pose(body, { ...f, sex });
       skinning(P, body.ibm, skin);
-      const cuts = HAIR_CUTS[sex];
-      const cut = R.hair[cuts[Math.floor(hash(f.seed, 2) * cuts.length)]];
-      const beard = sex === 'male' && hash(f.seed, 3) < 0.3 ? R.hair.beard : null;
+      const cut = R.hair[look.cut];
+      const beard = look.beard ? R.hair.beard : null;
       // the room's strongest lights at them
       const at = mid(f.J.hpL, f.J.hpR);
       const ls = cam.lights.map(l => { const d2 = (l.x - at[0]) ** 2 + (l.y - at[1]) ** 2 + (l.z - at[2]) ** 2; return { l, w: l.i / (1 + d2 / l.rad2) }; })
@@ -491,6 +556,10 @@ export function renderFigures(cam, figs) {
       gl.uniform3fv(u.uHairC, f.hair);
       gl.uniform1i(u.uVac, f.vac ? 1 : 0);
       gl.uniform1i(u.uRigid, 0);
+      // wounds: how hurt each part is (0–1: head, torso, left arm, right arm; left leg, right leg, burns, dead)
+      const w = f.wound || [0, 0, 0, 0, 0, 0, 0, 0];
+      gl.uniform4f(u.uWoundA, w[0], w[1], w[2], w[3]);
+      gl.uniform4f(u.uWoundB, w[4], w[5], w[6], w[7]);
       const vacGrow = f.vac ? 0.035 * P.k : 0;          // (a vac suit stands off the body)
       const draws = [{ m: body.meshes.body, part: 0, tex: body.skin, ibm: body.ibm }];
       if (!f.vac) {
@@ -573,7 +642,7 @@ in vec3 vW; in vec3 vN; in vec2 vUV; in vec4 vTag; in vec3 vRest;
 uniform int uPart, uVac;
 uniform sampler2D uTex;
 uniform vec3 uEye, uSuitC, uAccC, uSkinTint, uHairC, uCovC, uHelmC;
-uniform vec4 uLand, uOut;
+uniform vec4 uLand, uOut, uWoundA, uWoundB;
 uniform float uChestY;
 uniform int uLN;
 uniform vec3 uLP[${MAX_LIGHTS}], uLC[${MAX_LIGHTS}];
@@ -641,6 +710,36 @@ vec3 jumpsuit(vec3 q, out float ks) {
   return c;
 }
 
+// wounds, worked from where a point lies on the body at rest: blood where a part is hurt (soaked dark into the
+// cloth, bright and wet on skin), char where they were burned
+float hurtAt(vec3 q) {
+  float pelvisY = uLand.x, collarY = uLand.y, armY = uLand.z;
+  float ax = abs(q.x);
+  float head = step(collarY - 0.02, q.y);
+  float arm = (1.0 - head) * step(0.2, ax) * step(armY - 0.12, q.y);
+  float leg = (1.0 - head) * (1.0 - arm) * step(q.y, pelvisY - 0.05);
+  float torso = (1.0 - head) * (1.0 - arm) * (1.0 - leg);
+  float side = step(0.0, q.x);
+  return head * uWoundA.x + torso * uWoundA.y + arm * mix(uWoundA.w, uWoundA.z, side) + leg * mix(uWoundB.y, uWoundB.x, side);
+}
+vec3 wounded(vec3 c, vec3 q, bool skin, inout float ks) {
+  float d = hurtAt(q);
+  if (d > 0.02) {
+    float n = vnoise(q * 9.0) * 0.65 + vnoise(q * 26.0) * 0.35;
+    float blood = smoothstep(0.05, 0.0, n - (d * 0.8 - 0.16));
+    // (blood is dark: wet and deep red on skin, soaked near-black into the cloth)
+    c = mix(c, skin ? vec3(0.3, 0.025, 0.02) : c * vec3(0.32, 0.07, 0.06) + vec3(0.07, 0.0, 0.0), blood * 0.85);
+    ks = mix(ks, skin ? 0.35 : 0.12, blood);
+  }
+  if (uWoundB.z > 0.02) {
+    float n = vnoise(q * 14.0 + 3.0);
+    c = mix(c, vec3(0.06, 0.05, 0.045), smoothstep(0.05, 0.0, n - uWoundB.z * 0.7) * 0.85);
+  }
+  // the dead: no blood under the skin
+  if (skin && uWoundB.w > 0.5) c = mix(c, vec3(dot(c, vec3(0.3, 0.55, 0.15))) * vec3(0.92, 0.95, 1.0), 0.55);
+  return c;
+}
+
 void main() {
   if (uPart == 7) { frag = vec4(uOut.rgb * uOut.a, uOut.a); return; }
   vec3 N = normalize(vN);
@@ -658,6 +757,7 @@ void main() {
       alb = mix(alb, uAccC, band(vRest.y, uChestY - 0.03, uChestY + 0.02) * step(0.0, vRest.z));
       alb = mix(alb, vec3(0.45, 0.47, 0.5), max(hand, boot));
       ks = 0.12; shin = 22.0;
+      alb = wounded(alb, vRest, false, ks);
     } else {
       float k2;
       alb = jumpsuit(vRest, k2); ks = k2;
@@ -666,6 +766,7 @@ void main() {
       alb = mix(alb, vec3(0.09, 0.09, 0.1), boot);
       if (boot > 0.5) { ks = 0.25; shin = 36.0; }
       if (skinK > 0.5) { ks = 0.08; shin = 18.0; }
+      alb = wounded(alb, vRest, skinK > 0.5, ks);
       // fabric: a little creasing
       if (max(skinK, boot) < 0.5) N = normalize(N + (vec3(vnoise(vRest * 60.0), vnoise(vRest * 60.0 + 7.1), vnoise(vRest * 60.0 + 13.7)) - 0.5) * 0.12);
     }

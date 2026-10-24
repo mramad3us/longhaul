@@ -46,8 +46,12 @@
 //
 // People are a handful of joints posed from what the sim says they are
 // doing (on their feet or walking, at a station, back in a couch, asleep
-// under a blanket, on the autodoc, at the mess table, on the treadmill,
-// down on the deck, adrift in free fall), interpolated between sim
+// on their side under a blanket, knees drawn up to fit the rack, on the
+// autodoc knees raised under the sheet, at the mess table, on the
+// treadmill, adrift in free fall, braced against a hard burn, pinned flat
+// by a crushing one, thrown along the deck or tumbling when the ship moves
+// under them, down where they fell, each their own way, in their blood if
+// they are badly hurt), interpolated between sim
 // minutes by `alpha`, and given bodies on the GPU (gl/figures.js): a
 // rigged human body posed to those joints, in a jumpsuit of their
 // department's colour with its details, skin and hair, or a white vac suit
@@ -176,7 +180,7 @@ function isSolid(tiles, x, z) {
 const _rooms = new WeakMap();
 
 /** The compartment as geometry: floor cells, walls, fixtures, lights. Cached on the deck's tile array. */
-function roomFor(ship, di) {
+export function roomFor(ship, di) {
   const deck = ship.decks[di];
   let room = _rooms.get(deck.tiles);
   if (!room) { room = buildRoom(ship, di); _rooms.set(deck.tiles, room); }
@@ -1455,7 +1459,7 @@ const SIDES = ['L', 'R'];
  * The figure's joints in world space, its face direction and posture.
  * fig: { m, x, z (tile top-left, continuous), moving, heading }
  */
-function posture(room, fig, t, floating) {
+export function posture(room, fig, t, floating) {
   const m = fig.m;
   const sk = seatKind(m.seat);
   const fx = sk ? seatFixture(room, m.seat) : null;
@@ -1479,24 +1483,37 @@ function posture(room, fig, t, floating) {
     const n = pl.n(0, 1); face = [n[0], 0.5, n[1]]; kind = 'couch';
   } else if (fx && (sk === 'helm' || sk === 'ops' || sk === 'weapons' || sk === 'engStation')) {
     const pl = inFixture({
-      ftL: [0.42, 0.3, 0.02], ftR: [0.58, 0.3, 0.02], knL: [0.42, 0.33, 0.52], knR: [0.58, 0.33, 0.52],
-      hpL: [0.42, 0.6, 0.48], hpR: [0.58, 0.6, 0.48], shL: [0.35, 0.73, 0.86], shR: [0.65, 0.73, 0.86],
-      elL: [0.3, 0.58, 0.68], elR: [0.7, 0.58, 0.68], haL: [0.37, 0.35, 0.74], haR: [0.63, 0.35, 0.74],
-      nk: [0.5, 0.74, 0.9], hd: [0.5, 0.75, 0.99],
+      // (sat up to the console, hands on its edge, elbows bent at the sides)
+      ftL: [0.42, 0.3, 0.02], ftR: [0.58, 0.3, 0.02], knL: [0.42, 0.36, 0.5], knR: [0.58, 0.36, 0.5],
+      hpL: [0.42, 0.62, 0.48], hpR: [0.58, 0.62, 0.48], shL: [0.36, 0.58, 0.86], shR: [0.64, 0.58, 0.86],
+      elL: [0.31, 0.5, 0.66], elR: [0.69, 0.5, 0.66], haL: [0.4, 0.33, 0.73], haR: [0.6, 0.33, 0.73],
+      nk: [0.5, 0.58, 0.9], hd: [0.5, 0.56, 0.99],
     });
     const n = pl.n(0, -1); face = [n[0], 0, n[1]]; kind = 'seat';
-  } else if (fx && (sk === 'bunk' || sk === 'paxBerth' || sk === 'medbay')) {
-    const y = sk === 'medbay' ? 0.6 : sk === 'paxBerth' ? 0.4 : 0.37;
+  } else if (fx && (sk === 'bunk' || sk === 'paxBerth')) {
+    // asleep on their side, knees drawn up, facing out of the rack: how a body fits a bunk a tile long
+    const M = sk === 'paxBerth' ? 0.36 : 0.33;           // (the mattress's top)
     const pl = inFixture({
-      hd: [0.18, 0.42, y + 0.05], nk: [0.26, 0.42, y + 0.03], shL: [0.29, 0.27, y + 0.02], shR: [0.29, 0.57, y + 0.02],
-      hpL: [0.56, 0.34, y + 0.01], hpR: [0.56, 0.5, y + 0.01], knL: [0.73, 0.35, y + 0.02], knR: [0.73, 0.49, y + 0.02],
-      ftL: [0.9, 0.36, y + 0.03], ftR: [0.9, 0.48, y + 0.03], elL: [0.42, 0.24, y + 0.01], elR: [0.42, 0.6, y + 0.01],
-      haL: [0.55, 0.27, y + 0.02], haR: [0.55, 0.57, y + 0.02],
+      hd: [0.17, 0.42, M + 0.11], nk: [0.24, 0.43, M + 0.1],
+      shR: [0.29, 0.43, M + 0.05], shL: [0.3, 0.46, M + 0.26], hpR: [0.55, 0.42, M + 0.06], hpL: [0.55, 0.44, M + 0.21],
+      knR: [0.66, 0.7, M + 0.05], knL: [0.64, 0.72, M + 0.15], ftR: [0.88, 0.52, M + 0.03], ftL: [0.86, 0.56, M + 0.11],
+      elR: [0.33, 0.67, M + 0.04], haR: [0.21, 0.62, M + 0.06], elL: [0.43, 0.57, M + 0.24], haL: [0.47, 0.72, M + 0.14],
+    });
+    const n = pl.n(0, 1); face = [n[0], 0, n[1]]; kind = 'side';
+    const cover = (u0, u1, w0, w1, yy) => [[u0, w0], [u1, w0], [u1, w1], [u0, w1]].map(([u, w]) => { const [x, z] = pl.p(u, w); return [x, yy, z]; });
+    blanket = cover(0.25, 0.96, 0.12, 0.84, M + 0.06);
+  } else if (fx && sk === 'medbay') {
+    // on the autodoc: on their back, knees raised, the sheet over them
+    const y = 0.6;
+    const pl = inFixture({
+      hd: [0.15, 0.42, y + 0.05], nk: [0.22, 0.42, y + 0.04], shL: [0.27, 0.27, y + 0.03], shR: [0.27, 0.57, y + 0.03],
+      hpL: [0.55, 0.35, y + 0.02], hpR: [0.55, 0.49, y + 0.02], knL: [0.72, 0.36, y + 0.26], knR: [0.72, 0.48, y + 0.26],
+      ftL: [0.86, 0.37, y + 0.02], ftR: [0.86, 0.47, y + 0.02], elL: [0.4, 0.22, y + 0.02], elR: [0.4, 0.62, y + 0.02],
+      haL: [0.53, 0.25, y + 0.03], haR: [0.53, 0.59, y + 0.03],
     });
     face = [0, 1, 0]; kind = 'lying';
     const cover = (u0, u1, w0, w1, yy) => [[u0, w0], [u1, w0], [u1, w1], [u0, w1]].map(([u, w]) => { const [x, z] = pl.p(u, w); return [x, yy, z]; });
-    if (sk === 'medbay') sheet = cover(0.48, 0.95, 0.27, 0.6, y + 0.05);
-    else blanket = cover(0.3, 0.95, 0.22, 0.63, y + 0.06);
+    sheet = cover(0.4, 0.95, 0.2, 0.64, y + 0.05);
   } else if (fx && sk === 'rec') {
     const run = Math.sin(t * 0.011 + m.id);
     const pl = inFixture({
@@ -1513,17 +1530,84 @@ function posture(room, fig, t, floating) {
     const f = [Math.cos(a), Math.sin(a)], l = [-Math.sin(a), Math.cos(a)];
     let lift = 0, tilt = 0;
     const W = (fw, lat, up) => [ox + f[0] * fw + l[0] * lat, up, oz + f[1] * fw + l[1] * lat];
-    if (down) {
-      // (carried: over a shipmate's shoulder; adrift: limp, off the deck)
-      const y = m.task?.type === 'carried' ? 0.92 : floating ? 0.35 + 0.05 * Math.sin(t * 0.0013 + m.id) : 0.07;
+    const pc = 0.56;
+    /** A standing-frame posture (forward, lateral, up), leaned by `tilt` about a pivot `pc` high, lifted. */
+    const lean = (def, tiltA, pivot, up0 = 0) => {
+      for (const [k, [fw, lat, up]] of Object.entries(def)) {
+        const r = up - pivot, fw2 = fw * Math.cos(tiltA) + r * Math.sin(tiltA), up2 = pivot + r * Math.cos(tiltA) - fw * Math.sin(tiltA);
+        J[k] = W(fw2, lat, up2 + up0);
+      }
+    };
+    if (fig.thrown && !down) {
+      // thrown by the ship moving under them: along the way they go, reaching out to break it; on the deck they fall
+      // forward and slide, in free fall they tumble
+      const th = fig.thrown, sp = Math.hypot(th.vx, th.vy);
+      if (sp > 1e-3) { a = Math.atan2(th.vy, th.vx); f[0] = Math.cos(a); f[1] = Math.sin(a); l[0] = -Math.sin(a); l[1] = Math.cos(a); }
+      const flail = Math.sin(t * 0.02 + m.id), kick = Math.sin(t * 0.017 + m.id * 2);
       const def = {
-        hd: [0.42, 0, y + 0.02], nk: [0.33, 0, y + 0.01], shL: [0.3, 0.15, y], shR: [0.3, -0.15, y],
-        hpL: [-0.05, 0.08, y], hpR: [-0.05, -0.08, y], knL: [-0.3, 0.1, y], knR: [-0.3, -0.09, y],
-        ftL: [-0.55, 0.12, y], ftR: [-0.54, -0.1, y], elL: [0.14, 0.23, y], elR: [0.14, -0.23, y],
-        haL: [-0.02, 0.28, y], haR: [0.0, -0.27, y],
+        ftL: [-0.05, 0.09, 0.04], ftR: [-0.12 + 0.06 * kick, -0.09, 0.12], knL: [0.02, 0.08, 0.31], knR: [0.04, -0.09, 0.33],
+        hpL: [0, 0.075, 0.56], hpR: [0, -0.075, 0.56], shL: [0, 0.15, 0.93], shR: [0, -0.15, 0.93],
+        elL: [0.2, 0.24, 0.96 + 0.05 * flail], elR: [0.22, -0.24, 0.98 - 0.05 * flail], haL: [0.38, 0.26, 0.98 + 0.08 * flail], haR: [0.4, -0.25, 1.02 - 0.08 * flail],
+        nk: [0.02, 0, 0.97], hd: [0.05, 0, 1.06],
       };
-      for (const [k, v] of Object.entries(def)) J[k] = W(...v);
-      face = [0, 1, 0]; kind = 'down';
+      let tiltA;
+      if (th.grounded) {
+        tiltA = Math.min(1.3, 0.45 + sp * 0.4); lean(def, tiltA, 0.02);
+        // (going down onto the deck, not through it: the hands and knees that reach it stop on it)
+        const FLOOR = { ha: 0.03, el: 0.05, kn: 0.05, ft: 0.04, sh: 0.1, hp: 0.09, nk: 0.1, hd: 0.09 };
+        for (const k in J) J[k][1] = Math.max(J[k][1], FLOOR[k.slice(0, 2)] ?? 0.06);
+      }
+      else { tiltA = t * 0.0045 + m.id; lean(def, tiltA, pc, 0.3 + 0.08 * Math.sin(t * 0.003 + m.id)); }
+      face = [f[0] * Math.cos(tiltA), -Math.sin(tiltA), f[1] * Math.cos(tiltA)]; kind = th.grounded ? 'fall' : 'float';
+    } else if (down) {
+      // (carried: over a shipmate's shoulder; adrift: limp, off the deck; else where they fell, each their own way)
+      const carried = m.task?.type === 'carried';
+      // (y: the joints' line; the body's own thickness lifts it off the deck: figures.js)
+      const y = carried ? 0.92 : floating ? 0.35 + 0.05 * Math.sin(t * 0.0013 + m.id) : 0;
+      const v = carried || floating ? 0 : Math.floor(hash(m.id, 41) * 3);
+      const j = (n, s2) => (hash(m.id, n) - 0.5) * s2;
+      const def = v === 1 ? {
+        // on their side, one knee drawn up
+        hd: [0.42, 0.05, y + 0.07], nk: [0.33, 0.04, y + 0.06], shR: [0.3, 0.02, y + 0.01], shL: [0.3, 0.06, y + 0.21],
+        hpR: [-0.05, 0.02, y + 0.01], hpL: [-0.05, 0.04, y + 0.14], knR: [-0.3, 0.06, y], knL: [-0.18, 0.24 + j(43, 0.1), y + 0.06],
+        ftR: [-0.55, 0.04, y - 0.01], ftL: [-0.42, 0.18, y + 0.02], elR: [0.38, 0.2, y], haR: [0.52, 0.12 + j(44, 0.1), y],
+        elL: [0.12, 0.22, y + 0.16], haL: [0.0, 0.32, y + 0.01],
+      } : v === 2 ? {
+        // face down, an arm under them (the chest deeper than the back: a little higher)
+        hd: [0.43, 0.02, y + 0.08], nk: [0.33, 0, y + 0.045], shL: [0.3, 0.15, y + 0.035], shR: [0.3, -0.15, y + 0.035],
+        hpL: [-0.05, 0.08, y + 0.025], hpR: [-0.05, -0.08, y + 0.025], knL: [-0.3, 0.14 + j(45, 0.08), y + 0.025], knR: [-0.29, -0.12, y + 0.035],
+        ftL: [-0.55, 0.2 + j(46, 0.1), y + 0.065], ftR: [-0.55, -0.12, y + 0.065], elL: [0.42, 0.32, y + 0.025], elR: [0.15, -0.12, y + 0.005],
+        haL: [0.58, 0.22 + j(47, 0.1), y + 0.025], haR: [0.02, -0.04, y + 0.005],
+      } : {
+        // on their back, limbs where they fell
+        hd: [0.42, j(48, 0.06), y + 0.02], nk: [0.33, 0, y + 0.01], shL: [0.3, 0.15, y], shR: [0.3, -0.15, y],
+        hpL: [-0.05, 0.08, y], hpR: [-0.05, -0.08, y], knL: [-0.3, 0.1 + j(49, 0.1), y], knR: [-0.3, -0.09 - j(50, 0.08), y],
+        ftL: [-0.55, 0.12 + j(51, 0.16), y], ftR: [-0.54, -0.1 - j(52, 0.12), y], elL: [0.14 + j(53, 0.2), 0.25, y], elR: [0.14 + j(54, 0.2), -0.25, y],
+        haL: [-0.02 + j(55, 0.5), 0.32 + j(56, 0.1), y], haR: [j(57, 0.5), -0.31, y],
+      };
+      for (const [k, w] of Object.entries(def)) J[k] = W(...w);
+      face = v === 1 ? [l[0], 0, l[1]] : v === 2 ? [0, -1, 0] : [0, 1, 0]; kind = 'down';
+    } else if (m.gState === 'prone' && !floating) {
+      // pinned flat to the deck by the G, face down, arms out, unable to rise (y: face down, the chest is deeper than the back)
+      const y = 0.025;
+      const def = {
+        hd: [0.43, 0, y + 0.04], nk: [0.33, 0, y + 0.03], shL: [0.3, 0.15, y + 0.02], shR: [0.3, -0.15, y + 0.02],
+        hpL: [-0.05, 0.08, y], hpR: [-0.05, -0.08, y], knL: [-0.3, 0.13, y], knR: [-0.3, -0.13, y],
+        ftL: [-0.55, 0.16, y + 0.03], ftR: [-0.55, -0.16, y + 0.03], elL: [0.4, 0.33, y], elR: [0.4, -0.33, y],
+        haL: [0.56, 0.24, y], haR: [0.56, -0.24, y],
+      };
+      for (const [k, w] of Object.entries(def)) J[k] = W(...w);
+      face = [0, -1, 0]; kind = 'pinned';
+    } else if (m.gState === 'strained' && !floating) {
+      // bracing under a hard burn: knees bent, hands on them, leaning into it
+      const def = {
+        ftL: [0.02, 0.1, 0.02], ftR: [0.02, -0.1, 0.02], knL: [0.16, 0.11, 0.25], knR: [0.16, -0.11, 0.25],
+        hpL: [-0.06, 0.08, 0.4], hpR: [-0.06, -0.08, 0.4], shL: [0.1, 0.15, 0.74], shR: [0.1, -0.15, 0.74],
+        elL: [0.06, 0.21, 0.5], elR: [0.06, -0.21, 0.5], haL: [0.16, 0.12, 0.3], haR: [0.16, -0.12, 0.3],
+        nk: [0.13, 0, 0.78], hd: [0.2, 0, 0.85],
+      };
+      for (const [k, w] of Object.entries(def)) J[k] = W(...w);
+      face = [f[0], -0.25, f[1]]; kind = 'brace';
     } else {
       const sitAt = (m.activity === 'eating' || m.activity === 'socializing') && !floating ? tableBeside(room, fig) : null;
       if (sitAt) {
@@ -1554,7 +1638,6 @@ function posture(room, fig, t, floating) {
           haL: [-s * 0.1 + work, 0.16, 0.55 + work * 1.2], haR: [s * 0.1 + work, -0.16, 0.55 + work * 1.2],
           nk: [0, 0, 0.97], hd: [0.01, 0, 1.065],
         };
-        const pc = 0.56;
         for (const [k, [fw, lat, up]] of Object.entries(def)) {
           // free fall: the body leans, pivoting at the hips
           const r = up - pc, fw2 = fw * Math.cos(tilt) + r * Math.sin(tilt), up2 = pc + r * Math.cos(tilt) - fw * Math.sin(tilt);
@@ -1734,18 +1817,46 @@ function figureSpec(lens, env, fig, P, selected, W, H) {
   const pad = (vac ? 0.3 : 0.22) * k + 4;
   const box = { x0: Math.max(0, x0 - pad), y0: Math.max(0, y0 - pad), x1: Math.min(W, x1 + pad), y1: Math.min(H, y1 + pad) };
   const roleC = rgb(ROLE_SUIT[m.role] || ROLE_SUIT.Deckhand);
-  let suit = roleC, skin = rgb(SKIN[m.id % SKIN.length]), hair = rgb(HAIR[(m.id * 3 + 1) % HAIR.length]);
-  if (m.dead) { suit = mix(suit, [0.35, 0.37, 0.4], 0.6); skin = mix(skin, [0.55, 0.55, 0.55], 0.5); }
+  const suit = roleC, skin = rgb(SKIN[m.id % SKIN.length]), hair = rgb(HAIR[(m.id * 3 + 1) % HAIR.length]);
   const blanketC = mix(rgb(ALB.blanket), roleC, 0.3);
   const h = hash(m.id, 5);
   return {
     J: P.J, face: P.face, kind: P.kind, box, vac, suit, accent: mix(roleC, [1, 1, 1], 0.35), skin, hair,
-    hairStyle: h < 0.45 ? 0 : h < 0.62 ? 1 : h < 0.74 ? 2 : h < 0.86 ? 3 : 4, build: hash(m.id, 9), seed: m.id,
+    hairStyle: h < 0.45 ? 0 : h < 0.62 ? 1 : h < 0.74 ? 2 : h < 0.86 ? 3 : 4, build: hash(m.id, 9), seed: m.id, wound: woundsOf(m),
     cover: cover || null, coverKind: P.sheet ? 'sheet' : 'blanket', coverCol: blanketC,
     outline: selected ? [...rgb(C_SEL), 1] : cover ? [0, 0, 0, 0] : [4 / 255 * 0.45, 6 / 255 * 0.45, 9 / 255 * 0.45, 0.45],
     outlineW: selected ? Math.max(1.5, k * 0.022) : Math.max(1, k * 0.016),
     hit: { x0: x0 - 3, y0: y0 - 3, x1: x1 + 3, y1: y1 + 3 }, head: lens.p(P.J.hd[0], P.J.hd[1], P.J.hd[2]), headR: (vac ? BODY.helmet : BODY.head) * k,
   };
+}
+
+/** How hurt each part of someone is, 0–1 (head, torso, left arm, right arm, left leg, right leg), burns, dead. */
+function woundsOf(m) {
+  const b = m.body || {};
+  const d = (k) => Math.max(0, Math.min(1, 1 - (b[k] ?? 100) / 100));
+  return [d('head'), d('torso'), d('leftArm'), d('rightArm'), d('leftLeg'), d('rightLeg'), m.conditions?.includes('burned') ? 0.7 : 0, m.dead ? 1 : 0];
+}
+
+/**
+ * Blood pooled on the deck under someone down and badly hurt (or dead of it):
+ * as wide as the wound is bad, its edge uneven, dark in the room's light.
+ */
+function drawPool(g, lens, env, m, x, z) {
+  const w = woundsOf(m);
+  const hurt = Math.max(w[0], w[1]) * 0.8 + (w[2] + w[3] + w[4] + w[5]) * 0.08;
+  if (hurt < 0.35) return;
+  const r = 0.16 + 0.32 * Math.min(1, (hurt - 0.35) / 0.5);
+  crewLight(env, x, z, _L);
+  const n = 18;
+  g.beginPath();
+  for (let i = 0; i <= n; i++) {
+    const a = i / n * Math.PI * 2, rr = r * (0.75 + 0.35 * hash(m.id, i % n + 70));
+    const p = lens.p(x + Math.cos(a) * rr * 1.2, 0.003, z + Math.sin(a) * rr);
+    if (i) g.lineTo(p[0], p[1]); else g.moveTo(p[0], p[1]);
+  }
+  g.closePath();
+  g.fillStyle = css(0.3 * _L[0], 0.025 * _L[1], 0.025 * _L[2], 0.85);
+  g.fill();
 }
 
 /** A soft shadow on the deck under someone standing (fainter as they float off it). */
@@ -1913,6 +2024,7 @@ function drawCam(cam, state, alpha, now) {
   const floating = G < 0.01;
   const byRow = [];
   for (let r = 0; r < room.rows; r++) byRow.push([]);
+  const inertia = state.$inertia?.active ? state.$inertia : null;
   for (const m of ship.crew) {
     if (m.away) continue;
     const px = m.$px ?? m.pos.sx, py = m.$py ?? m.pos.sy;
@@ -1933,7 +2045,10 @@ function drawCam(cam, state, alpha, now) {
     if (work != null) heading = work;
     if (heading == null) heading = Math.PI / 2 + 0.6 * (hash(m.id) - 0.5);
     const row = Math.max(0, Math.min(room.rows - 1, Math.floor(z + 0.5)));
-    byRow[row].push({ m, x: x + (m.task?.type === 'carried' ? 0.3 : 0), z, moving, heading, work: work != null, climb });
+    // thrown about by the ship moving under them (an inertial event, sim/inertia.js): how fast, which way
+    const flung = inertia?.bodies.find(b => b.id === m.id && b.moving);
+    const thrown = flung ? { vx: flung.vx, vy: flung.vy, grounded: inertia.grounded } : null;
+    byRow[row].push({ m, x: x + (m.task?.type === 'carried' ? 0.3 : 0), z, moving, heading, work: work != null, climb, thrown });
   }
   const selId = cam.opts.selectedCrew?.();
   const hits = [];
@@ -1982,7 +2097,8 @@ function drawCam(cam, state, alpha, now) {
     // the people in this row, far first
     for (const fig of byRow[r]) {
       const P = fig.P, sel = fig.sel;
-      if (P.kind === 'stand' || P.kind === 'float' || P.kind === 'down') {
+      if (P.kind === 'down' || P.kind === 'pinned') drawPool(g, lens, env, fig.m, (P.J.hpL[0] + P.J.hpR[0] + P.J.shL[0] + P.J.shR[0]) / 4, (P.J.hpL[2] + P.J.hpR[2] + P.J.shL[2] + P.J.shR[2]) / 4);
+      if (P.kind === 'stand' || P.kind === 'float' || P.kind === 'down' || P.kind === 'brace' || P.kind === 'pinned' || P.kind === 'fall') {
         const lift = P.kind === 'float' ? P.J.ftL[1] : P.kind === 'down' && floating ? P.J.hpL[1] : 0;
         drawShadow(g, lens, (P.J.hpL[0] + P.J.hpR[0]) / 2, (P.J.hpL[2] + P.J.hpR[2]) / 2, lift, lens.k(lens.p(fig.x + 0.5, 0, fig.z + 0.5)[2]));
       }

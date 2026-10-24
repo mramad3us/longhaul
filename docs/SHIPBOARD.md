@@ -36,7 +36,7 @@ Ship coordinates count tile rows from the bow across all decks, with a one-row g
 
 Roles: Captain, Pilot, Engineer, Medic, Gunner, Mechanic, Scientist, Cook. Each crew member has four skills (piloting, security, engineering, medical) that improve with practice, plus a body (six parts), a heart, consciousness, morale and conditions.
 
-**G-loads.** Above 1.5G an unsecured person strains; above 2.5G they are injured; at 8G they are crushed. A secure seat gives juice when G > 1.5:
+**G-loads.** Above 1.5G an unsecured person strains (the cameras show them braced, knees bent, hands on them); above 2.5G they are injured (pinned face down to the deck, arms out); at 8G they are crushed. Anyone not strapped in when the drive lights, cuts or changes hard, or the ship flips, is thrown (`inertia.js`): on the cameras they fall along the way they go, reaching out, and slide; in free fall they tumble across the compartment, into what is in the way. A secure seat gives juice when G > 1.5:
 - the standard dose makes 3G feel like 1G and costs 1 med unit per person
 - above 6G a high dose (4.5× protection) costs 2 units in all, plus a booster a day, and carries a stroke risk for every minute above 6G
 
@@ -44,7 +44,7 @@ A dose stays in the blood for an hour, so a flip or a lull between combat burns 
 - **hangover** (standard dose): up to 3 days, scaled by the peak G. Work efficiency ×0.85, lower morale, and hard G risks brain bleeds.
 - **crash** (high dose): heart stress +40 and heart health −15, which barely mends while it lasts. It runs 6 days plus 1.5 h for every hour on the high dose, capped at 10 days. Work efficiency ×0.6, morale down hard, twice the brain-bleed risk. Cardiac stress builds at dangerous loads, and a failing heart goes critical: death within minutes unless someone gives first aid.
 
-**Medicine.** Critical crew are stabilized and carried to the autodoc by whoever is free with medical skill. The autodoc heals over hours using med supplies; it runs faster with a medic on watch and slower when damaged.
+**Medicine.** The cameras show what the crew trauma model says: blood where a part of the body is hurt (wet on skin, soaked dark into the jumpsuit), char where someone burned, the pallor of the dead; the badly hurt and the dead lie where they fell, each their own way (on their back, on their side, face down), in a pool as wide as the wound is bad. Critical crew are stabilized and carried to the autodoc by whoever is free with medical skill. The autodoc heals over hours using med supplies; it runs faster with a medic on watch and slower when damaged.
 
 **Needs** (0–100): rest, food, hygiene, recreation. They decay with time awake and are met at the bunks, galley, head, exercise rig and mess table. Sleeping in a couch is slow; long burns feed people through the couch line. Needs set morale, and morale and fatigue set work efficiency. A death aboard lowers everyone's morale for days.
 
