@@ -505,6 +505,7 @@ button.flagged { color: var(--c-flag); border-color: var(--c-flag); }
 .scanner-detail-key { color: var(--c-text3); font-size: 11px !important; letter-spacing: 0.08em; }
 .scanner-detail-val { font-family: var(--f-data); font-size: 12px; color: var(--c-text); text-align: right; }
 .scanner-detail-hull { width: 100%; height: auto; margin: 6px 0; }
+.scanner-detail-sub { margin: 9px 0 1px; font-family: var(--f-ui); font-size: 10px; letter-spacing: 0.14em; color: var(--c-text3); opacity: 0.8; }
 .ctx-selection { margin-top: 4px; }
 .route-idle { margin-top: 4px; }
 

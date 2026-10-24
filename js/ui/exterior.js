@@ -13,6 +13,18 @@
 // station the view is turned so the station's up is up (the ground
 // below).
 //
+// The picture is rendered on the GPU (gl/ships3d.js): the hulls and
+// stations as lit solids, built from those same models (gl/hullmesh.js),
+// the rock as a sphere of cratered regolith, in sunlight with shadows, the
+// drive plumes as glowing columns, the whole exposed as a camera would
+// (gl/post.js). The drone hangs off the plane looking down at it a little
+// from the side, its picture plane kept parallel to the plane, so the
+// plane maps to the screen exactly as the overlays have it (OBLIQUE_K: a
+// hull's top and one flank show). The Sun lies in the plane; its light is
+// raised out of it (SUN_RAISE) so the tops of hulls take it, and a port on
+// its rock's night side is floodlit. Without WebGL2 everything is drawn
+// flat from hull-art.js instead.
+//
 // Overlays for docking: the corridor down the berth's axis with its
 // marks, the berth's collar, ours. Names go beside the hulls, never on
 // one (labels.js), with the nav computer's marks (marks.js): DARK for a
@@ -48,14 +60,16 @@ import { holdOffset } from '../sim/autopilot.js';
 import { getBody, bodyPos } from '../sim/ephemeris.js';
 import { hullOf } from '../sim/hulls.js';
 import { stationModel, berthOf, stationAngle, berthFrame } from '../sim/stations.js';
-import { matePose } from '../sim/mating.js';
+import { matePose, turn } from '../sim/mating.js';
 import { collarFrame, dockPose, facingOf } from '../sim/docking.js';
 import { liveKnowledge } from '../sim/intel.js';
 import { isDark, isIdentified } from '../sim/sensors.js';
 import { factionColor } from '../sim/factions.js';
-import { PLAYER_CLASS } from '../sim/ship-classes.js';
+import { PLAYER_CLASS, CLASSES } from '../sim/ship-classes.js';
 import { FitCanvas, pointAt } from './dom.js';
-import { drawHull, drawStation } from './hull-art.js';
+import { drawHull, drawHullMarks, drawStation } from './hull-art.js';
+import { has3D, renderScene, obliqueCamera, hullMatrix, stationMatrix } from './gl/ships3d.js';
+import { mat4 } from './gl/gl.js';
 import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, MARK_COL } from './marks.js';
 
@@ -68,6 +82,8 @@ const LOCK_EASE_S = 0.8;         // a station come into view: the turn to its up
 const FAR_FRAME_M = 8_000;       // docking further than this from the berth: we are framed, the station marked
 const FAR_SPAN_M = 3_000;
 const FOCUS_SWITCH = 0.7;        // another thing takes the frame when it is this much closer than the one framed
+const OBLIQUE_K = 0.42;          // the drone looks down at ~23° off the plane's normal: z metres off the plane show k·z to the right
+const SUN_RAISE = 48 * Math.PI / 180;  // the Sun's light raised out of the plane (it lies in it) so the tops of hulls take it
 
 export class ExteriorView {
   constructor(container, { onSelect } = {}) {
@@ -163,6 +179,51 @@ export class ExteriorView {
     return { cx, cy, span, rot };
   }
 
+  /**
+   * The picture on the GPU (gl/ships3d.js): the rock under a surface port,
+   * the stations, the other hulls and ours as lit solids in sunlight, copied
+   * in over the stars and under the overlays. False without a GPU (the flat
+   * drawing stands in).
+   */
+  solid(state, objects, st, us, tm, t, fc, { ours, mine, ourPlume }) {
+    if (!has3D()) return false;
+    const cam = this.cam, dpr = fc.dpr;
+    const Wd = fc.canvas.width, Hd = fc.canvas.height, sc = cam.scale * dpr;
+    const objs = [];
+    for (const o of objects) {
+      const e = o.e, p = o.pose;
+      if (!p) continue;
+      if (e.type === 'station') {
+        const model = stationModel(e.id);
+        if (model) objs.push({ kind: 'station', key: e.id, model, m: stationMatrix(p.mx, p.my, p.angle), tint: factionColor(e.faction), lights: true });
+      } else if (o.hull && o.hull.L * cam.scale >= 1.5) {
+        objs.push({ kind: 'hull', key: e.cls, model: o.hull, tl: CLASSES[e.cls]?.tl ?? 2, m: poseMatrix(p), tint: factionColor(e.faction), plume: e.thrust || 0, lights: !isDark(e) && !e.tags?.wreck });
+      }
+    }
+    const ourCls = state.ship.classId || PLAYER_CLASS;
+    if (ours.L * cam.scale >= 1.5) objs.push({ kind: 'hull', key: ourCls, model: ours, tl: CLASSES[ourCls]?.tl ?? 2, m: poseMatrix(mine), tint: '#5FD38D', plume: ourPlume || 0, lights: true });
+    const rock = st ? rockOf(st, us, tm) : null;
+    if (!objs.length && !rock) return false;
+    const camera = obliqueCamera(Wd, Hd, sc, cam.rot, cam.x, cam.y, OBLIQUE_K, Math.max(60_000, Math.max(Wd, Hd) / sc * 4));
+    const r = Math.hypot(us.x, us.y) || 1;
+    const sun = [-us.x / r * Math.cos(SUN_RAISE), -us.y / r * Math.cos(SUN_RAISE), Math.sin(SUN_RAISE)];
+    const half = Math.min(Math.max(Wd, Hd) / sc * 0.62, 5000);
+    const out = renderScene({
+      w: Wd, h: Hd, ...camera, sun, sunI: 3.2, exposure: 1, objects: objs, t, pxPerM: sc,
+      shadowBox: { cx: cam.x, cy: cam.y, cz: 0, half, depth: half }, rock,
+      // the sunlit ground below lights the undersides a little
+      bounce: rock ? { dir: rock.n, col: rock.albedo.map(v => v * 0.45 * Math.max(0, rock.n[0] * sun[0] + rock.n[1] * sun[1] + 0.3)) } : null,
+      fill: fillLight(st, rock, sun),
+    });
+    if (!out) return false;
+    const ctx = fc.ctx;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(out.canvas, out.sx, out.sy, out.w, out.h, 0, 0, Wd, Hd);
+    ctx.restore();
+    return true;
+  }
+
   render(state, alpha, opts = {}) {
     const fc = this.fc;
     if (!fc.fit()) return;
@@ -242,9 +303,46 @@ export class ExteriorView {
     ctx.fillRect(0, 0, W, H);
     for (const s of this.stars) { ctx.fillStyle = `rgba(200,215,235,${s.b * 0.5})`; ctx.fillRect(s.x * W, s.y * H, 1, 1); }
 
-    // A rock under a surface port
+    // What is in the picture, posed: stations turned with their rock, hulls in a berth (posed by it) or
+    // flying, and ours (mated at a collar, or flying)
+    for (const o of objects) {
+      const e = o.e;
+      if (e.type === 'station') { o.pose = { mx: o.dx, my: o.dy, mz: 0, angle: stationAngle(e.orbit, tm) }; continue; }
+      const hull = e.type === 'ship' ? hullOf(e.cls) : null;
+      if (!hull) continue;
+      let pose = null;
+      if (e.tags?.berth && e.tags.at) {
+        const host = world.get(e.tags.at);
+        const b = host && berthOf(host.id, e.tags.berth);
+        const port = b && hull.ports.find(p => b.accepts.includes(p.size));
+        if (b && port) {
+          const fr = berthFrame(state, host, b, tm);
+          const mp = matePose(fr, port);
+          pose = { mx: (mp.center.x - us.x) * AU_M, my: (mp.center.y - us.y) * AU_M, mz: mp.offZ, facing: mp.facing, view: mp.view, R: mp.R };
+        }
+      }
+      o.pose = pose || { mx: o.dx, my: o.dy, mz: 0, facing: facingOf(e), view: 'top', R: null };
+      o.hull = hull;
+    }
+    const ours = hullOf(state.ship.classId || PLAYER_CLASS);
+    const mine = { mx: 0, my: 0, mz: 0, facing: ourPose ? ourPose.facing : f.facing, view: ourPose ? ourPose.view : 'top', R: null };
+    if (ourPose?.R) {
+      // mated: the collar's rotation, turned by the yaw the dock holds; our centre off the plane by our port's place
+      const yaw = d.rel?.yaw || 0, c = Math.cos(yaw), s = Math.sin(yaw);
+      const rz = (v) => [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+      mine.R = { X: rz(ourPose.R.X), Y: rz(ourPose.R.Y), Z: rz(ourPose.R.Z) };
+      const port = ours.ports.find(p => p.id === d.port) || ours.ports[0];
+      mine.mz = -turn(ourPose.R, [port.x, port.y, port.z])[2];
+    }
+    const ourPlume = d?.phase === 'approach' ? state.$dockThrust || 0 : f.thrustG;
+    const ourRcs = Math.min(1, (d && IN_FRAME_PHASES.has(d.phase) ? state.$dockRcs || 0 : 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0));
+
+    // The picture itself: on the GPU, lit solids in sunlight (ships3d.js); else drawn flat
     const st = objects.find(o => o.e.type === 'station');
-    if (st) drawBody(ctx, st.e, us, tm, toS, sc, W, H);
+    const solid = opts.gpu !== false && this.solid(state, objects, st, us, tm, t, fc, { ours, mine, ourPlume });
+    if (!solid && st) drawBody(ctx, st.e, us, tm, toS, sc, W, H);
+    // (a thing off the plane shows to the side as the drone looks down at it: OBLIQUE_K)
+    const toS3 = (mx, my, mz) => { const [x, y] = toS(mx, my); return [x + (solid ? OBLIQUE_K * mz * sc : 0), y]; };
 
     const hits = this._hits;
     hits.length = 0;
@@ -258,7 +356,7 @@ export class ExteriorView {
       const m = stationModel(o.e.id);
       const [sx, sy] = toS(o.dx, o.dy);
       const occ = new Set(Object.keys(o.e.berths || {}));
-      drawStation(ctx, m, { x: sx, y: sy, angle: screenAngle(stationAngle(o.e.orbit, tm)), scale: sc, t, tint: factionColor(o.e.faction), occupied: occ, highlight: state.dock?.target.id === o.e.id ? state.dock.berth : null, labels: sc > 0.04 });
+      drawStation(ctx, m, { x: sx, y: sy, angle: screenAngle(o.pose.angle), scale: sc, t, tint: factionColor(o.e.faction), occupied: occ, highlight: state.dock?.target.id === o.e.id ? state.dock.berth : null, labels: sc > 0.04, partsOff: solid });
       hits.push({ id: o.e.id, x: sx, y: sy });
       const mk = marksOf(fm, o.e.id);
       if (sc * m.sizeM < 2000) L.add(o.e.name, sx, sy, { off: 14, font: LABEL_FONT, color: factionColor(o.e.faction), alpha: 0.85, pri: 5 + markPri(mk), above: true, tags: labelTags(mk) });
@@ -266,24 +364,10 @@ export class ExteriorView {
     }
     // Other ships: in a berth (posed by the berth), or flying
     for (const o of objects) {
-      const e = o.e;
-      if (e.type !== 'ship') continue;
-      const hull = hullOf(e.cls);
-      if (!hull) continue;
-      let pose = null;
-      if (e.tags?.berth && e.tags.at) {
-        const host = world.get(e.tags.at);
-        const b = host && berthOf(host.id, e.tags.berth);
-        const port = b && hull.ports.find(p => b.accepts.includes(p.size));
-        if (b && port) {
-          const fr = berthFrame(state, host, b, tm);
-          const mp = matePose(fr, port);
-          pose = { mx: (mp.center.x - us.x) * AU_M, my: (mp.center.y - us.y) * AU_M, facing: mp.facing, view: mp.view };
-        }
-      }
-      if (!pose) pose = { mx: o.dx, my: o.dy, facing: facingOf(e), view: 'top' };
-      const [sx, sy] = toS(pose.mx, pose.my);
-      drawHull(ctx, hull, { x: sx, y: sy, facing: screenAngle(pose.facing), scale: sc, view: pose.view, tint: factionColor(e.faction), plume: e.thrust || 0, t, ports: true });
+      const e = o.e, hull = o.hull, pose = o.pose;
+      if (e.type !== 'ship' || !hull) continue;
+      const [sx, sy] = toS3(pose.mx, pose.my, pose.mz);
+      if (!solid) drawHull(ctx, hull, { x: sx, y: sy, facing: screenAngle(pose.facing), scale: sc, view: pose.view, tint: factionColor(e.faction), plume: e.thrust || 0, t, ports: true });
       // (kilometres out a hull is a few pixels: a mark in its colour, as ours has; hollow if it runs dark)
       const mk = marksOf(fm, e.id, isDark(e), e.tags?.wreck);
       if (hull.L * sc < 8) {
@@ -292,7 +376,7 @@ export class ExteriorView {
       }
       hits.push({ id: e.id, x: sx, y: sy });
       // (its name beside the hull, never on it or on another's: labels.js; until we know it, what it is to us)
-      const [hx, hy] = hullBox(hull, screenAngle(pose.facing), sc);
+      const [hx, hy] = hullBox(hull, screenAngle(pose.facing), sc, solid);
       if (hull.L * sc > 6) L.block(sx - hx, sy - hy, sx + hx, sy + hy);
       if (marks) {
         const r = Math.max(hx, hy, 4);
@@ -339,12 +423,12 @@ export class ExteriorView {
     }
 
     // Our hull
-    const ours = hullOf(state.ship.classId || PLAYER_CLASS);
-    const mine = ourPose ? { mx: 0, my: 0, facing: ourPose.facing, view: ourPose.view } : { mx: 0, my: 0, facing: f.facing, view: 'top' };
-    const [ox, oy] = toS(mine.mx, mine.my);
-    drawHull(ctx, ours, { x: ox, y: oy, facing: screenAngle(mine.facing), scale: sc, view: mine.view, tint: '#5FD38D', plume: d?.phase === 'approach' ? state.$dockThrust || 0 : f.thrustG, rcs: Math.min(1, (d && IN_FRAME_PHASES.has(d.phase) ? state.$dockRcs || 0 : 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0)), t, ports: d?.port || true });
+    const [ox, oy] = toS3(mine.mx, mine.my, mine.mz);
+    const ourArt = { x: ox, y: oy, facing: screenAngle(mine.facing), scale: sc, view: mine.view, tint: '#5FD38D', plume: ourPlume, rcs: ourRcs, t, ports: d?.port || true };
+    if (solid) drawHullMarks(ctx, ours, ourArt);
+    else drawHull(ctx, ours, ourArt);
     if (ours.L * sc < 8) { ctx.fillStyle = '#5FD38D'; ctx.fillRect(ox - 2, oy - 2, 4, 4); }
-    { const [hx, hy] = hullBox(ours, screenAngle(mine.facing), sc); L.block(ox - hx, oy - hy, ox + hx, oy + hy); }
+    { const [hx, hy] = hullBox(ours, screenAngle(mine.facing), sc, solid); L.block(ox - hx, oy - hy, ox + hx, oy + hy); }
 
     // The names, placed last (the scale bar keeps its corner)
     L.block(0, H - 28, 220, H);
@@ -405,10 +489,44 @@ const fmtKm = (m) => m >= 10_000 ? `${Math.round(m / 1000).toLocaleString()} km`
 const LABEL_FONT = '10px "IBM Plex Mono", monospace';
 const shortName = (text) => text.length > 26 ? text.slice(0, 25) + '…' : text;
 
-/** Half the screen box a hull fills, turned to `angle`: [across, up and down] in px. */
-function hullBox(hull, angle, sc) {
+/** Half the screen box a hull fills, turned to `angle`: [across, up and down] in px (solid: its height shows to the side too). */
+function hullBox(hull, angle, sc, solid = false) {
   const c = Math.abs(Math.cos(angle)), s = Math.abs(Math.sin(angle));
-  return [(c * hull.L + s * hull.W) / 2 * sc, (s * hull.L + c * hull.W) / 2 * sc];
+  return [((c * hull.L + s * hull.W) / 2 + (solid ? OBLIQUE_K * hull.H / 2 : 0)) * sc, (s * hull.L + c * hull.W) / 2 * sc];
+}
+
+/** A hull's model matrix from its pose: the rotation a collar gives it, or flying in the plane. */
+function poseMatrix(p) {
+  return p.R ? mat4.basis(p.R.X, p.R.Y, p.R.Z, [p.mx, p.my, p.mz || 0]) : hullMatrix(p.mx, p.my, p.facing, p.view, p.mz || 0);
+}
+
+/**
+ * Light besides the Sun's: near a port its floodlights, strong when the port
+ * is on its rock's night side (shining down off the towers, out of the plane
+ * toward the drone); far from one only the faint glow of the sky.
+ */
+function fillLight(st, rock, sun) {
+  if (!st) return { dir: [0.3, -0.2, 1], col: [0.02, 0.021, 0.025] };
+  const up = rock ? rock.n : [0, 1, 0];
+  const day = rock ? Math.max(0, Math.min(1, (up[0] * sun[0] + up[1] * sun[1]) * 3 + 0.4)) : 1;
+  const k = 0.15 + 1.3 * (1 - day);
+  return { dir: [up[0] * 0.5 - 0.2, up[1] * 0.5 + 0.1, 1], col: [k * 0.95, k * 0.98, k * 1.04] };
+}
+
+/** The ground's albedo (linear) on the rocks ports stand on: Ceres and Phobos dark, Vesta bright. */
+const ROCK_ALBEDO = { Ceres: [0.1, 0.095, 0.09], Pallas: [0.15, 0.155, 0.16], Vesta: [0.32, 0.29, 0.26], Phobos: [0.075, 0.066, 0.06] };
+
+/** The rock under a surface port as the GPU draws it (ships3d.js): its surface under the station, its radius. */
+function rockOf(st, us, tm) {
+  const b = getBody(st.e.orbit?.body);
+  if (!b || st.e.orbit.r * AU_M > b.radius * 1000 * 1.05) return null;
+  const c = bodyPos(b, tm / DAY_MIN);
+  const cx = (c.x - us.x) * AU_M, cy = (c.y - us.y) * AU_M, R = b.radius * 1000;
+  const dx = st.dx - cx, dy = st.dy - cy, l = Math.hypot(dx, dy) || 1;
+  const n = [dx / l, dy / l, 0];
+  let seed = 0;
+  for (const ch of b.name) seed = (seed * 31 + ch.charCodeAt(0)) % 997;
+  return { S: [cx + n[0] * R, cy + n[1] * R, 0], n, along: [-n[1], n[0], 0], R, albedo: ROCK_ALBEDO[b.name] || [0.12, 0.115, 0.11], seed };
 }
 
 /**

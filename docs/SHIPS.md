@@ -162,7 +162,7 @@ Every class has a physical hull (`hullOf`, `sim/hulls.js`): parts in metres, bui
 | Torch raider | 3–6 | 4 | 35 × 6 × 5 m | S nose · S port flank | — |
 | Armed runner (stolen courier) | 2–5 | 3 | 40 × 7 × 6 m | S nose · S port flank | belly |
 
-The tactical display, the exterior view (a drone's camera), the telescope, the docking camera, the ship picker and the library draw hulls from these models (`ui/hull-art.js`): from above, from below or along a flank as the pose shows it.
+The tactical display, the docking camera, the ship picker and the library draw hulls from these models flat (`ui/hull-art.js`): from above, from below or along a flank as the pose shows it. The exterior view (a drone's camera) and the telescope render them as lit solids on the GPU (`ui/gl/hullmesh.js`, `ui/gl/ships3d.js`): every module a plated can with its frame rings and ports, what a hull carries outside (collars with their latches, RCS quads, radiator frames and manifolds, welded tanks, the drive bell and its gimbal frame, PDC turrets, sensor dishes), in each hull's pose, in sunlight.
 
 ## Our ship
 

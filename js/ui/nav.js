@@ -13,13 +13,19 @@
 // wherever it is listed; F (or FLAG on the card and the panel) flags what
 // is picked, and the CONTEXT panel lists the flags. LOOK on a contact's
 // card or panel, or a world's (or Z), puts the telescope on it (stage.js).
+// A contact on the board has one sheet in the CONTEXT panel on every
+// display (contactSheet): who it is, how it moves against us, its drive
+// (the G it pulls, its thrust, its plume, its signature), what it is.
+// Range and relative speed there, in the route's status, on the ship
+// panel and on the telescope are all hud.js relativeTo's, at the sim's
+// minute: one figure everywhere.
 // ============================================================
 
 import { ui } from './context.js';
 import { $, $$, esc, setText, setHTML, show, toggleClass, fmtSpeed, fmtMeters, fmtKm, fmtG, fmtNum, fmtAngle } from './dom.js';
 import { toast } from './toast.js';
 import { logEntry } from './log.js';
-import { AU_M, AU_KM, RANGE, DAY_MIN } from '../core/constants.js';
+import { AU_M, AU_KM, RANGE, DAY_MIN, G0 } from '../core/constants.js';
 import { formatDuration } from '../core/clock.js';
 import { getBody, BODIES } from '../sim/ephemeris.js';
 import { getWorld } from '../sim/world.js';
@@ -28,7 +34,9 @@ import { engageRoute, abortRoute, overrideSecure, forceTurn, TURN_HOLD_MAX_MIN }
 import { crewSecureStatus, isSecured } from '../sim/crew-ai.js';
 import { driveLimitG, systemPerf, flightComputerState } from '../sim/systems.js';
 import { isConscious } from '../sim/crew.js';
-import { SENSOR_RANGES, REVEAL, setSensorRange, selectContact, toggleLock, contactById, isDark } from '../sim/sensors.js';
+import { SENSOR_RANGES, REVEAL, setSensorRange, selectContact, toggleLock, contactById, isDark, signatureRange, hullSignature } from '../sim/sensors.js';
+import { pointMag, PLUME_W_PER_N } from '../sim/telescope.js';
+import { facingOf } from '../sim/docking.js';
 import { toggleFlag, flagOf, flagList, clearFlags, missionTargets, knownName, FLAG_LETTERS } from '../sim/flags.js';
 import { missionForEntity } from '../sim/missions.js';
 import { dockedStation } from '../sim/contracts.js';
@@ -478,23 +486,14 @@ function renderSelection() {
   const routing = ap && ap.plan.target.id === t.id;
   const canHail = t.kind === 'entity' && inRadio(s, t.id);
 
-  if ((ui.nav.tab === 'scanner' || ui.nav.tab === 'tactical') && t.kind === 'entity') {
-    const c = contactById(s, t.id);
-    if (!c) return;
+  // A contact on the board: the whole sheet, on every display (the same numbers the ship panel, the
+  // route and the telescope give: one moment, the sim's minute)
+  const c = t.kind === 'entity' ? contactById(s, t.id) : null;
+  if (c) {
     const lock = s.sensors.locked === t.id;
-    const row = (k, v, cls = '') => `<div class="scanner-detail-row"><span class="scanner-detail-key">${k}</span><span class="scanner-detail-val ${cls}">${v}</span></div>`;
+    const board = ui.nav.tab === 'scanner' || ui.nav.tab === 'tactical';
     const html = `<div class="scanner-detail-header">${c.sos ? '<span class="scanner-sos-tag">⚠ SOS</span> ' : ''}${esc(c.name || c.signature || 'CONTACT')}${markChips(marksFor(s, t) || {})}</div>
-      ${row('TRANSPONDER', c.name ? esc(c.name) : 'SILENT', c.name ? 'scanner-val-accent' : 'scanner-val-dim')}
-      ${row('SIGNATURE', c.signature || '—')}
-      ${row('FACTION', c.faction || '—', c.faction ? '' : 'scanner-val-dim')}
-      ${row('CLASS', c.shipClass ? libRef(d.entity, esc(c.shipClass)) : '—')}
-      ${row('RANGE', fmtKm(c.dist * AU_KM))}
-      ${row('LIGHT LAG', c.lagS < 0.1 ? '< 0.1 s' : `${c.lagS.toFixed(1)} s`, 'scanner-val-dim')}
-      ${row('REL SPEED', c.velocityKnown && rel ? fmtSpeed(rel.speed) : `scanning… ${Math.max(0, REVEAL.VELOCITY - c.scan)}m`)}
-      ${row('BEARING', fmtAngle(c.bearing - s.flight.facing))}
-      ${row('DRIVE', c.thrust || (c.scan < REVEAL.THRUST ? '…' : '—'), c.thrust && c.thrust !== 'COASTING' ? 'scanner-val-warn' : '')}
-      ${row('MASS', c.mass ? fmtNum(c.mass / 1000, 1) + ' kt' : '…')}
-      ${shipRows(s, d.entity, c, row)}
+      ${contactSheet(s, d.entity, c, rel)}
       <div class="panel-actions">
         <button class="scanner-track-btn ${lock ? 'tracking' : ''}" data-act="lock">${lock ? 'UNLOCK' : 'LOCK'}</button>
         ${routing ? '<button class="scanner-intercept-btn intercepting" data-act="abort">ABORT INTERCEPT</button>' : '<button class="scanner-intercept-btn" data-act="plot">INTERCEPT</button>'}
@@ -503,6 +502,7 @@ function renderSelection() {
         ${!c.ordnance ? `<button class="scanner-track-btn ${s.combat.target === t.id ? 'tracking' : ''}" data-act="target">${s.combat.target === t.id ? 'TARGETED' : 'TARGET'}</button>` : ''}
         ${dockButton(s, d.entity)}
         ${!c.ordnance && !c.station && boardable(s, d.entity).ok ? `<button class="scanner-track-btn" data-act="board">${d.entity?.tags?.wreck ? 'SALVAGE' : 'BOARD'}</button>` : ''}
+        ${board ? '' : '<button class="scanner-track-btn" data-act="focus">FOCUS</button>'}
         ${lookButton('scanner-track-btn')}
         ${flaggable(d.entity) ? flagButton(s, t.id, 'scanner-track-btn') : ''}
       </div>`;
@@ -639,6 +639,78 @@ function onPanelClick(e) {
 }
 
 /** What we know of a ship's hull and people, for the contact panel. */
+const sheetRow = (k, v, cls = '', tip = '') => `<div class="scanner-detail-row"${tip ? ` title="${esc(tip)}"` : ''}><span class="scanner-detail-key">${k}</span><span class="scanner-detail-val ${cls}">${v}</span></div>`;
+const sheetHead = (k) => `<div class="scanner-detail-sub">${k}</div>`;
+
+/**
+ * What the board holds on a contact, as precisely as our sensors have it:
+ * who it is; how it moves against us (range, range rate, relative speed,
+ * where it passes closest, which way its nose points); its drive (lit or
+ * cold, the G it pulls, the thrust that takes at its mass, how bright the
+ * plume is from here, its signature when lit) and what it is. Range and
+ * speeds are relativeTo's (hud.js): the same figures as the ship panel,
+ * the route and the telescope. What a longer look has not yet given is
+ * marked with the minutes still to scan.
+ */
+function contactSheet(s, e, c, rel) {
+  const row = sheetRow;
+  const wait = (need) => `scanning… ${Math.max(1, need - c.scan)}m`;
+  const out = [];
+  out.push(row('TRANSPONDER', c.name ? esc(c.name) : c.dark ? 'SILENT · running dark' : 'SILENT', c.name ? 'scanner-val-accent' : 'scanner-val-dim'));
+  if (!c.ordnance) {
+    out.push(row('CLASS', c.shipClass ? libRef(e, esc(c.shipClass)) : '—'));
+    out.push(row('FACTION', c.faction || '—', c.faction ? '' : 'scanner-val-dim'));
+  }
+  // ---- how it moves against us
+  out.push(sheetHead('MOTION'));
+  if (rel) {
+    out.push(row('RANGE', fmtMeters(rel.dist)));
+    if (c.velocityKnown) {
+      const rate = rel.closing > 0.5 ? `▼ ${fmtSpeed(rel.closing)} closing` : rel.closing < -0.5 ? `▲ ${fmtSpeed(-rel.closing)} opening` : 'holding';
+      out.push(row('RANGE RATE', rate, rel.closing > 0.5 ? 'scanner-val-warn' : ''));
+      out.push(row('REL V', fmtSpeed(rel.speed)));
+      const cpa = closestApproach(rel);
+      if (cpa) out.push(row('CLOSEST', cpa.tS > 0 ? `${fmtMeters(cpa.dM)} in ${formatDuration(cpa.tS / 60)}` : 'passed: opening', '', 'Where it passes closest to us if neither of us changes course'));
+    } else out.push(row('REL V', wait(REVEAL.VELOCITY), 'scanner-val-dim'));
+  }
+  out.push(row('BEARING', `${fmtAngle(c.bearing - s.flight.facing)} off our nose`));
+  if (e && e.type !== 'station') {
+    if (c.headingKnown) {
+      const toUs = Math.atan2(-Math.sin(c.bearing), -Math.cos(c.bearing));
+      const off = Math.abs(Math.atan2(Math.sin(facingOf(e) - toUs), Math.cos(facingOf(e) - toUs))) * 180 / Math.PI;
+      const asp = off < 25 ? 'nose on to us' : off > 155 ? 'tail to us' : off > 65 && off < 115 ? 'broadside' : off < 90 ? 'nose toward us' : 'nose away';
+      out.push(row('ASPECT', `${asp} · ${Math.round(off)}°`));
+    } else out.push(row('ASPECT', wait(REVEAL.HEADING), 'scanner-val-dim'));
+  }
+  out.push(row('LIGHT LAG', c.lagS < 0.1 ? '< 0.1 s' : `${c.lagS.toFixed(1)} s`, 'scanner-val-dim'));
+  // ---- its drive
+  if (e && e.type !== 'station') {
+    out.push(sheetHead('DRIVE'));
+    if (c.thrust != null) {
+      const g = e.thrust || 0;
+      out.push(row('G-LOAD', g > 0 ? `${g.toFixed(2)} G · drive lit` : '0 G · drive cold, coasting', g > 0 ? 'scanner-val-warn' : ''));
+      if (g > 0) {
+        if (c.mass) out.push(row('THRUST', `${fmtNum(g * G0 * c.mass / 1e3, 1)} MN at ${fmtNum(c.mass / 1000, 1)} kt`, ''));
+        out.push(row('PLUME', `mag ${pointMag((c.mass ? g * G0 * c.mass * 1000 : 0) * PLUME_W_PER_N, rel?.dist || c.dist * AU_M).toFixed(1)} from here · seen to ${fmtKm(signatureRange(e) * AU_KM)}`, 'scanner-val-dim'));
+      }
+    } else out.push(row('G-LOAD', c.plume ? `drive lit · ${wait(REVEAL.THRUST)}` : wait(REVEAL.THRUST), c.plume ? 'scanner-val-warn' : 'scanner-val-dim'));
+    out.push(row('SIGNATURE', c.signature ? esc(c.signature) : c.plume ? '…' : 'unread: the drive is cold', c.signature ? '' : 'scanner-val-dim', 'A drive signature is read from the plume, while the drive is lit'));
+    if (!c.plume && !c.ordnance) out.push(row('COLD SIG', `radar holds it to ${fmtKm(hullSignature(e) * AU_KM)}`, 'scanner-val-dim'));
+  }
+  out.push(row('MASS', c.mass ? `${fmtNum(c.mass / 1000, 1)} kt` : wait(REVEAL.MASS), c.mass ? '' : 'scanner-val-dim'));
+  out.push(shipRows(s, e, c, row));
+  return out.join('');
+}
+
+/** Where two straight courses pass closest: distance (m) and in how long (s), or null without relative motion. */
+function closestApproach(rel) {
+  const vx = -rel.dvx, vy = -rel.dvy, v2 = vx * vx + vy * vy;
+  if (v2 < 1e-6) return null;
+  const tS = -(rel.dx * vx + rel.dy * vy) / v2;
+  if (tS <= 0) return { tS, dM: rel.dist };
+  return { tS, dM: Math.hypot(rel.dx + vx * tS, rel.dy + vy * tS) };
+}
+
 function shipRows(s, e, c, row) {
   if (!e || e.type !== 'ship' || c.ordnance) return '';
   const known = !!c.name;
@@ -924,7 +996,10 @@ function renderRouteStatus(state, eta, box, full) {
   if (!visible) return;
   if (ap.plan.kind === 'stance') { renderStanceStatus(state, eta, box, full); return; }
   const name = targetName(state, ap.plan.target);
+  // (the range and relative speed every panel gives, and the sense of it: hud.js relativeTo)
+  const rel = relativeTo(state, ap.plan.target);
   const dist = ap.d != null ? Math.max(0, ap.d - ap.plan.standoff) : null;
+  const motion = rel ? `${fmtMeters(rel.dist)} · ${fmtSpeed(rel.speed)}${rel.closing > 0.5 ? ' ▼' : rel.closing < -0.5 ? ' ▲' : ''}` : dist != null ? fmtMeters(dist) : '';
   const tp = targetStateAt(state, ap.plan.target, state.clock.minute)?.pos;
   const total = tp ? Math.hypot(ap.startPos.x - tp.x, ap.startPos.y - tp.y) * AU_M : 0;
   const frac = dist != null && total > 0 ? Math.max(0, Math.min(1, 1 - dist / total)) : 0;
@@ -934,7 +1009,7 @@ function renderRouteStatus(state, eta, box, full) {
   if (!full) {
     setHTML(box, `<div class="route-status-summary">
       <div class="route-status-progress"><div class="route-status-fill" style="width:${(frac * 100).toFixed(1)}%"></div></div>
-      <span class="route-status-eta">${dist != null ? fmtMeters(dist) + ' · ' : ''}${fmtSpeed(ap.relSpeed)} · ETA ${etaTxt}${flip}</span>
+      <span class="route-status-eta">${motion} · ETA ${etaTxt}${flip}</span>
       <button class="route-abort-btn" data-act="abort">ABORT</button>
     </div>`);
     return;
@@ -943,7 +1018,7 @@ function renderRouteStatus(state, eta, box, full) {
       <span class="route-status-dest">→ ${esc(name)}</span>
       <span class="route-status-phase phase-${ap.helm === 'unmanned' ? 'unmanned' : ap.display}">${esc(phase)}${flip}</span>
       <div class="route-status-progress"><div class="route-status-fill" style="width:${(frac * 100).toFixed(1)}%"></div></div>
-      <span class="route-status-eta">${dist != null ? fmtMeters(dist) + ' · ' : ''}${fmtSpeed(ap.relSpeed)} · ETA ${etaTxt}</span>
+      <span class="route-status-eta">${motion} · ETA ${etaTxt}</span>
       <button class="route-abort-btn" data-act="abort">ABORT</button>
     </div>`;
   setHTML(box, html);

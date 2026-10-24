@@ -5,11 +5,12 @@
 // or a world, as its camera would: from where we are, along the line of
 // sight, the plane's up as up. The physics decides everything drawn:
 //
-//   a hull many resolution elements long is its shape, side on,
-//   foreshortened by the angle we see it at, lit from the Sun's side (or
-//   its night side, nearly black but for its lit limb), blurred to what
-//   the camera resolves; a few elements, a smudge; under one, a point of
-//   light as bright as its magnitude against what the frame reaches
+//   a hull many resolution elements long is its shape: the solid (on the
+//   GPU, gl/ships3d.js) seen along our line of sight, rolled as its crew
+//   left it, lit by the Sun at its true phase (or its night side, nearly
+//   black but for its lit limb), blurred to what the camera resolves; a
+//   few elements, a smudge; under one, a point of light as bright as its
+//   magnitude against what the frame reaches
 //   a lit drive is a star at the stern, the mirror's diffraction spikes on
 //   it; the hull is lost in its glare unless the plume filter takes the
 //   drive's lines out (FILTER on the bar: PLUME, DEEP), and looking aft
@@ -21,7 +22,8 @@
 //   between us and a ship hides it
 //   a fight is what it would look like (scope-fx.js): flashes that white
 //   out the sensor, fireballs kilometres across, fragments and venting air,
-//   PDC tracers reaching for a torpedo
+//   PDC tracers reaching for a torpedo, a hull raked by guns (the hits on
+//   the faces we see of the solid, where it projects them)
 //   behind, the stars, as many as the exposure picks up, drifting as the
 //   mount tracks, streaking as it slews; the sensor's noise rising as the
 //   camera reaches for faint things
@@ -51,15 +53,18 @@ import { launchedBy } from '../sim/ordnance.js';
 import { PLAYER } from '../sim/combatants.js';
 import { isIdentified, isDark } from '../sim/sensors.js';
 import { hullOf } from '../sim/hulls.js';
-import { stationModel } from '../sim/stations.js';
+import { stationModel, stationAngle } from '../sim/stations.js';
+import { facingOf } from '../sim/docking.js';
 import { factionColor } from '../sim/factions.js';
 import { FitCanvas, fmtKm } from './dom.js';
 import { drawHull, drawStation } from './hull-art.js';
 import { ourPlace } from './exterior.js';
+import { relativeTo } from './hud.js';
 import { fxList } from './fx.js';
 import { frameMarks, marksOf, markWords } from './marks.js';
 import { ScopeFx } from './scope-fx.js';
 import { SkyPainter, drawStars, hash } from './scope-sky.js';
+import { has3D, renderScene, orthoCamera, hullMatrix, stationMatrix } from './gl/ships3d.js';
 
 const C_MS = 299_792_458;
 const NIGHT = 2.3;               // rad of phase: past this we see the night side
@@ -130,6 +135,7 @@ export class ScopeView {
     const world = getWorld(state);
     const a = clamp(alpha ?? 1, 0, 1);
     const tm = state.clock.minute + a;
+    this.tm = tm;
     const sc = scopeOf(state);
     const filter = FILTERS[this.filter] || FILTERS.off;
     const lock = target ? lockOn(state, target, sc) : null;
@@ -314,9 +320,23 @@ export class ScopeView {
       toScreen: (pos) => { const d = Math.max(1, Math.hypot(pos.x - us.x, pos.y - us.y) * AU_M); return [W / 2 - angDiff(Math.atan2(pos.y - us.y, pos.x - us.x), bearing) * ppr, H / 2, d]; },
       pose: (id) => this.poses.get(id) || null,
       threat: (id) => threats.get(id)?.xy || null,
+      // where any other thing is on the screen (off it or not); we are the camera, nowhere
+      at: (id) => { if (id === PLAYER) return null; const o = world.get(id); return o ? fxView.toScreen(predictEntity(o, tm, world).pos) : null; },
+    };
+    // (how far apart two things are, and how fast they close: a gun's rounds take their time to cross it)
+    const kin = (id) => {
+      if (id === PLAYER) return { x: us.x, y: us.y, vx: state.flight.vel.vx, vy: state.flight.vel.vy };
+      const o = world.get(id);
+      return o ? { ...predictEntity(o, tm, world).pos, vx: o.vel.vx, vy: o.vel.vy } : null;
     };
     this.fx.ingest(fxList(), {
       now, tm, pose: fxView.pose, velOf,
+      between: (a, b) => {
+        const p = kin(a), q = kin(b);
+        if (!p || !q) return null;
+        const dx = (q.x - p.x) * AU_M, dy = (q.y - p.y) * AU_M, d = Math.max(1, Math.hypot(dx, dy));
+        return { distM: d, closing: -((q.vx - p.vx) * dx + (q.vy - p.vy) * dy) / d };
+      },
       burst: (pos, sizeM, until) => {
         const d = Math.max(1, Math.hypot(pos.x - us.x, pos.y - us.y) * AU_M);
         if (Math.abs(angDiff(Math.atan2(pos.y - us.y, pos.x - us.x), bearing)) < fov) this.burst = { fov: sizeM / d / 0.8, until };
@@ -355,6 +375,7 @@ export class ScopeView {
     const mode = this.slew ? 'SLEWING' : lost ? 'HOLDING LAST POSITION' : hider ? 'OCCULTED' : lock && !lock.ok ? (lock.why === 'range' ? 'NO LOCK' : 'NO TRACK') : 'TRACKING';
     this.hud(ctx, W, H, state, {
       sc, sight: hider ? null : sight, wv, lock, name: named, marks, fov, ppr, box: box || this.worldBox, own, faction: e?.faction, lost, hider, mode,
+      rangeM: e && !lost ? relativeTo(state, { kind: 'entity', id: e.id })?.dist : null,
       expS, gain, filter, sunInField, sunOff, us, bearing, lag: sight?.lagS ?? wv?.lagS ?? null, event: this.fx.event(now),
     });
   }
@@ -403,7 +424,7 @@ export class ScopeView {
     }
     if (lit && glareK > 0.5 && s.elements >= 6 && this.filter === 'off') this.hint = this.hint || 'plume';
     const b = box || { x0: x - 10, y0: y - 10, x1: x + 10, y1: y + 10 };
-    this.poses.set(e.id, { x, y, pxPerM, dir, fs: s.foreshorten, hull, box: box || null, distM: s.distM });
+    this.poses.set(e.id, { x, y, pxPerM, dir, fs: s.foreshorten, hull, box: box || null, distM: s.distM, solid: box?.solid || null });
     return b;
   }
 
@@ -412,6 +433,10 @@ export class ScopeView {
     const hull = e.type === 'ship' ? hullOf(e.cls) : null;
     const model = e.type === 'station' ? stationModel(e.id) : null;
     if (!hull && !model) return null;
+    if (has3D()) {
+      const b = this.solidShape(ctx, e, s, x, y, pxPerM, blurPx, alpha, t, hull, model);
+      if (b) return b;
+    }
     const L = hull ? hull.L : model.sizeM, Hm = heightOf(e);
     const wPx = L * s.foreshorten * pxPerM, hPx = Hm * pxPerM;
     const m = Math.ceil(blurPx * 3 + 6);
@@ -447,6 +472,61 @@ export class ScopeView {
     ctx.drawImage(off, 0, 0, ow * dpr, oh * dpr, x - ow / 2, y - oh / 2, ow, oh);
     ctx.restore();
     return { x0: x - wPx / 2, y0: y - hPx / 2, x1: x + wPx / 2, y1: y + hPx / 2 };
+  }
+
+  /**
+   * A hull (or a station) on the GPU (gl/ships3d.js): the solid seen along
+   * our line of sight with the plane's up as up, lit by the Sun at its true
+   * phase (the side toward it bright, its night side black but for what the
+   * sky gives back), blurred to what the optics resolve. Only the part in
+   * the frame is rendered. Returns its box, and how its own frame projects
+   * (the effects put hits and the guns' muzzles on it: scope-fx.js).
+   */
+  solidShape(ctx, e, s, x, y, pxPerM, blurPx, alpha, t, hull, model) {
+    const dpr = this.fc.dpr, W = this.fc.w, H = this.fc.h;
+    const b = s.bearing, f = [Math.cos(b), Math.sin(b), 0], right = [Math.sin(b), -Math.cos(b), 0];
+    // (a ship flying in the plane is rolled however its crew left it: a little of its back or its belly shows)
+    const m = hull ? rolled(hullMatrix(0, 0, facingOf(e), 'top'), (idHash(e.id) - 0.5) * 0.9) : stationMatrix(0, 0, stationAngle(e.orbit, this.tm));
+    const bb = hull ? hull.bounds : modelBounds(model);
+    // where its corners fall on the screen
+    let r0 = Infinity, r1 = -Infinity, u0 = Infinity, u1 = -Infinity;
+    for (const cx of [bb.x0, bb.x1]) for (const cy of [bb.y0, bb.y1]) for (const cz of [bb.z0, bb.z1]) {
+      const w = [m[0] * cx + m[4] * cy + m[8] * cz, m[1] * cx + m[5] * cy + m[9] * cz, m[2] * cx + m[6] * cy + m[10] * cz];
+      const rr = w[0] * right[0] + w[1] * right[1];
+      r0 = Math.min(r0, rr); r1 = Math.max(r1, rr); u0 = Math.min(u0, w[2]); u1 = Math.max(u1, w[2]);
+    }
+    const box = { x0: x + r0 * pxPerM, x1: x + r1 * pxPerM, y0: y - u1 * pxPerM, y1: y - u0 * pxPerM };
+    // (rendered only as far as the frame, and a margin for the blur)
+    const pad = Math.ceil(blurPx * 3 + 4);
+    const cx0 = Math.max(-pad, Math.floor(box.x0 - pad)), cx1 = Math.min(W + pad, Math.ceil(box.x1 + pad));
+    const cy0 = Math.max(-pad, Math.floor(box.y0 - pad)), cy1 = Math.min(H + pad, Math.ceil(box.y1 + pad));
+    if (cx1 <= cx0 || cy1 <= cy0) return { ...box, solid: null };
+    const wD = Math.min(4096, Math.ceil((cx1 - cx0) * dpr)), hD = Math.min(4096, Math.ceil((cy1 - cy0) * dpr));
+    const k = wD / (cx1 - cx0);
+    const mx = ((cx0 + cx1) / 2 - x) / pxPerM, my = (y - (cy0 + cy1) / 2) / pxPerM;
+    const L = hull ? hull.L : model.sizeM;
+    const cam = orthoCamera([right[0] * mx, right[1] * mx, my], f, [0, 0, 1], wD, hD, pxPerM * k, L * 2 + 200);
+    // the Sun, at the phase we see it at: on the side the sight says
+    const ph = s.phase, side = s.sunRight ? 1 : -1;
+    const sun = [-f[0] * Math.cos(ph) + right[0] * side * Math.sin(ph), -f[1] * Math.cos(ph) + right[1] * side * Math.sin(ph), 0.04];
+    const out = renderScene({
+      w: wD, h: hD, ...cam, sun, sunI: 3.4, exposure: 1.15, t, pxPerM: pxPerM * k,
+      objects: [{ kind: hull ? 'hull' : 'station', key: hull ? e.cls : e.id, model: hull || model, tl: e.tl ?? 2, m, tint: factionColor(e.faction), plume: 0, heat: Math.min(1, (e.thrust || 0) * 0.35), lights: !e.tags?.wreck && !isDark(e) }],
+      shadowBox: { cx: 0, cy: 0, cz: 0, half: L * 0.7, depth: L * 0.7 }, fill: { dir: [0, 0, 1], col: [0.012, 0.012, 0.015] },
+    });
+    if (!out) return null;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (blurPx > 0.35) ctx.filter = `blur(${blurPx.toFixed(1)}px)`;
+    ctx.drawImage(out.canvas, out.sx, out.sy, out.w, out.h, cx0, cy0, cx1 - cx0, cy1 - cy0);
+    ctx.restore();
+    // a point of its own frame (m) on the screen; is a face turned toward us
+    const proj = (p) => {
+      const w = [m[0] * p[0] + m[4] * p[1] + m[8] * p[2], m[1] * p[0] + m[5] * p[1] + m[9] * p[2], m[2] * p[0] + m[6] * p[1] + m[10] * p[2]];
+      return [x + (w[0] * right[0] + w[1] * right[1]) * pxPerM, y - w[2] * pxPerM];
+    };
+    const toUs = (n) => -(m[0] * n[0] + m[4] * n[1] + m[8] * n[2]) * f[0] - (m[1] * n[0] + m[5] * n[1] + m[9] * n[2]) * f[1];
+    return { ...box, solid: { proj, toUs, m, f, right } };
   }
 
   /** The sensor's noise: a still pattern, moved every frame. */
@@ -505,7 +585,8 @@ export class ScopeView {
     if (o.name) {
       ctx.textAlign = 'right';
       const lines = [[o.name + (o.marks || ''), o.faction ? factionColor(o.faction) : wv ? SUNC : TEXT]];
-      const d = s?.distM ?? wv?.distM ?? o.lost?.distM ?? o.lock?.distM;
+      // (a contact's range is the one every panel gives: hud.js relativeTo, at the sim's minute)
+      const d = o.rangeM ?? s?.distM ?? wv?.distM ?? o.lost?.distM ?? o.lock?.distM;
       if (wv) lines[0][0] += ` · ${KIND_WORD[wv.body.type] || 'BODY'}`;
       if (d != null) lines.push([`RANGE ${d > 0.02 * AU_M ? `${(d / AU_M).toFixed(3)} AU` : fmtKm(d / 1000)} · LIGHT ${lightTime(d)}`, TEXT]);
       if (s) {
@@ -559,6 +640,31 @@ export class ScopeView {
 }
 
 /** A hull's height across the line of sight (side on), m; a station's plan. */
+/** A hull's model matrix rolled about its own axis by `a` (rad). */
+function rolled(m, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  const Y = [m[4], m[5], m[6]], Z = [m[8], m[9], m[10]];
+  const out = Float32Array.from(m);
+  for (let i = 0; i < 3; i++) { out[4 + i] = Y[i] * c + Z[i] * s; out[8 + i] = Z[i] * c - Y[i] * s; }
+  return out;
+}
+
+/** A station model's extent (m, its own frame), worked once. */
+const _bounds = new WeakMap();
+function modelBounds(model) {
+  let b = _bounds.get(model);
+  if (b) return b;
+  b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, z0: Infinity, z1: -Infinity };
+  for (const p of model.parts) {
+    const e = p.k === 'box' ? [p.x0, p.x1, p.y0, p.y1, p.z0, p.z1] : p.k === 'cyl' ? [p.x0, p.x1, p.y - p.r, p.y + p.r, (p.z || 0) - p.r, (p.z || 0) + p.r]
+      : p.k === 'ring' ? [p.x - p.r - p.d, p.x + p.r + p.d, -p.r - p.d, p.r + p.d, -p.w / 2, p.w / 2] : null;
+    if (!e) continue;
+    b.x0 = Math.min(b.x0, e[0]); b.x1 = Math.max(b.x1, e[1]); b.y0 = Math.min(b.y0, e[2]); b.y1 = Math.max(b.y1, e[3]); b.z0 = Math.min(b.z0, e[4]); b.z1 = Math.max(b.z1, e[5]);
+  }
+  _bounds.set(model, b);
+  return b;
+}
+
 function heightOf(e) {
   if (e?.type === 'station') return (stationModel(e.id)?.sizeM || 1000) * 0.7;
   const h = e?.type === 'ship' ? hullOf(e.cls) : null;

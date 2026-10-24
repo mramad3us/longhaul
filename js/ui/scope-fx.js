@@ -20,10 +20,15 @@
 //   SLUG       a sharper, smaller hit: sparks and a puff
 //   INTERCEPT  a torpedo torn apart by a PDC stream: a spark, fragments,
 //              a little fire
-//   PDC        the guns firing: muzzle flashes flickering at the turrets,
-//              tracer streams (one round in ten) reaching out toward the
-//              torpedo, or, coming at us, radiating from the mount
-//   STRAFE     rounds walking over a hull: a scatter of sparks
+//   PDC        the guns firing: muzzle flashes flickering at the turrets
+//              (where the hull has them), tracer streams reaching out toward
+//              the torpedo, or, coming at us, blooming out of the muzzle
+//   STRAFE     rounds walking over a hull: ours converging on it from the
+//              frame's edges over their time of flight (the gap at the
+//              muzzle speed plus the closing speed: seconds, at a few km),
+//              then the hits on the faces we see (a white-hot
+//              strike, sparks thrown off the face, vaporised metal, a spot
+//              glowing and cooling, flakes of plating), the misses going on
 //
 // and the sensor's response to the brightest: the frame whiting out and
 // recovering, a bloom streak through the flash, ghosts of the flash
@@ -38,6 +43,7 @@
 
 import { AU_M } from '../core/constants.js';
 import { flashMag } from '../sim/telescope.js';
+import { PDC_MUZZLE } from '../sim/weapons.js';
 import { rng } from './scope-sky.js';
 
 const EVENT_WORDS = {
@@ -49,7 +55,7 @@ const EVENT_WORDS = {
   pdc: 'POINT DEFENSE FIRING · tracer streams reaching for the torpedo',
   strafe: 'PDC FIRE ON A HULL · rounds walking over it',
 };
-const LIFE_MS = { nuclear: 5200, fusion: 6800, he: 3600, kinetic: 2200, intercept: 1900, pdc: 1100, strafe: 1100 };
+const LIFE_MS = { nuclear: 5200, fusion: 6800, he: 3600, kinetic: 2200, intercept: 1900, pdc: 1100, strafe: 1300 };
 
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const ease = (t) => 1 - Math.pow(1 - clamp01(t), 3);
@@ -96,7 +102,12 @@ export class ScopeFx {
       if (kind === 'pdc' || kind === 'strafe') {
         const shooter = kind === 'pdc' ? fx.id : fx.from;
         if (!c.pose(shooter) && !(kind === 'strafe' && c.pose(fx.target))) continue;
-        this.add({ kind, born, seed, shooter, victim: kind === 'strafe' ? fx.target : null, defending: fx.defending });
+        // the rounds' time of flight, on the wall clock as everything here: the gap at the muzzle
+        // speed plus the closing speed (at 6 km, some five seconds before the first of them lands)
+        const aim = kind === 'strafe' ? fx.target : fx.defending;
+        const gap = aim && aim !== shooter ? c.between?.(shooter, aim) : null;
+        const tofS = gap ? Math.min(40, gap.distM / Math.max(300, PDC_MUZZLE + gap.closing)) : 2;
+        this.add({ kind, born, seed, shooter, victim: kind === 'strafe' ? fx.target : null, defending: fx.defending, dp: fx.dp, tofS });
         continue;
       }
       if (fx.x == null) continue;
@@ -115,7 +126,8 @@ export class ScopeFx {
   }
 
   add(e) {
-    e.life = LIFE_MS[e.kind];
+    // (a burst of fire lasts as long as its last rounds take to arrive, and their sparks to die)
+    e.life = e.tofS != null ? (GUN_BURST_S + e.tofS + 1.4) * 1000 : LIFE_MS[e.kind];
     this.list.push(e);
     this.until = Math.max(this.until, e.born + e.life);
     if (this.list.length > 80) this.list.shift();
@@ -131,9 +143,13 @@ export class ScopeFx {
       const age = (now - e.born) / e.life;
       if (age < 0 || age >= 1) continue;
       const rank = { nuclear: 5, fusion: 5, he: 3, kinetic: 2, intercept: 2, strafe: 1, pdc: 1 }[e.kind] || 0;
-      if (!best || rank > best.rank) best = { rank, kind: e.kind };
+      if (!best || rank > best.rank || (rank === best.rank && e.born < best.e.born)) best = { rank, kind: e.kind, e };
     }
-    return best && EVENT_WORDS[best.kind];
+    if (!best) return null;
+    // our rounds still on their way: how long until the first of them lands
+    const e = best.e, left = e.kind === 'strafe' && e.tofS != null ? e.tofS - (now - e.born) / 1000 : 0;
+    if (left > 0.15) return `PDC FIRE · rounds in flight, ${left.toFixed(1)} s to the hull (${e.tofS.toFixed(1)} s across)`;
+    return EVENT_WORDS[best.kind];
   }
 
   /**
@@ -202,6 +218,12 @@ export class ScopeFx {
 function placeOf(e, v) {
   if (e.onto) {
     const p = v.pose(e.onto);
+    if (p && p.solid && p.hull) {
+      // on the face of the 3D hull we see
+      const side = p.solid.toUs([0, 1, 0]) >= 0 ? 1 : -1;
+      const [x, y] = p.solid.proj([p.hull.L * e.local.x, side * p.hull.W / 2, p.hull.H * e.local.z]);
+      return { x, y, k: p.pxPerM, distM: p.distM, cx: p.x, cy: p.y };
+    }
     if (p) {
       const hx = (p.hull ? p.hull.L : 40) * e.local.x, hz = (p.hull ? Math.max(p.hull.W, p.hull.H || 0) : 10) * e.local.z;
       return { x: p.x + p.dir * p.fs * hx * p.pxPerM, y: p.y - hz * p.pxPerM, k: p.pxPerM, distM: p.distM, cx: p.x, cy: p.y };
@@ -382,16 +404,7 @@ const DRAW = {
   pdc(ctx, e, age, v) { guns(ctx, e, age, v, e.shooter, true); },
   strafe(ctx, e, age, v) {
     guns(ctx, e, age, v, e.shooter, false);
-    // rounds walking over the victim: sparks scattered over its face
-    const p = v.pose(e.victim);
-    if (!p) return;
-    const r = rng(e.seed + Math.floor(age * 18));
-    ctx.globalCompositeOperation = 'lighter';
-    const b = p.box;
-    for (let i = 0; i < 6; i++) {
-      const x = b ? b.x0 + r() * (b.x1 - b.x0) : p.x, y = b ? b.y0 + (0.25 + r() * 0.5) * (b.y1 - b.y0) : p.y;
-      v.point(ctx, x, y, 3 + r() * 3, v.psfPx, [255, 220, 170]);
-    }
+    raked(ctx, e, age, v);
   },
 };
 
@@ -429,44 +442,238 @@ function burst(ctx, e, age, v, S, o) {
   plates(ctx, e, age, P);
 }
 
-/** Guns firing from `shooter`: muzzle flashes at its turrets, tracer streams toward what it shoots at. */
+// ---- GUNFIRE ----
+// A PDC fires thousands of rounds a minute; one in five is a tracer. What a
+// camera sees of a stream depends on which way it runs: rounds of ours,
+// flying away from us at the target, come in from the edges of the frame
+// and converge on it (their angle off the line of sight shrinks as they go:
+// fast and long at first, then crawling in); rounds coming at us bloom
+// out from the muzzle and race off the frame; a stream across the field is
+// a line of dashes from the turret to what it shoots at. Where the rounds
+// meet a hull they strike the faces we see, walked along it by the gunner:
+// each a white-hot flash, sparks thrown off the face, a puff of vaporised
+// metal, a spot that glows on and cools, flakes of plating. No round is
+// there at once: each leaves the gun when it is fired and crosses the gap
+// at its speed (PDC_MUZZLE plus the closing speed), so the hits begin a
+// time of flight after the guns open up and go on that long after.
+
+const TRACER = [255, 214, 150], TRACER_HOT = [255, 244, 220];
+const GUN_BURST_S = 1.0;          // a burst of fire as shown: the guns firing this long, its rounds arriving a time of flight later
+const TRACERS_PER_S = 12;         // one round in five a tracer, per stream
+
+/** Soft light sprites (a radial falloff in a colour), made once and drawn scaled: far cheaper than a gradient each time. */
+const _sprites = new Map();
+function sprite(rgb, hard = false) {
+  const key = rgb.join(',') + (hard ? 'h' : '');
+  let c = _sprites.get(key);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  if (hard) { gr.addColorStop(0, rgba([255, 255, 255], 1)); gr.addColorStop(0.18, rgba(rgb, 0.95)); gr.addColorStop(0.45, rgba(rgb, 0.25)); gr.addColorStop(1, rgba(rgb, 0)); }
+  else { gr.addColorStop(0, rgba(rgb, 1)); gr.addColorStop(0.3, rgba(rgb, 0.45)); gr.addColorStop(0.65, rgba(rgb, 0.12)); gr.addColorStop(1, rgba(rgb, 0)); }
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  _sprites.set(key, c);
+  return c;
+}
+function dab(ctx, x, y, r, rgb, a, hard = false) {
+  if (a <= 0.004 || r <= 0.2) return;
+  ctx.globalAlpha = Math.min(1, a);
+  ctx.drawImage(sprite(rgb, hard), x - r, y - r, r * 2, r * 2);
+  ctx.globalAlpha = 1;
+}
+/** A streak: a glowing line from (x0, y0) to (x1, y1), its head brightest. */
+function streak(ctx, x0, y0, x1, y1, w, rgb, a) {
+  if (a <= 0.004) return;
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  g.addColorStop(0, rgba(rgb, 0)); g.addColorStop(0.7, rgba(rgb, a * 0.6)); g.addColorStop(1, rgba(TRACER_HOT, a));
+  ctx.strokeStyle = g;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = w * 2.6; ctx.globalAlpha = 0.28; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  ctx.lineWidth = w; ctx.globalAlpha = 1; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+}
+
+/** The PDC mounts of a hull, in its own frame: the turret, and the way its barrels point (as hullmesh.js builds them). */
+function mountsOf(hull) {
+  if (!hull) return [];
+  return hull.parts.filter(q => q.role === 'pdc').map(q => {
+    const c = [(q.x0 + q.x1) / 2, (q.y0 + q.y1) / 2, ((q.z0 ?? 0) + (q.z1 ?? 0)) / 2];
+    const s = Math.min(q.x1 - q.x0, q.y1 - q.y0), side = Math.sign(c[1]) || 1, up = Math.sign(c[2]) || 1;
+    const d = [0.25, side, up * 0.35], l = Math.hypot(...d);
+    const dir = d.map(x => x / l);
+    return { p: [c[0] + dir[0] * s * 1.4, c[1] + side * s * 0.3 + dir[1] * s * 1.4, c[2] + dir[2] * s * 1.4], dir, n: [0, side, 0] };
+  });
+}
+
+/** Where a ship-frame point shows, for a drawn pose: the 3D hull's own projection, or the flat drawing's. */
+function projOf(p, pt) {
+  if (p.solid) return p.solid.proj(pt);
+  return [p.x + p.dir * p.fs * pt[0] * p.pxPerM, p.y - pt[2] * p.pxPerM];
+}
+
+/**
+ * Guns firing from `shooter`: muzzle flashes at its turrets while they fire,
+ * tracers on their way for a time of flight (e.tofS) after. Each round
+ * leaves when it is fired and flies at its speed: a stream reaches what it
+ * is aimed at only seconds after the guns open up, and keeps arriving that
+ * long after they stop.
+ */
 function guns(ctx, e, age, v, shooter, defensive) {
-  const p = v.pose(shooter);
-  if (!p) return;
-  const mounts = (p.hull?.parts || []).filter(q => q.role === 'pdc');
-  const pts = mounts.length ? mounts.map(q => ({ x: p.x + p.dir * p.fs * ((q.x0 + q.x1) / 2) * p.pxPerM, y: p.y - (((q.z0 ?? 0) + (q.z1 ?? 0)) / 2) * p.pxPerM })) : [{ x: p.x, y: p.y }];
   const t = age * e.life / 1000;
+  const tof = Math.max(0.3, e.tofS ?? 2);
   const r = rng(e.seed);
-  const target = defensive ? v.threat(shooter) : (e.victim ? v.pose(e.victim) : null);
+  const n = Math.round(TRACERS_PER_S * GUN_BURST_S);
   ctx.globalCompositeOperation = 'lighter';
-  pts.forEach((m, mi) => {
-    // the muzzle: a flicker, burst after burst
-    const fl = (Math.sin(t * 90 + mi * 2.1 + e.seed) + 1) / 2;
-    if (fl > 0.35) v.point(ctx, m.x, m.y, 2.5 + fl * 2.5, Math.max(v.psfPx, 0.9), [255, 226, 170]);
-    // the stream: toward the threat (off the frame or not), the gun walking its aim round it; with nothing
-    // to aim at that we see, the rounds come at us: short streaks round the mount, foreshortened
-    const tx = target ? target[0] ?? target.x : null, ty = target ? target[1] ?? target.y : null;
-    const fade = clamp01(1.4 - age);
-    if (tx != null) {
-      for (let st = 0; st < 2; st++) {
-        const walk = Math.sin(t * 3.1 + st * 2 + mi) * 0.035, ang = Math.atan2(ty - m.y, tx - m.x) + walk;
-        const L = Math.hypot(tx - m.x, ty - m.y) * 1.05;
-        for (let i = 0; i < 9; i++) {
-          const ph = (t * 1.6 + i / 9 + st * 0.05) % 1;           // one round in ten a tracer: dashes running out
-          const d0 = L * ph, d1 = Math.max(0, d0 - Math.max(3, L * 0.035));
-          ctx.strokeStyle = rgba([255, 206, 130], 0.85 * (1 - ph * 0.8) * fade);
-          ctx.lineWidth = 1.1;
-          ctx.beginPath(); ctx.moveTo(m.x + Math.cos(ang) * d1, m.y + Math.sin(ang) * d1); ctx.lineTo(m.x + Math.cos(ang) * d0, m.y + Math.sin(ang) * d0); ctx.stroke();
-        }
+  const p = v.pose(shooter);
+  // ours, at what we look at: the rounds fly away from us and converge on it
+  if (!p) {
+    if (shooter !== 'player' || !e.victim) return;
+    const vp = v.pose(e.victim);
+    if (!vp) return;
+    const box = vp.box || { x0: vp.x - 10, x1: vp.x + 10, y0: vp.y - 5, y1: vp.y + 5 };
+    const span = Math.max(30, Math.hypot(box.x1 - box.x0, box.y1 - box.y0));
+    for (let st = 0; st < 2; st++) {
+      // each mount's stream comes from its own side of us
+      const th = (e.seed % 628) / 100 + st * 2.4, dx = Math.cos(th), dy = Math.sin(th);
+      const K = span * (0.35 + 0.2 * st);
+      for (let i = 0; i < n; i++) {
+        const te = (i + hash01(e.seed, i, st)) / n * GUN_BURST_S;          // when it left the gun
+        const s = (t - te) / tof;                                            // the share of the way it has come (past 1: a miss, going on)
+        if (s <= 0.02 || s > 1.08) continue;
+        const aim = aimPoint(e, vp, te + tof, r, i + st * 31);
+        const off = (q) => K * (1 - q) / q;
+        const ds = Math.min(0.035, 0.05 / tof);
+        const x1 = aim[0] + dx * off(s), y1 = aim[1] + dy * off(s);
+        const x0 = aim[0] + dx * off(Math.max(0.015, s - ds)), y0 = aim[1] + dy * off(Math.max(0.015, s - ds));
+        const a = 0.85 * (s > 1 ? clamp01((1.08 - s) / 0.08) : clamp01(s * 6));
+        streak(ctx, x0, y0, x1, y1, Math.max(0.9, 2.2 * (1 - s * 0.6)), TRACER, a);
+        dab(ctx, x1, y1, Math.max(2, 5 * (1.2 - s)), TRACER, a * 0.5);
       }
-    } else {
-      for (let i = 0; i < 4; i++) {
-        const th = r() * Math.PI * 2, reach = Math.max(4, 120 * p.pxPerM) * (0.5 + r() * 0.5);
-        const ph = (t * 2.4 + i / 4) % 1;
-        ctx.strokeStyle = rgba([255, 206, 130], 0.6 * (1 - ph) * fade);
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(m.x + Math.cos(th) * reach * Math.max(0, ph - 0.25), m.y + Math.sin(th) * reach * Math.max(0, ph - 0.25)); ctx.lineTo(m.x + Math.cos(th) * reach * ph, m.y + Math.sin(th) * reach * ph); ctx.stroke();
+    }
+    return;
+  }
+  // a hull we see firing: the muzzles while it fires, and the rounds on their way out of them
+  const mounts = mountsOf(p.hull);
+  const pts = mounts.length ? mounts.map(m => ({ at: projOf(p, m.p), seen: !p.solid || p.solid.toUs(m.n) > -0.2 })) : [{ at: [p.x, p.y], seen: true }];
+  const target = defensive ? v.threat(shooter) : e.victim === 'player' ? null : (v.pose(e.victim) ? [v.pose(e.victim).x, v.pose(e.victim).y] : v.at?.(e.victim));
+  pts.forEach((m, mi) => {
+    const [mx, my] = m.at;
+    // the muzzle: a flash every few rounds, flickering, while the guns fire
+    const fl = (Math.sin(t * 95 + mi * 2.1 + e.seed) + 1) / 2;
+    if (t < GUN_BURST_S && fl > 0.3 && m.seen) {
+      dab(ctx, mx, my, mpx(1.2, p.pxPerM, 2.5, 22) * (0.6 + fl), [255, 220, 160], 0.9, true);
+      v.point(ctx, mx, my, 2 + fl * 3, Math.max(v.psfPx, 0.9), [255, 236, 200]);
+    }
+    for (let st = 0; st < (target ? 2 : 1); st++) {
+      for (let i = 0; i < n; i++) {
+        const te = (i + hash01(e.seed, i * 7 + mi, st + 3)) / n * GUN_BURST_S;
+        const q = (t - te) / tof;
+        if (q <= 0 || q > 1.05) continue;
+        if (target) {
+          // across the field: dashes running out to what it shoots at, the gunner walking the aim round it
+          const [tx, ty] = target;
+          const walk = Math.sin(te * 3.1 + st * 2 + mi) * 0.03 + (hash01(e.seed, i, mi + 9) - 0.5) * 0.02;
+          const ang = Math.atan2(ty - my, tx - mx) + walk, L = Math.hypot(tx - mx, ty - my);
+          const d0 = L * q, d1 = Math.max(0, d0 - Math.max(4, L * Math.min(0.04, 0.06 / tof)));
+          const ca = Math.cos(ang), sa = Math.sin(ang);
+          streak(ctx, mx + ca * d1, my + sa * d1, mx + ca * d0, my + sa * d0, 1.3, TRACER, 0.85 * (1 - q * 0.6));
+        } else {
+          // at us: out of the muzzle, growing and racing off the frame as they come (perspective: off ∝ q/(1−q))
+          const th = hash01(e.seed, i, mi + 1) * Math.PI * 2, K = mpx(6, p.pxPerM, 6, 60) * (0.5 + hash01(e.seed, i, mi + 2) * 0.8);
+          const qq = Math.min(0.93, q), q0 = Math.max(0, qq - 0.06 / tof);
+          const o = (z) => K * z / (1 - z);
+          streak(ctx, mx + Math.cos(th) * o(q0), my + Math.sin(th) * o(q0), mx + Math.cos(th) * o(qq), my + Math.sin(th) * o(qq), 1 + 2.5 * qq, TRACER, 0.75 * clamp01(q * 5));
+        }
       }
     }
   });
+}
+
+/** Where the gunner holds the stream at time t: walked along the hull, the rounds scattered round it. Screen px. */
+function aimPoint(e, p, t, r, i) {
+  const hull = p.hull;
+  const walk = Math.sin(t * 1.7 + e.seed * 0.01) * 0.38 + Math.sin(t * 4.3 + e.seed) * 0.08;
+  if (hull && p.solid) {
+    const W = hull.W, H = hull.H;
+    const side = p.solid.toUs([0, 1, 0]) >= 0 ? 1 : -1;
+    const pt = [hull.L * walk + (hash01(e.seed, i, 1) - 0.5) * hull.L * 0.12, side * W / 2, (hash01(e.seed, i, 2) - 0.5) * H * 0.7];
+    return p.solid.proj(pt);
+  }
+  const b = p.box || { x0: p.x - 10, x1: p.x + 10, y0: p.y - 5, y1: p.y + 5 };
+  return [(b.x0 + b.x1) / 2 + walk * (b.x1 - b.x0), b.y0 + (0.25 + 0.5 * hash01(e.seed, i, 2)) * (b.y1 - b.y0)];
+}
+
+const hash01 = (a, b, c) => { let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+
+/** A size in metres on the screen, kept between a few pixels and what still reads as small. */
+const mpx = (m, k, lo, hi) => Math.max(lo, Math.min(hi, m * k));
+
+/**
+ * The rounds that find the hull: hits on the faces we see, walked along it.
+ * As many land as the burst did damage (dp); the rest pass it by.
+ */
+function raked(ctx, e, age, v) {
+  const p = v.pose(e.victim);
+  if (!p) return;
+  const t = age * e.life / 1000;
+  const hits = Math.round(8 + Math.min(34, (e.dp ?? 2) * 8));
+  const k = Math.max(0.02, p.pxPerM);
+  // the face the rounds strike (the flank toward us), its normal on the screen: sparks come off it round that
+  let nx = 0, ny = 0;
+  if (p.solid) {
+    const side = p.solid.toUs([0, 1, 0]) >= 0 ? 1 : -1, m = p.solid.m, r = p.solid.right;
+    const w = [m[4] * side, m[5] * side, m[6] * side];
+    nx = w[0] * r[0] + w[1] * r[1]; ny = -w[2];
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  const tof = e.tofS ?? 0;
+  for (let i = 0; i < hits; i++) {
+    const t0 = hash01(e.seed, i, 7) * GUN_BURST_S + tof;          // when this one lands: fired in the burst, a time of flight later
+    const dt = t - t0;
+    if (dt < 0 || dt > 1.3) continue;
+    const [hx, hy] = aimPoint(e, p, t0, null, i);
+    // the strike: white-hot, gone in a tenth of a second; it lights the plating round it for a moment
+    if (dt < 0.1) {
+      const f = 1 - dt / 0.1;
+      dab(ctx, hx, hy, mpx(0.9, k, 2.5, 16) * (0.7 + f * 0.6), TRACER_HOT, f, true);
+      dab(ctx, hx, hy, mpx(3.5, k, 5, 40), [255, 170, 90], 0.22 * f);
+      if (f > 0.5) v.point(ctx, hx, hy, 2.5 + 3 * f, Math.max(v.psfPx, 0.9), [255, 245, 225]);
+    }
+    // sparks off the face, straight out (no air to curve them), cooling as they go
+    for (let j = 0; j < 8; j++) {
+      const hj = i * 13 + j;
+      const life = 0.2 + 0.45 * hash01(e.seed, hj, 4);
+      const q = dt / life;
+      if (q >= 1) continue;
+      const iso = Math.hypot(nx, ny);
+      let th = hash01(e.seed, hj, 5) * Math.PI * 2;
+      if (iso > 0.2) th = Math.atan2(ny, nx) + (hash01(e.seed, hj, 5) - 0.5) * 2.4;
+      // (toward us, a spark's flight is foreshortened: some barely move on the screen)
+      const reach = (1.5 + 6 * hash01(e.seed, hj, 6)) * (iso > 0.2 ? 1 : 0.35 + 0.65 * hash01(e.seed, hj, 8));
+      const d = mpx(reach, k, 2, 140) * ease(q * 1.3);
+      const len = mpx(0.6 + 0.8 * (1 - q), k, 1.2, 22);
+      const x1 = hx + Math.cos(th) * d, y1 = hy + Math.sin(th) * d;
+      streak(ctx, x1 - Math.cos(th) * len, y1 - Math.sin(th) * len, x1, y1, mpx(0.06, k, 0.6, 1.6), heat(q * 0.85 + 0.05), (1 - q) * 0.9);
+    }
+    // vaporised metal: a small puff, lit by the Sun, spreading and thinning
+    if (dt < 0.9) {
+      ctx.globalCompositeOperation = 'screen';
+      dab(ctx, hx + nx * dt * 2 * k, hy + ny * dt * 2 * k, mpx(0.6 + 3 * ease(dt / 0.9), k, 2, 50), [178, 184, 194], 0.22 * (1 - dt / 0.9));
+      ctx.globalCompositeOperation = 'lighter';
+    }
+    // the spot it struck, glowing on and cooling
+    const q = dt / 1.3;
+    dab(ctx, hx, hy, mpx(0.35, k, 1.2, 7), heat(0.3 + q * 0.65), 0.85 * (1 - q) * (1 - q), true);
+    // a flake of plating now and then, tumbling out (glinting as it turns)
+    if (hash01(e.seed, i, 9) > 0.55) {
+      const th = Math.atan2(ny || -1, nx) + (hash01(e.seed, i, 10) - 0.5) * 2.8, d = mpx((1 + 3 * hash01(e.seed, i, 11)) * dt, k, 0, 120);
+      const glint = Math.pow(Math.max(0, Math.sin(dt * 18 + i)), 8);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = rgba([90 + 150 * glint, 92 + 150 * glint, 98 + 150 * glint], 0.9 * (1 - q));
+      const sz = mpx(0.15, k, 1, 3);
+      ctx.fillRect(hx + Math.cos(th) * d - sz / 2, hy + Math.sin(th) * d - sz / 2, sz, sz);
+      ctx.globalCompositeOperation = 'lighter';
+    }
+  }
 }

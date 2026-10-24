@@ -47,15 +47,19 @@
 // People are a handful of joints posed from what the sim says they are
 // doing (on their feet or walking, at a station, back in a couch, asleep
 // under a blanket, on the autodoc, at the mess table, on the treadmill,
-// down on the deck, adrift in free fall), drawn as limbs of a body's
-// width in their department's colour, or white vac suits with helmets;
-// interpolated between sim minutes by `alpha`. The selected one is
-// outlined and named. Someone in the head is behind its door.
+// down on the deck, adrift in free fall), interpolated between sim
+// minutes by `alpha`, and given bodies on the GPU (gl/figures.js): a
+// jumpsuit in their department's colour with its details, skin, hair, or a
+// white vac suit with its helmet and pack, lit by the room's own lights
+// through the same lens. Without WebGL2 they are drawn as limbs of a
+// body's width. The selected one is outlined and named. Someone in the
+// head is behind its door.
 //
 // Cost: the room (floor, walls, fixtures, light) is rendered once per
 // deck, canvas size and lighting state into offscreen layers, one per
 // tile row, so people are drawn between them and hidden by what stands
-// nearer. A frame draws those layers, the people, the faint changing
+// nearer (their bodies rendered in one GPU pass per camera first, then
+// copied in, each in its place among the rows). A frame draws those layers, the people, the faint changing
 // content of screens, status lamps (machines by their system's state,
 // the hatch over a docked collar, the head's door) and the overlay: a
 // few hundredths of a millisecond of script. Rebuilding a layer set is
@@ -70,6 +74,7 @@ import { SYSTEM_BY_FIXTURE, Status } from '../sim/systems.js';
 import { ATMO } from '../sim/life-support.js';
 import { isConscious } from '../sim/crew.js';
 import { formatDate, formatTime } from '../core/clock.js';
+import { renderFigures } from './gl/figures.js';
 
 const T = TileType;
 
@@ -1621,15 +1626,7 @@ function drawFigure(g, lens, env, fig, P, selected, t) {
   const headR = (suit ? BODY.helmet : BODY.head) * lens.k(pr.hd[2]);
   g.lineCap = 'round'; g.lineJoin = 'round';
 
-  // a mess stool under someone sat at a table
-  if (P.stool) {
-    const [sx, sz] = P.stool;
-    const top = lens.p(sx, 0.43, sz), foot = lens.p(sx, 0, sz), r = 0.12 * lens.k(top[2]);
-    g.fillStyle = C(rgb(ALB.metalDk)); g.beginPath(); g.ellipse(foot[0], foot[1], r * 0.8, r * 0.5, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = C(rgb(ALB.metalDk)); g.lineWidth = Math.max(1.5, 0.06 * k);
-    g.beginPath(); g.moveTo(top[0], top[1]); g.lineTo(foot[0], foot[1]); g.stroke();
-    g.fillStyle = C(rgb(ALB.stool)); g.beginPath(); g.ellipse(top[0], top[1], r, r * 0.62, 0, 0, Math.PI * 2); g.fill();
-  }
+  drawStool(g, lens, P, C, k);
   // a dark edge that keeps a figure apart from the plating behind it; the
   // selected one outlined in the selection colour instead
   const outline = (col, o) => {
@@ -1705,6 +1702,49 @@ function drawFigure(g, lens, env, fig, P, selected, t) {
   for (const kk in pr) { const v = pr[kk]; x0 = Math.min(x0, v[0]); x1 = Math.max(x1, v[0]); y0 = Math.min(y0, v[1]); y1 = Math.max(y1, v[1]); }
   const pad = Math.max(headR, 3);
   return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad, hx: pr.hd[0], hy: pr.hd[1] - headR };
+}
+
+/** A mess stool under someone sat at a table (C: a colour in the room's light). */
+function drawStool(g, lens, P, C, k) {
+  if (!P.stool) return;
+  const [sx, sz] = P.stool;
+  const top = lens.p(sx, 0.43, sz), foot = lens.p(sx, 0, sz), r = 0.12 * lens.k(top[2]);
+  g.lineCap = 'round';
+  g.fillStyle = C(rgb(ALB.metalDk)); g.beginPath(); g.ellipse(foot[0], foot[1], r * 0.8, r * 0.5, 0, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = C(rgb(ALB.metalDk)); g.lineWidth = Math.max(1.5, 0.06 * k);
+  g.beginPath(); g.moveTo(top[0], top[1]); g.lineTo(foot[0], foot[1]); g.stroke();
+  g.fillStyle = C(rgb(ALB.stool)); g.beginPath(); g.ellipse(top[0], top[1], r, r * 0.62, 0, 0, Math.PI * 2); g.fill();
+}
+
+/**
+ * A figure for the GPU (gl/figures.js): its joints and posture, its
+ * colours, and the box on the camera's canvas its picture fills.
+ */
+function figureSpec(lens, env, fig, P, selected, W, H) {
+  const m = fig.m;
+  const vac = !!m.suit?.wearing;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const take = (v) => { const q = lens.p(v[0], v[1], v[2]); x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]); return q; };
+  for (const kk in P.J) take(P.J[kk]);
+  const cover = P.blanket || P.sheet;
+  if (cover) cover.forEach(take);
+  const hp = lens.p((P.J.hpL[0] + P.J.hpR[0]) / 2, (P.J.hpL[1] + P.J.hpR[1]) / 2, (P.J.hpL[2] + P.J.hpR[2]) / 2);
+  const k = lens.k(hp[2]);
+  const pad = (vac ? 0.3 : 0.22) * k + 4;
+  const box = { x0: Math.max(0, x0 - pad), y0: Math.max(0, y0 - pad), x1: Math.min(W, x1 + pad), y1: Math.min(H, y1 + pad) };
+  const roleC = rgb(ROLE_SUIT[m.role] || ROLE_SUIT.Deckhand);
+  let suit = roleC, skin = rgb(SKIN[m.id % SKIN.length]), hair = rgb(HAIR[(m.id * 3 + 1) % HAIR.length]);
+  if (m.dead) { suit = mix(suit, [0.35, 0.37, 0.4], 0.6); skin = mix(skin, [0.55, 0.55, 0.55], 0.5); }
+  const blanketC = mix(rgb(ALB.blanket), roleC, 0.3);
+  const h = hash(m.id, 5);
+  return {
+    J: P.J, face: P.face, kind: P.kind, box, vac, suit, accent: mix(roleC, [1, 1, 1], 0.35), skin, hair,
+    hairStyle: h < 0.45 ? 0 : h < 0.62 ? 1 : h < 0.74 ? 2 : h < 0.86 ? 3 : 4, build: hash(m.id, 9), seed: m.id,
+    cover: cover || null, coverKind: P.sheet ? 'sheet' : 'blanket', coverCol: blanketC,
+    outline: selected ? [...rgb(C_SEL), 1] : cover ? [0, 0, 0, 0] : [4 / 255 * 0.45, 6 / 255 * 0.45, 9 / 255 * 0.45, 0.45],
+    outlineW: selected ? Math.max(1.5, k * 0.022) : Math.max(1, k * 0.016),
+    hit: { x0: x0 - 3, y0: y0 - 3, x1: x1 + 3, y1: y1 + 3 }, head: lens.p(P.J.hd[0], P.J.hd[1], P.J.hd[2]), headR: (vac ? BODY.helmet : BODY.head) * k,
+  };
 }
 
 /** A soft shadow on the deck under someone standing (fainter as they float off it). */
@@ -1899,6 +1939,25 @@ function drawCam(cam, state, alpha, now) {
   let tag = null;
   const docked = state.dock && (state.dock.phase === 'docked' || state.dock.phase === 'seal') ? airlockFor(ship, state.dock.port) : null;
 
+  // Everyone posed, far first in each row; their bodies rendered on the GPU in one pass (gl/figures.js),
+  // copied in below in their place among the rows (without one, drawn flat)
+  const posed = [];
+  for (let r = 0; r < room.rows; r++) {
+    byRow[r].sort((a, b) => lens.dist(b.x + 0.5, 0.6, b.z + 0.5) - lens.dist(a.x + 0.5, 0.6, a.z + 0.5));
+    for (const fig of byRow[r]) {
+      const P = posture(room, fig, t, floating);
+      if (fig.climb) for (const k in P.J) P.J[k][1] += fig.climb;
+      fig.P = P;
+      fig.sel = selId != null && selId === fig.m.id;
+      fig.spec = figureSpec(lens, env, fig, P, fig.sel, c.Wd, c.Hd);
+      posed.push(fig);
+    }
+  }
+  const floorK = env.mode === 'normal' ? 0.5 : env.mode === 'battle' ? 0.34 : env.mode === 'blackout' ? 0.15 : 0.24;
+  const solid = posed.length ? renderFigures({ eye: lens.eye, r: lens.r, u: lens.u, f: lens.f, s: lens.s, ox: lens.ox, oy: lens.oy, lights: env.lights, amb: env.amb, exp: env.exp, floor: floorK,
+    tint: env.mode === 'battle' ? [1.05, 0.92, 0.92] : [1, 1, 1] }, posed.map(f => f.spec)) : null;
+  posed.forEach((f, i) => { f.img = solid?.[i] || null; });
+
   const fire = deck.atmosphere?.fire?.intensity > 0 ? deck.atmosphere.fire : null;
   const fireRow = Math.max(0, Math.min(room.rows - 1, Math.floor(room.fire[1])));
   for (let r = 0; r < room.rows; r++) {
@@ -1920,16 +1979,20 @@ function drawCam(cam, state, alpha, now) {
     // a fire in this row: before the people and what stands nearer
     if (fire && fireRow === r) drawFlames(g, lens, room, fire.intensity, t);
     // the people in this row, far first
-    const list = byRow[r].sort((a, b) => lens.dist(b.x + 0.5, 0.6, b.z + 0.5) - lens.dist(a.x + 0.5, 0.6, a.z + 0.5));
-    for (const fig of list) {
-      const P = posture(room, fig, t, floating);
-      if (fig.climb) for (const k in P.J) P.J[k][1] += fig.climb;
+    for (const fig of byRow[r]) {
+      const P = fig.P, sel = fig.sel;
       if (P.kind === 'stand' || P.kind === 'float' || P.kind === 'down') {
         const lift = P.kind === 'float' ? P.J.ftL[1] : P.kind === 'down' && floating ? P.J.hpL[1] : 0;
         drawShadow(g, lens, (P.J.hpL[0] + P.J.hpR[0]) / 2, (P.J.hpL[2] + P.J.hpR[2]) / 2, lift, lens.k(lens.p(fig.x + 0.5, 0, fig.z + 0.5)[2]));
       }
-      const sel = selId != null && selId === fig.m.id;
-      const box = drawFigure(g, lens, env, fig, P, sel, t);
+      let box;
+      if (fig.img) {
+        const im = fig.img, sp = fig.spec;
+        crewLight(env, (P.J.hpL[0] + P.J.hpR[0]) / 2, (P.J.hpL[2] + P.J.hpR[2]) / 2, _L);
+        drawStool(g, lens, P, (cc) => css(cc[0] * _L[0], cc[1] * _L[1], cc[2] * _L[2]), lens.k(lens.p(fig.x + 0.5, 0, fig.z + 0.5)[2]));
+        g.drawImage(im.canvas, im.sx, im.sy, im.w, im.h, im.x, im.y, im.w, im.h);
+        box = { ...sp.hit, hx: sp.head[0], y0: Math.min(sp.hit.y0, sp.head[1] - sp.headR) };
+      } else box = drawFigure(g, lens, env, fig, P, sel, t);
       hits.push({ id: fig.m.id, x0: box.x0 / dpr * sx, y0: box.y0 / dpr * sy, x1: box.x1 / dpr * sx, y1: box.y1 / dpr * sy });
       if (sel) tag = { name: fig.m.name, x: box.hx, y: box.y0 };
     }

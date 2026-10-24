@@ -3,7 +3,11 @@
 //
 // Every hull and station is drawn from its physical model (sim/hulls.js,
 // sim/stations.js) at true proportions, at any scale: from a few pixels
-// on the tactical display to a docking camera's close-up. A hull is seen
+// on the tactical display to the ship picker's and the library's
+// portraits. The drone's view and the telescope render the same models
+// as lit solids on the GPU (gl/ships3d.js) and draw them flat from here
+// only without WebGL2; over their solids, the marks that are the
+// display's own come from here (drawHullMarks, drawStation's berths). A hull is seen
 // from above (its back), from below (mirrored), or along a flank (its
 // side), as the pose it is in shows it (sim/mating.js).
 //
@@ -129,6 +133,28 @@ export function drawHull(ctx, hull, o) {
   ctx.restore();
 }
 
+/**
+ * Over a hull the GPU drew (exterior.js): only what is the display's, not
+ * the hull's: the collar we dock by, picked out, and the RCS puffs.
+ */
+export function drawHullMarks(ctx, hull, o) {
+  if (!hull) return;
+  const side = o.view === 'side' || o.view === 'side-flip';
+  const P = projector(o.x, o.y, o.facing || 0, o.scale, o.view || 'top');
+  ctx.save();
+  if (typeof o.ports === 'string' && hull.L * o.scale > 18) {
+    const pt = hull.ports.find(p => p.id === o.ports);
+    if (pt && !(side ? pt.face[0] === 'y' : pt.face[0] === 'z')) {
+      const [sx, sy] = P(pt.x, side ? pt.z : pt.y);
+      const r = Math.max(3, (pt.size === 'L' ? 3 : pt.size === 'M' ? 1.1 : 0.5) * o.scale * 1.3);
+      ctx.strokeStyle = '#6EEAE0'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  if (o.rcs > 0) drawRcsPuffs(ctx, hull, P, o);
+  ctx.restore();
+}
+
 function poly(ctx, pts) {
   ctx.beginPath();
   ctx.moveTo(pts[0][0], pts[0][1]);
@@ -200,14 +226,15 @@ function drawRcsPuffs(ctx, hull, P, o) {
 /**
  * Draw a station's model. o: { x, y (px of the station's centre), angle (rad:
  * the station frame's x axis, solar frame), scale (px/m), t, tint,
- * occupied: Set of berth ids, highlight: berth id, labels }
+ * occupied: Set of berth ids, highlight: berth id, labels, partsOff (the GPU drew the
+ * structure: only the berths' lamps) }
  */
 export function drawStation(ctx, model, o) {
   if (!model) return;
   const c = Math.cos(o.angle), s = Math.sin(o.angle);
   const P = (x, y) => { const wx = x * c - y * s, wy = x * s + y * c; return [o.x + wx * o.scale, o.y - wy * o.scale]; };
   ctx.save();
-  const parts = model.parts.map((p, i) => ({ p, i })).sort((a, b) => ((a.p.z0 ?? 0) - (b.p.z0 ?? 0)) || a.i - b.i);
+  const parts = o.partsOff ? [] : model.parts.map((p, i) => ({ p, i })).sort((a, b) => ((a.p.z0 ?? 0) - (b.p.z0 ?? 0)) || a.i - b.i);
   for (const { p } of parts) {
     const [fill, edge] = ROLE[p.role] || ROLE.hab;
     ctx.lineWidth = Math.max(0.6, Math.min(2.5, o.scale * 2));
