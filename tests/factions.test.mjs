@@ -11,6 +11,9 @@ import { zoneCandidates, spawnZone, zonePos, zonesAt, director, spawnEncounter, 
 import { acceptContract, ContractType, contractsTick } from '../js/sim/contracts.js';
 import { explodeNpc } from '../js/sim/damage.js';
 import { spawnAgent } from '../js/sim/agents.js';
+import { gateId } from '../js/sim/stations.js';
+import { keepOutM } from '../js/sim/traffic-control.js';
+import { AU_M } from '../js/core/constants.js';
 
 function game(seed = 5) {
   seedRandom(seed);
@@ -98,6 +101,44 @@ export default [
       pirate.combat.status = 'wreck';
       contractsTick(s);
       assert(c.phase === 'return', 'bounty earned, return to the station');
+    },
+  },
+  {
+    name: 'an escort: at every station the convoy waits outside the gate, leaves when we join it there, and berths at its destination',
+    fn: () => {
+      const s = game(21);
+      s.politics.quietUntil = Infinity;
+      const world = getWorld(s);
+      const rows = [];
+      let trip = null;
+      for (const st of world.stations) {
+        const gate = world.get(gateId(st.id));
+        world.refresh(gate, s.clock.minute);
+        const dest = world.stations.filter(x => x !== st).sort((a, b) => Math.hypot(a.pos.x - st.pos.x, a.pos.y - st.pos.y) - Math.hypot(b.pos.x - st.pos.x, b.pos.y - st.pos.y))[0];
+        const c = { id: `c-e-${st.id}`, type: ContractType.ESCORT, station: st.id, stationName: st.name, phase: 'offered', zone: null,
+          dest: dest.id, destName: dest.name, ship: { cls: 'hauler', name: `Test Hauler ${st.id}`, faction: 'independent', tl: 2, shipClass: 'Hauler', mass: 9e6 }, g: 0.3,
+          reward: { credits: 3000 }, deadline: 60 * DAY_MIN, expires: s.clock.minute + DAY_MIN, title: 'Escort' };
+        st.board.missions.push(c); st.board.lastRefresh = s.clock.minute;
+        // in port: at the gate, where a route to the station ends
+        s.flight.hold = null; s.dock = null;
+        s.flight.pos = { ...gate.pos }; s.flight.vel = { ...gate.vel };
+        const r = acceptContract(s, st.id, c.id);
+        assert(r.ok, `${st.id}: ${r.text}`);
+        const convoy = world.get(c.targetId);
+        const fromStation = Math.hypot(convoy.pos.x - st.pos.x, convoy.pos.y - st.pos.y) * AU_M;
+        assert(fromStation > keepOutM(st.id), `${st.id}: the convoy waits outside the keep-out (${Math.round(fromStation / 1000)} km out, keep-out ${keepOutM(st.id) / 1000} km)`);
+        contractsTick(s);
+        assert(c.phase === 'underway', `${st.id}: joined at the gate, the convoy should get under way (${c.phase})`);
+        c.ambushAt = null;
+        rows.push(`${st.id} ${Math.round(fromStation / 1000)} km out`);
+        if (st.id === 'phobos-yard') trip = { c, convoy, dest };
+      }
+      // the Phobos convoy flown to its destination's gate, and in to a berth
+      let t = 0;
+      for (; t < 30 * DAY_MIN && trip.c.phase === 'underway'; t += 60) { advance(s, 60); contractsTick(s); }
+      console.log(`      convoys wait: ${rows.join(' · ')}; Phobos → ${trip.dest.name}: ${trip.c.phase} after ${fmt(t / DAY_MIN)} days, ${trip.convoy.tags.berth ? 'in berth ' + trip.convoy.tags.berth : 'at the anchorage'}`);
+      assert(trip.c.phase === 'arrived', `the convoy should reach ${trip.dest.name}: ${trip.c.phase}`);
+      assert(trip.convoy.tags.at === trip.dest.id, 'and be berthed there');
     },
   },
   {

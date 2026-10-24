@@ -16,7 +16,10 @@
 //              when the brief has it on file, its drive signature seen in
 //              its plume (sensors.js identifyHunt)
 //   ESCORT   — fly formation with a convoy ship to its destination; it
-//              departs when we join it, and raiders will come
+//              waits for us just outside the station's approach gate
+//              (inside it no ship comes uncleared: traffic-control.js),
+//              departs when we join it there, flies to the destination's
+//              gate and berths, and raiders will come
 //   SMUGGLE  — carry contraband through a blockade or into inner-planet
 //              space; an inspection that finds it ends the job
 //   RECON    — get a navy picket inside radar range and hold a lock on it
@@ -49,6 +52,7 @@ import { WARHEADS, AMMO_PRICES } from './weapons.js';
 import { DRONE_PRICE } from './drones.js';
 import { adjustStanding } from './law.js';
 import { dockedStationEntity, dockedTo } from './docking.js';
+import { gateOrbit } from './stations.js';
 import { freeBerths } from './manifest.js';
 import { MIL_TYPES, MIL_LABEL, milShare, milRefusal, generateMil, spawnMil, milProgress, milTurnIn } from './military.js';
 import { licenseOf, ourCommandShip, supplyPriceFactor, creditMission, rankOf, RANK_FOR } from './service.js';
@@ -248,7 +252,7 @@ function generateHot(state, station, others) {
       const d = distAU(station, dest);
       return { ...base, dest: dest.id, destName: dest.name, ship, g,
         title: `Escort: ${ship.name} to ${dest.name}`,
-        description: `Raiders have been hitting the ${station.name}–${dest.name} run. Fly escort for the ${ship.shipClass} "${ship.name}": it departs when we join formation (within 10 km) and burns at ${g}G. Keep it alive; collect at ${dest.name}.`,
+        description: `Raiders have been hitting the ${station.name}–${dest.name} run. Fly escort for the ${ship.shipClass} "${ship.name}": it waits for us outside ${station.name}'s approach gate, departs when we join formation there (within 10 km) and burns at ${g}G. Keep it alive; collect at ${dest.name}.`,
         reward: { credits: Math.round(randInt(2500, 5000) + d * 600), pdcRounds: 3000 }, deadline: randInt(8, 20) * DAY_MIN, expires: now + randInt(1, 3) * DAY_MIN };
     }
     case ContractType.SMUGGLE: {
@@ -274,14 +278,36 @@ function generateHot(state, station, others) {
   return null;
 }
 
+const CONVOY_WAIT_KM = 3;            // an escort's convoy waits this far out past its station's gate
+
+/** Where an escort's convoy waits for us: just out past its station's gate, riding up with it. */
+const convoyWait = (stationId) => { const o = gateOrbit(stationId); return { ...o, r: o.r + CONVOY_WAIT_KM / AU_KM }; };
+
+/**
+ * A save from before v0.27 left a waiting convoy inside its station's
+ * keep-out, where nobody may come for it uncleared (and from an orbital
+ * station's berths too far to join): out to the gate with it.
+ */
+export function upgradeContracts(state) {
+  const world = getWorld(state);
+  for (const c of state.contracts?.active || []) {
+    if (c.type !== ContractType.ESCORT || c.phase !== 'active') continue;
+    const e = world.get(c.targetId);
+    if (!e || e.agent || !world.get(c.station)) continue;
+    e.orbit = convoyWait(c.station);
+    world.refresh(e, state.clock.minute);
+    world.hash.update(e);
+  }
+}
+
 /** Spawn what a hot-zone contract needs in the world (on acceptance). */
 function spawnHotTarget(state, station, c) {
   const world = getWorld(state);
   const now = state.clock.minute;
   if (c.type === ContractType.ESCORT) {
-    const o = station.orbit;
+    // (out past the gate, riding up from the station with it: where a route to the station ends, and no ship needs a clearance to be)
     const e = createEntity({ id: world.newId('convoy'), name: c.ship.name, type: 'ship', faction: c.ship.faction, cls: c.ship.cls, tl: c.ship.tl,
-      shipClass: c.ship.shipClass, mass: c.ship.mass, orbit: { body: o.body, r: o.r * 1.01, phase: o.phase - 0.001, period: o.period }, tags: { contract: c.id } });
+      shipClass: c.ship.shipClass, mass: c.ship.mass, orbit: convoyWait(station.id), tags: { contract: c.id } });
     world.add(e);
     c.targetId = e.id; c.targetName = e.name;
     return;
@@ -330,6 +356,7 @@ function hotProgress(state, c, emit) {
         const d = Math.hypot(t.pos.x - state.flight.pos.x, t.pos.y - state.flight.pos.y) * AU_M;
         if (d <= 10_000) {
           wake(state, t, 'convoy', { mode: 'travel', dest: c.dest, contract: c.id, ambient: false });
+          t.agent.travelG = c.g;
           if (!state.combat.protect.includes(t.id)) state.combat.protect.push(t.id);
           const dest = world.get(c.dest);
           const L = dest ? Math.hypot(dest.pos.x - t.pos.x, dest.pos.y - t.pos.y) * AU_M : 0;

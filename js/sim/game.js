@@ -31,7 +31,7 @@ import { createComms, commsTick } from './comms.js';
 import { createSensors, sensorsTick } from './sensors.js';
 import { createNavFlags, flagsTick } from './flags.js';
 import { createMissions, missionsTick } from './missions.js';
-import { createContracts, contractsTick } from './contracts.js';
+import { createContracts, contractsTick, upgradeContracts } from './contracts.js';
 import { createTraffic, seedTraffic, trafficTick, ensurePopulation, DEFAULT_TRAFFIC } from './traffic.js';
 import { seedForces, forcesTick, commandShipFor } from './forces.js';
 import { createService, serviceTick } from './service.js';
@@ -163,7 +163,8 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
 /**
  * A save from v0.10 (same schema, fewer systems): give it a plot, the
  * traffic of a settled system, and the background forces. Nothing it
- * already has changes.
+ * already has changes. (And an escort's convoy waiting where nobody could
+ * come for it goes out to its gate: contracts.js.)
  */
 export function upgradeState(state) {
   setGravityEpoch(state.clock.minute);
@@ -179,6 +180,7 @@ export function upgradeState(state) {
   const fresh = state.traffic && !state.traffic.v;
   ensurePopulation(state);
   if (fresh && state.traffic.population > 0) seedForces(state);
+  upgradeContracts(state);
   return state;
 }
 

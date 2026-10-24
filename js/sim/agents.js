@@ -18,7 +18,8 @@
 //   navy           patrol → engage enemy warships; warn off strangers
 //   civilian       flee from whoever is shooting, then drift (a miner
 //                  turns its gear on anyone who comes close)
-//   convoy         travel to a destination (escort contracts)
+//   convoy         wait at its port's gate, then travel gate to gate and
+//                  berth (escort contracts)
 //
 // Fight or run. A ship weighs a fight by strength (its own against the
 // enemy's) and breaks off when it is outgunned or hurt; a pirate lying
@@ -74,7 +75,7 @@ import { wantedBy, settleInspection, adjustStanding, inJurisdiction, recentlyIns
 import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from './weapons.js';
 import { putToSleep } from './forces.js';
 import { enemyOf, hostileTo, friendOf, flagOf, hullLegal, navyOf, rankOf, RANK_FOR } from './service.js';
-import { releaseHull, parkHull } from './stations.js';
+import { releaseHull, parkHull, gateId } from './stations.js';
 
 /**
  * How each role fights. launchAU: torpedo launch range · standoffM: distance
@@ -568,8 +569,10 @@ const BRAINS = {
     const world = getWorld(state);
     const st = world.get(a.dest);
     if (!st) return;
-    // (where the station is now: far from us its stored place can be an hour old)
-    const sp = predictEntity(st, state.clock.minute, world);
+    // At the destination's gate, stopped: it goes in to a berth (where the gate is now: far from us
+    // its stored place can be an hour old)
+    const at = world.get(travelTarget(state, a.dest).id);
+    const sp = predictEntity(at, state.clock.minute, world);
     if (distAU(e.pos, sp.pos) * AU_M < 10_000 && Math.hypot(e.vel.vx - sp.vel.vx, e.vel.vy - sp.vel.vy) < 20) {
       parkAt(state, e, st);
       a.mode = 'arrived';
@@ -814,7 +817,7 @@ function steer(state, e, emit) {
     case 'intercept': goTo(state, e, playerSpec, 20_000_000, R.approachG, true); break;
     case 'search-approach': case 'search': goTo(state, e, playerSpec, 2_000, 1); break;
     case 'loot': if (a.target) goTo(state, e, spec(a.target), 2_000, 1); else a.cmd = null; break;
-    case 'travel': if (a.dest) goTo(state, e, { kind: 'entity', id: a.dest }, 3_000, CLASSES[e.cls]?.drive.cruiseG || 0.3); break;
+    case 'travel': if (a.dest) goTo(state, e, travelTarget(state, a.dest), 3_000, a.travelG || CLASSES[e.cls]?.drive.cruiseG || 0.3); break;
     case 'cruise': case 'patrol':
       if (a.home) goTo(state, e, a.home, 30_000_000, 1); else a.cmd = null;
       break;
@@ -864,6 +867,12 @@ function goTo(state, e, target, standoff, accelG, hostile = false, cruise = null
   a.cmd = g.arrived ? holdWith(tgt) : g.cmd;
   // (where it is flying, for its terrain guard: a target over a rock is come down to, not climbed away from)
   a.$toward = g.arrived ? null : g.toward;
+}
+
+/** Where a ship bound for a station flies to: its approach gate (inside it, a berth is docking's business), or the station. */
+function travelTarget(state, id) {
+  const gate = getWorld(state).get(gateId(id));
+  return { kind: 'entity', id: gate ? gate.id : id };
 }
 
 /** Arrived: match the target's own thrust so we stay with it. */
