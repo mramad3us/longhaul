@@ -21,11 +21,22 @@
 // Each piece is drawn only when it is a few pixels or more across, so the
 // system view stays clean and the rings come in as the map closes on the
 // world (FOCUS frames its planetary space).
+//
+// Our shuttles out over the world (sim/shuttles.js) draw their way ahead
+// over it (drawShuttleTracks): the rest of the run sampled off its flight
+// path, in the world's frame (it moves tens of km a second round the Sun,
+// and the track goes with it), the drive's legs dashed, the air's stretch
+// solid, the pad a ring.
 // ============================================================
 
 import { AU_M } from '../core/constants.js';
 import { pullAtM, airspacesOf, worldAngle } from '../sim/worlds.js';
 import { factionColor } from '../sim/factions.js';
+import { bodyPos } from '../sim/ephemeris.js';
+import { flightPathAt } from '../sim/planetary.js';
+import { activeRuns } from '../sim/shuttles.js';
+import { getWorld } from '../sim/world.js';
+import { DAY_MIN } from '../core/constants.js';
 
 const WELL = '120,196,255';
 const G_RINGS = [0.03, 0.1, 0.3, 1];
@@ -124,6 +135,45 @@ export function drawWorldZones(ctx, w, x, y, pxM, W, H, L, minute, pass) {
       const lx = x + Math.cos(tm) * R * 1.14, ly = y - Math.sin(tm) * R * 1.14;
       if (lx > -30 && lx < W + 30 && ly > -10 && ly < H + 10) L.add(a.name.toUpperCase(), lx, ly, { off: 2, font: FONT, color: col, alpha: 0.8, pri: 2 });
     }
+  }
+  ctx.restore();
+}
+
+const TRACK = '255,255,255';   // (white: no ring of a world's space is)
+const TRACK_STEP_MIN = 1.5;      // the track sampled this often (min): the entry turns fast
+const TRACK_MAX = 900;
+
+/**
+ * Our shuttles' way ahead round world `w` (centred on screen at x, y, `pxM`
+ * px per metre): each run from now to its recovery, the points placed at
+ * their minute relative to the world's centre then.
+ */
+export function drawShuttleTracks(ctx, state, w, x, y, pxM) {
+  const runs = activeRuns(state).filter(r => r.world === w.name);
+  if (!runs.length || w.wellM * pxM < 20) return;
+  const world = getWorld(state), now = state.clock.minute;
+  ctx.save();
+  for (const run of runs) {
+    const path = { world: run.world, cls: run.cls, carrier: run.carrier, legs: run.legs };
+    const end = run.legs.at(-1).t0, step = Math.max(TRACK_STEP_MIN, (end - now) / TRACK_MAX);
+    let kind = null;
+    ctx.beginPath();
+    for (let m = now; m <= end + 1e-6; m += step) {
+      const p = flightPathAt(world, path, Math.min(m, end));
+      const c = bodyPos(w.body, Math.min(m, end) / DAY_MIN);
+      const sx = x + (p.pos.x - c.x) * AU_M * pxM, sy = y - (p.pos.y - c.y) * AU_M * pxM;
+      const k = p.leg === 'down' || p.leg === 'up' ? 'air' : p.leg === 'ground' ? 'ground' : 'drive';
+      if (k !== kind) {
+        if (kind) { ctx.lineTo(sx, sy); ctx.stroke(); }
+        ctx.beginPath();
+        ctx.setLineDash(k === 'drive' ? [5, 4] : []);
+        ctx.strokeStyle = `rgba(${TRACK},${k === 'air' ? 0.95 : 0.55})`; ctx.lineWidth = k === 'air' ? 1.8 : 1.2;
+        ctx.moveTo(sx, sy);
+        kind = k;
+        if (k === 'ground') { ctx.save(); ctx.setLineDash([]); ctx.strokeStyle = `rgba(${TRACK},0.95)`; ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); ctx.beginPath(); ctx.moveTo(sx, sy); }
+      } else ctx.lineTo(sx, sy);
+    }
+    if (kind) ctx.stroke();
   }
   ctx.restore();
 }

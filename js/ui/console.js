@@ -36,7 +36,7 @@ let hooks = {};
 let exteriorFloating = false;
 
 export function initConsole(h) {
-  hooks = h;   // { closeDialog(id), closeComms(), closeBoarding(), closeLibrary(), closeStation(), onExteriorPlaced() }
+  hooks = h;   // { closeDialog(id), closeComms(), closeBoarding(), closeShuttle(), closeLibrary(), closeStation(), onExteriorPlaced() }
   initWm($('#wm-layer'));
   const stash = (id) => { const n = $(id); n.remove(); n.removeAttribute('id'); return n; };
 
@@ -59,6 +59,7 @@ export function initConsole(h) {
   adoptWindow('station', $('#dialog-station'), { onClose: () => hooks.closeDialog?.('#dialog-station'), w: 760, h: 640 });
   adoptWindow('comms', $('#dialog-comms'), { onClose: () => hooks.closeComms?.(), title: 'COMMS', w: 900, h: 600 });
   adoptWindow('boarding', $('#dialog-boarding'), { onClose: () => hooks.closeBoarding?.(), title: 'BOARDING', w: 640 });
+  adoptWindow('shuttle', $('#dialog-shuttle'), { onClose: () => hooks.closeShuttle?.(), title: 'SHUTTLES', w: 700 });
   adoptWindow('library', $('#library'), { onClose: () => hooks.closeLibrary?.(), title: "SHIP'S LIBRARY", w: 980, h: 640 });
   $('#wm-layer').appendChild($('#library'));
 

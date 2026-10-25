@@ -39,7 +39,7 @@ import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
 import { ourName } from '../sim/service.js';
 import { worldOf } from '../sim/worlds.js';
-import { drawWorldZones } from './worldzones.js';
+import { drawWorldZones, drawShuttleTracks } from './worldzones.js';
 
 const LIGHT_RINGS = [[LIGHT_SECOND_AU, '1 LIGHT-SEC'], [LIGHT_MINUTE_AU, '1 LIGHT-MIN'], [LIGHT_MINUTE_AU * 10, '10 LIGHT-MIN']];
 const REPORT_FADE_MIN = 3 * 1440;   // a report is drawn faintest at this age
@@ -415,6 +415,7 @@ export class SolarMap {
     }
 
     if (zoneWorld) drawWorldZones(ctx, zoneWorld, zoneAt[0], zoneAt[1], S / AU_M, W, H, L, state.clock.minute, 'over');
+    if (zoneWorld) drawShuttleTracks(ctx, state, zoneWorld, zoneAt[0], zoneAt[1], S / AU_M);
 
     // Entities: only what we know. LIVE contacts on our board and CHARTED
     // things on published orbits are drawn where they are; everything else

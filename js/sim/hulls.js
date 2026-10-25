@@ -8,7 +8,9 @@
 // cylinders, radiators are flat panels edge-on to the drive, and the
 // drive bell is at the stern. A ship rated for atmospheric entry is
 // still a box: a flat-bottomed lifting body with a ceramic belly, or a
-// tail-sitter with a shield ring round its drive, on legs.
+// tail-sitter with a shield ring round its drive, on legs. (Those flying
+// are the shuttles big hulls carry, belly-first on skids, a crew hatch in
+// the nose: ship-classes.js BAYS.)
 //
 // Ship frame: x along the thrust axis (bow +x, stern −x, the origin at
 // mid-length), y to starboard, z dorsal. Parts:
@@ -232,8 +234,15 @@ const ARCH = {
     b.box(0.78, 0.9, W * 0.7, H * 0.8, 'machinery');
     b.bell(0.9, 1, W * 0.08, W * 0.18);
     if (!c.atmo) { b.radiators(0.8, 0.9, W * 0.35); b.cyl(0.25, 0.7, H * 0.3, 'tank', { z: H * 0.7 }); }
-    b.port('crew', 0.12, 'y-', 'M', 'crew');
-    b.port('cargo', 0.5, 'y+', 'L', 'cargo');
+    // rated for entry: the lifting body's ceramic belly, its skids (the tower hulls get theirs in fittings())
+    if (c.atmo?.entry === 'belly') {
+      b.box(0, 0.92, W * 1.04, H * 0.08, 'shield', { z: -H / 2 - H * 0.04 });
+      for (const s of [-1, 1]) b.box(0.15, 0.85, 0.4, 0.6, 'leg', { y: s * W * 0.38, z: -H / 2 - H * 0.12 });
+    }
+    // (a carried craft mates nose first in its bay: an S collar there)
+    if (c.carried) b.port('nose', 0, 'x+', 'S', 'crew');
+    b.port('crew', 0.12, 'y-', c.carried ? 'S' : 'M', 'crew');
+    b.port('cargo', 0.5, 'y+', c.carried ? 'M' : 'L', 'cargo');
     b.hatch('ramp', 0.7, 'z-', 'cargo ramp');
   },
 

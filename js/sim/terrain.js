@@ -35,9 +35,10 @@
 // the route flies on.
 //
 // The air. Over a world with an atmosphere (worlds.js) the guard's floor is
-// the entry interface, not the ground: there is no atmospheric flight yet,
-// so the nav computer (and an NPC's) keeps out of the air as it keeps out
-// of the rock, and the planner refuses a route that goes into it (nav.js).
+// the entry interface, not the ground: no hull we fly is rated for an air
+// (a shuttle goes down: shuttles.js, on rails of its own), so the nav
+// computer (and an NPC's) keeps out of the air as it keeps out of the rock,
+// and the planner refuses a route that goes into it (nav.js).
 // Falling toward the air we are told as the ground is told (at the same
 // times: ATMOSPHERE), and a ship in it feels it (flight.js drag). Contact is
 // still the ground's.
@@ -262,7 +263,7 @@ export function terrainTick(state, emit = () => {}, { free = true } = {}) {
     const ka = state.autopilot?.phase === 'active' ? (ma <= 1 ? WARN_MIN.length : 0) : WARN_MIN.filter(m => ma <= m).length;
     if (ka > (w.ka || 0)) {
       const v = impactSpeed(fl, f.vel, ma * MIN_S, thrust);
-      emit('nav-callout', { level: ma <= 3 ? 'danger' : 'warn', key: 'atmo', text: `ATMOSPHERE: falling into ${s.body.name}'s air, its top ${Math.round(fl.alt / 1000).toLocaleString()} km below. Entry in ${Math.max(1, Math.round(ma))} min at ${(v / 1000).toFixed(1)} km/s.` });
+      emit('nav-callout', { level: ma <= 3 ? 'danger' : 'warn', key: 'atmo', text: `ATMOSPHERE: falling into ${s.body.name.endsWith('s') ? `${s.body.name}'` : `${s.body.name}'s`} air, its top ${Math.round(fl.alt / 1000).toLocaleString()} km below. Entry in ${Math.max(1, Math.round(ma))} min at ${(v / 1000).toFixed(1)} km/s.` });
     }
     w.ka = ka;
   } else w.ka = 0;

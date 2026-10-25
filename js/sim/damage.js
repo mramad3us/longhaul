@@ -393,3 +393,89 @@ export function hullTick(state, e, emit = () => {}) {
   }
   if (--h.containment <= 0) explodeNpc(state, e, h.lastHitBy ?? null, emit);
 }
+
+// ---- A WRECK'S TUMBLE ----
+//
+// A wreck tumbles from the moment it was wrecked: about an axis and at a
+// rate (1.5–5.5° a minute) worked from a hash of its id, the same for
+// every look at it (ui/gl/damage.js draws it so). A ship docking with one
+// matches its spin first (docking.js SPIN MATCH), and flies round it as it
+// does until the collar it wants faces it down the corridor: to us the
+// wreck's turn slows and stops with the hull back where the dock's frame
+// has it (tags.spinHeld: from its angle then to the nearest whole turn,
+// at most half a turn either way), and stands still after. Once the
+// collars are mated our RCS despins the pair (tags.despun: it turns no
+// more, ever). Called off before that, it turns on from where it stood
+// (tags.tumble0).
+
+/** A stable number in [0, 1) from a string and integers (the tumble: as ui/gl/damage.js hashes a hull's id). */
+function stable01(id, a = 0, b = 0) {
+  let h = 2166136261 ^ Math.imul(a, 374761393) ^ Math.imul(b, 668265263);
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  h = Math.imul(h ^ (h >>> 15), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/**
+ * A wreck's tumble: { axis (unit, in its hull's frame), rate (° a minute),
+ * since (the minute it began; null: a hulk with no date, drawn still) }, or
+ * null for a hull that is no wreck.
+ */
+export function tumbleOf(e) {
+  if (e?.combat?.status !== 'wreck') return null;
+  const id = e.id;
+  const a = stable01(id, 1, 21) * Math.PI * 2, b = Math.acos(2 * stable01(id, 2, 21) - 1);
+  const since = e.combat.wreckedAt ?? (e.tags?.despawnAt != null ? e.tags.despawnAt - 10 * 1440 : null);
+  return { axis: [Math.sin(b) * Math.cos(a), Math.sin(b) * Math.sin(a), Math.cos(b)], rate: 1.5 + 4 * stable01(id, 3, 21), since };
+}
+
+/** How far round a wreck has turned at minute `tm` (°), as we see it; null for no wreck. */
+export function tumbleAngle(e, tm) {
+  const t = tumbleOf(e);
+  if (!t) return null;
+  const T = e.tags || {};
+  if (T.despun) return T.despun.deg;
+  const H = T.spinHeld;
+  if (H) {
+    // (a cubic from its angle and rate then to the whole turn at rest: the match and the fly-round)
+    const u = Math.min(1, Math.max(0, (tm - H.at) / H.D));
+    return H.deg0 + t.rate * H.D * (u - 2 * u * u + u * u * u) + (H.F - H.deg0) * (3 * u * u - 2 * u * u * u);
+  }
+  if (T.tumble0) return T.tumble0.deg + t.rate * Math.max(0, tm - T.tumble0.at);
+  return t.since == null ? t.rate * 60 : t.rate * Math.max(0, tm - t.since);
+}
+
+/** Is it turning, to us (a dock must match it first)? */
+export function tumbling(e) {
+  const t = tumbleOf(e);
+  return !!t && t.since != null && !e.tags?.despun && !e.tags?.spinHeld;
+}
+
+/** The turn left to the nearest whole turn from where it stands at `minute` (°, −180 to 180): what a spin match flies round. */
+export function spinLeft(e, minute) {
+  const deg = tumbleAngle(e, minute) ?? 0;
+  return Math.round(deg / 360) * 360 - deg;
+}
+
+/** We take up its turn from `minute` over `D` minutes, flying round to its collar: it stands still to us after. */
+export function holdSpin(e, minute, D) {
+  e.tags ||= {};
+  const deg0 = tumbleAngle(e, minute);
+  e.tags.spinHeld = { at: minute, deg0, F: deg0 + spinLeft(e, minute), D };
+}
+
+/** We let go of its turn (a dock called off): it turns on, to us, from where it stood. */
+export function releaseSpin(e, minute) {
+  if (!e?.tags?.spinHeld) return;
+  const deg = tumbleAngle(e, minute);
+  delete e.tags.spinHeld;
+  e.tags.tumble0 = { deg, at: minute };
+}
+
+/** Mated, our RCS kills the pair's turn: the wreck turns no more. */
+export function despin(e, minute) {
+  if (!tumbleOf(e)) return;
+  const deg = tumbleAngle(e, minute);
+  delete e.tags.spinHeld; delete e.tags.tumble0;
+  e.tags.despun = { deg, at: minute };
+}

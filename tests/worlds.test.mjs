@@ -4,9 +4,10 @@
 // A world holds a planetary space out to where its pull falls to 0.01 G,
 // with high orbits a route can end in (the parking orbit at its edge, the
 // stationary orbit over an airspace), low orbit and the air below; the
-// nav computer keeps out of the air and the planner refuses a route into
-// it; a ship in it is dragged; the ground is shared into airspaces with
-// their spaceports, and sites come from seeds. Every body has its sheet.
+// nav computer keeps our hull out of the air and the planner refuses a
+// route into it; a ship in it is dragged; the ground of the settled worlds
+// is shared into airspaces with their spaceports (nobody's on Mercury,
+// Venus and Io), and sites come from seeds. Every body has its sheet.
 // ============================================================
 
 import { assert, fmt } from './helpers.mjs';
@@ -19,7 +20,7 @@ import { planRoutes } from '../js/sim/nav.js';
 import { terrainGuard } from '../js/sim/terrain.js';
 import { BODIES, getBody, bodyPos, bodyVel } from '../js/sim/ephemeris.js';
 import {
-  WORLDS, worldOf, atmosphere, layerOf, airspacesOf, airspaceAt, groundAngle, worldAngle, proceduralSite, solarDayH, orbitPeriodS, airDrag,
+  WORLDS, worldOf, atmosphere, layerOf, airspacesOf, airspaceAt, groundAngle, worldAngle, proceduralSite, solarDayH, orbitPeriodS, airDrag, settlementOf,
 } from '../js/sim/worlds.js';
 import { BODY_FACTS } from '../js/sim/bodyfacts.js';
 import { bodySheet } from '../js/ui/bodysheet.js';
@@ -55,7 +56,7 @@ export default [
       }
       const rho = (n, km) => atmosphere(worldOf(n), km * 1000).rho;
       assert(Math.abs(rho('Earth', 0) - 1.22) < 0.05 && rho('Earth', 10) < 0.45 && rho('Earth', 200) === 0, `Earth's air: ${rho('Earth', 0).toFixed(3)} at the ground, none over its interface`);
-      assert(rho('Venus', 0) > 50 && rho('Mars', 0) > 0.01 && rho('Mars', 0) < 0.03 && rho('Titan', 0) > 1, 'Venus thick, Mars thin, Titan thicker than Earth');
+      assert(rho('Venus', 0) > 50 && rho('Mars', 0) > 0.6 && rho('Mars', 0) < 0.9 && rho('Titan', 0) > 1, `Venus thick, Mars terraformed (${rho('Mars', 0).toFixed(2)} kg/m³: thinner than Earth's sea level), Titan thicker than Earth`);
       assert(worldOf('Jupiter').atmo.giant && Math.abs(rho('Jupiter', 0) - 0.15) < 0.03, 'a giant: its 1-bar level at its radius');
       assert(Math.abs(solarDayH(getBody('Earth')) - 24) < 0.05 && Math.abs(solarDayH(getBody('Mars')) - 24.66) < 0.05 && Math.abs(solarDayH(getBody('Venus')) / 24 - 116.75) < 0.2 && Math.abs(solarDayH(getBody('Luna')) / 24 - 29.53) < 0.05, 'days sun to sun');
       console.log(`      ${WORLDS.map(w => `${w.name} ${fmt(w.wellM / 1000, 0)} km`).join(' · ')}`);
@@ -65,12 +66,12 @@ export default [
     name: 'the ground is shared out: airspaces round each world\'s equator by its size, each with its controller and spaceport; the giants have none; sites come from seeds',
     fn: () => {
       const n = (name) => airspacesOf(worldOf(name)).length;
-      assert(n('Earth') === 11 && n('Mars') === 6 && n('Luna') === 3 && n('Titan') === 5 && n('Venus') === 11, `Earth ${n('Earth')}, Mars ${n('Mars')}, Luna ${n('Luna')}`);
+      assert(n('Earth') === 11 && n('Mars') === 6 && n('Luna') === 3 && n('Titan') === 5 && n('Europa') === 3 && n('Ganymede') === 5 && n('Callisto') === 4, `Earth ${n('Earth')}, Mars ${n('Mars')}, Luna ${n('Luna')}`);
       for (const g of ['Jupiter', 'Saturn', 'Uranus', 'Neptune']) assert(n(g) === 0, `${g}: no ground, no airspaces`);
+      for (const u of ['Mercury', 'Venus', 'Io']) assert(n(u) === 0 && !settlementOf(worldOf(u)).settled && settlementOf(worldOf(u)).note, `${u}: nobody's ground (${settlementOf(worldOf(u)).note.slice(0, 40)}…)`);
       const m = worldOf('Mars'), air = airspacesOf(m);
       assert(air[0].a0 === 0 && Math.abs(air.at(-1).a1 - 2 * Math.PI) < 1e-12 && air.every((a, i) => i === 0 || a.a0 === air[i - 1].a1), 'they cover the equator, end to end');
       assert(air.every(a => a.authority === 'MCR' && a.port.ang >= a.a0 && a.port.ang < a.a1 && a.ceilingM === m.low[1]), 'Martian, each port inside its own, up through low orbit');
-      assert(airspacesOf(worldOf('Io')).every(a => !a.authority && /unclaimed/.test(a.controller)), 'Io unclaimed');
       for (const a of air) assert(airspaceAt(m, (a.a0 + a.a1) / 2) === a, `the middle of ${a.name} is ${a.name}`);
       const t = 12_345;
       assert(Math.abs(groundAngle(m, worldAngle(m, 1.234, t), t) - 1.234) < 1e-9, 'ground and plane angles, both ways');
@@ -118,7 +119,7 @@ export default [
     },
   },
   {
-    name: 'no atmospheric flight yet: the planner refuses a route into a world\'s air, and the guard keeps a falling ship out of it (a rock\'s ground as before)',
+    name: 'our hull keeps out of the air (shuttles go down: shuttles.test.mjs): the planner refuses a route into a world\'s air, and the guard keeps a falling ship out of it (a rock\'s ground as before)',
     fn: () => {
       const s = nearWorld('Earth', 0.005);
       // (the brachistochrones: a ballistic arc fails on its own account)

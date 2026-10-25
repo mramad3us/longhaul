@@ -104,7 +104,7 @@ export const STANCE_PHASE = {
 };
 
 const DOCK_CHIP = {
-  awaiting: ['AWAITING DOCKING CLEARANCE', 'chip-warn'], approach: ['FINAL APPROACH', 'chip-nav'], prox: ['DOCKING', 'chip-nav'],
+  awaiting: ['AWAITING DOCKING CLEARANCE', 'chip-warn'], approach: ['FINAL APPROACH', 'chip-nav'], spin: ['SPIN MATCH', 'chip-nav'], prox: ['DOCKING', 'chip-nav'],
   capture: ['SOFT CAPTURE', 'chip-ok'], seal: ['HARD DOCK', 'chip-ok'], undock: ['UNDOCKING', 'chip-warn'], separate: ['SEPARATING', 'chip-warn'],
   holding: ['HOLDING OFF', 'chip-ok'], outbound: ['CLIMBING OUT ON RCS', 'chip-nav'],
 };
@@ -285,7 +285,10 @@ function updateTactical(state) {
     const p = state.flight.pos;
     const ctl = controlAt(p.x, p.y, state.clock.minute);
     const zone = zonesAt(state, p)[0];
-    setText(el.space, zone ? `${spaceLabel(ctl)} · ${ZONE_KINDS[zone.kind].label}` : spaceLabel(ctl));
+    const words = zone ? `${spaceLabel(ctl)} · ${ZONE_KINDS[zone.kind].label}` : spaceLabel(ctl);
+    setText(el.space, words);
+    // (clipped when the rail is short of room: the whole of it on hover)
+    if (el.space.title !== words) el.space.title = `Who holds this space: ${words}`;
     el.space.className = `rail-space ${zone ? 'space-hot' : ctl.lawless ? 'space-lawless' : ctl.contested ? 'space-contested' : ''}`;
   }
   const th = threatSummary(state);

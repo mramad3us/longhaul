@@ -10,10 +10,16 @@
 // (each panel a shade apart), armour plates, radiator fins (glowing dull
 // red when the drive runs hot), gold foil, polished tanks, a bell of dark
 // alloy with a white-hot throat when lit, the faction's band, lit ports and
-// nav lights. A lit drive's plume is a hot narrow core off the throat inside a
-// faint sheath that flares, as exhaust does in vacuum, out past the hull's
-// own breadth within a few bell lengths aft (so a camera on our hull looking
-// aft sees it round the stern). Damage (damage.js) is cut and painted into the surface: holes
+// nav lights. A lit drive's plume is a volume of light along the ship's axis:
+// a hot narrow core off the throat inside a faint sheath that flares, as
+// exhaust does in vacuum, out past the hull's own breadth within a few bell
+// lengths aft. It is drawn twice over, added: a strip along the axis turned
+// to the camera (what a plume seen from the side is), fading as the axis
+// turns toward the camera, and a stack of soft round glows along the axis,
+// each as wide as the plume is there, that perspective piles up seen down
+// the axis into the round glow round the stern a camera on our own hull sees
+// looking aft (the near glows large, the far ones small toward the axis'
+// vanishing point). Damage (damage.js) is cut and painted into the surface: holes
 // (discarded, the dark inside of the hull seen through them), their torn
 // edges bent out, scorching, pits, hot metal; a broken hull keeps its side
 // of a ragged tear (the clip, in the shadow pass too). The plume is its own pass: light added, a bright core
@@ -37,6 +43,7 @@ import { Post } from './post.js';
 
 const LAYOUT = [['aPos', 3], ['aNrm', 3], ['aCol', 3], ['aMat', 1]];
 const MAX_SCARS = 16;
+const GLOWS = 22;                // the round glows a plume's volume is built of, along its axis
 
 // A broken hull's tear: the plane it keeps one side of, made ragged (shared by the shadow and the picture)
 const CLIP_GLSL = `
@@ -87,9 +94,17 @@ function setup() {
       cone.push(s0, -1, 0, s1, -1, 0, s1, 1, 0, s0, -1, 0, s1, 1, 0, s0, 1, 0);
     }
     const plumeVA = vertexArray(gl, new Float32Array(cone), [['aPos', 3]]);
+    // …and the glows along it: GLOWS camera-facing quads (s, corner), closer together near the throat
+    const quads = [];
+    for (let i = 0; i < GLOWS; i++) {
+      const sv = (i / (GLOWS - 1)) ** 2;
+      quads.push(sv, -1, -1, sv, 1, -1, sv, 1, 1, sv, -1, -1, sv, 1, 1, sv, -1, 1);
+    }
+    const glowVA = vertexArray(gl, new Float32Array(quads), [['aPos', 3]]);
+    const glow = program(gl, GLOW_VS, GLOW_FS, ['aPos']);
     let post = new Post(gl);
     if (!post.ok) post = null;
-    R = { gl, ctx, lit, depth, plume, plumeVA, rock, post, empty: gl.createVertexArray(), meshes: new Map(), shadow: { fb, tex } };
+    R = { gl, ctx, lit, depth, plume, plumeVA, glow, glowVA, rock, post, empty: gl.createVertexArray(), meshes: new Map(), shadow: { fb, tex } };
   } catch (e) {
     console.error('[ships3d]', e.message);
     R = null;
@@ -253,10 +268,29 @@ export function renderScene(scene) {
         // (the sheath flares past the hull's breadth: half-width ~1.1 of its largest side)
         gl.uniform1f(R.plume.u.uSpread, 1.1 * Math.max(m.info.W || 0, m.info.H || 0, rad));
         gl.uniform3fv(R.plume.u.uViewDir, scene.viewDir);
-      gl.uniform3fv(R.plume.u.uEye, scene.eye || [0, 0, 0]);
-      gl.uniform1f(R.plume.u.uPersp, scene.persp ? 1 : 0);
+        gl.uniform3fv(R.plume.u.uEye, scene.eye || [0, 0, 0]);
+        gl.uniform1f(R.plume.u.uPersp, scene.persp ? 1 : 0);
         gl.uniform1f(R.plume.u.uG, g);
         drawArray(gl, R.plumeVA);
+      }
+      // the volume's glows along the axis (the round glow seen down it)
+      const G = R.glow.u;
+      gl.useProgram(R.glow.p);
+      gl.uniformMatrix4fv(G.uView, false, scene.view);
+      gl.uniformMatrix4fv(G.uProj, false, scene.proj);
+      gl.uniform1f(G.uExposure, tonemap ? scene.exposure ?? 1 : 1);
+      gl.uniform3fv(G.uViewDir, scene.viewDir);
+      gl.uniform3fv(G.uEye, scene.eye || [0, 0, 0]);
+      gl.uniform1f(G.uPersp, scene.persp ? 1 : 0);
+      for (const { o, m } of lit) {
+        const b = m.info.bell, g = o.plume;
+        const len = m.info.L * Math.min(14, 2.2 + Math.sqrt(g) * 3.2);
+        const rad = b.r * (0.9 + Math.min(1.5, g * 0.12));
+        gl.uniformMatrix4fv(G.uModel, false, o.m);
+        gl.uniform3f(G.uShape, b.x, len, rad);
+        gl.uniform1f(G.uSpread, 1.1 * Math.max(m.info.W || 0, m.info.H || 0, rad));
+        gl.uniform1f(G.uG, g);
+        drawArray(gl, R.glowVA);
       }
       gl.depthMask(true);
       gl.disable(gl.BLEND);
@@ -824,25 +858,21 @@ uniform vec3 uShape, uViewDir, uEye;    // the bell's exit (x, ship frame), the 
 uniform float uPersp, uSpread;          // (the sheath's half-width once it has flared, m)
 out vec2 vST;
 out float vCore;                        // the core's share of the strip's half-width here
+out float vEnd;                         // how nearly end-on the camera sees the axis (the glows take over)
 void main() {
   float s = aPos.x, t = aPos.y;
-  // the axis in the world, and as the camera sees it: the strip lies in the plane facing the camera, along
-  // the axis' part across the line of sight (seen down its axis, from our own hull, it is a disc of light
-  // round the bell, not a strip seen edge-on)
+  // along the axis in the world, turned across it to face the camera
   vec3 a0 = (uModel * vec4(uShape.x, 0.0, 0.0, 1.0)).xyz;
   vec3 ax = normalize((uModel * vec4(-1.0, 0.0, 0.0, 0.0)).xyz);
   vec3 vdir = uPersp > 0.5 ? normalize(a0 - uEye) : normalize(uViewDir);
-  vec3 ap = ax - vdir * dot(ax, vdir);
-  float sl = length(ap);
-  if (sl > 1e-3) ap /= sl;
-  else { ap = cross(vdir, vec3(0.0, 0.0, 1.0)); if (length(ap) < 1e-3) ap = cross(vdir, vec3(1.0, 0.0, 0.0)); ap = normalize(ap); }
-  vec3 side = normalize(cross(vdir, ap));
-  float endOn = 1.0 - sl;
+  vec3 side = cross(ax, vdir);
+  float sl = length(side);
+  side = sl > 1e-3 ? side / sl : normalize(cross(ax, vec3(0.0, 0.0, 1.0)));
+  vEnd = 1.0 - sl;
   // the core widens slowly off the throat; the sheath flares out past the hull within the first stretch aft
-  float wCore = uShape.z * (1.0 + 2.6 * s + 3.0 * endOn) * 1.8;
-  float wSheath = mix(wCore, max(wCore, uSpread * (1.0 + 1.5 * endOn)), smoothstep(0.0, 0.3, s));
-  float w = max(wCore, wSheath);
-  vec3 p = a0 + ap * (s * uShape.y * max(sl, 0.15)) + side * t * w;
+  float wCore = uShape.z * (1.0 + 2.6 * s) * 1.8;
+  float w = max(wCore, mix(wCore, uSpread, smoothstep(0.0, 0.3, s)));
+  vec3 p = a0 + ax * (s * uShape.y) + side * t * w;
   vST = vec2(s, t);
   vCore = wCore / w;
   gl_Position = uProj * uView * vec4(p, 1.0);
@@ -852,6 +882,7 @@ const PLUME_FS = `#version 300 es
 precision highp float;
 in vec2 vST;
 in float vCore;
+in float vEnd;
 uniform float uTime, uG, uExposure;
 out vec4 frag;
 float h(float x) { return fract(sin(x * 91.7) * 47453.3); }
@@ -868,5 +899,52 @@ void main() {
   float fl = 0.9 + 0.1 * h(floor(uTime * 30.0));
   vec3 col = vec3(1.0, 0.97, 0.95) * core * 2.4 + vec3(0.42, 0.58, 1.0) * sheath;
   col *= fl * clamp(0.35 + uG * 0.25, 0.0, 2.2) * uExposure * smoothstep(1.0, 0.75, s) * smoothstep(1.0, 0.8, abs(t));
+  // (seen down its axis the strip is edge-on: the glows carry the plume there)
+  col *= pow(1.0 - vEnd, 1.5);
   frag = vec4(col, 0.0);
 }`;
+
+// The plume's volume: round glows along its axis, each facing the camera, as wide as the plume there
+const GLOW_VS = `#version 300 es
+layout(location=0) in vec3 aPos;        // s along the plume (0 the bell, 1 its end), the quad's corner
+uniform mat4 uModel, uView, uProj;
+uniform vec3 uShape, uViewDir, uEye;
+uniform float uPersp, uSpread;
+out vec2 vUV;
+out float vS;
+out float vEnd;
+void main() {
+  float s = aPos.x;
+  vec3 a0 = (uModel * vec4(uShape.x, 0.0, 0.0, 1.0)).xyz;
+  vec3 ax = normalize((uModel * vec4(-1.0, 0.0, 0.0, 0.0)).xyz);
+  vec3 c = a0 + ax * (s * uShape.y);
+  vec3 vdir = uPersp > 0.5 ? normalize(c - uEye) : normalize(uViewDir);
+  vec3 up0 = abs(vdir.z) < 0.95 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+  vec3 right = normalize(cross(vdir, up0)), up = cross(right, vdir);
+  // (the glows' sheath spreads wider than the strip's: the faint outer light of exhaust in vacuum, round the stern)
+  float wCore = uShape.z * (1.0 + 2.6 * s) * 1.8;
+  float w = max(wCore, mix(wCore, 2.0 * uSpread, smoothstep(0.0, 0.35, s)));
+  vEnd = 1.0 - length(cross(ax, vdir));
+  vUV = aPos.yz; vS = s;
+  gl_Position = uProj * uView * vec4(c + (right * aPos.y + up * aPos.z) * w, 1.0);
+}`;
+
+const GLOW_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+in float vS;
+in float vEnd;
+uniform float uG, uExposure;
+out vec4 frag;
+void main() {
+  float r2 = dot(vUV, vUV);
+  if (r2 > 1.0) discard;
+  // a hot centre near the throat, the blue sheath round it, both thinning down the plume
+  float core = exp(-r2 * 30.0) * exp(-vS * 5.0) * 2.4;
+  float sheath = exp(-r2 * 2.6) * (exp(-vS * 2.0) * 0.85 + 0.06);
+  vec3 col = vec3(1.0, 0.97, 0.95) * core + vec3(0.42, 0.58, 1.0) * sheath;
+  // one of a stack: seen down the axis they pile up into the round glow; from the side the strip carries most of it
+  col *= (0.12 + 0.88 * vEnd) * (5.0 / float(${GLOWS})) * clamp(0.35 + uG * 0.25, 0.0, 2.2) * uExposure * smoothstep(1.0, 0.7, vS) * (1.0 - smoothstep(0.6, 1.0, r2));
+  frag = vec4(col, 0.0);
+}`;
+

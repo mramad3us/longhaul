@@ -265,14 +265,15 @@ const HANDLERS = {
   // ---- Docking
   'dock-begun': ({ target, phase }) => logEntry(phase === 'inbound' ? `Docking: inbound to ${target}` : `Docking: ${target}`, 'nav'),
   'dock-awaiting': ({ target }) => { logEntry(`Holding at ${target}'s gate — docking clearance needed. Hail traffic control.`, 'warn'); pushTicker(`Holding at the gate: request docking clearance from ${target}.`, 'warn', 'NAV'); toast('HAIL FOR DOCKING CLEARANCE', 'warn'); },
-  'dock-phase': ({ phase, berth, aborted, gateKm, kind }) => {
-    const text = { approach: `Final approach to ${berth}: the docking computer has it, 0.1 G and the keep-out limit`, prox: `Proximity operations: ${berth} ${kind === 'ship' ? '300 m' : 'a kilometre'} ahead`, seal: 'Soft capture — latches closing, collar retracting', undock: 'Venting the lock, unlatching', separate: 'Released: backing out on RCS', holding: aborted ? 'Backed out to the hold point' : 'Clear of the berth, holding', outbound: `Climbing out of the corridor on RCS: through the gate at ${gateKm ?? 50} km, then the drive`, clear: 'Through the gate: clear to light the drive' }[phase];
+  'dock-phase': ({ phase, berth, aborted, gateKm, kind, rate, seconds, arcM, target }) => {
+    const text = { spin: `Spin match: the ${target} tumbles ${rate?.toFixed(1)}° a minute. Taking up its turn on the RCS${arcM > 5 ? ` and flying ${Math.round(arcM)} m round it to its collar` : ''} (${seconds >= 120 ? `${Math.round(seconds / 60)} min` : `${seconds} s`}): it will stand still to us`, approach: `Final approach to ${berth}: the docking computer has it, 0.1 G and the keep-out limit`, prox: `Proximity operations: ${berth} ${kind === 'ship' ? '300 m' : 'a kilometre'} ahead`, seal: 'Soft capture — latches closing, collar retracting', undock: 'Venting the lock, unlatching', separate: 'Released: backing out on RCS', holding: aborted ? 'Backed out to the hold point' : 'Clear of the berth, holding', outbound: `Climbing out of the corridor on RCS: through the gate at ${gateKm ?? 50} km, then the drive`, clear: 'Through the gate: clear to light the drive' }[phase];
     if (text) { logEntry(`Docking: ${text}`, 'nav'); pushTicker(text, 'nav', 'DOCK'); }
   },
   'dock-capture': ({ closing, miss }) => { logEntry(`Contact — soft capture at ${closing.toFixed(2)} m/s, ${miss.toFixed(2)} m off the axis`, 'ok'); toast('SOFT CAPTURE', 'ok'); },
   'docked': ({ target, berth, bumps }) => { logEntry(`Hard seal: docked at ${target}, ${berth}${bumps ? ` (${bumps} contact${bumps > 1 ? 's' : ''} before capture)` : ''}`, 'ok'); toast(`DOCKED · ${target}`, 'ok'); },
   'dock-bump': ({ why, dp, damaged }) => { logEntry(`Collar contact, no capture: ${why}${dp > 0.5 ? ` — hull damage ${Math.round(dp)} DP` : ''}${damaged ? ', the berth collar damaged' : ''}`, dp > 0.5 ? 'danger' : 'warn'); toast(dp > 0.5 ? 'HARD CONTACT' : 'NO CAPTURE — BOUNCED', dp > 0.5 ? 'danger' : 'warn'); },
   'dock-aborted': ({ why, holding, backingOut }) => logEntry(`Docking aborted: ${why}${backingOut ? ' — backing out' : holding ? ' — holding' : ''}`, 'warn'),
+  'spin-released': ({ target }) => logEntry(`Let go of the ${target}'s turn: it tumbles on`, 'nav'),
   'dock-torn': ({ target }) => { logEntry(`${target} lit its drive while we were joined — the collar tore free`, 'danger'); toast('COLLAR TORN FREE', 'danger'); },
   'survivors-aboard': ({ text }) => { logEntry(text, 'ok'); toast(text, 'ok'); },
   'survivors-landed': ({ text }) => { logEntry(text, 'ok'); toast(text, 'ok'); },

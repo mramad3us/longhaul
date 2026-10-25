@@ -70,17 +70,20 @@ import { dockedStationEntity, dockedTo } from './docking.js';
 import { gateOrbit } from './stations.js';
 import { freeBerths } from './manifest.js';
 import { MIL_TYPES, MIL_LABEL, milShare, milRefusal, generateMil, spawnMil, milProgress, milTurnIn } from './military.js';
+import { WORLDS, airspacesOf, worldOf } from './worlds.js';
+import { bodyPos } from './ephemeris.js';
+import { entryProfile, ascentProfile } from './planetary.js';
 import { licenseOf, ourCommandShip, supplyPriceFactor, creditMission, rankOf, RANK_FOR } from './service.js';
 
 export const ContractType = {
-  CARGO: 'CARGO', PASSENGERS: 'PASSENGERS', FUEL: 'FUEL',
+  CARGO: 'CARGO', PASSENGERS: 'PASSENGERS', FUEL: 'FUEL', PLANETSIDE: 'PLANETSIDE',
   INVESTIGATE: 'INVESTIGATE', SALVAGE: 'SALVAGE', SURVEY: 'SURVEY', MEDEVAC: 'MEDEVAC',
   BOUNTY: 'BOUNTY', ESCORT: 'ESCORT', SMUGGLE: 'SMUGGLE', RECON: 'RECON',
   INTEL: 'INTEL', HOLD: 'HOLD', STRIKE: 'STRIKE', COVERT: 'COVERT',
 };
 
 export const CONTRACT_LABEL = {
-  CARGO: 'CARGO HAUL', PASSENGERS: 'PASSENGER TRANSPORT', FUEL: 'FUEL DELIVERY',
+  CARGO: 'CARGO HAUL', PASSENGERS: 'PASSENGER TRANSPORT', FUEL: 'FUEL DELIVERY', PLANETSIDE: 'PLANETSIDE FREIGHT',
   INVESTIGATE: 'INVESTIGATE', SALVAGE: 'SALVAGE', SURVEY: 'SURVEY', MEDEVAC: 'MEDICAL EVAC',
   BOUNTY: 'BOUNTY', ESCORT: 'CONVOY ESCORT', SMUGGLE: 'BLOCKADE RUN', RECON: 'COVERT RECON',
   ...MIL_LABEL,
@@ -124,6 +127,7 @@ export function dockedPort(state) {
 
 const GEN = [
   { type: ContractType.CARGO, weight: 4, dest: true },
+  { type: ContractType.PLANETSIDE, weight: 3 },
   { type: ContractType.PASSENGERS, weight: 3, dest: true },
   { type: ContractType.FUEL, weight: 2, dest: true },
   { type: ContractType.INVESTIGATE, weight: 2 },
@@ -133,6 +137,23 @@ const GEN = [
 ];
 
 function distAU(a, b) { return Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y); }
+
+/** What goes down to a world's ground in a shuttle: small, dear freight. */
+const SURFACE_CARGO = [
+  ['medical supplies', 300, 3000], ['seed stock', 500, 3500], ['pharmaceuticals', 200, 1500], ['electronic parts', 300, 2500],
+  ['spare parts', 500, 3800], ['mail and personal effects', 100, 800], ['precision instruments', 200, 1200], ['water purifiers', 600, 3500],
+];
+/** A spaceport for freight from `station`: on a settled world near it (worlds.js), the nearer likelier. */
+function surfaceSite(state, station) {
+  const days = state.clock.minute / DAY_MIN;
+  const near = WORLDS.filter(w => airspacesOf(w).length).map(w => { const p = bodyPos(w.body, days); return { w, d: Math.hypot(p.x - station.pos.x, p.y - station.pos.y) }; })
+    .filter(x => x.d < 3.5).sort((a, b) => a.d - b.d).slice(0, 3);
+  if (!near.length) return null;
+  const pickW = weightedPick(near, x => 1 / (0.05 + x.d));
+  return { w: pickW.w, a: pick(airspacesOf(pickW.w)), d: pickW.d };
+}
+/** Can our shuttles make a world's ground (and come back)? */
+export const shuttleCanLand = (state, worldName) => (state.shuttles?.bay || []).some(s => entryProfile(worldName, s.cls) && ascentProfile(worldName, s.cls));
 
 function generate(state, station, others) {
   // Military work, for a captain flying the flag of a power fighting near here (all of a command ship's board)
@@ -151,6 +172,16 @@ function generate(state, station, others) {
   const now = state.clock.minute;
   const base = { id, type: gen.type, station: station.id, stationName: station.name, offeredAt: now, phase: 'offered' };
   switch (gen.type) {
+    case ContractType.PLANETSIDE: {
+      // freight to a world's ground: our shuttles take it down from a high orbit (shuttles.js)
+      const site = surfaceSite(state, station);
+      if (!site) return null;
+      const [name, lo, hi] = pick(SURFACE_CARGO); const mass = Math.round(randInt(lo, hi) / 50) * 50;
+      return { ...base, world: site.w.name, airspace: site.a.id, destName: `${site.a.port.name}, ${site.w.name}`, cargo: { name, mass },
+        title: `Planetside: ${name} to ${site.a.port.name}`,
+        description: `Land ${mass.toLocaleString()} kg of ${name} at ${site.a.port.name} on ${site.w.name}. Our own shuttle takes it down from a high orbit (a hull without a shuttle bay can't), the ${site.a.controller} clears the landing, and payment comes by radio when it is on the pad.`,
+        reward: { credits: Math.round(mass * 0.9 + site.d * 1100 + 1800) }, deadline: randInt(5, 12) * DAY_MIN, expires: now + randInt(1, 3) * DAY_MIN };
+    }
     case ContractType.CARGO: {
       const dest = pick(others); const [name, lo, hi] = pick(CARGO); const mass = randInt(lo, hi);
       const d = distAU(station, dest);
@@ -648,6 +679,7 @@ export function acceptContract(state, stationId, contractId) {
   if (POWERS.includes(st.faction) && state.law.standing[st.faction] < STANDING_TO_TRADE) return { ok: false, text: `${st.name} won't give work to a ship with your record.` };
   if (c.mil) { const no = milRefusal(state, c); if (no) return { ok: false, text: no }; }
   if (!inPort(state, st)) return { ok: false, text: st.tags?.command ? `Come alongside the ${st.name} (inside 10 km) to sign for it.` : `Come into ${st.name}'s port space (inside ${Math.round(PORT_M / 1e6) * 1000} km) to sign for it.` };
+  if (c.type === ContractType.PLANETSIDE && !shuttleCanLand(state, c.world)) return { ok: false, text: `It takes a shuttle that can make ${c.world}'s ground: this hull carries none.` };
   if (c.cargo) {
     const load = state.cargo.reduce((s, x) => s + x.mass, 0);
     if (load + c.cargo.mass > state.cargoCapacity) return { ok: false, text: `Not enough hold space (${(state.cargoCapacity - load).toLocaleString()} kg free).` };
@@ -814,6 +846,27 @@ export function abandonContract(state, contractId, emit = () => {}) {
   return true;
 }
 
+/**
+ * Freight landed by our shuttle at a PLANETSIDE contract's spaceport
+ * (shuttles.js): what is owed counted off, and the contract paid by radio
+ * when all of it is down.
+ */
+export function deliverPlanetside(state, contractId, kg, emit = () => {}) {
+  const c = state.contracts.active.find(x => x.id === contractId);
+  if (!c || c.type !== ContractType.PLANETSIDE || c.phase !== 'active') return null;
+  c.landedKg = (c.landedKg || 0) + kg;
+  logContract(state, c, `${Math.round(kg).toLocaleString()} kg landed at ${c.destName}`);
+  if (c.landedKg < c.cargo.mass - 1) { emit('contract-progress', { contract: c, text: `${Math.round(c.landedKg).toLocaleString()} of ${c.cargo.mass.toLocaleString()} kg of ${c.cargo.name} on the pad at ${c.destName}.` }); return { done: false, left: c.cargo.mass - c.landedKg }; }
+  grant(state, c.reward, 0);
+  c.phase = 'complete';
+  c.completedAt = state.clock.minute;
+  c.paid = { ...c.reward };
+  logContract(state, c, `Paid by radio: ${(c.reward.credits || 0).toLocaleString()} MCR`);
+  archive(state, c);
+  emit('contract-progress', { contract: c, text: completionText(c, 0) });
+  return { done: true, text: completionText(c, 0) };
+}
+
 function archive(state, c) {
   const C = state.contracts;
   C.active = C.active.filter(x => x !== c);
@@ -823,6 +876,7 @@ function archive(state, c) {
 function completionText(c, bonus) {
   switch (c.type) {
     case ContractType.CARGO: return `Cargo delivered to ${c.destName}. Dock crews start unloading the ${c.cargo.name}. Payment transferred.`;
+    case ContractType.PLANETSIDE: return `The ${c.cargo.name} is on the pad at ${c.destName}: ${Math.round(c.landedKg || c.cargo.mass).toLocaleString()} kg signed for. Payment transferred by radio.`;
     case ContractType.PASSENGERS: return `Passengers disembark at ${c.destName}.${bonus ? ' The VIP is impressed — bonus paid.' : ' Another safe transit.'} Payment transferred.`;
     case ContractType.FUEL: return `Fuel transfer complete. ${c.destName} confirms ${c.fuelKg.toLocaleString()} kg received. Payment transferred.`;
     case ContractType.INVESTIGATE: return `Report filed with ${c.stationName}. ${c.outcome === 'alive' ? 'A tug is already on its way.' : c.outcome === 'derelict' ? 'Recovery team scheduled.' : 'The loss is recorded.'} Payment transferred.`;

@@ -33,6 +33,7 @@
 // ============================================================
 
 import { ensureHull } from '../../sim/combatants.js';
+import { tumbleOf, tumbleAngle } from '../../sim/damage.js';
 
 const MAX_SCARS = 16;            // the most a hull's shader takes (the worst)
 const VENT_MIN = 25;             // a hole in a pressure hull vents this long (sim minutes): the air runs out
@@ -196,10 +197,9 @@ export function damageLook(src, hull, tm) {
   // a wreck: tumbling, broken-backed (most), its fragments drifting off
   let tumble = null, broken = null, debris = null;
   if (wreck) {
-    const a = hash01(id, 1, 21) * Math.PI * 2, b = Math.acos(2 * hash01(id, 2, 21) - 1);
-    const axis = [Math.sin(b) * Math.cos(a), Math.sin(b) * Math.sin(a), Math.cos(b)];
-    const rate = 1.5 + 4 * hash01(id, 3, 21);          // degrees a minute
-    tumble = { axis, deg: rate * Math.max(0, tm - since) };
+    // (its turn as the sim has it: sim/damage.js, matched and despun by a dock)
+    const tb = tumbleOf(src);
+    tumble = tb ? { axis: tb.axis, deg: tumbleAngle(src, tm) } : null;
     const mods = hull.parts.filter(p => p.k === 'box' && PRESSURE.has(p.role));
     if (hash01(id, 4, 21) < 0.65 && hull.L > 20) {
       // torn through at the joint nearest the worst wound (or the middle of the hull)

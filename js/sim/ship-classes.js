@@ -39,6 +39,12 @@
 // passenger berths): a navy takes prisoners. A police cutter's brig is its
 // passenger deck (its `berths`).
 //
+// No hull here is rated for an atmosphere but the CARRIED craft: the
+// shuttles a big hull keeps in its bays for a world's ground (BAYS: a
+// pinnace, a cargo lander), belly-first under tiles (`atmo`), with a lift
+// to drag for the glide. They are never hulls to command (out of
+// CLASS_IDS); shuttles.js flies them, planetary.js their entries.
+//
 // A navy's hulls are military kit: flying one takes that navy's license
 // (service.js); a `stolen` one no license covers. A ship's identity
 // (rollIdentity) is its class, its flag, its sub-faction (factions.js)
@@ -115,7 +121,7 @@ export const KINDS = {
   prospector: 'Prospector', courier: 'Courier', shuttle: 'Cargo shuttle', 'light-freighter': 'Light freighter',
   freighter: 'Bulk freighter', hauler: 'Ice hauler', tanker: 'Tanker', liner: 'Liner', miner: 'Mining ship',
   cutter: 'Patrol cutter', corvette: 'Corvette', frigate: 'Frigate', destroyer: 'Destroyer', battleship: 'Battleship',
-  gunship: 'Gunship', raider: 'Raider',
+  gunship: 'Gunship', raider: 'Raider', pinnace: 'Pinnace', lander: 'Cargo lander',
 };
 
 // ---- CLASSES ----
@@ -128,7 +134,10 @@ export const KINDS = {
 // tubes · magazine: torpedoes carried {he, nuke} (magazineCap: room for
 // more) · railgun: mounts · gear: mining gear that can be turned on a hull
 // ({ type, mounts }, weapons.js) · evasive: crew drilled to jink under
-// fire · factions: who flies it (weights) · desc: the yard's pitch.
+// fire · factions: who flies it (weights) · desc: the yard's pitch ·
+// carried: a craft a bigger hull carries (its shuttles: BAYS), never flown
+// as a ship of its own, with lift (its lift over drag, entering an
+// atmosphere: sim/entry.js).
 
 const UNARMED = { armor: 0, pdc: 0, tubes: 0, magazine: null, railgun: 0 };
 
@@ -432,9 +441,44 @@ export const CLASSES = {
     cargoT: 10, berths: 2, factions: { pirate: 3 }, names: 'pirate', evasive: true,
     desc: 'A Hermes courier with a tube where the mail hold was.',
   },
+
+  // ---------------- Carried craft: a big hull's way down to a world ----------------
+  pinnace: {
+    name: 'Pinnace', kind: 'pinnace', hull: 'shuttle', builder: 'independent', tl: 2, category: 'civilian', size: 'S', carried: true,
+    lengthM: 18, massT: 45, crew: [1, 2], crewStd: 1, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, lift: 1.3,
+    drive: { cruiseG: 1, maxG: 4 }, ...UNARMED, cargoT: 4, berths: 12, factions: {}, names: 'shuttle',
+    desc: 'A small lifting body carried in a big hull\'s bay: a pilot, a dozen people and a few tonnes, down to a world\'s ground and back up to orbit.',
+  },
+  lander: {
+    name: 'Cargo lander', kind: 'lander', hull: 'shuttle', builder: 'independent', tl: 2, category: 'civilian', size: 'S', carried: true,
+    lengthM: 26, massT: 140, crew: [1, 2], crewStd: 2, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, lift: 0.9,
+    drive: { cruiseG: 0.8, maxG: 3 }, ...UNARMED, cargoT: 60, berths: 2, factions: {}, names: 'shuttle',
+    desc: 'A freighter\'s lighter: sixty tonnes in a squat ceramic-bellied box, down to a spaceport and back for the next load.',
+  },
 };
 
-export const CLASS_IDS = Object.keys(CLASSES);
+/**
+ * The craft a hull carries in its bays (its shuttles), by class: a big hull
+ * isn't rated for an atmosphere, and its shuttles are how it reaches a
+ * world's ground. Small hulls and the hulls rated for entry themselves
+ * (the corvettes' tail-sitters, the couriers' and lighters' bellies) carry
+ * none.
+ */
+export const BAYS = {
+  tramp: { pinnace: 1 }, 'light-freighter': { pinnace: 1 }, meridian: { pinnace: 1 }, ares: { pinnace: 1 },
+  'ore-scow': { pinnace: 1 }, freighter: { lander: 1, pinnace: 1 }, 'tharsis-bulk': { lander: 1, pinnace: 1 },
+  'ice-hauler': { pinnace: 2 }, 'water-carrier': { pinnace: 2 }, 'belt-tanker': { pinnace: 1 }, tanker: { pinnace: 1 },
+  'colony-ship': { lander: 2, pinnace: 4 }, liner: { lander: 1, pinnace: 4 }, 'valles-liner': { lander: 1, pinnace: 3 },
+  'mining-barge': { pinnace: 1 }, 'mining-tender': { pinnace: 1 }, 'pallas-refiner': { pinnace: 1 },
+  'opa-frigate': { pinnace: 1 }, 'unn-frigate': { pinnace: 1 }, 'unn-frigate-new': { pinnace: 1 }, 'mcrn-frigate': { pinnace: 1 },
+  'unn-destroyer': { pinnace: 2 }, 'mcrn-destroyer': { pinnace: 2 }, 'unn-battleship': { pinnace: 4, lander: 2 }, 'mcrn-battleship': { pinnace: 4, lander: 2 },
+  'opa-gunship': { pinnace: 2 }, 'pirate-gunship': { pinnace: 1 },
+};
+/** A class's shuttles, one entry each: [{ cls }]. */
+export const bayOf = (classId) => Object.entries(BAYS[classId] || {}).flatMap(([cls, n]) => Array.from({ length: n }, () => ({ cls })));
+
+/** The ships (a carried craft is not one: BAYS). */
+export const CLASS_IDS = Object.keys(CLASSES).filter(id => !CLASSES[id].carried);
 export const PLAYER_CLASS = 'light-freighter';
 
 /**

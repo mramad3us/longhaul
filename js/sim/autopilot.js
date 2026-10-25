@@ -288,7 +288,7 @@ export function autopilotTick(state, emit = () => {}) {
     const allIn = st.unsecured.length === 0;
     // (not with a boarding party aboard another hull: they would be left there)
     const partyOut = state.ship.crew.some(m => m.away?.op && !m.away.captured);
-    if (partyOut && !ap.partyNoted) { ap.partyNoted = true; emit('nav-callout', { level: 'warn', text: 'A boarding party is aboard the other ship: the route waits for them.' }); }
+    if (partyOut && !ap.partyNoted) { ap.partyNoted = true; const sh = state.ship.crew.some(m => m.away?.shuttle); emit('nav-callout', { level: 'warn', text: sh ? 'Our shuttle is out with its crew: the route waits for it to come home.' : 'A boarding party is aboard the other ship: the route waits for them.' }); }
     // (and for a drone out, called home meanwhile: drones.js; EXECUTE NOW leaves it behind)
     const droneHome = !state.drone || ap.override;
     if (!partyOut && droneHome && ((st.pilotReady || !st.pilot) && (allIn || ap.override) || (ap.override && !st.pilot))) {

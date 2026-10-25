@@ -15,6 +15,16 @@
 //             computer in the berth's frame (below) on the drive at 0.1G and
 //             under the keep-out speed limit (traffic-control.js), to a
 //             point CORRIDOR out along the berth's axis
+//   spin      SPIN MATCH, off a tumbling wreck (damage.js tumbleOf): at
+//             the corridor's mouth our ship takes up the wreck's turn on
+//             the RCS, and flies round it as it does until the collar we
+//             want faces us down the corridor (to us, the wreck's turn
+//             slows and stops with the collar on our axis: at most half a
+//             turn round, the arc at our RCS's acceleration, a minute to a
+//             few: spinMatchS); from then on it stands still to us, and
+//             mated, our RCS despins the pair (despin): it turns no more
+//             when we let go. Called off before the seal, we let go of its
+//             turn (releaseSpin) and it turns on, to us.
 //   prox      PROXIMITY OPERATIONS, flown second by second on RCS in the
 //             berth's own frame: x out along the collar's axis (range),
 //             y along its `up`, z out of the plane; and the attitude errors
@@ -81,7 +91,7 @@ import { createPlan, portOfTarget } from './nav.js';
 import { engageRoute, abortRoute, holdStation } from './autopilot.js';
 import { CORRIDOR_M, clearanceFor, clearanceUsed, keepOutM, markOutbound } from './traffic-control.js';
 import { CLASSES, PLAYER_CLASS } from './ship-classes.js';
-import { applyHit } from './damage.js';
+import { applyHit, tumbling, tumbleOf, holdSpin, releaseSpin, despin, spinLeft } from './damage.js';
 import { flagOf } from './service.js';
 import { crewAboard, passengersAboard, setCrewAboard, freeBerths } from './manifest.js';
 import { adjustStanding, cite } from './law.js';
@@ -104,11 +114,11 @@ const RAD = Math.PI / 180;
 // ---- QUERIES ----
 
 /** Phases in which our ship is held in the berth's frame (no flight step). */
-const HELD = new Set(['approach', 'prox', 'capture', 'seal', 'docked', 'undock', 'separate', 'holding', 'outbound']);
+const HELD = new Set(['approach', 'spin', 'prox', 'capture', 'seal', 'docked', 'undock', 'separate', 'holding', 'outbound']);
 /** Phases flown second by second, on RCS (the pilot may fly them). */
 const PROX = new Set(['prox', 'separate']);
 /** …and with the final approach, every phase flown second by second in the berth's frame. */
-const IN_FRAME = new Set(['approach', 'prox', 'separate', 'outbound']);
+const IN_FRAME = new Set(['approach', 'spin', 'prox', 'separate', 'outbound']);
 /** Phases a dock at a station can be left from for somewhere else (beginDocking chains through clearOff). */
 const LEAVING_FROM = new Set(['docked', 'undock', 'separate', 'holding', 'outbound', 'approach']);
 
@@ -177,8 +187,8 @@ export function dockPose(state, d, fr = collarFrame(state, d)) {
   if (!fr) return null;
   const port = ourPort(state, d);
   const r = d.rel;
-  if (d.phase === 'approach' || d.phase === 'outbound') {
-    // the final approach (and the way out): rel is our centre, and we point where we thrust
+  if (d.phase === 'approach' || d.phase === 'outbound' || d.phase === 'spin') {
+    // the final approach (and the way out, and a spin match at the corridor's mouth): rel is our centre, and we point where we thrust
     const ox = r.x * fr.normal.x + r.y * fr.up.x, oy = r.x * fr.normal.y + r.y * fr.up.y;
     const w = fr.omega || 0;
     return {
@@ -387,7 +397,54 @@ function approachStep(state, dtS, emit) {
   state.$dockThrust = drive ? g : 0;
   state.$dockRcs = drive ? 0 : g;
   d.t += dtS;
-  if (dist < 40 && Math.hypot(r.vx, r.vy, r.vz) < 2) startProx(state, emit);
+  if (dist < 40 && Math.hypot(r.vx, r.vy, r.vz) < 2) {
+    const e = d.target.kind === 'ship' && getWorld(state).get(d.target.id);
+    if (e && tumbling(e)) startSpin(state, e, emit); else startProx(state, emit);
+  }
+}
+
+/**
+ * How long a spin match from now takes (s): taking up the turn (longer the
+ * faster it is), or flying the arc round the wreck to its collar on the
+ * RCS (accelerating, then braking), whichever is longer. { S, arcM, g }.
+ */
+export function spinMatchS(state, e, minute = state.clock.minute) {
+  const rate = tumbleOf(e)?.rate || 0;
+  const arcM = Math.abs(spinLeft(e, minute)) * RAD * (SHIP_CORRIDOR_M + (hullOf(e.cls)?.L || 50) / 2);
+  const a = Math.max(0.005, ourRcs(state).accel);
+  const S = Math.round(Math.max(40 + 10 * rate, 2 * Math.sqrt(arcM / a)));
+  return { S, arcM, g: Math.max(SPIN_RCS_G, 4 * arcM / (S * S) / G0) };
+}
+const SPIN_RCS_G = 0.004;            // what the match takes from the RCS at the least: the turn, and holding the circle round the wreck's centre
+
+/** At the corridor's mouth off a tumbling wreck: take up its turn before proximity operations. */
+function startSpin(state, e, emit) {
+  const d = state.dock;
+  const t0 = state.clock.minute + (d.t || 0) / MIN_S;
+  const { S, arcM, g } = spinMatchS(state, e, t0);
+  d.phase = 'spin';
+  d.since = state.clock.minute;
+  d.timer = 0;
+  d.spinS = S;
+  d.spinG = g;
+  d.rel.vx = d.rel.vy = d.rel.vz = 0;
+  state.$dockThrust = 0;
+  holdSpin(e, t0, S / MIN_S);
+  state.flight.spinWith = e.id;
+  emit('dock-phase', { phase: 'spin', berth: berthLabel(state), rate: tumbleOf(e).rate, seconds: S, arcM, target: e.name });
+}
+
+/** One second of a spin match: held at the corridor's mouth, the RCS taking up the wreck's turn. */
+function spinStep(state, dtS, emit) {
+  const d = state.dock;
+  const g = d.spinG || SPIN_RCS_G;
+  const kg = fuelUsed(0, g, dtS / MIN_S);
+  state.resources.fuel.current = Math.max(0, state.resources.fuel.current - kg);
+  d.fuel += kg;
+  state.$dockRcs = g;
+  d.timer += dtS;
+  d.t += dtS;
+  if (d.timer >= d.spinS) startProx(state, emit);
 }
 
 /** Enter proximity operations at the corridor mouth (where the final approach left us). */
@@ -398,7 +455,7 @@ function startProx(state, emit) {
   const port = ourPort(state, d);
   // Where our collar is, in the berth's frame: our centre plus the collar's
   // place on the hull, once the nose is round to the mated attitude
-  const c = d.phase === 'approach' ? d.rel : centreInFrame(state, d);
+  const c = d.phase === 'approach' || d.phase === 'spin' ? d.rel : centreInFrame(state, d);
   const R = mateRotation(port.face, fr.normal, fr.up);
   const p = turn(R, [port.x, port.y, port.z]);
   const r = d.rel = zeroRel();
@@ -527,8 +584,15 @@ function clearGate(state, e, emit) {
  */
 export function dockingTick(state, emit = () => {}) {
   const d = state.dock;
-  if (!d) return false;
   const world = getWorld(state);
+  // (a wreck's turn we took up and are no longer held to: it turns on, to us)
+  const sw = state.flight.spinWith;
+  if (sw && (!d || d.target.id !== sw || !HELD.has(d.phase))) {
+    const e = world.get(sw);
+    if (e?.tags?.spinHeld) { releaseSpin(e, state.clock.minute); emit('spin-released', { target: e.name }); }
+    state.flight.spinWith = null;
+  }
+  if (!d) return false;
   const e = world.get(d.target.id);
   const now = state.clock.minute;
   if (!e) {
@@ -601,6 +665,7 @@ export function frameStep(state, dtS = 1, emit = () => {}) {
   const d = state.dock;
   if (!d) return;
   if (d.phase === 'approach') approachStep(state, dtS, emit);
+  else if (d.phase === 'spin') spinStep(state, dtS, emit);
   else if (d.phase === 'outbound') outboundStep(state, dtS, emit);
   else if (PROX.has(d.phase)) proxStep(state, dtS, emit);
 }
@@ -820,6 +885,16 @@ function completeDock(state, emit) {
       e.agent.mode = e.agent.mode === 'dock-hold' ? 'docked' : e.agent.mode;
       e.agent.dockedWith = PLAYER;
     }
+    // a wreck whose turn we took up: mated, our RCS kills the pair's (the bigger the wreck, the longer)
+    if (e.tags?.spinHeld) {
+      const ratio = Math.max(0.3, Math.min(6, (hullOf(e.cls)?.L || 50) / (hullOf(state.ship.classId || PLAYER_CLASS)?.L || 50)));
+      const kg = fuelUsed(0, SPIN_RCS_G, ratio * 1.5);
+      state.resources.fuel.current = Math.max(0, state.resources.fuel.current - kg);
+      d.fuel += kg;
+      despin(e, state.clock.minute);
+      state.flight.spinWith = null;
+      emit('nav-callout', { level: 'info', key: 'dock', text: `Mated with the ${e.name}: the RCS kills the pair's tumble. It will turn no more when we let go.` });
+    }
     if (e.tags?.rescue) takeSurvivors(state, e, emit);
   }
   emit('docked', { target: e?.name, kind: d.target.kind, id: d.target.id, berth: berthLabel(state), fuel: d.fuel, bumps: d.bumps });
@@ -887,7 +962,7 @@ export function abortDocking(state, emit = () => {}, why = 'aborted') {
   const d = state.dock;
   if (!d) return false;
   if (d.phase === 'inbound' || d.phase === 'awaiting') { abortRoute(state, emit); state.dock = null; emit('dock-aborted', { why }); return true; }
-  if (d.phase === 'approach') { d.phase = 'holding'; d.rel.vx = d.rel.vy = d.rel.vz = 0; emit('dock-aborted', { why, holding: true }); return true; }
+  if (d.phase === 'approach' || d.phase === 'spin') { d.phase = 'holding'; d.rel.vx = d.rel.vy = d.rel.vz = 0; emit('dock-aborted', { why, holding: true }); return true; }
   if (d.phase === 'prox') { d.backingOut = true; emit('dock-aborted', { why, backingOut: true }); return true; }
   if (d.phase === 'capture' || d.phase === 'seal') { d.phase = 'separate'; d.rel.vx = 0.1; d.since = state.clock.minute; emit('dock-aborted', { why, backingOut: true }); return true; }
   return false;
@@ -966,8 +1041,8 @@ export function dockStatus(state) {
     range: r.x, closing: -r.vx, lateral: Math.hypot(r.y, r.z), y: r.y, z: r.z, vy: r.vy, vz: r.vz,
     toGo: d.phase === 'outbound' && d.goal ? Math.hypot(d.goal.x - r.x, d.goal.y - r.y)
       : d.phase === 'approach' ? Math.hypot(r.x - (d.target.kind === 'ship' ? SHIP_CORRIDOR_M : CORRIDOR_M), r.y, r.z) : null,
-    yaw: r.yaw / RAD, pitch: r.pitch / RAD, roll: r.roll / RAD, fuel: d.fuel, bumps: d.bumps,
-    timer: d.phase === 'capture' ? CAPTURE_MIN - (state.clock.minute - d.since) : d.phase === 'seal' ? SEAL_MIN - (state.clock.minute - d.since) : d.phase === 'undock' ? UNDOCK_MIN - (state.clock.minute - d.since) : null,
+    yaw: r.yaw / RAD, pitch: r.pitch / RAD, roll: r.roll / RAD, fuel: d.fuel, bumps: d.bumps, tumble: d.phase === 'spin' && e ? tumbleOf(e)?.rate || 0 : 0,
+    timer: d.phase === 'spin' ? Math.max(0, (d.spinS - d.timer) / MIN_S) : d.phase === 'capture' ? CAPTURE_MIN - (state.clock.minute - d.since) : d.phase === 'seal' ? SEAL_MIN - (state.clock.minute - d.since) : d.phase === 'undock' ? UNDOCK_MIN - (state.clock.minute - d.since) : null,
     rate: PROX_RATES[d.rate ?? 3],
   };
 }

@@ -32,7 +32,8 @@ const PLANET_DATA = [
   { name: 'Earth', a: 1.0, radius: 6_371, color: '#4A90D9', rotH: 23.934, gm: 398_600, atmo: { surfaceKPa: 101.3, scaleKm: 8.5, interfaceKm: 120 }, initAngle: 0.0, moons: [
     { name: 'Luna', aKm: 384_400, period: 27.32, radius: 1737.4, gm: 4904.9, color: '#AAAAAA', initAngle: 0 },
   ] },
-  { name: 'Mars', a: 1.524, radius: 3_390, color: '#C1553B', rotH: 24.623, gm: 42_828, atmo: { surfaceKPa: 0.61, scaleKm: 11.1, interfaceKm: 125 }, initAngle: 4.5, moons: [
+  // (Mars two centuries into its terraforming: half an Earth's air, nitrogen and oxygen, breathable on the low ground: bodyfacts.js)
+  { name: 'Mars', a: 1.524, radius: 3_390, color: '#B8634A', rotH: 24.623, gm: 42_828, atmo: { surfaceKPa: 52, scaleKm: 19, interfaceKm: 160 }, initAngle: 4.5, moons: [
     { name: 'Phobos', aKm: 9_377, period: 0.319, radius: 11.1, gm: 0.000711, color: '#888877', initAngle: 0.5 },
     { name: 'Deimos', aKm: 23_460, period: 1.263, radius: 6.2, gm: 9.8e-05, color: '#777766', initAngle: 2.1 },
   ] },

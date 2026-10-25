@@ -69,7 +69,7 @@ let etaCache = { at: 0, key: '', minutes: null, path: null };
 let hooks = {};
 
 export function initNav(h) {
-  hooks = h;   // { hail(entityId), openStation(), board(id), dock(target), showPanel(id), look(target) }
+  hooks = h;   // { hail(entityId), openStation(), board(id), dock(target), showPanel(id), look(target), shuttle(airspaceId) }
   tacModal = new TacView($('[data-nav-screen="tactical"]'), { onSelect: (id) => selectOnBoard(id) });
   map = new SolarMap($('[data-nav-screen="solar"]'), {
     onSelect: (sel) => { ui.nav.target = sel; ui.nav.card = !!sel; hidePickList(); renderSelection(); },
@@ -611,6 +611,7 @@ function onPanelClick(e) {
       if (p) map.focusOn(p, t.kind === 'entity' ? 2e6 : w ? 0.42 * Math.min(map.fc.w, map.fc.h) / (2 * w.wellM / AU_M) : Math.max(map.scale, 300));
     } break;
     case 'orbit-over': if (t && btn.dataset.air) openRoutePanel({ kind: 'body', id: t.id }, { over: btn.dataset.air }); break;
+    case 'send-shuttle': if (btn.dataset.air) hooks.shuttle?.(btn.dataset.air); break;
     case 'abort':
       if (abortRoute(s, (type, p) => bus.emit(type, p))) { toast('Route aborted — drive cut', 'warn'); }
       renderSelection();

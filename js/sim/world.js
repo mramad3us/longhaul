@@ -175,10 +175,18 @@ export function propagateFree(pos, vel, t0, t1, thrustG, heading, maxStepMin) {
 }
 
 /** Predicted {pos, vel} of any entity at a future minute, without mutating it. */
+/**
+ * A flight path's place (a craft between orbit and a world's ground, on
+ * the rails planetary.js flew for it): set by planetary.js when it loads, so
+ * this module needn't know how it is worked out.
+ */
+export const FLIGHT_PATH = { at: null };
+
 export function predictEntity(e, minute, world = null) {
   const pos = { x: e.pos.x, y: e.pos.y };
   const vel = { vx: e.vel.vx, vy: e.vel.vy };
-  if (e.orbit) orbitStateAt(e.orbit, minute, pos, vel);
+  if (e.flightPath && world && FLIGHT_PATH.at) FLIGHT_PATH.at(world, e, minute, pos, vel);
+  else if (e.orbit) orbitStateAt(e.orbit, minute, pos, vel);
   else if (e.transit && world) {
     const thrust = e.thrust, heading = e.heading;
     transitStateAt(world, e, minute, pos, vel);
@@ -283,7 +291,9 @@ export class World {
   /** Bring one entity exactly up to `minute`. */
   refresh(e, minute) {
     if (e.driven) return;                         // its controller steps it (combat.js)
-    if (e.orbit) {
+    if (e.flightPath && FLIGHT_PATH.at) {
+      FLIGHT_PATH.at(this, e, minute, e.pos, e.vel);
+    } else if (e.orbit) {
       orbitStateAt(e.orbit, minute, e.pos, e.vel);
     } else if (e.transit) {
       if (!transitStateAt(this, e, minute, e.pos, e.vel)) e.transit = null;   // endpoint vanished: drift

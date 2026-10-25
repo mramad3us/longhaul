@@ -178,6 +178,30 @@
 .bd-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .bd-phase { font: 10px var(--font-pixel); color: var(--accent-bright); letter-spacing: 1px; }
 
+/* ---- SHUTTLES ---- */
+.dialog.dialog-shuttle { width: min(720px, 94vw); max-width: none; }
+.sb-bay { display: grid; gap: 4px; margin: 6px 0 12px; }
+.sb-row { display: grid; grid-template-columns: minmax(90px, auto) minmax(150px, auto) 1fr; gap: 12px; align-items: baseline; padding: 6px 8px; background: var(--bg-raised); border: 1px solid var(--hull-primary); font: 11px var(--font-mono); }
+.sb-name { color: var(--text-primary); }
+.sb-class { color: var(--text-dim); }
+.sb-state { color: var(--text-secondary); text-align: right; }
+.sb-state.out { color: var(--accent-bright); }
+.sb-run { margin: 0 0 12px; padding: 8px; border: 1px solid var(--hull-primary); }
+.sb-run .sb-line { margin-top: 6px; }
+.sb-plan { border-top: 1px solid var(--hull-primary); padding-top: 10px; }
+.sb-pick { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 10px; font: 10px var(--font-mono); color: var(--text-dim); letter-spacing: 0.06em; }
+.sb-pick select { margin-left: 6px; background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--hull-primary); font: 11px var(--font-mono); padding: 2px 4px; }
+.sb-timeline { display: grid; gap: 2px; margin-bottom: 10px; }
+.sb-step { display: grid; grid-template-columns: 64px 72px 1fr; gap: 10px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid color-mix(in srgb, var(--hull-primary) 50%, transparent); font: 11px var(--font-mono); }
+.sb-step:last-child { border-bottom: 0; color: var(--text-primary); }
+.sb-k { color: var(--text-dim); letter-spacing: 0.08em; font-size: 10px; }
+.sb-v { color: var(--text-primary); text-align: right; }
+.sb-note { color: var(--text-secondary); }
+.sb-line { font: 11px var(--font-mono); color: var(--text-secondary); margin: 4px 0; }
+.sb-line b { color: var(--text-dim); font-weight: normal; letter-spacing: 0.08em; font-size: 10px; margin-right: 6px; }
+.sb-ok { color: var(--ok, #5FD38D); }
+.sb-bad, .sb-why { color: var(--warn, #E8C45A); }
+
 /* ---- CONTACT PANEL ADDITIONS ---- */
 .scanner-detail-hull { width: 100%; height: 60px; background: #03060B; border: 1px solid #13232c; margin: 4px 0 6px; display: block; }
 

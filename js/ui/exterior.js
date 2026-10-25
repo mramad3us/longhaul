@@ -551,9 +551,36 @@ export function ourMount(state, g) {
     const port = ours.ports.find(p => p.id === d.port) || ours.ports[0];
     mine.mz = -turn(ourPose.R, [port.x, port.y, port.z])[2];
   }
+  // Off a wreck's collar (past the spin match, which leaves it in the dock's
+  // frame: sim/damage.js), we are posed on the piece our collar is on, as
+  // it is drawn: bent with the after piece of a broken-backed hulk, turned
+  // with one still tumbling (a dock older than the match), so the two
+  // never part on the screen
+  const tgt = ourPose && d.target.kind === 'ship' && MATED_PHASES.has(d.phase) && g.objects.find(o => o.e.id === d.target.id && o.pose && o.hull);
+  if (tgt) {
+    const look = damageLook(tgt.e, tgt.hull, g.tm);
+    if (look?.tumble || look?.broken) {
+      const Mw = poseMatrix(tgt.pose);
+      const port = tgt.hull.ports.find(p => p.id === d.berth);
+      const parts = pieces(Mw, look);
+      const pc = parts.find(x => !x.clip || !port || x.clip[0] * port.x + x.clip[1] * port.y + x.clip[2] * port.z >= x.clip[3]) || parts[0];
+      mine.M = mul4(mul4(pc.m, rigidInverse(Mw)), poseMatrix(mine));
+    }
+  }
   const ourPlume = d?.phase === 'approach' ? state.$dockThrust || 0 : f.thrustG;
   const ourRcs = Math.min(1, (d && IN_FRAME_PHASES.has(d.phase) ? state.$dockRcs || 0 : 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0));
   return { ours, mine, ourPlume, ourRcs };
+}
+
+const MATED_PHASES = new Set(['prox', 'capture', 'seal', 'docked', 'undock', 'separate', 'holding']);
+
+/** The inverse of a rigid model matrix (a rotation and a translation). */
+function rigidInverse(m) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) o[c * 4 + r] = m[r * 4 + c];
+  for (let r = 0; r < 3; r++) o[12 + r] = -(o[r] * m[12] + o[4 + r] * m[13] + o[8 + r] * m[14]);
+  o[15] = 1;
+  return o;
 }
 
 /**
@@ -607,6 +634,7 @@ function hullBox(hull, angle, sc, solid = false, tumbling = false) {
 
 /** A hull's model matrix from its pose: the rotation a collar gives it, or flying in the plane. */
 export function poseMatrix(p) {
+  if (p.M) return p.M;
   return p.R ? mat4.basis(p.R.X, p.R.Y, p.R.Z, [p.mx, p.my, p.mz || 0]) : hullMatrix(p.mx, p.my, p.facing, p.view, p.mz || 0);
 }
 

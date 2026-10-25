@@ -55,6 +55,7 @@ import { leaseTick } from './leases.js';
 import { setGravityEpoch } from './gravity.js';
 import { fireTick } from './fire.js';
 import { createDroneStores, dronesTick } from './drones.js';
+import { createShuttles, shuttlesTick, npcShuttlesTick } from './shuttles.js';
 
 export const SAVE_SCHEMA = 7;
 
@@ -136,6 +137,7 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
     tc: createTrafficControl(),
     dock: null,
     drone: null,
+    shuttles: createShuttles(classId),
     boarding: null,
     dossier: createDossier(),
     entities: createDefaultEntities(),
@@ -176,6 +178,7 @@ export function upgradeState(state) {
   state.navFlags ??= createNavFlags();
   state.resources.drones ??= createDroneStores(state.ship.classId);
   if (state.drone === undefined) state.drone = null;
+  state.shuttles ??= createShuttles(state.ship.classId);
   if (state.dock === undefined) state.dock = null;
   if (state.boarding === undefined) state.boarding = null;
   state.combat.fuses ??= [];
@@ -434,6 +437,8 @@ export function minuteTick(state, { lite = false } = {}) {
   combatTick(state, emit);
   stationsTick(state, emit);
   boardingTick(state, emit);
+  shuttlesTick(state, emit);
+  npcShuttlesTick(state);
   leaveTick(state, emit);
   leaseTick(state, emit);
   lawTick(state);

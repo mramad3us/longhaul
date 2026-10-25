@@ -60,7 +60,7 @@
 //   plot { target, dock? }    open the route planner on a target
 //   open { window, id?, tab? } windows: station (tabs board, deliver,
 //        services, berth, hire, leave, traffic), missions, comms, systems,
-//        roster, service, library, boarding, jobs, weapons, map
+//        roster, service, library, boarding, shuttles, jobs, weapons, map
 //   toggle { what }           'combat' (battle stations) | 'suits'
 //   respond { request, option } answer a comm request
 //   hail { id }               open a channel (also completes a rescue or
@@ -113,6 +113,7 @@ import { dockedStationEntity, dockedTo } from '../sim/docking.js';
 import { contractor, hullLegal, navyOf, openCallups } from '../sim/service.js';
 import { milRefusal } from '../sim/military.js';
 import { dockedPort, deliverable, inPort, needsBerth, contractsAt, CONTRACT_LABEL } from '../sim/contracts.js';
+import { activeRuns, runReadout, runRefusal } from '../sim/shuttles.js';
 
 export const AI_NAME = 'VIGIL';
 export const LEVELS = { warning: 3, caution: 2, advice: 1, info: 0 };
@@ -274,6 +275,7 @@ const A = {
   missions: () => act('missions', 'MISSIONS', { type: 'open', window: 'missions' }),
   service: () => act('service', 'SERVICE RECORD', { type: 'open', window: 'service' }),
   boarding: () => act('boarding', 'BOARDING', { type: 'open', window: 'boarding' }),
+  shuttles: (air = null) => act('shuttles', 'SHUTTLES', { type: 'open', window: 'shuttles', id: air }),
   map: () => act('map', 'OPEN MAP', { type: 'open', window: 'map' }),
   station: (id, tab, label) => act(`station-${tab}`, label, { type: 'open', window: 'station', id, tab }),
   hail: (id, label = 'HAIL') => act('hail', label, { type: 'hail', id }),
@@ -590,8 +592,9 @@ function ruleFlight(state, c, add) {
     // Securing for the burn: the route waits for everyone to be strapped in (and the pilot at the helm)
     const sec = ap.secure;
     const partyOut = state.ship.crew.some(m => m.away?.op && !m.away.captured);
+    const shuttle = state.ship.crew.some(m => m.away?.shuttle);
     if (partyOut) {
-      add({ key: 'secure', level: CAUTION, rank: 85, sig: 'party', text: `The route to ${name} waits for our boarding party to come back.`, actions: [A.boarding()] });
+      add({ key: 'secure', level: CAUTION, rank: 85, sig: shuttle ? 'shuttle' : 'party', text: shuttle ? `The route to ${name} waits for our shuttle to come home.` : `The route to ${name} waits for our boarding party to come back.`, actions: [shuttle ? A.shuttles() : A.boarding()] });
     } else if (sec && sec.total - sec.secured > 0) {
       const n = sec.total - sec.secured;
       add({
@@ -978,8 +981,19 @@ function ruleContracts(state, c, add) {
   const readySet = new Set(ready);
   const next = active.filter(x => !readySet.has(x)).sort((a, b) => (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity))[0];
   if (!next) return;
-  const t = contractTarget(next);
   const due = (next.dueAt ?? Infinity) - c.now;
+  if (next.type === 'PLANETSIDE') {
+    // (a world's ground: a high orbit round it first, then the shuttle: ruleShuttles)
+    if (state.flight.hold?.kind === 'orbit' && state.flight.hold.id === next.world) return;
+    add({
+      key: `contract:${next.id}`, level: due < 12 * 60 ? CAUTION : ADVICE, rank: 60, sig: next.phase,
+      text: `Next: freight to ${next.destName}, due in ${dur(due)}: by shuttle, from orbit.`,
+      detail: `A PLANETSIDE contract: take us into a high orbit round ${next.world} (ORBIT), then send a shuttle down to the spaceport with the freight (G). It is paid by radio when it lands.`,
+      actions: [act('plot', `ORBIT ${next.world.toUpperCase()}`, { type: 'plot', target: { kind: 'body', id: next.world } }), A.missions()],
+    });
+    return;
+  }
+  const t = contractTarget(next);
   const label = CONTRACT_LABEL[next.type]?.toLowerCase() || 'contract';
   if (!t?.id || !c.world.get(t.id) || headingFor(state, c, t.id)) return;
   const tgt = c.world.get(t.id);
@@ -1010,6 +1024,36 @@ function ruleBoarding(state, c, add) {
  * while the party is still across or we are inside its blast; a warning
  * once it is near going with us still inside.
  */
+/**
+ * Shuttles: one out (where it is, and that we wait for it: its crew are
+ * away); one waiting for us out of reach; freight aboard for a world's
+ * ground with us in a high orbit round it.
+ */
+function ruleShuttles(state, c, add) {
+  for (const run of activeRuns(state)) {
+    const rd = runReadout(state, run);
+    const waiting = rd.phase === 'hold';
+    add({
+      key: `shuttle:${run.id}`, level: waiting ? CAUTION : INFO, rank: waiting ? 70 : 40, sig: rd.phase,
+      text: waiting ? `${run.name} is waiting for us in orbit round ${run.world}: come back into its planetary space to pick it up.`
+        : `${run.name} ${rd.words} (${run.port.name}): home in ${dur(rd.eta)}.`,
+      detail: `Its crew are away until it is back in its bay: the routes wait for them. Breaking our orbit sends it after us when it comes home.`,
+      actions: [A.shuttles()],
+    });
+  }
+  const f = c.f;
+  if (f.hold?.kind !== 'orbit' || c.dock || activeRuns(state).length) return;
+  const no = runRefusal(state);
+  if (no.why) return;
+  const freight = state.contracts.active.filter(x => x.type === 'PLANETSIDE' && x.world === no.w.name && state.cargo.some(i => i.contract === x.id));
+  if (!freight.length) return;
+  add({
+    key: `shuttle-freight:${no.w.name}`, level: ADVICE, rank: 46, sig: freight.map(x => x.id).join(','),
+    text: `Freight aboard for ${freight[0].destName}${freight.length > 1 ? ` and ${freight.length - 1} more` : ''}: a shuttle can take it down.`,
+    actions: [A.shuttles(freight[0].airspace)],
+  });
+}
+
 function ruleScuttle(state, c, add) {
   for (const id of state.combat.fuses || []) {
     const e = c.world.get(id);
@@ -1200,14 +1244,14 @@ function ruleSituation(state, c, add) {
 
 const RULES = [
   ruleReactor, ruleOrdnance, ruleDecks, ruleCrew, ruleHostiles, rulePort, ruleFlight,
-  ruleRequests, ruleBoarding, ruleScuttle, ruleDistress, ruleOrders, ruleContracts, ruleLaw,
+  ruleRequests, ruleBoarding, ruleScuttle, ruleShuttles, ruleDistress, ruleOrders, ruleContracts, ruleLaw,
   ruleStores, ruleMachinery, rulePortCall, ruleSituation,
 ];
 
 // ---- INFO: what we are doing ----
 
 const DOCK_WORDS = {
-  approach: (n) => `On the final approach to ${n}.`, prox: (n) => `Docking with ${n}: proximity operations.`,
+  approach: (n) => `On the final approach to ${n}.`, spin: (n) => `Matching ${possessive(n)} tumble before docking.`, prox: (n) => `Docking with ${n}: proximity operations.`,
   capture: (n) => `Soft capture at ${n}: latching.`, seal: (n) => `Hard dock at ${n}: equalizing the lock.`,
   undock: (n) => `Undocking from ${n}: venting the lock.`, separate: (n) => `Backing off ${n} on the RCS.`,
   holding: (n) => `Holding off ${n}.`, outbound: (n) => `Climbing out of ${possessive(n)} gate on the RCS.`,

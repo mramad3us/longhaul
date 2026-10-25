@@ -159,10 +159,11 @@ export default [
         if (s.intel.tracks[p.entityId]?.kind === 'chart') charted++;
       });
       let both = null;
-      for (let d = 1; d <= 40 && (lost.UN + lost.MCR < 6); d++) {
-        advance(s, DAY_MIN);
+      // (looked at every six hours: a squadron can arrive and be cut down between two days' looks)
+      for (let q = 1; q <= 40 * 4 && (lost.UN + lost.MCR < 6); q++) {
+        advance(s, DAY_MIN / 4);
         const t = forcesAt(s, z);
-        if (!both && t.UN?.length && t.MCR?.length) both = d;
+        if (!both && t.UN?.length && t.MCR?.length) both = Math.ceil(q / 4);
       }
       const left = Object.fromEntries(Object.entries(forcesAt(s, z)).map(([k, v]) => [k, v.length]));
       console.log(`      sent ${JSON.stringify(sent)}; both on station by day ${both}; lost ${JSON.stringify(lost)} (each wreck charted as the news lands: ${charted}); on station now ${JSON.stringify(left)}`);

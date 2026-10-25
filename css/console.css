@@ -138,9 +138,10 @@ input.form-input:focus, .solar-search:focus, .library-search:focus { outline: no
 /* Status rail */
 .rail { height: var(--rail-h); flex: 0 0 var(--rail-h); display: flex; align-items: center; gap: 14px; padding: 0 10px;
   background: var(--c-bg); border-bottom: 1px solid var(--c-line); position: relative; z-index: 20; }
-.rail-id { display: flex; align-items: center; gap: 8px; min-width: 120px; flex: 0 1 auto; }
-.rail-ship { font-weight: 600; font-size: 15px; letter-spacing: 0.04em; color: var(--c-data); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; flex: 0 1 auto; min-width: 60px; }
-.rail-time { display: flex; align-items: center; gap: 8px; padding-left: 12px; border-left: 1px solid var(--c-line); }
+/* (the id shrinks before the clock does: the ship's name first, down to a few letters, then the space's, clipped) */
+.rail-id { display: flex; align-items: center; gap: 8px; min-width: 120px; flex: 0 1 auto; overflow: hidden; }
+.rail-ship { font-weight: 600; font-size: 15px; letter-spacing: 0.04em; color: var(--c-data); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; flex: 0 100 auto; min-width: 60px; }
+.rail-time { display: flex; align-items: center; gap: 8px; padding-left: 12px; border-left: 1px solid var(--c-line); flex: 0 0 auto; }
 .rail-date, .rail-clock { font-family: var(--f-data); font-size: 13px; color: var(--c-text2); }
 .rail-clock { color: var(--c-data); font-weight: 500; }
 .rail-warp { display: flex; gap: 0; margin-left: 4px; border: 1px solid var(--c-line2); border-radius: 2px; overflow: hidden; }
@@ -154,7 +155,8 @@ input.form-input:focus, .solar-search:focus, .library-search:focus { outline: no
 .rail-perf { font-family: var(--f-data); font-size: 11px; color: var(--c-text3); white-space: nowrap; }
 .rail-fill { flex: 1 1 0; min-width: 0; }
 /* whose space we are in (and a hot zone's kind) */
-.rail-space { font-family: var(--f-data); font-size: 11px; letter-spacing: 0.06em; color: var(--c-text3); text-transform: uppercase; white-space: nowrap; }
+.rail-space { font-family: var(--f-data); font-size: 11px; letter-spacing: 0.06em; color: var(--c-text3); text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 0.01 auto; }   /* (next to nothing: a sliver of a pixel shrunk shows the ellipsis; it gives once the ship's name is at its least) */
+.rail-id .hud-flag-chip { flex: 0 0 auto; }
 .rail-space:empty { display: none; }
 .rail-space.space-contested { color: var(--c-caution); }
 .rail-space.space-lawless { color: #C77DB8; }
@@ -193,7 +195,7 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .rail-icon { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: none; border: 0; color: var(--c-text3); border-radius: 2px; }
 .rail-icon:hover { color: var(--c-text); background: var(--c-raise); }
 .rail-icon svg { width: 16px; height: 16px; }
-@media (max-width: 1500px) { .rail-date { display: none; } }
+@media (max-width: 1600px) { .rail-date { display: none; } }   /* (the clock stays: the room goes to the space's name) */
 @media (max-width: 1300px) { .rail-btn { padding: 0 5px; font-size: 10px; } .ann { min-width: 76px; } }
 
 /* Docks and panels */
@@ -581,7 +583,7 @@ button.flagged { color: var(--c-flag); border-color: var(--c-flag); }
 
 /* ---- NARROWER SCREENS: the rail makes room (the display bar folds by its own width: .mv-group) ---- */
 .lbl-short { display: none; }
-@media (max-width: 1600px) {
+@media (max-width: 1800px) {   /* (the long names cost the rail ~170 px: the ship's and the space's names need it more) */
   .rail-btn .lbl-long { display: none; }
   .rail-btn .lbl-short { display: inline; }
 }

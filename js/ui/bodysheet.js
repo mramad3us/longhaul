@@ -14,13 +14,15 @@
 // space, its high orbits (the parking orbit, the stationary orbit if it has
 // one), low orbit, its ground control, and its airspaces round the
 // equator, each with its controller and spaceport, and where there is a
-// stationary orbit, a button to fly to it over that airspace.
+// stationary orbit, a button to fly to it over that airspace, and one to
+// send a shuttle down to its spaceport (SEND SHUTTLE: ui/shuttlebay.js).
+// Who lives there, or why nobody does.
 // ============================================================
 
 import { AU_M, AU_KM, G0 } from '../core/constants.js';
 import { getBody, SUN } from '../sim/ephemeris.js';
 import { STAR_FACTS, factsOf } from '../sim/bodyfacts.js';
-import { worldOf, airspacesOf, orbitPeriodS, orbitSpeed, solarDayH, controlWords, atmosphere } from '../sim/worlds.js';
+import { worldOf, airspacesOf, orbitPeriodS, orbitSpeed, solarDayH, controlWords, atmosphere, settlementOf } from '../sim/worlds.js';
 import { FACTIONS } from '../sim/factions.js';
 import { esc } from './dom.js';
 
@@ -139,13 +141,16 @@ function worldRows(w) {
   out.push(row('STATIONARY', w.sync ? `${km(w.sync)} out: round in a sidereal day, over one ground point` : `none: ${esc(w.syncWhy)}`, w.sync ? 'scanner-val-accent' : 'scanner-val-dim'));
   out.push(row('LOW ORBIT', `${km(w.low[0] - w.R)} to ${km(w.low[1] - w.R)} up: ground control's to clear (not yet)`, 'scanner-val-dim'));
   out.push(row('GROUND CONTROL', controlWords(w)));
-  out.push(row('APPROACH', 'no final approach yet: the nav computer keeps out of the air and off the ground', 'scanner-val-dim'));
+  const home = settlementOf(w);
+  out.push(row(home.settled ? 'PEOPLE' : 'UNSETTLED', home.settled ? `${esc(home.people)}: ${esc(home.note)}` : esc(home.note), home.settled ? '' : 'scanner-val-dim'));
+  out.push(row('APPROACH', 'our hull keeps out of the air and off the ground: a shuttle goes down from a high orbit (G)', 'scanner-val-dim'));
   const air = airspacesOf(w);
   if (air.length) {
     out.push(head(`AIRSPACES · ${air.length}`));
     for (const a of air) {
       const who = a.authority ? FACTIONS[a.authority]?.short || 'independent' : 'unclaimed';
-      const btn = w.sync ? `<button class="route-zoom-btn ms-inline-btn" data-act="orbit-over" data-air="${a.id}" title="Plot a route to the stationary orbit over the ${esc(a.name)} airspace">ORBIT OVER</button>` : '';
+      const btn = (w.sync ? `<button class="route-zoom-btn ms-inline-btn" data-act="orbit-over" data-air="${a.id}" title="Plot a route to the stationary orbit over the ${esc(a.name)} airspace">ORBIT OVER</button>` : '')
+        + `<button class="route-zoom-btn ms-inline-btn" data-act="send-shuttle" data-air="${a.id}" title="Plan a shuttle run down to ${esc(a.port.name)} (from a high orbit round ${esc(w.name)})">SEND SHUTTLE</button>`;
       out.push(row(esc(a.name.toUpperCase()), `${esc(a.controller)} · ${who} · ${esc(a.port.name)}${btn}`));
     }
   }

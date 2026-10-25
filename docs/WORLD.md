@@ -32,7 +32,7 @@ Each power projects influence from the bodies it holds (`INFLUENCE_SOURCES`), wi
 
 ## Who is out there (`sim/traffic.js`, `sim/forces.js`)
 
-A new game has **3,000 traffic ships** (`DEFAULT_TRAFFIC`), nine in ten of them under way. They fly between the stations on analytic courses and make **port calls** there (DOCKING.md): a berth only for the work that needs one, the layover in the holding pattern, and out through the gate when it leaves (from a berth or a slot). The long legs between ports are straight courses between moving ends, and one can pass through a planet on the way (the Earth or Mars, for Luna's and Phobos' yards): they are drawn so far from us that it is rarely seen, and routing them round is still to come. A ship picks its next port by distance and flag: weight 3 for its own power's ports, 1.5 where either side is independent, 1 otherwise, divided by (0.5 + distance in AU). So the Belt trades mostly with itself, and Earth–Mars is a busy lane.
+A new game has **3,000 traffic ships** (`DEFAULT_TRAFFIC`), nine in ten of them under way. They fly between the stations on analytic courses and make **port calls** there (DOCKING.md): a berth only for the work that needs one, the layover in the holding pattern, and out through the gate when it leaves (from a berth or a slot). The long legs between ports are straight courses between moving ends, and one can pass through a planet on the way (the Earth or Mars, for Luna's and Phobos' yards): they are drawn so far from us that it is rarely seen, and routing them round is still to come. A ship picks its next port by distance and flag: weight 3 for its own power's ports, 1.5 where either side is independent, 1 otherwise, divided by (0.5 + distance in AU). So the Belt trades mostly with itself, and Earth–Mars is a busy lane. A ship with shuttles sometimes calls at a settled world instead (a **planetary call**, a fifth of its departures with one within 2.5 AU): into the world's parking orbit, held there while its shuttles work its freight and passengers down (3 to 72 hours), then on to a port (FLIGHT.md).
 
 Every power also keeps hulls in space. They are real entities on rails, indexed in `world.forces`:
 
@@ -227,6 +227,7 @@ The contract board, news, the traffic board, clearances and fines are radio work
 | Contract | Work |
 |---|---|
 | CARGO / PASSENGERS / FUEL | load at the station, deliver at the destination (VIP passengers pay a bonus for a fast trip) |
+| PLANETSIDE | load small, dear freight (medical supplies, seed stock, parts, 100 kg to 4 t) for a spaceport on a settled world within 3.5 AU (the nearer likelier), take it into a high orbit there and land it by shuttle; paid by radio when it is on the pad, a part at a time if it takes more than one run (FLIGHT.md: shuttles). Signing needs a shuttle that can make that world's ground |
 | INVESTIGATE / MEDEVAC | rendezvous with a ship, hail it in formation, return (medevac casualties need berths) |
 | SALVAGE | hold formation with a derelict while the crew strips it (2 h), return |
 | SURVEY | loiter within 150,000 km of a survey mark for the required time, return |

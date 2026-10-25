@@ -80,7 +80,7 @@ const LOOK = {
   Venus: { kind: 'cloud', base: '#E9D4A2', band: '#D7B983', atmo: [255, 236, 190] },
   Earth: { kind: 'earth', atmo: [120, 170, 255] },
   Luna: { kind: 'rock', base: '#A7A7A2', dark: '#5C5C5A', maria: 9, craters: 260 },
-  Mars: { kind: 'mars', base: '#B9573A', dark: '#6F3423', atmo: [230, 160, 120], caps: true },
+  Mars: { kind: 'mars', base: '#B9573A', dark: '#6F3423', atmo: [196, 178, 190], caps: true },   // (terraformed: a thin pale sky at its limb)
   Phobos: { kind: 'rock', base: '#6E665C', dark: '#4B453E', craters: 70, irregular: 0.28 },
   Deimos: { kind: 'rock', base: '#7A7264', dark: '#57514A', craters: 40, irregular: 0.22 },
   Jupiter: { kind: 'giant', bands: ['#D9C6A4', '#B3875C', '#E8DCC2', '#A9774E', '#DCCBAA', '#C59A6C', '#E5D7BB', '#9E6E48'], spot: '#B5523A', limb: 0.55, atmo: [255, 230, 190] },
@@ -171,7 +171,12 @@ function surfaceOf(name, color) {
           const d = fbm(X / 16, Y / 16, seed + 1, DW / 16, 5);
           c = mix(base, dark, sstep(0.46, 0.62, d) * 0.85);
           c = mix(c, [210, 140, 100], Math.max(0, (n - 0.6)) * 0.8);
-          c = mix(c, [236, 232, 226], sstep(1.2, 1.3, Math.abs(lat) + (n - 0.5) * 0.2));
+          // terraformed: the young northern sea over the low plains, a lake in the low basins, lichen and grass round the water
+          const low = 1 - sstep(0.38, 0.5, d);
+          const sea = sstep(0.42, 0.55, lat + (n - 0.5) * 0.25) * low;
+          c = mix(c, [112, 108, 70], sstep(0.2, 0.6, low) * 0.35 * (1 - sea));
+          c = mix(c, [38, 62, 84], Math.min(1, sea * 1.4 + (d < 0.3 ? 0.8 : 0)));
+          c = mix(c, [236, 232, 226], sstep(1.3, 1.4, Math.abs(lat) + (n - 0.5) * 0.2));
           break;
         }
         case 'io': {

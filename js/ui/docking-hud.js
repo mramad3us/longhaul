@@ -30,7 +30,7 @@ import { requestDeparture, requestDocking, clearanceFor } from '../sim/traffic-c
 
 const emit = (t, p) => bus.emit(t, p);
 const PHASE = {
-  inbound: 'INBOUND TO THE GATE', approach: 'FINAL APPROACH', prox: 'PROXIMITY OPERATIONS', capture: 'SOFT CAPTURE',
+  inbound: 'INBOUND TO THE GATE', approach: 'FINAL APPROACH', spin: 'SPIN MATCH · RCS', prox: 'PROXIMITY OPERATIONS', capture: 'SOFT CAPTURE',
   seal: 'HARD DOCK · EQUALIZING', docked: 'DOCKED', undock: 'UNDOCKING', separate: 'SEPARATING', holding: 'HOLDING OFF',
   outbound: 'CLIMBING OUT · RCS TO THE GATE',
 };
@@ -95,7 +95,12 @@ export function updateDockingHud(state) {
   const ok = (v, lim) => v <= lim ? 'dh-ok' : v <= lim * 2 ? 'dh-warn' : 'dh-bad';
   const r = (k, v, cls = '') => `<div class="dh-r"><span>${k}</span><b class="${cls}">${v}</b></div>`;
   const approach = st.phase === 'approach';
-  const rd = st.phase === 'outbound'
+  const rd = st.phase === 'spin'
+    ? r('TUMBLE', `${(st.tumble || 0).toFixed(1)}°/min`)
+      + r('MATCHED IN', `${Math.ceil((st.timer || 0) * 60)} s`)
+      + r('DRIVE', 'COLD')
+      + r('RCS / FUEL', `${state.dock.fuel.toFixed(2)} kg`)
+    : st.phase === 'outbound'
     ? r('TO THE GATE', fmtMeters(st.toGo))
       + r('SPEED', fmtSpeed(Math.hypot(state.dock.rel.vx, state.dock.rel.vy, state.dock.rel.vz)))
       + r('DRIVE', 'COLD')
@@ -175,12 +180,12 @@ function drawCamera(canvas, state, st) {
   const W = canvas.width, H = canvas.height, cx = W / 2, cy = H / 2;
   ctx.fillStyle = '#02060A';
   ctx.fillRect(0, 0, W, H);
-  if (st.phase === 'approach' || st.phase === 'outbound') {
+  if (st.phase === 'approach' || st.phase === 'outbound' || st.phase === 'spin') {
     ctx.fillStyle = 'rgba(110,234,224,0.7)';
     ctx.font = '11px "Share Tech Mono", monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(st.phase === 'outbound' ? 'GATE AHEAD' : 'CORRIDOR AHEAD', cx, cy - 6);
-    ctx.fillText(fmtMeters(st.toGo), cx, cy + 10);
+    ctx.fillText(st.phase === 'spin' ? 'MATCHING ITS TURN' : st.phase === 'outbound' ? 'GATE AHEAD' : 'CORRIDOR AHEAD', cx, cy - 6);
+    ctx.fillText(st.phase === 'spin' ? `${Math.ceil((st.timer || 0) * 60)} s` : fmtMeters(st.toGo), cx, cy + 10);
     ctx.textAlign = 'left';
     return;
   }

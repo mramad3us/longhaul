@@ -20,7 +20,7 @@ import { ensureHull, PLAYER, profile } from '../js/sim/combatants.js';
 import { crewAboard, complementOf, knownCrew, dossierOf, learn } from '../js/sim/manifest.js';
 import { openChannel, topics, say, closeChannel } from '../js/sim/dialogue.js';
 import { startBoarding, boardingActions, orderAboard } from '../js/sim/boarding.js';
-import { applyHit, wreckNpc } from '../js/sim/damage.js';
+import { applyHit, wreckNpc, tumbleOf, tumbleAngle, tumbling } from '../js/sim/damage.js';
 import { serialize, deserialize } from '../js/sim/save.js';
 import { releaseHold, engageRoute } from '../js/sim/autopilot.js';
 import { planRoutes, DEPART_OUT } from '../js/sim/nav.js';
@@ -476,6 +476,61 @@ export default [
       startBoarding(s, h.id, { party, via: 'eva' });
       assert(s.law.record.some(c => c.kind === 'piracy'), 'boarding a lawful hull uninvited is piracy');
       console.log(`      ${before} aboard the pirate; ${held.count} taken prisoner; log: ${s.law.record.map(c => c.kind).join(', ')}`);
+    },
+  },
+  {
+    name: 'a tumbling wreck: a spin match at the corridor\'s mouth before proximity operations (it stands still to us after), the pair despun once mated; called off, it tumbles on',
+    fn: () => {
+      const s = game(15, { classId: 'cutter', crewCount: 6 });
+      releaseHold(s);
+      s.dock = null;
+      s.flight.pos.y += 0.02;
+      const f = s.flight;
+      const w = spawnAgent(s, { role: 'civilian', cls: 'meridian', faction: 'UN', pos: { x: f.pos.x + 3000 / AU_M, y: f.pos.y }, vel: { ...f.vel } });
+      wreckNpc(s, w, null);
+      advance(s, 30);
+      const tb = tumbleOf(w);
+      assert(tb && tumbling(w) && tb.rate >= 1.5 && tb.rate <= 5.5, `it tumbles: ${tb && fmt(tb.rate, 1)}°/min`);
+      const a0 = tumbleAngle(w, s.clock.minute);
+      assert(tumbleAngle(w, s.clock.minute + 10) - a0 > 10, 'and turns on, as we see it');
+      const phases = [];
+      const b = D.beginDocking(s, { kind: 'ship', id: w.id }, { mode: 'auto' });
+      assert(b.ok, b.text);
+      let matchedAt = null, fuel0 = s.resources.fuel.current;
+      const t = run(s, st => {
+        if (phases.at(-1) !== st.dock?.phase) phases.push(st.dock?.phase);
+        if (st.dock?.phase === 'prox' && matchedAt == null) matchedAt = st.clock.minute;
+        return st.dock?.phase === 'docked';
+      }, 240);
+      assert(s.dock?.phase === 'docked', `docked (${phases.join(' → ')})`);
+      const iSpin = phases.indexOf('spin');
+      assert(iSpin > 0 && phases.indexOf('approach') < iSpin && iSpin < phases.indexOf('prox'), `a spin match between the approach and proximity operations (${phases.join(' → ')})`);
+      // (from the match on, it stood still to us: its angle was the same through proximity operations)
+      const held = tumbleAngle(w, matchedAt);
+      assert(Math.abs(tumbleAngle(w, s.clock.minute) - held) < 1e-6 && w.tags.despun && !tumbling(w), `still to us from the match on, despun once mated (${fmt(held, 1)}°)`);
+      assert(Math.abs(held / 360 - Math.round(held / 360)) < 1e-9, `at rest in the dock's frame, its collar on our axis (${fmt(held, 1)}°)`);
+      // let go: it stays despun
+      D.undock(s);
+      run(s, st => st.dock?.phase === 'holding' || !st.dock, 60);
+      advance(s, 20);
+      assert(Math.abs(tumbleAngle(w, s.clock.minute) - held) < 1e-6, 'and turns no more when we let go');
+      console.log(`      ${fmt(tb.rate, 1)}°/min: ${phases.join(' → ')} in ${t} min, the match ${s.dock?.spinS ?? '?'} s, ${fmt(fuel0 - s.resources.fuel.current, 2)} kg; it rests at ${fmt(held, 1)}° (a whole turn: the dock's frame)`);
+      // another wreck, called off during its match: it tumbles on from where it stood
+      const w2 = spawnAgent(s, { role: 'civilian', cls: 'meridian', faction: 'UN', pos: { x: s.flight.pos.x + 3000 / AU_M, y: s.flight.pos.y + 2000 / AU_M }, vel: { ...s.flight.vel } });
+      wreckNpc(s, w2, null);
+      advance(s, 5);
+      if (s.dock) D.releaseDock(s);
+      D.beginDocking(s, { kind: 'ship', id: w2.id }, { mode: 'auto' });
+      run(s, st => st.dock?.phase === 'spin', 120);
+      assert(s.dock?.phase === 'spin' && w2.tags.spinHeld, `matching (${s.dock?.phase})`);
+      advance(s, 1);
+      const at = tumbleAngle(w2, s.clock.minute);
+      D.abortDocking(s, emit, 'test');
+      D.releaseDock(s);
+      advance(s, 1);
+      assert(!w2.tags.spinHeld && w2.tags.tumble0 && tumbling(w2), 'let go: it tumbles on');
+      const later = tumbleAngle(w2, s.clock.minute + 10);
+      assert(later - at > 10 && Math.abs(tumbleAngle(w2, s.clock.minute) - at) < tumbleOf(w2).rate * 1.5, `from where it stood (${fmt(at, 1)}° → ${fmt(later, 1)}° in ten minutes)`);
     },
   },
   {

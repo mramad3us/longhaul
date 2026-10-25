@@ -81,6 +81,7 @@ Near a hub the radio is busy, and it is the real traffic: traffic control clears
 | inbound | a route to the gate (or alongside a ship), flown by the autopilot |
 | awaiting | holding at the gate for docking clearance |
 | approach | the final approach, flown by the docking computer in the berth's frame on the drive at 0.1 G, no faster than 150 m/s and no faster than it can stop, to the corridor's mouth 1 km out along the collar's axis (300 m for a ship) |
+| spin | a **spin match**, off a tumbling wreck: at the corridor's mouth, our ship takes up its turn on the RCS and flies round it until its collar faces us down the corridor (below) |
 | prox | proximity operations, second by second on the RCS (auto or by hand) |
 | capture | soft capture inside the envelope; 2 min to hard dock |
 | seal | 3 min to equalize; then **docked**: the berth is ours |
@@ -103,6 +104,8 @@ Contact outside the envelope bounces. Past twice the capture speed the berth's c
 `tests/docking.test.mjs` docks at every station from its gate: 22–28 minutes, no bumps, contact at 0.10 m/s, 0.03 kg of RCS. A careful scripted pilot docks by hand; a careless one keeps hitting at 1.2 m/s and loses half the hull.
 
 **Ship to ship.** The other ship has to hold still: one that agreed to a rendezvous on the radio (it is woken off its rails and cuts its drive: `dock-hold`), one that has struck, a disabled or dead hull. Docked, we can trade over the collar (their prices are well over a station's; a charity case gives it away), take survivors off, and board through the collar. A ship we are joined to that lights its drive tears the collar loose.
+
+**A tumbling wreck** (sim/damage.js `tumbleOf`: from when it was wrecked, about an axis and at a rate of 1.5–5.5° a minute, both from a hash of its id, as the pictures draw it) can't be docked with as it turns. At the corridor's mouth the docking computer matches its spin (`spin`): it takes up the turn on the RCS and flies round the wreck as it does, until the collar it wants faces us down the corridor (at most half a turn round, 300 m out). It takes the longer of the turn (40 s plus 10 s a degree a minute) and the arc at our RCS's acceleration, accelerating then braking: a minute to a few. To us, the wreck's turn slows and stops with its collar on our axis, and it stands still after. Mated, our RCS despins the pair (a minute and a half of RCS, longer for a bigger wreck): it turns no more when we let go. A dock called off before the seal lets go of its turn, and the wreck tumbles on from where it stood.
 
 ## Berth leases (`leases.js`)
 

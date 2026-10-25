@@ -28,19 +28,24 @@
 //     at speed (atmosphere(), dragAccel(), entryHeat()). A gas giant has
 //     no ground: its radius is its 1-bar level, and the air goes on down.
 //
-// THE GROUND is shared out. A world with ground has AIRSPACES: arcs of its
-// equator (the plane cuts each world round its equator), one for every
-// AIRSPACE_KM of it (Earth eleven, Mars six, Luna three), each with its
-// authority and its controller, reaching from the ground up through low
-// orbit: a low orbit over it, and later a landing in it, is that
-// controller's to clear. They turn with the world (a body-frame angle, as
-// a surface target's: gravity.js surfacePoint). The giants have no ground
+// THE GROUND is shared out where people live on it (SETTLEMENTS: Earth,
+// Luna, Mars, Ganymede, Callisto, Europa, Titan; Venus, Mercury and Io are
+// nobody's, and the giants have no ground). A settled world has AIRSPACES:
+// arcs of its equator (the plane cuts each world round its equator), one
+// for every AIRSPACE_KM of it (Earth eleven, Mars six, Luna three), each
+// with its authority and its controller, reaching from the ground up
+// through low orbit: a low orbit over it, and a landing in it, is that
+// controller's to clear (shuttles.js landingClearance). They turn with the
+// world (a body-frame angle, as a surface target's: gravity.js
+// surfacePoint). The giants have no ground
 // and no airspaces. Each airspace has its spaceport now; procedural sites
 // (camps, mines, wrecks, the places missions will send us) come from a
 // seed (proceduralSite), hundreds to a world in time.
 //
-// The routes don't go into the air yet (no final approach: the nav
-// computer's floor is the entry interface, terrain.js). A route to a world
+// Our routes don't go into the air: no hull we command is rated for one
+// (the nav computer's floor is the entry interface, terrain.js). A big
+// hull's shuttles go down instead (shuttles.js, planetary.js: an entry
+// flown as physics, a run planned whole from a high orbit). A route to a world
 // itself ends in a high orbit: its parking orbit, at the edge of planetary
 // space, or, where the world has one, the stationary orbit over one of its
 // airspaces (nav.js 'orbit' targets: parkingTarget, stationaryTarget). Low
@@ -53,9 +58,9 @@
 // parking orbit), down into low orbit, onto the stationary orbit, into the
 // air. In the air (airDrag), our ship is slowed by it: the drag of our speed
 // through the air (which turns with the world), the dynamic pressure and the
-// heat of it kept for the displays (state.$air). Hull damage from entry heat
-// waits for atmospheric flight; an entry-rated hull (ship-classes.js atmo)
-// will be what takes it.
+// heat of it kept for the displays (state.$air), told, not taken: the
+// entry-rated craft (ship-classes.js atmo) are the shuttles, on rails of
+// their own.
 //
 // Cost: a world's numbers are worked out once. Where we are among them
 // (worldAt) is a pass over the dozen worlds, once a minute for us.
@@ -80,14 +85,37 @@ const BAR_PA = 100_000;
 
 /**
  * Who answers for a world's planetary space: the power whose ground control
- * will clear low orbits and landings there. The giants and Io have no ground
- * to control.
+ * will clear low orbits and landings there. Only the worlds people live on
+ * have one (SETTLEMENTS); the rest are nobody's ground.
  */
 export const GROUND_CONTROL = {
-  Mercury: 'UN', Venus: 'UN', Earth: 'UN', Luna: 'UN',
-  Mars: 'MCR', Callisto: 'MCR',
+  Earth: 'UN', Luna: 'UN', Mars: 'MCR', Callisto: 'MCR',
   Ganymede: 'independent', Europa: 'OPA', Titan: 'OPA',
 };
+
+/**
+ * Who lives on each world, and why nobody lives on the rest (the sheet says
+ * so): the settled worlds have ground control, airspaces and spaceports;
+ * an unsettled one has none, whatever its size.
+ */
+export const SETTLEMENTS = {
+  Earth: { people: '30 billion', note: 'the UN\'s capital and most of humanity: every coast a city, every city a spaceport' },
+  Luna: { people: 'about 1 billion', note: 'warrens under the maria, the UN Navy\'s yards, the mass drivers that throw cargo off it' },
+  Mars: { people: 'about 4 billion', note: 'domed cities on the high ground and the Mariner Valley, farms in the lowlands, the young northern sea' },
+  Ganymede: { people: 'about 100 million', note: 'the outer planets\' breadbasket: farms under domes and mirrors, claimed by Earth and Mars and owned by neither' },
+  Callisto: { people: 'a few million', note: 'the MCRN\'s Jovian base and the dome towns round it, outside the worst of Jupiter\'s radiation' },
+  Europa: { people: 'a few million', note: 'ice miners\' towns on and under the shell, selling water to the Jovian moons' },
+  Titan: { people: 'a few hundred thousand', note: 'Belter research stations and hydrocarbon camps by the seas, under air thicker than Earth\'s' },
+};
+/** Why nobody lives on a world (for the ones that aren't settled). */
+export const UNSETTLED = {
+  Mercury: 'nobody lives on it: too close to the Sun, its day side molten-hot. UN solar arrays may yet be put in its orbit.',
+  Venus: 'nobody lives on it: 92 bar of carbon dioxide at 464 °C, sulfuric-acid cloud. If anyone comes it will be to orbit, or to the cloud tops at 50–55 km, where the air is an Earth\'s pressure and temperature and a floating station could stay up; not yet.',
+  Io: 'nobody lives on it: four hundred volcanoes and a radiation dose that kills an unshielded crew in a day. A few corporate labs, nobody\'s business.',
+  Jupiter: 'no ground to live on', Saturn: 'no ground to live on', Uranus: 'no ground to live on', Neptune: 'no ground to live on',
+};
+/** A world's people, or why it has none: { settled, people, note }. */
+export const settlementOf = (w) => SETTLEMENTS[w.name] ? { settled: true, ...SETTLEMENTS[w.name] } : { settled: false, people: null, note: UNSETTLED[w.name] || 'nobody lives on it' };
 
 /** The layers of a world's space, outermost first, as the displays name them. */
 export const LAYERS = {
@@ -220,19 +248,16 @@ export const entryHeat = (rho, vMS, noseM = 2) => rho > 0 ? SUTTON_GRAVES_K * Ma
 const AIRSPACE_KM = 3500;                   // one airspace for this much of a world's equator
 /** The airspaces round each world's equator, eastward from its prime meridian (body-frame angle 0). */
 export const AIRSPACE_NAMES = {
-  Mercury: ['Caloris', 'Tolstoj', 'Beethoven', 'Rachmaninoff'],
-  Venus: ['Eistla', 'Bell', 'Ovda', 'Thetis', 'Atla', 'Ulfrun', 'Beta', 'Phoebe', 'Themis', 'Lada', 'Alpha'],
   Earth: ['Gulf of Guinea', 'East African', 'Indian Ocean', 'Sunda', 'Melanesian', 'Central Pacific', 'Polynesian', 'Galápagos', 'Andean', 'Amazonian', 'Mid-Atlantic'],
   Luna: ['Tranquillity', 'Far Side', 'Imbrium'],
   Mars: ['Meridiani', 'Syrtis', 'Elysium', 'Amazonis', 'Tharsis', 'Mariner Valley'],
-  Io: ['Loki', 'Pele', 'Prometheus'],
   Europa: ['Conamara', 'Pwyll', 'Thera'],
   Ganymede: ['Galileo', 'Uruk', 'Osiris', 'Memphis', 'Nicholson'],
   Callisto: ['Valhalla', 'Asgard', 'Adlinda', 'Heimdall'],
   Titan: ['Xanadu', 'Shangri-La', 'Belet', 'Adiri', 'Senkyo'],
 };
 /** How a world's controllers style themselves. */
-const CONTROLLER_WORD = { Earth: 'Air Traffic Control', Mars: 'Planetary Traffic', Luna: 'Lunar Control', Venus: 'Research Authority', Mercury: 'Collector Authority', Titan: 'Flight Service', Europa: 'Ice Control', Ganymede: 'Agricultural Authority', Callisto: 'Naval Air Control', Io: 'Monitoring Station' };
+const CONTROLLER_WORD = { Earth: 'Air Traffic Control', Mars: 'Planetary Traffic', Luna: 'Lunar Control', Titan: 'Flight Service', Europa: 'Ice Control', Ganymede: 'Agricultural Authority', Callisto: 'Naval Air Control' };
 
 const TWO_PI = 2 * Math.PI;
 const wrap = (a) => ((a % TWO_PI) + TWO_PI) % TWO_PI;
@@ -245,7 +270,7 @@ const wrap = (a) => ((a % TWO_PI) + TWO_PI) % TWO_PI;
  */
 const _air = new Map();
 export function airspacesOf(w) {
-  if (!w || w.atmo?.giant) return [];
+  if (!w || w.atmo?.giant || !SETTLEMENTS[w.name]) return [];
   let list = _air.get(w.name);
   if (list) return list;
   const n = Math.max(2, Math.round(TWO_PI * w.R / 1000 / AIRSPACE_KM));
@@ -256,7 +281,7 @@ export function airspacesOf(w) {
     const a0 = TWO_PI * i / n, a1 = TWO_PI * (i + 1) / n;
     return {
       id: `${w.name}:${i}`, world: w.name, index: i, name, a0, a1,
-      authority: w.authority, controller: w.authority ? `${name} ${word}` : `${name} (unclaimed)`,
+      authority: w.authority, controller: `${name} ${word}`,
       ceilingM: w.low[1],
       port: { id: `${w.name}:${i}:port`, name: `${name} Spaceport`, ang: a0 + (a1 - a0) * (0.35 + 0.3 * frac(i * 0.618 + w.R * 1e-7)), kind: 'spaceport' },
     };
@@ -331,6 +356,9 @@ export function solarDayH(body) {
 
 // ---- PER MINUTE ----
 
+/** A world's name, possessive (Mars', Earth's). */
+export const worldOfs = (n) => n.endsWith('s') ? `${n}'` : `${n}'s`;
+
 /** Whose ground control a world has, in words. */
 export function controlWords(w) {
   if (!w.authority) return 'no ground control';
@@ -353,10 +381,10 @@ export function worldsTick(state, emit = () => {}) {
   const cur = here ? { name: here.w.name, layer: here.layer, airspace: under?.id || null } : null;
   f.world = cur;
   if (!cur && !was) return;
-  if (!cur) { emit('nav-callout', { level: 'info', key: 'world', text: `Out of ${was.name}'s planetary space: open space, flight as before.` }); return; }
+  if (!cur) { emit('nav-callout', { level: 'info', key: 'world', text: `Out of ${worldOfs(was.name)} planetary space: open space, flight as before.` }); return; }
   const w = here.w;
   if (!was || was.name !== cur.name) {
-    emit('nav-callout', { level: 'info', key: 'world', text: `Into ${w.name}'s planetary space, ${km(here.altM)} up (${controlWords(w)}): planetary flight. Its pull here is ${(pullAtM(w, here.rM) / G0).toFixed(3)} G; its parking orbit ${km(w.parkM)} out.` });
+    emit('nav-callout', { level: 'info', key: 'world', text: `Into ${worldOfs(w.name)} planetary space, ${km(here.altM)} up (${controlWords(w)}): planetary flight. Its pull here is ${(pullAtM(w, here.rM) / G0).toFixed(3)} G; its parking orbit ${km(w.parkM)} out.` });
     return;
   }
   if (cur.airspace && cur.airspace !== was.airspace) {
@@ -367,9 +395,9 @@ export function worldsTick(state, emit = () => {}) {
   const order = ['high', 'stationary', 'low', 'atmosphere', 'surface'];
   const deeper = order.indexOf(cur.layer) > order.indexOf(was.layer);
   if (cur.layer === 'low' && deeper) emit('nav-callout', { level: 'info', key: 'world', text: `${w.name} low orbit, ${km(w.low[0] - w.R)} to ${km(w.low[1] - w.R)} up: a circular orbit here goes round in ${Math.round(orbitPeriodS(w, here.rM) / 60)} min at ${(orbitSpeed(w, here.rM) / 1000).toFixed(1)} km/s.` });
-  else if (cur.layer === 'stationary') emit('nav-callout', { level: 'info', key: 'world', text: `On ${w.name}'s stationary orbit, ${km(w.sync)} out: an orbit here keeps pace with the ground below.` });
-  else if (cur.layer === 'atmosphere') emit('nav-callout', { level: 'danger', key: 'world', text: `In ${w.name}'s air, ${km(here.altM)} up: it drags on us, and the nav computer won't fly in it (no atmospheric flight yet).` });
-  else if (was.layer === 'atmosphere' && !deeper) emit('nav-callout', { level: 'info', key: 'world', text: `Out of ${w.name}'s air.` });
+  else if (cur.layer === 'stationary') emit('nav-callout', { level: 'info', key: 'world', text: `On ${worldOfs(w.name)} stationary orbit, ${km(w.sync)} out: an orbit here keeps pace with the ground below.` });
+  else if (cur.layer === 'atmosphere') emit('nav-callout', { level: 'danger', key: 'world', text: `In ${worldOfs(w.name)} air, ${km(here.altM)} up: it drags on us, and the nav computer won't fly in it (no atmospheric flight yet).` });
+  else if (was.layer === 'atmosphere' && !deeper) emit('nav-callout', { level: 'info', key: 'world', text: `Out of ${worldOfs(w.name)} air.` });
 }
 
 /**

@@ -34,6 +34,14 @@
 // parking orbit further out. Every move inside a port is a short leg
 // through the station's approach gate, so nothing climbs out of a port
 // through the rock it is built on.
+//
+// A PLANETARY CALL: a ship that carries shuttles (ship-classes.js BAYS)
+// sometimes goes from a port to a settled world near it (worlds.js) instead
+// of the next port (PLANET_CALL_P), into the world's parking orbit (a rails
+// orbit, at a place of its own on it), and holds there while its shuttles
+// work its freight or its passengers down and up (planetary.js runMinutes:
+// the same runs ours fly, timed, not flown, unless we are there to see:
+// shuttles.js npcShuttlesTick), then goes on to a port.
 // ============================================================
 
 import { AU_M, G0, MIN_S } from '../core/constants.js';
@@ -43,6 +51,11 @@ import { createEntity } from './entities.js';
 import { rollIdentity, CLASSES } from './ship-classes.js';
 import { berthInto, releaseHull, gateId, berthSizesFor, freeBerth, anchorageOrbit } from './stations.js';
 import { freeSlot, claimSlot, slotOrbit } from './holding.js';
+import { bayOf } from './ship-classes.js';
+import { WORLDS, airspacesOf, orbitPeriodS } from './worlds.js';
+import { runMinutes } from './planetary.js';
+import { bodyPos } from './ephemeris.js';
+import { DAY_MIN } from '../core/constants.js';
 
 export const DEFAULT_TRAFFIC = 3000;
 
@@ -83,6 +96,49 @@ function nextPort(all, from, faction) {
 }
 
 const span = ([a, b]) => randInt(Math.round(a), Math.round(b));
+
+const PLANET_CALL_P = 0.22;          // a ship with shuttles calls at a settled world near its port this often
+const PLANET_NEAR_AU = 2.5;          // …if one is this near
+const PLANET_WORK_MIN = [3 * H, 72 * H];
+
+/** A settled world for a ship leaving `from` to call at, or null (it has no shuttles, or none is near). */
+function planetFor(e, from, minute) {
+  if (!bayOf(e.cls).length || random() > PLANET_CALL_P) return null;
+  const days = minute / DAY_MIN;
+  const near = WORLDS.filter(w => airspacesOf(w).length).map(w => { const p = bodyPos(w.body, days); return { w, d: Math.hypot(p.x - from.pos.x, p.y - from.pos.y) }; }).filter(x => x.d < PLANET_NEAR_AU);
+  return near.length ? weightedPick(near, x => 1 / (0.05 + x.d)).w : null;
+}
+
+/** A place on a world's parking orbit (worlds.js), a rails orbit of the ship's own. */
+const parkingRail = (w) => ({ body: w.name, r: w.parkM / AU_M, phase: random() * 2 * Math.PI, period: orbitPeriodS(w, w.parkM) / 86400 });
+
+/** In a world's parking orbit: how long its shuttles take with what it brings (its freight's share for the ground, its passengers). */
+function atPlanet(world, e, minute) {
+  const w = WORLDS.find(x => x.name === e.tags.planet);
+  e.transit = null; e.thrust = 0;
+  e.orbit = e.tags.planetOrbit;
+  const bay = bayOf(e.cls), cls = bay.some(s => s.cls === 'lander') ? 'lander' : bay[0].cls;
+  const n = bay.filter(s => s.cls === cls).length;
+  const c = CLASSES[e.cls];
+  const tonnes = Math.max(5, Math.min(600, (c.cargoT || 0) * 0.02 + (c.berths || 0) * 0.15));
+  const work = w ? runMinutes(w.name, cls, tonnes, n) : null;
+  e.tags.call = { phase: 'planet', planet: e.tags.planet, since: minute };
+  e.tags.until = minute + Math.max(PLANET_WORK_MIN[0], Math.min(PLANET_WORK_MIN[1], Math.round(work ?? 12 * H)));
+}
+
+/** Its shuttles done: out of the world's orbit, on to a port. */
+function leavePlanet(world, e, minute) {
+  // (its shuttle still out, where we see it: it waits for it: shuttles.js)
+  const sh = e.tags.shuttleOut && world.get(e.tags.shuttleOut);
+  if (sh && sh.tags.until > minute) { e.tags.until = Math.ceil(sh.tags.until) + 10; return; }
+  e.tags.shuttleOut = null;
+  const all = world.stations;
+  const to = nextPort(all, { pos: e.pos }, e.faction);
+  e.tags.planet = null; e.tags.planetOrbit = null; e.tags.call = null;
+  e.tags.to = to.id; e.tags.from = null; e.tags.ends = 'gate';
+  e.tags.legs = null;
+  if (!flyLeg(world, e, minute, { orbit: e.orbit }, gateId(to.id), e.tags.g, to.id)) e.tags.until = minute + 720;
+}
 
 /** Decide what this call is: { work (min in a berth, 0 if none), lay (min in a slot), tender (min, work from the slot) }. */
 export function planCall(e) {
@@ -187,6 +243,7 @@ function toSlot(world, e, st, minute, phase) {
 function landed(world, e, minute) {
   const ends = e.tags.ends;
   e.tags.ends = null;
+  if (ends === 'planet') { atPlanet(world, e, minute); return; }
   const st = world.get(e.tags.to || e.tags.at || e.transit?.port);
   if (st && ends === 'gate') { arrive(world, e, st, minute); return; }
   const call = e.tags.call;
@@ -221,6 +278,17 @@ function depart(world, e, minute) {
   const fromGate = gateId(from.id), toGate = gateId(to.id);
   const inSlot = !!e.tags.slot;
   const slot = inSlot ? { orbit: e.orbit } : null;
+  // (or a world near it, its shuttles to work: a planetary call)
+  const planet = planetFor(e, from, minute);
+  if (planet) {
+    leavePort(world, e);
+    e.tags.call = null;
+    e.tags.to = null; e.tags.from = from.id; e.tags.ends = 'planet';
+    e.tags.planet = planet.name; e.tags.planetOrbit = parkingRail(planet);
+    e.tags.legs = [[fromGate, { orbit: e.tags.planetOrbit }, g]];
+    if (!flyLeg(world, e, minute, slot, world.get(fromGate) ? fromGate : { orbit: e.tags.planetOrbit }, LOCAL_G, from.id)) e.tags.until = minute + 720;
+    return;
+  }
   leavePort(world, e);
   e.tags.call = null;
   e.tags.to = to.id;
@@ -282,6 +350,8 @@ function serviceShip(e, minute, world) {
     const next = e.tags.legs?.shift();
     if (next && endOf(world, next[1]) && (!next[0] || endOf(world, next[0]))) flyLeg(world, e, minute, next[0], next[1], next[2]);
     else { e.tags.legs = null; landed(world, e, minute); }
+  } else if (e.orbit && e.tags.planet) {
+    leavePlanet(world, e, minute);
   } else if (e.orbit && e.tags.at) {
     nextInPort(world, e, minute);
   } else return;

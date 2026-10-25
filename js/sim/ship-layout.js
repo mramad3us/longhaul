@@ -141,7 +141,7 @@ function program(c) {
 /** Classes with an interior (the ones a small crew can fly): classId → program. */
 export const DECK_PROGRAMS = {};
 for (const [id, c] of Object.entries(CLASSES)) {
-  if (c.crew[0] <= 8 && (c.size === 'S' || c.size === 'M')) DECK_PROGRAMS[id] = program(c);
+  if (!c.carried && c.crew[0] <= 8 && (c.size === 'S' || c.size === 'M')) DECK_PROGRAMS[id] = program(c);
 }
 
 /** The drive bell takes the last stretch of the hull; the decks fill the rest. */

@@ -608,7 +608,7 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
     t += dtMin;
     // (a plan that comes down on a rock is no plan: in flight the guard would fight it all the way)
     const sf = nearestSurface(f.pos.x, f.pos.y, t);
-    // (nor one that goes into a world's air, or through it to the ground in one step: no atmospheric flight yet, worlds.js)
+    // (nor one that goes into a world's air, or through it to the ground in one step: our hull isn't rated for one; shuttles go down, shuttles.js)
     if (sf?.body.atmo && sf.alt < sf.body.atmo.interfaceKm * 1000) { hit = sf.body.name; air = true; break; }
     if (sf && sf.alt < 0) { hit = sf.body.name; break; }
   }
@@ -767,7 +767,7 @@ function finishOption(state, plan, desc, fuelAvail) {
     departMin: departMinutes(state, plan),
     fuel: est.fuel,
     feasible: est.arrived && est.fuel <= fuelAvail * 0.95,
-    reason: est.air ? `Would enter ${est.hit}'s atmosphere: no atmospheric flight yet` : est.hit ? `Would come down on ${est.hit}` : !est.arrived ? 'No convergent trajectory' : est.fuel > fuelAvail * 0.95 ? 'Insufficient reaction mass' : '',
+    reason: est.air ? `Would enter ${est.hit.endsWith('s') ? `${est.hit}'` : `${est.hit}'s`} atmosphere: our hull isn't rated for one (a shuttle goes down from a high orbit)` : est.hit ? `Would come down on ${est.hit}` : !est.arrived ? 'No convergent trajectory' : est.fuel > fuelAvail * 0.95 ? 'Insufficient reaction mass' : '',
     juice: plan.accelG > 1.5,
   };
 }

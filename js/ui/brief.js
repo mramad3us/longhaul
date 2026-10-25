@@ -42,6 +42,7 @@ const HOW_NAMED = { transponder: 'its transponder', signature: 'its drive signat
 function turnIn(state, c) {
   if (c.mil) return `any ${FACTIONS[c.faction]?.short || ''} port (a station or a command ship)`;
   if (c.type === 'ESCORT') return `${c.destName}, with the convoy berthed`;
+  if (c.type === 'PLANETSIDE') return `landed at ${c.destName} by our shuttle, from a high orbit round ${c.world} (paid by radio on the pad)`;
   if (c.dest && c.type !== 'ESCORT') return `delivered at ${c.destName}, across a berth's collar`;
   if (c.perHead) return bountyHeads(state, c).heads ? `${c.stationName}, docked: its crew cross at a berth's collar` : `${c.stationName}, from its port space (docked, with any of its crew)`;
   return `${c.stationName}, from its port space`;
@@ -68,6 +69,7 @@ export function progressLine(state, c) {
     case 'BOUNTY': return `Find the ${c.targetName}: destroy it, or disable it and accept its surrender${hunt}`;
     case 'SURVEY': return `Survey ${Math.round(c.scanned / c.scanMin * 100)}%`;
     case 'SALVAGE': return c.worked ? `Salvage ${Math.round(c.worked / c.workMin * 100)}%` : 'Proceed to the derelict';
+    case 'PLANETSIDE': return c.landedKg ? `${fmtNum(Math.round(c.landedKg))} of ${fmtNum(c.cargo.mass)} kg on the pad at ${c.destName}` : `Take it to a high orbit round ${c.world}, then down by shuttle (G)`;
   }
   return c.dest ? `Deliver at ${c.destName}` : 'Proceed to target';
 }
