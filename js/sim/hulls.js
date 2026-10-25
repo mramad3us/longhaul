@@ -448,8 +448,8 @@ function fittings(b, c, spans) {
   const machine = span('engineering') || spans[spans.length - 2];
   const reactor = span('reactor') || spans[spans.length - 1];
   const command = spans[0];
-  // Radiators off the reactor and engine decks, smaller (and retractable) on hulls rated for atmosphere
-  b.radiators(machine.f0, reactor.f1, W * (c.atmo ? 0.22 : c.kind === 'courier' || c.kind === 'raider' ? 0.5 : 0.45), { root: W * reactor.width / 2 });
+  // Radiators off the reactor and engine decks
+  b.radiators(machine.f0, reactor.f1, W * (c.kind === 'courier' || c.kind === 'raider' ? 0.5 : 0.45), { root: W * reactor.width / 2 });
   b.box(command.f0 + 0.01, command.f0 + 0.06, W * 0.08, H * 0.2, 'sensor', { z: H * 0.5 });
   if (c.pdc) b.pdcs(c.pdc, machine.f0, Math.min(0.85, machine.f1 + 0.1));
   if (c.tubes) { const hold = span('cargo') || machine; b.box(hold.f0, hold.f1, W * 0.14, H * 0.14, 'tube', { z: -H * 0.52 }); }
@@ -465,15 +465,7 @@ function fittings(b, c, spans) {
     b.box(0.2, 0.36, W * 0.24, H * 0.3, 'armor', { y: W * 0.55 });
     b.box(0.5, 0.7, W * 0.2, H * 0.26, 'tube', { y: -W * 0.56, z: H * 0.1 });
   }
-  // Atmospheric entry: a ceramic belly and skids for a lifting body, a shield
-  // ring round the drive and legs for a tail-sitter
-  if (c.atmo?.entry === 'belly') {
-    b.box(0, 0.92, W * 1.04, H * 0.08, 'shield', { z: -H / 2 - H * 0.04 });
-    for (const s of [-1, 1]) b.box(0.15, 0.85, 0.5, 0.8, 'leg', { y: s * W * 0.38, z: -H / 2 - H * 0.12 });
-  } else if (c.atmo?.entry === 'tail') {
-    b.box(reactor.f1 - 0.03, reactor.f1, W * 0.96, H * 0.96, 'shield');
-    b.legs(reactor.f1 - 0.04, 4, W * 0.36);
-  }
+  // (no tower hull is rated for an atmosphere: its craft land for it, the shuttle builder's belly and skids)
 }
 
 // ---- THE CATALOG ----

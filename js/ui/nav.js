@@ -53,7 +53,7 @@ import { flagOf as flagOfService } from '../sim/service.js';
 import { commandOnStation } from '../sim/forces.js';
 import { ZONE_KINDS } from '../sim/conflict.js';
 import { hullOf, portSummary } from '../sim/hulls.js';
-import { CLASSES } from '../sim/ship-classes.js';
+import { CLASSES, landsBy } from '../sim/ship-classes.js';
 import { drawHullPortrait } from './hull-art.js';
 import { factionColor, FACTIONS } from '../sim/factions.js';
 import { bus } from '../core/events.js';
@@ -180,6 +180,20 @@ function selectOnBoard(id) {
 export function showOnBoard(id) {
   selectOnBoard(id);
   hooks.showPanel?.('context');
+}
+
+/**
+ * Follow something on the system display, framed on a world's planetary
+ * space (a shuttle of ours out: the shuttle window's MAP): picked, the map
+ * keeps it in the middle as it moves, its world's space and its track drawn.
+ */
+export function followOnMap(t, worldName = null) {
+  if (!ui.state || !t) return;
+  openNav('solar');
+  choose(t);
+  const w = worldName && worldOf(worldName);
+  if (w) map.scale = 0.42 * Math.min(map.fc.w, map.fc.h) / (2 * w.wellM / AU_M);
+  map.follow = 'target';
 }
 
 /** Select something from elsewhere (the AI line, a log entry): it shows on the system display. */
@@ -748,7 +762,7 @@ function shipRows(s, e, c, row) {
   return `${hull}${cmd}${row('ABOARD', crew ? `${esc(crew.text)} <span class="scanner-val-dim">${esc(crew.src)}</span>` : 'unknown', crew ? '' : 'scanner-val-dim')}
     ${CLASSES[e.cls]?.cargoT > 0 ? row('HOLD', hold ? `${esc(holdWords(hold.items))} <span class="scanner-val-dim">${esc(hold.src)}</span>` : known ? 'no manifest filed' : 'unknown', hold ? 'scanner-val-wrap' : 'scanner-val-dim') : ''}
     ${row('COLLARS', known ? esc(portSummary(e.cls)) : '—')}
-    ${known && CLASSES[e.cls]?.atmo ? row('ATMOSPHERE', 'rated for entry') : ''}`;
+    ${known && CLASSES[e.cls] ? row('ATMOSPHERE', esc(landsBy(e.cls)), 'scanner-val-wrap') : ''}`;
 }
 
 /** A forward command (FOB) in words: whose, which fight, where it stands, what it is to us. */

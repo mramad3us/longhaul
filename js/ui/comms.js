@@ -26,7 +26,7 @@ import { hullOf, portSummary } from '../sim/hulls.js';
 import { STATIONS } from '../sim/stations.js';
 import { clearanceFor, stationTraffic, zoneAt } from '../sim/traffic-control.js';
 import { finesOwed, WANTED_LABEL } from '../sim/law.js';
-import { classLabel, CLASSES } from '../sim/ship-classes.js';
+import { classLabel, CLASSES, landsBy } from '../sim/ship-classes.js';
 import { FACTIONS, factionColor } from '../sim/factions.js';
 import { completeRescue, missionForEntity } from '../sim/missions.js';
 import { hailContractTarget } from '../sim/contracts.js';
@@ -179,7 +179,7 @@ function cardHTML(s, e) {
     ${k('RANGE', fmtMeters(dM))}
     ${k('ABOARD', crew ? `${esc(crew.text)}<br><span class="cm-k">${esc(crew.src.toUpperCase())}${crew.by ? ` · ${esc(crew.by)}` : ''}${crew.ageMin > 1 ? ` · ${Math.round(crew.ageMin / 60)} h old` : ''}</span>` : 'unknown')}
     ${k('COLLARS', known ? esc(portSummary(e.cls)) : '—')}
-    ${CLASSES[e.cls]?.atmo && known ? k('ATMOSPHERE', 'rated for entry') : ''}
+    ${known ? k('ATMOSPHERE', esc(landsBy(e.cls))) : ''}
     ${k('STATE', p === 'struck' ? 'struck its colours' : p === 'crippled' ? 'dead in space' : e.agent?.mode === 'dock-hold' ? 'holding for us' : e.thrust > 0 ? `under thrust, ${e.thrust.toFixed(1)} G` : 'coasting')}
     ${k('TONE', mood)}
     ${isDocked(s) && dockedTo(s)?.id === e.id ? k('DOCKED', 'collar to collar') : ''}`;

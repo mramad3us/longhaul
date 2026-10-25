@@ -1,9 +1,9 @@
 // ============================================================
 // LONGHAUL — Shuttles: a big hull's way down to a world
 //
-// A ship too big to be rated for an atmosphere carries shuttles in its bays
-// (ship-classes.js BAYS: a pinnace for people and a few tonnes, a cargo
-// lander for sixty). Ours (state.shuttles.bay) go down from a world's high
+// No hull is rated for an atmosphere; every one carries shuttles in its
+// bays (ship-classes.js BAYS: a gig under a small hull's keel, a pinnace for
+// people and a few tonnes, a cargo lander for sixty). Ours (state.shuttles.bay) go down from a world's high
 // orbit, the parking orbit or the stationary one we hold (nav.js 'orbit'
 // targets), to a spaceport in one of its airspaces (worlds.js), and come
 // back. A RUN is planned whole when it is launched (planRun), each stretch
@@ -26,9 +26,13 @@
 //
 // A landing needs its airspace controller's clearance (landingClearance):
 // refused to a ship its power wants, or one flying the flag of a power at
-// war with it, or one it won't deal with. The shuttle's pilot (and anyone
-// riding down) is away from the ship meanwhile, as a boarding party is
-// (crew m.away: the routes wait for them, autopilot.js). The shuttle is a
+// war with it, or one it won't deal with. Who goes is chosen (launchRun
+// crew: the pilot, riders up to its seats, none unfit): they are away from
+// the ship meanwhile, as a boarding party is (crew m.away: the routes wait
+// for them, autopilot.js). A run planned for leave (planRun opts.leave)
+// holds the pad LEAVE_MIN instead of the turnaround; the party goes ashore,
+// paid for on landing (LEAVE_COST a head), and comes home rested
+// (crew-services.js restedAshore), unless called in off the pad. The shuttle is a
 // world entity on its flight path (world.js FLIGHT_PATH), seen on the
 // displays like any other hull. What it burns comes out of our tanks when
 // it is home.
@@ -60,6 +64,7 @@ import { shipGeometry, airlockFor } from './ship-layout.js';
 import { deliverPlanetside } from './contracts.js';
 import { marketOfWorld, shuttleTrade, stow, holdRoom, tradeRefusal, MARKETS } from './market.js';
 import { GOODS } from './goods.js';
+import { LEAVE_MIN, LEAVE_COST, restedAshore } from './crew-services.js';
 
 const SPAN_MIN = 0.4;                        // a leg round a world goes at least this far round (rad): a gentle spiral, never a plunge
 const RENDEZVOUS_M = 20_000;                 // a shuttle home further than this from us (we moved) chases us
@@ -127,7 +132,7 @@ export function runRefusal(state) {
  * Refused to a ship its power wants, one flying an enemy's flag, or one it
  * won't deal with (standing under −20).
  */
-export function landingClearance(state, airspaceId) {
+export function landingClearance(state, airspaceId, groundMin = GROUND_MIN) {
   const a = airspaceById(airspaceId);
   if (!a) return { ok: false, text: 'No such airspace.' };
   const p = a.authority;
@@ -135,7 +140,7 @@ export function landingClearance(state, airspaceId) {
   if (p && (state.law.wanted?.[p] ?? 0) >= 2) return { ok: false, text: `${who}: your registry is flagged by ${FACTIONS[p]?.short || p}. Landing denied; hold your orbit.` };
   if (p && hostileTo(state, p)) return { ok: false, text: `${who}: no landings for your flag. Clear our airspace.` };
   if (p && p in (state.law.standing || {}) && state.law.standing[p] < -20) return { ok: false, text: `${who}: you are not welcome here. Landing denied.` };
-  return { ok: true, text: `${who}: cleared to land at ${a.port.name}. Report at the interface; the pad is yours for ${Math.round(GROUND_MIN / 60 * 10) / 10} hours.` };
+  return { ok: true, text: `${who}: cleared to land at ${a.port.name}. Report at the interface; the pad is yours for ${Math.round(groundMin / 60 * 10) / 10} hours.` };
 }
 
 const wrapSpan = (d) => SPAN_MIN + (((d - SPAN_MIN) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
@@ -257,8 +262,13 @@ function legsFuel(worldName, cls, legs) {
   return { gMin, kg: gMin * FUEL_PER_G_MIN * craftOf(cls).m / 1e5 };
 }
 
-/** Our shuttle's run, planned from now: { ok, why, plan } (nothing launched). */
+/**
+ * Our shuttle's run, planned from now: { ok, why, plan } (nothing launched).
+ * opts.leave: whoever rides down goes ashore at the spaceport, the shuttle
+ * on the pad for a run ashore (LEAVE_MIN) instead of a turnaround.
+ */
 export function planRun(state, shuttleId, airspaceId, opts = {}) {
+  if (opts.leave) opts = { ...opts, groundMin: LEAVE_MIN };
   const sh = state.shuttles?.bay.find(s => s.id === shuttleId);
   if (!sh) return { ok: false, why: 'No such shuttle.' };
   if (sh.run) return { ok: false, why: `${sh.name} is out.` };
@@ -267,14 +277,24 @@ export function planRun(state, shuttleId, airspaceId, opts = {}) {
   const a = airspaceById(airspaceId);
   if (!a || a.world !== no.w.name) return { ok: false, why: `The spaceport must be on ${no.w.name}.` };
   const p = planLegs(no.w.name, sh.cls, airspaceId, state.clock.minute, (m) => carrierAt(state, m), opts);
-  return p.ok ? { ok: true, plan: { ...p, shuttle: sh.id, cls: sh.cls, airspace: a.id } } : { ok: false, why: p.why };
+  return p.ok ? { ok: true, plan: { ...p, shuttle: sh.id, cls: sh.cls, airspace: a.id, leave: !!opts.leave, groundMin: opts.groundMin ?? GROUND_MIN } } : { ok: false, why: p.why };
 }
+
+/** Who can go: the able crew aboard (none away, none hurt past working), the best pilots first. */
+export function shuttleCrew(state) {
+  return state.ship.crew.filter(m => !m.dead && !m.away && isAble(m))
+    .sort((x, y) => (x.role === 'Captain') - (y.role === 'Captain') || (y.skills?.piloting || 0) - (x.skills?.piloting || 0));
+}
+
+/** The seats a craft has besides its pilot's. */
+export const seatsOf = (cls) => CLASSES[cls]?.berths || 0;
+
+/** What a party's run ashore costs (LEAVE_COST a head). */
+export const leaveCost = (n) => n * LEAVE_COST;
 
 /** The crew a run takes by default: the able hand with the best piloting, the captain last. */
 export function defaultPilot(state) {
-  const able = state.ship.crew.filter(m => !m.dead && !m.away && isAble(m));
-  able.sort((x, y) => (x.role === 'Captain') - (y.role === 'Captain') || (y.skills?.piloting || 0) - (x.skills?.piloting || 0));
-  return able[0] || null;
+  return shuttleCrew(state)[0] || null;
 }
 
 /** What of our hold can go down to this spaceport: its PLANETSIDE contracts' cargo, up to the shuttle's room. */
@@ -294,17 +314,26 @@ export function cargoFor(state, airspaceId, cls) {
 
 /**
  * Launch a planned run: its clearance asked for (refused, nothing goes),
- * the pilot away, the cargo moved into the shuttle, the shuttle a world
- * entity on its flight path. Returns { ok, text, run }.
+ * its pilot and riders away (crew: { pilot, riders } ids, or a list with
+ * the pilot first; the best pilot alone by default), the cargo moved into
+ * the shuttle, the shuttle a world entity on its flight path. A plan made
+ * for leave (planRun opts.leave) sends the party ashore at the spaceport.
+ * Returns { ok, text, run }.
  */
 export function launchRun(state, plan, emit = () => {}, { crew = null, trade = null } = {}) {
   const sh = state.shuttles.bay.find(s => s.id === plan.shuttle);
   if (!sh || sh.run) return { ok: false, text: 'That shuttle is not in its bay.' };
-  const clr = landingClearance(state, plan.airspace);
+  const clr = landingClearance(state, plan.airspace, plan.groundMin);
   if (!clr.ok) return { ok: false, text: clr.text };
-  const pilot = crew?.length ? null : defaultPilot(state);
-  const party = crew?.length ? crew : pilot ? [pilot.id] : [];
-  if (!party.length) return { ok: false, text: 'Nobody fit to fly it.' };
+  // (ids as the crew keep them, whether they come as numbers or as a form's strings)
+  const able = shuttleCrew(state), byKey = new Map(able.map(m => [String(m.id), m.id]));
+  const list = (Array.isArray(crew) ? crew : crew ? [crew.pilot, ...(crew.riders || [])] : []).filter(x => x != null && x !== '').map(String);
+  const pilotId = list.length ? byKey.get(list[0]) : able[0]?.id;
+  if (pilotId == null) return { ok: false, text: 'Nobody fit to fly it.' };
+  if (list.slice(1).some(k => !byKey.has(k))) return { ok: false, text: 'Someone chosen to ride down is not fit to go.' };
+  const riders = [...new Set(list.slice(1).map(k => byKey.get(k)))].filter(id => id !== pilotId);
+  if (riders.length > seatsOf(sh.cls)) return { ok: false, text: `A ${CLASSES[sh.cls].name.toLowerCase()} seats ${seatsOf(sh.cls)} besides its pilot.` };
+  const party = [pilotId, ...riders];
   const S = state.shuttles;
   const id = `run-${S.nextId++}`;
   const a = airspaceById(plan.airspace);
@@ -319,7 +348,7 @@ export function launchRun(state, plan, emit = () => {}, { crew = null, trade = n
   const { sell, buy } = tradeLoad(state, sh.cls, load.mass, trade, plan.summary.world, freeBefore);
   const run = {
     id, shuttle: sh.id, cls: sh.cls, name: sh.name, world: plan.summary.world, airspace: a.id, port: { id: a.port.id, name: a.port.name },
-    carrier: 'player', phase: 'launch', legs: plan.legs, summary: plan.summary, crew: party, cargo: load.items, delivered: [], sell, buy, up: [],
+    carrier: 'player', phase: 'launch', legs: plan.legs, summary: plan.summary, crew: party, pilot: pilotId, leave: !!plan.leave, cargo: load.items, delivered: [], sell, buy, up: [],
     clearance: clr.text, startedAt: state.clock.minute, entity: `shuttle-${id}`, log: [],
   };
   S.runs.push(run);
@@ -327,7 +356,7 @@ export function launchRun(state, plan, emit = () => {}, { crew = null, trade = n
   sh.run = id;
   for (const mid of party) {
     const m = state.ship.crew.find(x => x.id === mid);
-    if (m) { m.away = { op: id, shuttle: true }; m.task = null; m.seat = null; m.path = []; m.activity = 'away'; }
+    if (m) { m.away = { op: id, shuttle: true, pilot: mid === pilotId }; m.task = null; m.seat = null; m.path = []; m.activity = 'away'; }
   }
   const world = getWorld(state);
   const e = createEntity({ id: run.entity, name: `${sh.name} (ours)`, type: 'ship', cls: sh.cls, faction: 'independent', transponder: true, t: state.clock.minute,
@@ -413,6 +442,7 @@ export function abortRun(state, runId, emit = () => {}) {
     if (lift >= ground.t1) return { ok: false, text: `${run.name} lifts off in ${Math.max(1, Math.round(ground.t1 - now))} min anyway.` };
     relay(state, run, gi, [{ ...ground, t1: lift }, ...backLegs(w, run.cls, a, lift, at)]);
     run.aborted = true;
+    if (run.ashore) run.leaveCut = true;                   // (called in from leave: no better for it)
     const why = leg.phase === 'ground' ? 'lifting off now' : leg.phase === 'down' ? 'it lands first, then lifts at once' : 'too near the air to stop: it lands, then lifts at once';
     log(run, state, `Called back: ${why}`);
     emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} called back: ${why}. Alongside in ${Math.round(run.legs.at(-1).t0 - now)} min.` });
@@ -558,6 +588,15 @@ function landed(state, run, emit) {
     handed.push(it);
   }
   run.cargo = run.cargo.filter(it => !handed.includes(it));
+  // a run ashore: paid for here, each head (short of the credits, they stay with the shuttle)
+  if (run.leave && !run.aborted) {
+    const cost = leaveCost(run.crew.length);
+    if (state.resources.credits.current >= cost) {
+      state.resources.credits.current -= cost;
+      run.ashore = true;
+      log(run, state, `${run.crew.length} ashore at ${run.port.name} (${cost.toLocaleString()} MCR)`);
+    } else log(run, state, `No leave: ${cost.toLocaleString()} MCR to go ashore, and not that much aboard`);
+  }
   emit('shuttle-landed', { run: run.id, name: run.name, port: run.port.name, world: run.world, delivered: handed, airspace: run.airspace });
   emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} down at ${run.port.name}${handed.length ? `: ${Math.round(handed.reduce((s, x) => s + x.mass, 0)).toLocaleString()} kg of ${handed[0].name} handed over` : ''}. Lift-off in ${Math.round(groundLeg.t1 - groundLeg.t0)} min.` });
 }
@@ -586,6 +625,8 @@ function recover(state, run, emit) {
     m.pos = { sx: node.sx, sy: node.sy };
     m.$px = node.sx; m.$py = node.sy;
     m.task = null; m.path = []; m.seat = null;
+    // (back from a run ashore, unless it was cut short: called back off the pad)
+    if (run.ashore && !run.leaveCut) restedAshore(m);
   }
   const world = getWorld(state);
   const e = world.get(run.entity);

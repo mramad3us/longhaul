@@ -10,7 +10,7 @@
 // ============================================================
 
 import { esc } from './dom.js';
-import { CLASSES, PLAYABLE, BUILDERS, KINDS, TECH, SIZES, maxCrew, hullPoints } from '../sim/ship-classes.js';
+import { CLASSES, PLAYABLE, BUILDERS, KINDS, TECH, SIZES, maxCrew, hullPoints, landsBy } from '../sim/ship-classes.js';
 import { hullOf, portSummary } from '../sim/hulls.js';
 import { createLayout } from '../sim/ship-layout.js';
 import { drawHullPortrait } from './hull-art.js';
@@ -69,7 +69,7 @@ function detailHTML(id) {
         ${navyOf(id) ? row('Papers', navyOf(id) === 'stolen' ? 'stolen navy hull: illegal everywhere' : `${esc(FACTIONS[navyOf(id)].navy)} contractor's license`, 'sp-warn') : ''}
         ${row('Passengers', c.berths ? `${c.berths} berths on a deck of their own${c.kind === 'cutter' ? ' (the brig)' : ''}` : '—', c.berths ? '' : 'sp-dim')}
         ${row('Collars', esc(portSummary(id)))}
-        ${row('Atmosphere', c.atmo ? `rated · ${c.atmo.entry === 'belly' ? 'lifting body, ceramic belly' : 'tail-first, shield ring'} · ${c.atmo.landing}` : 'not rated', c.atmo ? '' : 'sp-dim')}
+        ${row('Atmosphere', esc(landsBy(id).replace(/^not rated: /, '')))}
         ${row('Decks', esc(createLayout(id).map(d => d.name).join(' · ')))}
       </div>
       <div class="sp-col">

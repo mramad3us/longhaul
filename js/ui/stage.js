@@ -15,6 +15,10 @@
 //              what is round us from where we are, a piece of our own hull
 //              in the frame. Always there; the bar picks the camera (FWD,
 //              AFT, PORT, STBD; K steps through them).
+//   SHUTTLE    the cameras on a shuttle of ours that is out (shuttlecam.js:
+//              NOSE, DOWN, TAIL), through the whole ride down to the pad
+//              and back; with more than one out, the bar picks which.
+//              The shuttle window's CAMERA brings it up on that run.
 //   TELESCOPE  ours (sim/telescope.js, telescope.js): one contact or one
 //              world, from where we are. It holds what it was pointed at
 //              (LOOK on a contact's or a world's panel or card, Z, or the
@@ -64,15 +68,17 @@ import { dockHolds } from '../sim/docking.js';
 import { ExteriorView } from './exterior.js';
 import { ScopeView } from './telescope.js';
 import { HullCamView, HULL_CAMS } from './hullcam.js';
+import { ShuttleCamView, SHUTTLE_CAMS } from './shuttlecam.js';
+import { activeRuns } from '../sim/shuttles.js';
 import { initDockingHud, updateDockingHud } from './docking-hud.js';
 
 const PROX_PHASES = new Set(['approach', 'prox', 'capture', 'seal', 'undock', 'separate', 'holding', 'outbound']);
 const NEAR_STATION_M = 8_000, NEAR_SHIP_M = 5_000;
 const AUTO_HOLD_MS = 4500;     // the telescope stays on a target this long after the last torpedo is done with it
-const SRC_LABEL = { drone: 'DRONE', hull: 'HULL', scope: 'TELESCOPE' };
+const SRC_LABEL = { drone: 'DRONE', hull: 'HULL', shuttle: 'SHUTTLE', scope: 'TELESCOPE' };
 
-let el = {}, exterior = null, scope = null, hullcam = null, mode = null, hooks = {};
-let src = 'drone';             // the camera on the display: 'drone' | 'hull' | 'scope'
+let el = {}, exterior = null, scope = null, hullcam = null, shuttlecam = null, mode = null, hooks = {};
+let src = 'drone';             // the camera on the display: 'drone' | 'hull' | 'shuttle' | 'scope'
 let scopeTarget = null;        // what the telescope holds: { kind: 'entity' | 'body', id }
 let dockReturn = null;         // { tab, src, set }: what showed before a dock took the display over, and the camera it put up
 let auto = null;               // the telescope come up for our torpedoes: { id, until, back: { tab, src, scopeTarget } }
@@ -80,9 +86,10 @@ let watchAt = 0, barAt = 0, barKey = '', lostAt = -1e9;
 
 export function initStage(h = {}) {
   hooks = h;   // { state(), select(id), currentTab(), setTab(tab), back(), isFloating(), pick() }
-  el = { exterior: $('#stage-exterior'), scope: $('#stage-scope'), hull: $('#stage-hull'), bar: $('#cam-bar'), nofeed: $('#cam-nofeed'), hud: $('#dock-hud'), tab: $('#mv-tab-exterior') };
+  el = { exterior: $('#stage-exterior'), scope: $('#stage-scope'), hull: $('#stage-hull'), shuttle: $('#stage-shuttle'), bar: $('#cam-bar'), nofeed: $('#cam-nofeed'), hud: $('#dock-hud'), tab: $('#mv-tab-exterior') };
   exterior = new ExteriorView(el.exterior, { onSelect: (id) => id && hooks.select?.(id) });
   hullcam = new HullCamView(el.hull, { onSelect: (id) => id && hooks.select?.(id) });
+  shuttlecam = new ShuttleCamView(el.shuttle, { onSelect: (id) => id && hooks.select?.(id) });
   scope = new ScopeView(el.scope);
   // (the wheel over the telescope's picture steps its zoom)
   el.scope.addEventListener('wheel', (e) => { if (scope.zoomStep(e.deltaY < 0 ? 1 : -1)) { e.preventDefault(); barKey = ''; } }, { passive: false });
@@ -102,6 +109,7 @@ export function resetStage() {
   lostAt = -1e9;
   exterior?.reset();
   hullcam?.reset();
+  shuttlecam?.reset();
   scope?.reset();
 }
 
@@ -233,13 +241,15 @@ export function updateStage(state, alpha) {
   const m = stageMode(state);
   if (m !== mode) enter(state, m);
   watchTorpedoes(state);
-  const feed = src === 'scope' ? 'scope' : src === 'hull' ? 'hull' : droneFeed(state) ? 'drone' : null;
+  const feed = src === 'scope' ? 'scope' : src === 'hull' ? 'hull' : src === 'shuttle' ? 'shuttle' : droneFeed(state) ? 'drone' : null;
   show(el.exterior, feed === 'drone');
   show(el.scope, feed === 'scope');
   show(el.hull, feed === 'hull');
+  show(el.shuttle, feed === 'shuttle');
   if (onDisplay()) {
     if (feed === 'drone') exterior.render(state, alpha, { labels: mode !== 'near' });
     else if (feed === 'hull') hullcam.render(state, alpha);
+    else if (feed === 'shuttle') shuttlecam.render(state, alpha);
     else if (feed === 'scope') scope.render(state, alpha, scopeTarget);
     const now = performance.now();
     if (now - barAt > 250 || !barKey) { barAt = now; renderBar(state, feed); }
@@ -270,13 +280,20 @@ function renderBar(state, feed) {
   } else if (src === 'hull') {
     act = HULL_CAMS.map(c => `<button class="mv-btn ${hullcam.cam === c.id ? 'active' : ''}" data-cam-act="hull:${c.id}" title="${esc(c.name.toLowerCase())}">${c.label}</button>`).join('');
     note = 'fixed wide-angle cameras on our plating · K steps through them';
+  } else if (src === 'shuttle') {
+    const runs = activeRuns(state).filter(r => r.carrier === 'player');
+    const on = shuttlecam.runFor(state);
+    act = SHUTTLE_CAMS.map(c => `<button class="mv-btn ${shuttlecam.cam === c.id ? 'active' : ''}" data-cam-act="shuttle:${c.id}" title="${esc(c.name.toLowerCase())}">${c.label}</button>`).join('');
+    if (runs.length > 1) act += `<span class="mv-sep"></span>${runs.map(r => `<button class="mv-btn ${on?.id === r.id ? 'active' : ''}" data-cam-act="run:${esc(r.id)}" title="Its cameras">${esc(r.name.toUpperCase())}</button>`).join('')}`;
+    note = on ? `${on.name} · to ${on.port.name}, ${on.world}` : 'no shuttle out';
   } else {
     act = ds ? `<button class="mv-btn" data-cam-act="recall" ${ds.phase === 'recover' ? 'disabled' : ''} title="Call the drone home">RECALL</button>`
       : `<button class="mv-btn" data-cam-act="deploy" ${no ? `disabled title="${esc(no)}"` : 'title="Send a camera drone out: a view of our ship from outside"'}>DEPLOY DRONE</button>`;
     note = `${r?.current ?? 0}/${r?.max ?? 0} aboard`;
     if (ds) note += ` · ${ds.phase === 'launch' ? `launching, on station in ${formatDuration(ds.left)}` : ds.phase === 'recover' ? `coming home, aboard in ${formatDuration(ds.left)}` : `on station · cells ${formatDuration(ds.endurance)}`}`;
   }
-  const html = `<div class="cam-srcs">${srcBtn('drone', 'The drone\'s camera: our ship and what is round it')}${srcBtn('hull', 'The hull cameras: what is round us, from our plating (K)')}${srcBtn('scope', 'The telescope: one contact, from here (Z)')}</div>
+  const out = activeRuns(state).some(r => r.carrier === 'player');
+  const html = `<div class="cam-srcs">${srcBtn('drone', 'The drone\'s camera: our ship and what is round it')}${srcBtn('hull', 'The hull cameras: what is round us, from our plating (K)')}${srcBtn('shuttle', out ? 'The cameras on our shuttle out: the ride down and back' : 'Our shuttle\'s cameras, while one is out', !out && src !== 'shuttle')}${srcBtn('scope', 'The telescope: one contact, from here (Z)')}</div>
     <span class="mv-sep"></span>${act}<span class="cam-note">${note}</span>`;
   const key = html + '|' + (feed || '') + '|' + (ds?.phase || '') + (docking ? 'dock' : '') + (performance.now() - lostAt < 20_000 ? 'lost' : '');
   if (key === barKey) return;
@@ -323,6 +340,15 @@ function onClick(e) {
     case 'zoom-auto': scope.zoomAuto(); break;
   }
   if (b.dataset.camAct?.startsWith('hull:')) hullcam.select(b.dataset.camAct.slice(5));
+  if (b.dataset.camAct?.startsWith('shuttle:')) shuttlecam.select(b.dataset.camAct.slice(8));
+  if (b.dataset.camAct?.startsWith('run:')) shuttlecam.follow(b.dataset.camAct.slice(4));
+  barKey = '';
+}
+
+/** The shuttle cameras up, on a run (the shuttle window's CAMERA). */
+export function watchShuttle(runId = null) {
+  if (runId) shuttlecam.follow(runId);
+  src = 'shuttle'; auto = null; raise();
   barKey = '';
 }
 
@@ -342,3 +368,5 @@ export function zoomScope(step) {
 }
 
 export const currentStageMode = () => mode;
+/** The cameras themselves (for the tools that look at what they drew). */
+export const stageViews = () => ({ exterior, hullcam, shuttlecam, scope });

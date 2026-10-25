@@ -211,6 +211,18 @@
 .sb-check { display: inline-flex; align-items: center; gap: 6px; cursor: var(--cur-hand, pointer); }
 .sb-check.off { opacity: 0.45; }
 .sb-none { color: var(--text-dim); }
+/* who goes: the pilot, the riders in a grid of their own, ashore or not */
+.sb-crew { margin: 6px 0; }
+.sb-crew select { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--hull-primary); font: 11px var(--font-mono); padding: 2px 4px; }
+.sb-riders { display: grid; grid-template-columns: 80px 1fr; gap: 4px 12px; align-items: start; margin: 6px 0; font: 11px var(--font-mono); color: var(--text-secondary); }
+.sb-riders .sb-k { padding-top: 2px; }
+.sb-riders .sb-seats { grid-column: 2; color: var(--text-dim); font-size: 10px; letter-spacing: 0.06em; }
+.sb-ridergrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 3px 14px; }
+.sb-check .sb-dim { color: var(--text-dim); margin-left: 4px; }
+.sb-leave { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 4px 92px; font: 11px var(--font-mono); color: var(--text-secondary); line-height: 1.45; cursor: var(--cur-hand, pointer); }
+.sb-leave input { margin-top: 2px; }
+.sb-leave b { color: var(--text-primary); font-weight: normal; letter-spacing: 0.06em; }
+.sb-crew .sb-dim { color: var(--text-dim); }
 .sb-bad, .sb-why { color: var(--warn, #E8C45A); }
 
 /* ---- CONTACT PANEL ADDITIONS ---- */

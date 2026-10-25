@@ -40,10 +40,11 @@
 // passenger deck (its `berths`).
 //
 // No hull here is rated for an atmosphere but the CARRIED craft: the
-// shuttles a big hull keeps in its bays for a world's ground (BAYS: a
-// pinnace, a cargo lander), belly-first under tiles (`atmo`), with a lift
-// to drag for the glide. They are never hulls to command (out of
-// CLASS_IDS); shuttles.js flies them, planetary.js their entries.
+// shuttles every hull keeps in its bays for a world's ground (BAYS: a gig
+// for a small hull, a pinnace, a cargo lander), belly-first under tiles
+// (`atmo`), with a lift to drag for the glide. They are never hulls to
+// command (out of CLASS_IDS); shuttles.js flies them, planetary.js their
+// entries.
 //
 // A navy's hulls are military kit: flying one takes that navy's license
 // (service.js); a `stolen` one no license covers. A ship's identity
@@ -127,8 +128,8 @@ export const KINDS = {
 // ---- CLASSES ----
 // kind · builder · tl · category · size · lengthM · massT · crew [min, max]
 // and crewStd (the usual complement) · atmo: rated for atmospheric entry
-// ({ entry: 'belly' a lifting body on a ceramic belly | 'tail' a tail-sitter
-// behind a shield ring, landing }) — only a few hulls are
+// ({ entry: 'belly' a lifting body on a ceramic belly, shield, landing }) —
+// only the carried craft are
 // drive: sustained cruise G and maximum G (crew on juice) · armor: points
 // (each stops ~12% of a hit) · pdc: point-defense mounts · tubes: torpedo
 // tubes · magazine: torpedoes carried {he, nuke} (magazineCap: room for
@@ -169,7 +170,7 @@ export const CLASSES = {
   },
   hermes: {
     name: 'Hermes-pattern courier', kind: 'courier', builder: 'UN', tl: 2, category: 'civilian', size: 'S',
-    lengthM: 40, massT: 600, crew: [2, 3], crewStd: 2, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, drive: { cruiseG: 1, maxG: 6 }, ...UNARMED,
+    lengthM: 40, massT: 600, crew: [2, 3], crewStd: 2, drive: { cruiseG: 1, maxG: 6 }, ...UNARMED,
     cargoT: 10, berths: 4, factions: { UN: 4, independent: 3 }, names: 'courier',
     desc: 'The inner system\'s standard fast packet: mail, small freight, a few passengers in a hurry. Unarmed.',
   },
@@ -187,13 +188,13 @@ export const CLASSES = {
   },
   ascension: {
     name: 'Ascension cargo shuttle', kind: 'shuttle', builder: 'UN', tl: 2, category: 'civilian', size: 'S',
-    lengthM: 36, massT: 950, crew: [2, 3], crewStd: 2, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, drive: { cruiseG: 0.6, maxG: 3 }, ...UNARMED,
+    lengthM: 36, massT: 950, crew: [2, 3], crewStd: 2, drive: { cruiseG: 0.6, maxG: 3 }, ...UNARMED,
     cargoT: 380, berths: 8, factions: { UN: 4, independent: 2 }, names: 'shuttle',
     desc: 'Luna-built lighter, the workhorse of every Earth-side port. Unarmed.',
   },
   deimos: {
     name: 'Deimos lighter', kind: 'shuttle', builder: 'MCR', tl: 3, category: 'civilian', size: 'S',
-    lengthM: 34, massT: 850, crew: [2, 3], crewStd: 2, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, drive: { cruiseG: 1, maxG: 4 }, ...UNARMED,
+    lengthM: 34, massT: 850, crew: [2, 3], crewStd: 2, drive: { cruiseG: 1, maxG: 4 }, ...UNARMED,
     cargoT: 320, berths: 6, factions: { MCR: 4 }, names: 'shuttle',
     desc: 'A Martian orbital lighter: less hold, more drive, very little maintenance. Unarmed.',
   },
@@ -336,14 +337,14 @@ export const CLASSES = {
   },
   'unn-corvette': {
     name: 'Harrier-class corvette', kind: 'corvette', builder: 'UN', tl: 2, category: 'military', size: 'M',
-    lengthM: 50, massT: 2900, crew: [6, 12], crewStd: 10, atmo: { entry: 'tail', shield: 'ablative ring', landing: 'legs' }, drive: { cruiseG: 1, maxG: 9 },
+    lengthM: 50, massT: 2900, crew: [6, 12], crewStd: 10, drive: { cruiseG: 1, maxG: 9 },
     armor: 2, pdc: 4, tubes: 2, magazine: { he: 6, nuke: 4 }, railgun: 0,
     cargoT: 5, berths: 0, brig: 6, factions: { UN: 5 }, names: 'navy', evasive: true,
     desc: 'The UNN\'s numerous, thirty-year-old patrol corvette.',
   },
   'mcrn-corvette': {
     name: 'Tharsis-class corvette', kind: 'corvette', builder: 'MCR', tl: 4, category: 'military', size: 'M',
-    lengthM: 46, massT: 2800, crew: [6, 12], crewStd: 9, atmo: { entry: 'tail', shield: 'ablative ring', landing: 'legs' }, drive: { cruiseG: 1, maxG: 12 },
+    lengthM: 46, massT: 2800, crew: [6, 12], crewStd: 9, drive: { cruiseG: 1, maxG: 12 },
     armor: 2, pdc: 6, tubes: 2, magazine: { he: 6, nuke: 6 }, railgun: 0,
     cargoT: 5, berths: 0, brig: 6, factions: { MCR: 5 }, names: 'navy', evasive: true,
     desc: 'Martian fast-attack corvette: six TL4 PDCs, a 12G drive and a stealthy hull.',
@@ -436,7 +437,7 @@ export const CLASSES = {
   },
   'pirate-runner': {
     name: 'Armed runner (stolen courier)', kind: 'raider', builder: 'UN', tl: 2, category: 'irregular', size: 'S',
-    lengthM: 40, massT: 620, crew: [2, 5], crewStd: 3, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, drive: { cruiseG: 1, maxG: 6 },
+    lengthM: 40, massT: 620, crew: [2, 5], crewStd: 3, drive: { cruiseG: 1, maxG: 6 },
     armor: 0.5, pdc: 1, tubes: 1, magazine: { he: 3, nuke: 0 }, railgun: 0,
     cargoT: 10, berths: 2, factions: { pirate: 3 }, names: 'pirate', evasive: true,
     desc: 'A Hermes courier with a tube where the mail hold was.',
@@ -455,16 +456,26 @@ export const CLASSES = {
     drive: { cruiseG: 0.8, maxG: 3 }, ...UNARMED, cargoT: 60, berths: 2, factions: {}, names: 'shuttle',
     desc: 'A freighter\'s lighter: sixty tonnes in a squat ceramic-bellied box, down to a spaceport and back for the next load.',
   },
+  gig: {
+    name: 'Gig', kind: 'gig', hull: 'shuttle', builder: 'independent', tl: 2, category: 'civilian', size: 'S', carried: true, dims: [0.42, 0.3],
+    lengthM: 10, massT: 14, crew: [1, 1], crewStd: 1, atmo: { entry: 'belly', shield: 'ceramic tiles', landing: 'skids' }, lift: 1.1,
+    drive: { cruiseG: 1, maxG: 4 }, ...UNARMED, cargoT: 0.6, berths: 3, factions: {}, names: 'shuttle',
+    desc: 'A small hull\'s boat, in a bay under its keel: a pilot, three more and their kit, down to a world\'s ground and back up to orbit.',
+  },
 };
 
 /**
- * The craft a hull carries in its bays (its shuttles), by class: a big hull
- * isn't rated for an atmosphere, and its shuttles are how it reaches a
- * world's ground. Small hulls and the hulls rated for entry themselves
- * (the corvettes' tail-sitters, the couriers' and lighters' bellies) carry
- * none.
+ * The craft a hull carries in its bays (its shuttles), by class. No hull is
+ * rated for an atmosphere (its drive would burn the spaceport under it, and
+ * its RCS can't hold it up in a world's pull), so every one carries what
+ * lands for it: a small hull a gig, a mid-sized one a pinnace, the big ones
+ * pinnaces and cargo landers.
  */
 export const BAYS = {
+  rockhopper: { gig: 1 }, kestrel: { gig: 1 }, arsia: { gig: 1 }, dart: { gig: 1 }, hermes: { gig: 1 }, phobos: { gig: 1 },
+  mule: { gig: 1 }, ascension: { gig: 1 }, deimos: { gig: 1 }, 'pirate-raider': { gig: 1 }, 'pirate-runner': { gig: 1 },
+  'belt-cutter': { pinnace: 1 }, cutter: { pinnace: 1 }, 'mcr-cutter': { pinnace: 1 },
+  'opa-corvette': { pinnace: 1 }, 'unn-corvette': { pinnace: 1 }, 'mcrn-corvette': { pinnace: 1 }, 'pirate-corvette': { pinnace: 1 },
   tramp: { pinnace: 1 }, 'light-freighter': { pinnace: 1 }, meridian: { pinnace: 1 }, ares: { pinnace: 1 },
   'ore-scow': { pinnace: 1 }, freighter: { lander: 1, pinnace: 1 }, 'tharsis-bulk': { lander: 1, pinnace: 1 },
   'ice-hauler': { pinnace: 2 }, 'water-carrier': { pinnace: 2 }, 'belt-tanker': { pinnace: 1 }, tanker: { pinnace: 1 },
@@ -476,6 +487,26 @@ export const BAYS = {
 };
 /** A class's shuttles, one entry each: [{ cls }]. */
 export const bayOf = (classId) => Object.entries(BAYS[classId] || {}).flatMap(([cls, n]) => Array.from({ length: n }, () => ({ cls })));
+
+/**
+ * What takes a hull's people to a world's ground, in words (the sheets'
+ * ATMOSPHERE line): "a gig (3 seats, 0.6 t)", "2 pinnaces (12 seats, 4 t
+ * each) and a cargo lander (60 t)". A carried craft is rated itself.
+ */
+export function landsBy(classId) {
+  const c = CLASSES[classId];
+  if (!c) return '';
+  if (c.atmo) return `rated: a lifting body on a ${c.atmo.shield === 'ceramic tiles' ? 'ceramic belly' : c.atmo.shield}, lands on ${c.atmo.landing}`;
+  const bay = Object.entries(BAYS[classId] || {});
+  if (!bay.length) return 'not rated, and no craft to land';
+  const one = ([cls, n]) => {
+    const k = CLASSES[cls], what = k.name.toLowerCase(), each = n > 1 ? ' each' : '';
+    const room = k.berths > 2 ? `${k.berths} seats, ${k.cargoT} t${each}` : `${k.cargoT} t${each}`;
+    return `${n > 1 ? `${n} ${what}s` : `a ${what}`} (${room})`;
+  };
+  const words = bay.map(one);
+  return `not rated: lands by ${words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words.at(-1)}` : words[0]}`;
+}
 
 /** The ships (a carried craft is not one: BAYS). */
 export const CLASS_IDS = Object.keys(CLASSES).filter(id => !CLASSES[id].carried);

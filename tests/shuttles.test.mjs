@@ -1,7 +1,8 @@
 // ============================================================
 // LONGHAUL — Tests: shuttles and planetary flight
 //
-// A big hull carries shuttles (ship-classes.js BAYS) and they are its way
+// No hull is rated for an atmosphere: every one carries what lands for it
+// (ship-classes.js BAYS: a gig, a pinnace, a cargo lander), its way
 // to a world's ground: an entry flown as physics (planetary.js: the heat
 // inside its shield, the G inside its crew's, at rest on the pad at the
 // end), a run planned whole from a high orbit (shuttles.js: each stretch
@@ -22,10 +23,13 @@ import { parkingTarget, targetStateAt } from '../js/sim/nav.js';
 import { bodyPos, bodyVel } from '../js/sim/ephemeris.js';
 import { getWorld } from '../js/sim/world.js';
 import { serialize, deserialize } from '../js/sim/save.js';
-import { CLASSES, CLASS_IDS, bayOf } from '../js/sim/ship-classes.js';
+import { CLASSES, CLASS_IDS, bayOf, landsBy } from '../js/sim/ship-classes.js';
 import { worldOf, airspacesOf, airspaceById } from '../js/sim/worlds.js';
 import { entryProfile, ascentProfile, craftOf, flightPathAt, HEAT_LIMIT, runMinutes } from '../js/sim/planetary.js';
-import { planRun, launchRun, activeRuns, runReadout, landingClearance, runRefusal, abortRun } from '../js/sim/shuttles.js';
+import { planRun, launchRun, activeRuns, runReadout, landingClearance, runRefusal, abortRun, shuttleCrew, seatsOf } from '../js/sim/shuttles.js';
+import { WORLDS } from '../js/sim/worlds.js';
+import { LEAVE_MIN, LEAVE_COST } from '../js/sim/crew-services.js';
+import { upgradeState } from '../js/sim/game.js';
 import { holdLoad as MK_holdLoad } from '../js/sim/market.js';
 import { ContractType, deliverPlanetside } from '../js/sim/contracts.js';
 
@@ -57,7 +61,79 @@ function apart(w, a, ma, b, mb) {
 
 export default [
   {
-    name: 'shuttles are carried craft: in the big hulls\' bays, rated for an air, never a hull to command',
+    name: 'no hull is rated for an air, and every one carries a craft that is: a gig, a pinnace, a lander; each makes every settled world',
+    fn: () => {
+      const crafts = new Set();
+      for (const id of CLASS_IDS) {
+        const c = CLASSES[id];
+        assert(!c.atmo, `${id}: not rated for an atmosphere itself`);
+        const bay = bayOf(id);
+        assert(bay.length > 0, `${id}: carries something that lands (${landsBy(id)})`);
+        for (const b of bay) { crafts.add(b.cls); assert(CLASSES[b.cls]?.carried && CLASSES[b.cls].atmo, `${id}: its ${b.cls} is a carried craft, rated`); }
+        assert(/^not rated: lands by /.test(landsBy(id)), `${id}: ${landsBy(id)}`);
+      }
+      const settled = WORLDS.filter(w => airspacesOf(w).length);
+      const rows = [];
+      for (const cls of crafts) {
+        for (const w of settled) {
+          const p = entryProfile(w.name, cls), up = ascentProfile(w.name, cls);
+          assert(p && up, `a ${cls} makes ${w.name} and back`);
+          assert(p.peakHeat < HEAT_LIMIT[CLASSES[cls].atmo.shield] && p.peakG <= CLASSES[cls].drive.maxG + 0.05, `${cls} at ${w.name}: heat ${fmt(p.peakHeat / 1e6, 2)} MW/m², ${fmt(p.peakG, 1)} G`);
+        }
+        rows.push(`${cls}: ${CLASSES[cls].berths} seats, ${CLASSES[cls].cargoT} t, every settled world (${settled.map(w => w.name).join(', ')})`);
+      }
+      console.log(`      ${rows.join('\n      ')}\n      sheets: ${['mcrn-corvette', 'dart', 'freighter', 'liner'].map(id => `${CLASSES[id].name}: ${landsBy(id)}`).join(' · ')}`);
+      // an old game of a hull that had no craft: its bay filled on load
+      const s = createGame({ crewCount: 3, traffic: 0, forces: false, docked: false, classId: 'mcrn-corvette' });
+      s.shuttles.bay = [];
+      upgradeState(s);
+      assert(s.shuttles.bay.length === 1 && s.shuttles.bay[0].cls === 'pinnace', `an old corvette's bay: ${s.shuttles.bay.map(x => x.cls).join(', ')}`);
+    },
+  },
+  {
+    name: 'who goes: the pilot chosen, riders in the seats, none unfit; ashore at the spaceport for a run of leave, paid there, back rested (not if called in)',
+    fn: () => {
+      const s = inOrbit('Mars');
+      const a = airspacesOf(worldOf('Mars'))[2];
+      const able = shuttleCrew(s);
+      const p = planRun(s, s.shuttles.bay[0].id, a.id, { leave: true });
+      assert(p.ok && p.plan.groundMin === LEAVE_MIN, `a run for leave: the pad ${p.plan?.groundMin} min`);
+      // (more riders than seats, or someone unfit, refused; ids as a form gives them)
+      const seats = seatsOf(s.shuttles.bay[0].cls);
+      assert(seats === CLASSES.pinnace.berths, 'a pinnace seats its berths');
+      const hurt = able[2];
+      hurt.consciousness = 10;
+      const no = launchRun(s, p.plan, () => {}, { crew: { pilot: String(able[1].id), riders: [String(hurt.id)] } });
+      assert(!no.ok, `someone unfit riding down is refused: ${no.text}`);
+      hurt.consciousness = 100;
+      const credits = s.resources.credits.current;
+      const r = launchRun(s, p.plan, () => {}, { crew: { pilot: String(able[1].id), riders: [String(able[2].id), String(able[3].id)] } });
+      assert(r.ok && r.run.crew.length === 3 && r.run.pilot === able[1].id && r.run.leave, `launched with its pilot and two riders: ${r.text}`);
+      assert(s.ship.crew.filter(m => m.away?.op === r.run.id).length === 3 && s.ship.crew.find(m => m.id === able[1].id).away.pilot, 'the three away, the pilot marked');
+      for (const m of s.ship.crew) m.moraleMod = 0;
+      let charged = null;
+      flyRun(s, r.run, 2 * DAY_MIN, () => { if (charged == null && r.run.ashore) charged = credits - s.resources.credits.current; });
+      assert(r.run.phase === 'done' && r.run.ashore && charged === 3 * LEAVE_COST, `home, the three ashore for ${charged} MCR`);
+      const back = s.ship.crew.filter(m => [able[1].id, able[2].id, able[3].id].includes(m.id));
+      assert(back.every(m => !m.away && m.moraleMod >= 8 && m.needs.fun === 100), 'back aboard, rested and in better spirits');
+      assert(s.ship.crew.filter(m => !back.includes(m)).every(m => !(m.moraleMod > 0)), 'those who stayed aboard, as they were');
+      // called in off the pad: no better for it
+      const p2 = planRun(s, s.shuttles.bay[0].id, a.id, { leave: true });
+      const r2 = launchRun(s, p2.plan, () => {}, { crew: [able[1].id, able[2].id] });
+      assert(r2.ok, r2.text);
+      for (const m of s.ship.crew) m.moraleMod = 0;
+      let t = 0;
+      while (r2.run.phase !== 'ground' && t++ < DAY_MIN) advance(s, 1);
+      advance(s, 30);
+      const ab = abortRun(s, r2.run.id);
+      assert(ab.ok && r2.run.leaveCut, `called in from leave: ${ab.text}`);
+      flyRun(s, r2.run);
+      assert(s.ship.crew.filter(m => [able[1].id, able[2].id].includes(m.id)).every(m => !(m.moraleMod > 0)), 'leave cut short: no better for it');
+      console.log(`      a pinnace's ${seats} seats; three ashore at ${a.port.name} for ${LEAVE_MIN / 60} h, ${3 * LEAVE_COST} MCR, back rested; a leave called in, none`);
+    },
+  },
+  {
+    name: 'shuttles are carried craft: in the hulls\' bays, rated for an air, never a hull to command',
     fn: () => {
       for (const id of ['pinnace', 'lander']) {
         const c = CLASSES[id];

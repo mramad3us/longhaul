@@ -110,7 +110,7 @@ Every class has a physical hull (`hullOf`, `sim/hulls.js`): parts in metres, bui
 
 **Collars** (S crew hatch, M docking collar, L cargo cradle: docs/DOCKING.md) sit on the hull surface at a face: the nose (x+), the flanks (y±). On our ship each opens onto an airlock on a deck of the interior.
 
-**Rated for atmospheric entry** are only a few hulls, and they are still boxes: a lifting body with a ceramic belly and skids (the Hermes courier and its stolen Armed runner, the Ascension and Deimos cargo shuttles: orbital lighters for Earth and Mars), or a tail-sitter that comes in tail first behind an ablative shield ring and lands on legs (the UNN Harrier and MCRN Tharsis corvettes). The OPA's refit of the Harrier and the stolen one lost their shields. Every body's atmosphere is in the ephemeris for when entry is flown.
+**No hull is rated for atmospheric entry**: a fusion drive would burn the spaceport it came down on, and RCS can't hold a hull up in a world's pull. Every hull carries what lands for it in its bays (`BAYS`; a sheet's ATMOSPHERE line, `landsBy`): a gig under a small hull's keel (the prospectors, couriers, station shuttles, raiders), a pinnace in a cutter, a corvette, a light freighter or a frigate, cargo landers and pinnaces in the big hulls. The carried craft are rated themselves: lifting bodies on ceramic bellies and skids (FLIGHT.md).
 
 **Crew complements** are part of the design: `crew` is the rated range (the fewest who can keep watches, the most it berths), `crewStd` what a ship of the class usually carries. Every hull out there has its own number in the range, around the usual one, fixed by its identity (`manifest.complementOf`).
 

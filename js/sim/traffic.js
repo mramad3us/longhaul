@@ -101,9 +101,10 @@ const PLANET_CALL_P = 0.22;          // a ship with shuttles calls at a settled 
 const PLANET_NEAR_AU = 2.5;          // …if one is this near
 const PLANET_WORK_MIN = [3 * H, 72 * H];
 
-/** A settled world for a ship leaving `from` to call at, or null (it has no shuttles, or none is near). */
+/** A settled world for a ship leaving `from` to call at, or null (no freight shuttle aboard, or no world near). */
 function planetFor(e, from, minute) {
-  if (!bayOf(e.cls).length || random() > PLANET_CALL_P) return null;
+  // (a pinnace or a lander works a world's freight and passengers; a small hull's gig is its crew's own boat)
+  if (!bayOf(e.cls).some(s => s.cls !== 'gig') || random() > PLANET_CALL_P) return null;
   const days = minute / DAY_MIN;
   const near = WORLDS.filter(w => airspacesOf(w).length).map(w => { const p = bodyPos(w.body, days); return { w, d: Math.hypot(p.x - from.pos.x, p.y - from.pos.y) }; }).filter(x => x.d < PLANET_NEAR_AU);
   return near.length ? weightedPick(near, x => 1 / (0.05 + x.d)).w : null;
@@ -117,7 +118,7 @@ function atPlanet(world, e, minute) {
   const w = WORLDS.find(x => x.name === e.tags.planet);
   e.transit = null; e.thrust = 0;
   e.orbit = e.tags.planetOrbit;
-  const bay = bayOf(e.cls), cls = bay.some(s => s.cls === 'lander') ? 'lander' : bay[0].cls;
+  const bay = bayOf(e.cls).filter(s => s.cls !== 'gig'), cls = bay.some(s => s.cls === 'lander') ? 'lander' : bay[0].cls;
   const n = bay.filter(s => s.cls === cls).length;
   const c = CLASSES[e.cls];
   const tonnes = Math.max(5, Math.min(600, (c.cargoT || 0) * 0.02 + (c.berths || 0) * 0.15));

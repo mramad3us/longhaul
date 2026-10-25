@@ -110,6 +110,13 @@ export function shoreLeave(state, ids = null, { extend = false } = {}) {
   return { ok: true, text: `${going.length} ashore at ${st.name} for eight hours (${cost.toLocaleString()} MCR).` };
 }
 
+/** What a run ashore does for someone: back rested, fed, washed and in better spirits (a station's, or a world's by shuttle). */
+export function restedAshore(m) {
+  m.needs.rest = Math.max(m.needs.rest, 90); m.needs.food = Math.max(m.needs.food, 90);
+  m.needs.hygiene = 100; m.needs.fun = 100;
+  m.moraleMod = (m.moraleMod || 0) + 8;
+}
+
 /** Per minute: crew whose leave is over come back aboard through the lock. */
 export function leaveTick(state, emit = () => {}) {
   const now = state.clock.minute;
@@ -120,9 +127,7 @@ export function leaveTick(state, emit = () => {}) {
     const node = lock?.access != null ? shipGeometry(state.ship).nodes[lock.access] : shipGeometry(state.ship).nodes[0];
     m.away = null;
     m.pos = { sx: node.sx, sy: node.sy }; m.$px = node.sx; m.$py = node.sy;
-    m.needs.rest = Math.max(m.needs.rest, 90); m.needs.food = Math.max(m.needs.food, 90);
-    m.needs.hygiene = 100; m.needs.fun = 100;
-    m.moraleMod = (m.moraleMod || 0) + 8;
+    restedAshore(m);
     m.homeDeck = homeDeckFor(state.ship, m.role);
     back++;
   }

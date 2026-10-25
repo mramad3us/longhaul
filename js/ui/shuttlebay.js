@@ -8,11 +8,14 @@
 // what it costs the shield and the crew, the landing, the turnaround, the
 // climb, the way back), its controller's answer to the landing, and the
 // freight bound for that pad that will go down with it (PLANETSIDE
-// contracts), and the world's market (sim/market.js, its prices live from
+// contracts), who goes (the pilot, the riders in its seats, and ASHORE:
+// a run of leave at the spaceport, the pad held eight hours), and the
+// world's market (sim/market.js, its prices live from
 // its space): goods of ours to sell down, and one to buy and bring up, in
 // the shuttle's room. Launched, the window follows it: its phase, its height and
 // speed, the heat and the G of the entry as they come, and its log, and it
-// can be called back (CALL BACK: shuttles.js abortRun). G opens it; a
+// can be called back (CALL BACK: shuttles.js abortRun), ridden along on
+// its cameras (CAMERA: shuttlecam.js), followed on the map (MAP). G opens it; a
 // world's sheet sends a shuttle to an airspace (SEND SHUTTLE).
 // ============================================================
 
@@ -24,12 +27,14 @@ import { bus } from '../core/events.js';
 import { formatDuration } from '../core/clock.js';
 import { CLASSES } from '../sim/ship-classes.js';
 import { airspacesOf, worldOfs } from '../sim/worlds.js';
-import { runRefusal, planRun, launchRun, runReadout, activeRuns, landingClearance, cargoFor, defaultPilot, abortRun, tradeRoom } from '../sim/shuttles.js';
+import { runRefusal, planRun, launchRun, runReadout, activeRuns, landingClearance, cargoFor, shuttleCrew, seatsOf, leaveCost, abortRun, tradeRoom } from '../sim/shuttles.js';
 import { marketOfWorld, priceAt, quote, tradeRefusal, holdRoom, SPREAD, MARKETS } from '../sim/market.js';
 import { GOODS, GOOD_IDS, tonnes } from '../sim/goods.js';
+import { watchShuttle } from './stage.js';
+import { followOnMap } from './nav.js';
 
 const emit = (t, p) => bus.emit(t, p);
-let chosen = { shuttle: null, airspace: null, sell: new Set(), buy: null, buyT: 0 };
+let chosen = { shuttle: null, airspace: null, sell: new Set(), buy: null, buyT: 0, pilot: null, riders: new Set(), leave: false };
 
 export function initShuttleBay() {
   const ov = $('#dialog-shuttle');
@@ -62,7 +67,7 @@ function render() {
   const body = $('#dialog-shuttle-body');
   const bay = s.shuttles?.bay || [];
   if (!bay.length) {
-    body.innerHTML = `<h3 class="dialog-title">Shuttles</h3><p class="dialog-text">This hull carries no shuttles. Big hulls aren't rated for an atmosphere and carry shuttles to reach a world's ground; ours is either small enough to need none, or rated to land itself (not yet).</p><div class="form-actions"><button class="btn btn-secondary" data-act="close">Close</button></div>`;
+    body.innerHTML = `<h3 class="dialog-title">Shuttles</h3><p class="dialog-text">This hull carries no craft to land. No hull is rated for an atmosphere: a world's ground is reached by the gig, pinnace or lander in its bays.</p><div class="form-actions"><button class="btn btn-secondary" data-act="close">Close</button></div>`;
     return;
   }
   const runs = activeRuns(s);
@@ -87,18 +92,18 @@ function render() {
         if (!free.some(x => x.id === chosen.shuttle)) chosen.shuttle = free[0].id;
         // (the first time, the pad our freight is bound for)
         if (!air.some(a => a.id === chosen.airspace)) chosen.airspace = (air.find(a => cargoFor(s, a.id, 'lander').items.length) || air[0]).id;
-        const p = planRun(s, chosen.shuttle, chosen.airspace);
-        const clr = landingClearance(s, chosen.airspace);
+        const p = planRun(s, chosen.shuttle, chosen.airspace, { leave: chosen.leave });
+        const clr = landingClearance(s, chosen.airspace, p.ok ? p.plan.groundMin : undefined);
         const sh = bay.find(x => x.id === chosen.shuttle);
         const load = cargoFor(s, chosen.airspace, sh.cls);
-        const pilot = defaultPilot(s);
+        const pilot = pickCrew(s, sh);
         plan = `<div class="sb-plan">
           <div class="sb-pick"><label>SHUTTLE <select data-pick="shuttle">${free.map(x => `<option value="${x.id}" ${x.id === chosen.shuttle ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
             <label>TO <select data-pick="airspace">${air.map(a => `<option value="${a.id}" ${a.id === chosen.airspace ? 'selected' : ''}>${esc(a.port.name)} · ${esc(a.controller)}</option>`).join('')}</select></label></div>
           ${p.ok ? timeline(p.plan.summary) : `<p class="dialog-text sb-why">${esc(p.why)}</p>`}
           <div class="sb-line"><b>CLEARANCE</b> <span class="${clr.ok ? 'sb-ok' : 'sb-bad'}">${esc(clr.text)}</span></div>
           <div class="sb-line"><b>FREIGHT</b> ${load.items.length ? `${load.items.map(i => `${Math.round(i.mass).toLocaleString()} kg of ${esc(i.name)}`).join(', ')} (of ${Math.round(load.room).toLocaleString()} kg room)` : 'nothing aboard bound for this pad'}</div>
-          <div class="sb-line"><b>PILOT</b> ${pilot ? `${esc(pilot.name)} (${esc(pilot.role)}, piloting ${Math.round(pilot.skills.piloting)}): away from the ship until it is home` : 'nobody fit to fly it'}</div>
+          ${crewHTML(s, sh, airspacesOf(w).find(a => a.id === chosen.airspace))}
           ${tradeHTML(s, w, sh)}
           <div class="form-actions"><button class="btn btn-primary" data-act="launch" ${p.ok && clr.ok && pilot ? '' : 'disabled'}>LAUNCH ${esc(sh.name.toUpperCase())}</button></div>
         </div>`;
@@ -110,6 +115,38 @@ function render() {
     ${out}
     ${plan}
     <div class="form-actions"><button class="btn btn-secondary" data-act="close">Close</button></div>`;
+}
+
+/**
+ * Who goes: the pilot (the best able pilot unless another is chosen), who
+ * rides down in the seats, and whether they go ashore at the spaceport (a
+ * run ashore: the shuttle on the pad eight hours). Kept to who can go.
+ */
+function pickCrew(s, sh) {
+  // (kept as strings, as the form gives them)
+  const able = shuttleCrew(s), ids = new Set(able.map(m => String(m.id)));
+  if (!ids.has(chosen.pilot)) chosen.pilot = able[0] ? String(able[0].id) : null;
+  for (const id of [...chosen.riders]) if (!ids.has(id) || id === chosen.pilot) chosen.riders.delete(id);
+  const seats = seatsOf(sh.cls);
+  while (chosen.riders.size > seats) chosen.riders.delete([...chosen.riders].at(-1));
+  return able.find(m => String(m.id) === chosen.pilot) || null;
+}
+
+function crewHTML(s, sh, a) {
+  const able = shuttleCrew(s), seats = seatsOf(sh.cls);
+  if (!able.length) return '<div class="sb-line"><b>CREW</b> <span class="sb-bad">nobody fit to fly it</span></div>';
+  const full = chosen.riders.size >= seats;
+  const riders = able.filter(m => String(m.id) !== chosen.pilot).map(m => {
+    const on = chosen.riders.has(String(m.id));
+    return `<label class="sb-check ${!on && full ? 'off' : ''}"><input type="checkbox" data-rider="${esc(m.id)}" ${on ? 'checked' : ''} ${!on && full ? 'disabled' : ''}> ${esc(m.name)} <span class="sb-dim">${esc(m.role)}</span></label>`;
+  }).join('') || '<span class="sb-none">nobody else free</span>';
+  const n = 1 + chosen.riders.size;
+  return `<div class="sb-crew">
+    <div class="sb-line"><b>PILOT</b> <select data-pick="pilot">${able.map(m => `<option value="${esc(m.id)}" ${String(m.id) === chosen.pilot ? 'selected' : ''}>${esc(m.name)} · ${esc(m.role)} · piloting ${Math.round(m.skills?.piloting || 0)}</option>`).join('')}</select></div>
+    <div class="sb-riders"><span class="sb-k">RIDING DOWN</span><div class="sb-ridergrid">${riders}</div><span class="sb-seats">${chosen.riders.size} OF ${seats} SEAT${seats === 1 ? '' : 'S'} TAKEN</span></div>
+    <label class="sb-leave"><input type="checkbox" data-leave ${chosen.leave ? 'checked' : ''}><span><b>ASHORE</b> ${n === 1 ? 'the pilot' : `all ${n}`} on leave at ${esc(a?.port.name || 'the spaceport')}: the pad held eight hours, ${leaveCost(n).toLocaleString()} MCR paid there, back rested and in better spirits</span></label>
+    <div class="sb-line sb-dim">Whoever goes is away from the ship until the shuttle is home: their stations go unmanned, and our routes wait for them.</div>
+  </div>`;
 }
 
 /** The world's market for the run: what of ours to sell down, what to bring up. */
@@ -149,7 +186,7 @@ function timeline(S) {
   return `<div class="sb-timeline">
     ${step('DROP', dur(S.dropMin), S.air ? `on the drive to the top of the air, braking to ${(S.entryV / 1000).toFixed(1)} km/s` : 'on the drive, to 10 km over the pad')}
     ${S.air ? step('ENTRY', dur(S.downMin), `${(S.entryV / 1000).toFixed(1)} km/s in · heat ${(S.peakHeat / 1e6).toFixed(2)} MW/m² at its peak · ${Math.round(S.downrangeKm).toLocaleString()} km of glide · up to ${S.peakG.toFixed(1)} G · down on the drive`) : step('LANDING', dur(S.downMin), `on the drive · up to ${S.peakG.toFixed(1)} G`)}
-    ${step('GROUND', dur(S.groundMin), 'the freight off, the pad cleared')}
+    ${step('GROUND', dur(S.groundMin), chosen.leave ? 'a run ashore for whoever goes; the freight off' : 'the freight off, the pad cleared')}
     ${step('CLIMB', dur(S.upMin), S.air ? 'through the air on the drive' : 'off the pad on the drive')}
     ${step('BACK', dur(S.returnMin), 'up to us on our orbit')}
     ${step('TOTAL', dur(S.totalMin), `${S.fuelKg.toFixed(1)} kg of reaction mass`)}
@@ -162,13 +199,18 @@ function runPanel(s, run) {
   const live = rd.h != null ? `${fmtMeters(rd.h)} up · ${Math.round(rd.v).toLocaleString()} m/s${rd.q > 1000 ? ` · heat ${(rd.q / 1e6).toFixed(2)} MW/m²` : ''}${rd.g > 0.05 ? ` · ${rd.g.toFixed(1)} G` : ''}` : 'in the bay';
   return `<div class="sb-run"><div class="bd-phase">${esc(run.name.toUpperCase())} · ${esc((rd.words || rd.phase).toUpperCase())} · ${esc(run.port.name)}, ${esc(run.world)}</div>
     <div class="sb-line">${live} · this stretch ${dur(rd.legEnd)} more · home in ${dur(rd.eta)}</div>
-    ${['launch', 'drop', 'down', 'ground'].includes(rd.phase) && !run.aborted ? `<div class="bd-actions"><button class="btn btn-secondary" data-act="abort" data-run="${esc(run.id)}" title="Bring it back: braking short of the air while it still can, or else landing and lifting again at once">CALL BACK</button></div>` : ''}
+    <div class="bd-actions"><button class="btn btn-secondary" data-act="watch" data-run="${esc(run.id)}" title="Its cameras on the exterior display: NOSE, DOWN, TAIL">CAMERA</button>
+      <button class="btn btn-secondary" data-act="follow" data-run="${esc(run.id)}" title="Follow it on the system display, framed on ${esc(run.world)}'s space, its track drawn">MAP</button>
+      ${['launch', 'drop', 'down', 'ground'].includes(rd.phase) && !run.aborted ? `<button class="btn btn-secondary" data-act="abort" data-run="${esc(run.id)}" title="Bring it back: braking short of the air while it still can, or else landing and lifting again at once">CALL BACK</button>` : ''}</div>
     <div class="bd-log">${run.log.slice().reverse().map(l => `<div>${esc(l.text)}</div>`).join('')}</div></div>`;
 }
 
 function onChange(ev) {
   const box = ev.target.closest('[data-sell]');
   if (box) { if (box.checked) chosen.sell.add(box.dataset.sell); else chosen.sell.delete(box.dataset.sell); render(); return; }
+  const rider = ev.target.closest('[data-rider]');
+  if (rider) { if (rider.checked) chosen.riders.add(rider.dataset.rider); else chosen.riders.delete(rider.dataset.rider); render(); return; }
+  if (ev.target.closest('[data-leave]')) { chosen.leave = ev.target.checked; render(); return; }
   const sel = ev.target.closest('[data-pick]');
   if (!sel) return;
   const k = sel.dataset.pick;
@@ -184,11 +226,13 @@ function onClick(ev) {
   switch (btn.dataset.act) {
     case 'close': closeShuttleBay(); return;
     case 'abort': { const r = abortRun(s, btn.dataset.run, emit); toast(r.text, r.ok ? 'nav' : 'warn'); if (r.ok) logEntry(r.text, 'nav'); break; }
+    case 'watch': watchShuttle(btn.dataset.run); closeShuttleBay(); return;
+    case 'follow': { const run = activeRuns(s).find(r => r.id === btn.dataset.run); if (run) { followOnMap({ kind: 'entity', id: run.entity }, run.world); closeShuttleBay(); } return; }
     case 'launch': {
-      const p = planRun(s, chosen.shuttle, chosen.airspace);
+      const p = planRun(s, chosen.shuttle, chosen.airspace, { leave: chosen.leave });
       if (!p.ok) { toast(p.why, 'warn'); break; }
-      const r = launchRun(s, p.plan, emit, { trade: { sell: [...chosen.sell], buy: chosen.buy ? { good: chosen.buy, t: chosen.buyT || Infinity } : null } });
-      if (r.ok) { chosen.sell.clear(); chosen.buy = null; chosen.buyT = 0; }
+      const r = launchRun(s, p.plan, emit, { crew: { pilot: chosen.pilot, riders: [...chosen.riders] }, trade: { sell: [...chosen.sell], buy: chosen.buy ? { good: chosen.buy, t: chosen.buyT || Infinity } : null } });
+      if (r.ok) { chosen.sell.clear(); chosen.buy = null; chosen.buyT = 0; chosen.riders.clear(); chosen.leave = false; }
       toast(r.text, r.ok ? 'nav' : 'warn');
       if (r.ok) logEntry(r.text, 'nav');
       break;

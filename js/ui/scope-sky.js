@@ -230,6 +230,13 @@ function surfaceOf(name, color) {
   return s;
 }
 
+/** A world's surface map for the GPU (gl/world3d.js): { rgb (TW×TH×3), lights (TW×TH, or null), w, h }. */
+export function surfaceMap(name, color) {
+  const s = surfaceOf(name, color);
+  // (Earth's map has its clouds painted on: the GPU takes them off into a layer of their own)
+  return { rgb: s.rgb, lights: s.lights, w: TW, h: TH, clouds: s.look.kind === 'earth', sea: [32, 64, 128] };
+}
+
 /** Apply `fn(colour, falloff 0–1, d (distance / r))` within r of (u, v) on the map (wrapping in longitude, squeezed toward the poles). */
 function paint(rgb, u, v, r, fn) {
   for (let y = Math.max(0, Math.floor(v - r)); y <= Math.min(TH - 1, Math.ceil(v + r)); y++) {

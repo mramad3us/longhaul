@@ -182,6 +182,8 @@ export function upgradeState(state) {
   state.resources.drones ??= createDroneStores(state.ship.classId);
   if (state.drone === undefined) state.drone = null;
   state.shuttles ??= createShuttles(state.ship.classId);
+  // (a hull that had no craft before every hull carried one: its bay filled, nothing being out)
+  if (!state.shuttles.bay.length && !state.shuttles.runs.some(r => r.phase !== 'done')) state.shuttles.bay = createShuttles(state.ship.classId).bay;
   if (!state.market) createMarket(state);
   // (a hold's 'seized cargo' from before the market: labelled now, as what the hull it came from carried)
   for (const x of state.cargo) {
