@@ -10,7 +10,10 @@
 // (each panel a shade apart), armour plates, radiator fins (glowing dull
 // red when the drive runs hot), gold foil, polished tanks, a bell of dark
 // alloy with a white-hot throat when lit, the faction's band, lit ports and
-// nav lights. Damage (damage.js) is cut and painted into the surface: holes
+// nav lights. A lit drive's plume is a hot narrow core off the throat inside a
+// faint sheath that flares, as exhaust does in vacuum, out past the hull's
+// own breadth within a few bell lengths aft (so a camera on our hull looking
+// aft sees it round the stern). Damage (damage.js) is cut and painted into the surface: holes
 // (discarded, the dark inside of the hull seen through them), their torn
 // edges bent out, scorching, pits, hot metal; a broken hull keeps its side
 // of a ragged tear (the clip, in the shadow pass too). The plume is its own pass: light added, a bright core
@@ -247,6 +250,8 @@ export function renderScene(scene) {
         const rad = b.r * (0.9 + Math.min(1.5, g * 0.12));
         gl.uniformMatrix4fv(R.plume.u.uModel, false, o.m);
         gl.uniform3f(R.plume.u.uShape, b.x, len, rad);
+        // (the sheath flares past the hull's breadth: half-width ~1.1 of its largest side)
+        gl.uniform1f(R.plume.u.uSpread, 1.1 * Math.max(m.info.W || 0, m.info.H || 0, rad));
         gl.uniform3fv(R.plume.u.uViewDir, scene.viewDir);
       gl.uniform3fv(R.plume.u.uEye, scene.eye || [0, 0, 0]);
       gl.uniform1f(R.plume.u.uPersp, scene.persp ? 1 : 0);
@@ -816,36 +821,47 @@ const PLUME_VS = `#version 300 es
 layout(location=0) in vec3 aPos;
 uniform mat4 uModel, uView, uProj;
 uniform vec3 uShape, uViewDir, uEye;    // the bell's exit (x, ship frame), the plume's length and radius (m); the camera's look (a wide lens: its eye)
-uniform float uPersp;
+uniform float uPersp, uSpread;          // (the sheath's half-width once it has flared, m)
 out vec2 vST;
+out float vCore;                        // the core's share of the strip's half-width here
 void main() {
   float s = aPos.x, t = aPos.y;
-  // the axis in the world, and across it as the camera sees it
+  // the axis in the world, and as the camera sees it: the strip lies in the plane facing the camera, along
+  // the axis' part across the line of sight (seen down its axis, from our own hull, it is a disc of light
+  // round the bell, not a strip seen edge-on)
   vec3 a0 = (uModel * vec4(uShape.x, 0.0, 0.0, 1.0)).xyz;
   vec3 ax = normalize((uModel * vec4(-1.0, 0.0, 0.0, 0.0)).xyz);
-  vec3 side = cross(ax, uPersp > 0.5 ? normalize(a0 - uEye) : normalize(uViewDir));
-  float sl = length(side);
-  side = sl > 1e-3 ? side / sl : normalize(cross(ax, vec3(0.0, 0.0, 1.0)));
-  // seen end-on the plume is a disc of light: the strip grows as the axis turns toward the camera
+  vec3 vdir = uPersp > 0.5 ? normalize(a0 - uEye) : normalize(uViewDir);
+  vec3 ap = ax - vdir * dot(ax, vdir);
+  float sl = length(ap);
+  if (sl > 1e-3) ap /= sl;
+  else { ap = cross(vdir, vec3(0.0, 0.0, 1.0)); if (length(ap) < 1e-3) ap = cross(vdir, vec3(1.0, 0.0, 0.0)); ap = normalize(ap); }
+  vec3 side = normalize(cross(vdir, ap));
   float endOn = 1.0 - sl;
-  float w = uShape.z * (1.0 + 2.6 * s + 3.0 * endOn) * 1.8;
-  vec3 p = a0 + ax * (s * uShape.y * (1.0 - 0.85 * endOn)) + side * t * w;
+  // the core widens slowly off the throat; the sheath flares out past the hull within the first stretch aft
+  float wCore = uShape.z * (1.0 + 2.6 * s + 3.0 * endOn) * 1.8;
+  float wSheath = mix(wCore, max(wCore, uSpread * (1.0 + 1.5 * endOn)), smoothstep(0.0, 0.3, s));
+  float w = max(wCore, wSheath);
+  vec3 p = a0 + ap * (s * uShape.y * max(sl, 0.15)) + side * t * w;
   vST = vec2(s, t);
+  vCore = wCore / w;
   gl_Position = uProj * uView * vec4(p, 1.0);
 }`;
 
 const PLUME_FS = `#version 300 es
 precision highp float;
 in vec2 vST;
+in float vCore;
 uniform float uTime, uG, uExposure;
 out vec4 frag;
 float h(float x) { return fract(sin(x * 91.7) * 47453.3); }
 void main() {
   float s = vST.x, t = vST.y;
-  // light through a glowing column: a hot narrow core off the throat, a wide faint sheath, both fading down the plume
-  float wc = 0.09 + 0.25 * s, ws = 0.35 + 0.4 * s;
+  // light through a glowing column: a hot narrow core off the throat (its width its own, however far the
+  // sheath has flared), a wide faint sheath, both fading down the plume
+  float wc = (0.09 + 0.25 * s) * vCore, ws = 0.45 + 0.3 * s;
   float core = exp(-t * t / (wc * wc)) * (exp(-s * 7.0) * 3.0 + exp(-s * 2.2) * 0.5);
-  float sheath = exp(-t * t / (ws * ws)) * exp(-s * 2.6) * 0.45;
+  float sheath = exp(-t * t / (ws * ws)) * (exp(-s * 2.6) * 0.38 + 0.05 * exp(-s * 0.8));
   // shock diamonds near the bell
   float dia = 0.5 + 0.5 * cos(s * 70.0 - uTime * 2.0);
   core *= 1.0 + 0.7 * dia * exp(-s * 10.0);

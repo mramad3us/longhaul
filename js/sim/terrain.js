@@ -33,6 +33,14 @@
 // vertical (straight up when low) and out round the limb toward the
 // target's side, the body's pull covered, until the line is clear; then
 // the route flies on.
+//
+// The air. Over a world with an atmosphere (worlds.js) the guard's floor is
+// the entry interface, not the ground: there is no atmospheric flight yet,
+// so the nav computer (and an NPC's) keeps out of the air as it keeps out
+// of the rock, and the planner refuses a route that goes into it (nav.js).
+// Falling toward the air we are told as the ground is told (at the same
+// times: ATMOSPHERE), and a ship in it feels it (flight.js drag). Contact is
+// still the ground's.
 // ============================================================
 
 import { AU_M, MIN_S, TWO_PI } from '../core/constants.js';
@@ -47,6 +55,16 @@ export const TOUCH_MS = 2;          // a touch, no harm
 export const LOST_MS = 50;          // the speed into the ground that takes the whole hull
 const WARN_MIN = [30, 10, 3, 1];
 const WATCH_ALT_M = 3_000_000;      // the nav computer watches the ground inside 3,000 km
+
+/** How high a world's air reaches over its ground (its entry interface, m), or 0. */
+export const airDepthM = (body) => body?.atmo ? body.atmo.interfaceKm * 1000 : 0;
+
+/** The surface the guard keeps off: a nearestSurface() result with its floor raised to the air's top (rM, alt from there). */
+function floorOf(s) {
+  if (!s) return null;
+  const air = airDepthM(s.body);
+  return { ...s, rM: s.body.radius * 1000 + air, alt: s.alt - air };
+}
 
 /** Our velocity against the ground under a point on a body (m/s). */
 function againstGround(s, vel) {
@@ -106,9 +124,9 @@ function blocked(p, q, c, rM) {
  * aMax: the drive to use (m/s²).
  */
 export function terrainGuard(pos, vel, cmd, toward, aMax, minute, climbing = false) {
-  const s = nearestSurface(pos.x, pos.y, minute);
+  const s = floorOf(nearestSurface(pos.x, pos.y, minute));
   if (!s) return null;
-  const rM = s.body.radius * 1000;
+  const rM = s.rM;
   // (a ship coming in fast is watched from further out: at 100 km/s, twenty radii of a small rock is a minute)
   const vRel = Math.hypot(vel.vx - s.vel.vx, vel.vy - s.vel.vy);
   if (s.r > Math.max(GUARD_RANGE_R * rM, vRel * GUARD_AHEAD_S)) return null;
@@ -203,7 +221,7 @@ function pathToImpact(s, vel, thrust, horizon) {
   const STEP = 30;
   let x = s.ux * s.r, y = s.uy * s.r;
   let vx = vel.vx - s.vel.vx, vy = vel.vy - s.vel.vy;
-  const rM = s.body.radius * 1000, gm = s.body.gm * 1e9;
+  const rM = s.rM ?? s.body.radius * 1000, gm = s.body.gm * 1e9;
   for (let t = STEP; t <= horizon; t += STEP) {
     const r = Math.hypot(x, y), g = gm / (r * r);
     vx += (thrust.ax - g * x / r) * STEP; vy += (thrust.ay - g * y / r) * STEP;
@@ -231,12 +249,23 @@ export function terrainTick(state, emit = () => {}, { free = true } = {}) {
   // how many of the call-out times we are inside (a new one is called once)
   // (a route under way has the guard watching the ground for it: only the last minute is called)
   const k = state.autopilot?.phase === 'active' ? (min <= 1 ? WARN_MIN.length : 0) : WARN_MIN.filter(m => min <= m).length;
-  const w = (state.$terrain ||= { k: 0 });
+  const w = (state.$terrain ||= { k: 0, ka: 0 });
   if (k > w.k) {
     const v = Math.round(impactSpeed(s, f.vel, min * MIN_S, thrust));
     emit('nav-callout', { level: min <= 3 ? 'danger' : 'warn', key: 'terrain', text: `TERRAIN: falling toward ${s.body.name}, ${Math.round(s.alt / 1000).toLocaleString()} km below. Impact in ${Math.max(1, Math.round(min))} min at ${v} m/s.` });
   }
   w.k = k;
+  // the air before the ground, over a world that has it: the same call-outs, for its top
+  const fl = floorOf(s);
+  if (fl.alt > 0 && fl.rM > s.body.radius * 1000) {
+    const ma = timeToImpact(fl, f.vel, thrust) / MIN_S;
+    const ka = state.autopilot?.phase === 'active' ? (ma <= 1 ? WARN_MIN.length : 0) : WARN_MIN.filter(m => ma <= m).length;
+    if (ka > (w.ka || 0)) {
+      const v = impactSpeed(fl, f.vel, ma * MIN_S, thrust);
+      emit('nav-callout', { level: ma <= 3 ? 'danger' : 'warn', key: 'atmo', text: `ATMOSPHERE: falling into ${s.body.name}'s air, its top ${Math.round(fl.alt / 1000).toLocaleString()} km below. Entry in ${Math.max(1, Math.round(ma))} min at ${(v / 1000).toFixed(1)} km/s.` });
+    }
+    w.ka = ka;
+  } else w.ka = 0;
 }
 
 /** Roughly how fast we will meet the ground (m/s). */

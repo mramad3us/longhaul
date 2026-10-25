@@ -25,7 +25,7 @@
 // when picked), the captain's flags as lettered pennants.
 // ============================================================
 
-import { AU_KM, DAY_MIN } from '../core/constants.js';
+import { AU_KM, AU_M, DAY_MIN } from '../core/constants.js';
 import { BODIES, bodyPos } from '../sim/ephemeris.js';
 import { getWorld } from '../sim/world.js';
 import { factionColor, INFLUENCE_SOURCES } from '../sim/factions.js';
@@ -38,6 +38,8 @@ import { FitCanvas, fmtKm, pointAt } from './dom.js';
 import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
 import { ourName } from '../sim/service.js';
+import { worldOf } from '../sim/worlds.js';
+import { drawWorldZones } from './worldzones.js';
 
 const LIGHT_RINGS = [[LIGHT_SECOND_AU, '1 LIGHT-SEC'], [LIGHT_MINUTE_AU, '1 LIGHT-MIN'], [LIGHT_MINUTE_AU * 10, '10 LIGHT-MIN']];
 const REPORT_FADE_MIN = 3 * 1440;   // a report is drawn faintest at this age
@@ -382,6 +384,15 @@ export class SolarMap {
       pick.push({ kind: 'body', id: 'Sol', sx: sx0, sy: sy0 });
     }
 
+    // A world's space (sim/worlds.js): the one picked, or the one we are in (worldzones.js)
+    const zoneWorld = (this.selected?.kind === 'body' && worldOf(this.selected.id)) || worldOf(state.flight.world?.name || '');
+    let zoneAt = null;
+    if (zoneWorld) {
+      bodyPos(zoneWorld.body, days, _bp);
+      zoneAt = sp(_bp.x, _bp.y);
+      drawWorldZones(ctx, zoneWorld, zoneAt[0], zoneAt[1], S / AU_M, W, H, L, state.clock.minute, 'under');
+    }
+
     // Bodies
     for (const b of BODIES) {
       if (!b.a) continue;
@@ -402,6 +413,8 @@ export class SolarMap {
         L.add(planet ? b.name.toUpperCase() : b.name, x, y, { off: r + 5, font: planet ? UI(12, 600) : UI(11), color: planet ? COL.text2 : COL.text3, pri: planet ? 8 : 3 });
       }
     }
+
+    if (zoneWorld) drawWorldZones(ctx, zoneWorld, zoneAt[0], zoneAt[1], S / AU_M, W, H, L, state.clock.minute, 'over');
 
     // Entities: only what we know. LIVE contacts on our board and CHARTED
     // things on published orbits are drawn where they are; everything else

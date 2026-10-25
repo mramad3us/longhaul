@@ -8,12 +8,14 @@
 // cargo, the systems' health, stores.
 // ============================================================
 
+import { worldOf, LAYERS } from '../sim/worlds.js';
 import { suitedCount } from '../sim/life-support.js';
 import { ui } from './context.js';
 import { $, $$, esc, setText, setHTML, show, toggleClass, fmtSpeed, fmtMeters, fmtNum, fmtG, fmtMass } from './dom.js';
 import { flagChip, openService } from './service.js';
 import { formatDate, formatTime, formatDuration } from '../core/clock.js';
-import { AU_M } from '../core/constants.js';
+import { AU_M, DAY_MIN } from '../core/constants.js';
+import { bodyPos } from '../sim/ephemeris.js';
 import { maxSpeed } from '../sim/autopilot.js';
 import { targetStateAt, targetName } from '../sim/nav.js';
 import { dockedStation } from '../sim/contracts.js';
@@ -49,7 +51,7 @@ export function initHud(onSpeed, onCombat, onSystems, openCombatTab, onSuits = n
     perf: $('#hud-perf'), combat: $('#combat-toggle'), combatStatus: $('#combat-status'), suits: $('#suits-toggle'), suitsStatus: $('#suits-status'),
     station: $('#hud-station-btn'), missions: $('#hud-missions-count'), jobs: $('#hud-jobs-count'),
     drive: $('#info-drive'), attitude: $('#info-attitude'), vel: $('#info-velocity'), ref: $('#info-vel-ref'),
-    orbit: $('#info-orbit'), mass: $('#info-mass'), cargo: $('#info-cargo'), alert: $('#alert-border'),
+    orbit: $('#info-orbit'), world: $('#info-world'), worldLine: $('#info-world-line'), mass: $('#info-mass'), cargo: $('#info-cargo'), alert: $('#alert-border'),
     speedBtns: $$('.speed-btn'), strip: $('#systems-strip'), sysCount: $('#hud-systems-count'),
     space: $('#hud-space'), threat: $('#hud-threat'), hull: $('#info-hull'), flag: $('#hud-flag'),
     tc: $('#tc-chip'), comms: $('#hud-comms-btn'),
@@ -248,6 +250,15 @@ export function updateHud(state) {
   }
   const r = Math.hypot(f.pos.x, f.pos.y);
   setText(el.orbit, `${r.toFixed(3)} AU · ${fmtSpeed(Math.hypot(f.vel.vx, f.vel.vy))}`);
+  // inside a world's planetary space: which, the layer, our height (sim/worlds.js); in its air, what it does to us
+  const wd = f.world && worldOf(f.world.name);
+  show(el.worldLine, !!wd);
+  if (wd) {
+    const c = bodyPos(wd.body, state.clock.minute / DAY_MIN);
+    const alt = Math.hypot(f.pos.x - c.x, f.pos.y - c.y) * AU_M - wd.R;
+    const a = state.$air;
+    setText(el.world, `${wd.name.toUpperCase()} · ${LAYERS[f.world.layer] || ''} · ${fmtMeters(alt)} up${a ? ` · ${a.rho.toPrecision(2)} kg/m³ · q ${(a.q / 1000).toFixed(1)} kPa · ${Math.round(a.heat / 1000).toLocaleString()} kW/m²` : ''}`);
+  }
   const cargoKg = state.cargo.reduce((s, c) => s + c.mass, 0);
   setText(el.mass, fmtMass(state.shipMass + cargoKg + state.resources.fuel.current));
   setText(el.hull, `${Math.round(state.hull.integrity)}%${state.hull.integrity < 50 ? ' · burns limited to 3G' : ''}`);

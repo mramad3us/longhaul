@@ -13,6 +13,7 @@ import { AU_M, G0, MIN_S, GM_SUN, DAY_MIN, RANGE } from '../core/constants.js';
 import { getBody, bodyPos, bodyVel } from './ephemeris.js';
 import { getWorld, predictEntity, stepFree, propagateFree, orbitStateAt } from './world.js';
 import { slotOrbit } from './holding.js';
+import { worldOf, orbitPeriodS, parkingOrbit, airspaceById } from './worlds.js';
 import { APPROACH_M, APPROACH_SPEED_MS, KEEPOUT_SPEED_MS, KEEPOUT_EDGE, keepOutM } from './traffic-control.js';
 import { surfacePoint, nearestSurface } from './gravity.js';
 import { terrainGuard } from './terrain.js';
@@ -44,6 +45,10 @@ export const STANDOFF = {
 //              | { kind:'player' } (NPC guidance flying to our ship)
 //              | { kind:'slot', id: stationId, slot } (a place in a port's holding
 //                pattern: an orbit, holding.js)
+//              | { kind:'orbit', id: bodyName, rKm, phase, period, over? } (a place
+//                on a free circular orbit round a world: its parking orbit, or its
+//                stationary orbit over an airspace (`over`: its id), worlds.js;
+//                phase at day 0, period in days)
 //              | { kind:'surface', id: bodyName, ang } (a place on a body's ground: terrain.js)
 //              | { kind:'port', id, berth, offsetM, dockKind } (the mouth of a
 //                berth's corridor: a point out along a collar's axis, moving and
@@ -57,6 +62,7 @@ export function targetName(state, target) {
   if (target.kind === 'body') return target.id;
   if (target.kind === 'surface') return `the surface of ${target.id}`;
   if (target.kind === 'slot') return `${getWorld(state).get(target.id)?.name || 'port'} holding ${target.slot}`;
+  if (target.kind === 'orbit') return target.over ? `stationary over ${airspaceById(target.over)?.name || target.id}` : `${target.id} parking orbit`;
   if (target.kind === 'player') return ourName(state);
   if (target.kind === 'fix') return `${knownName(state, target.id) || trackOf(state, target.id)?.name || 'unidentified contact'} · last fix`;
   // (a ship by the name we know it by: an unidentified contact is no more than that)
@@ -69,7 +75,7 @@ export function targetExists(state, target) {
   if (target.kind === 'player') return !state.lost;
   if (target.kind === 'slot') return !!getWorld(state).get(target.id) && !!slotOrbit(target.id, target.slot);
   if (target.kind === 'fix') return !!trackOf(state, target.id);
-  return target.kind === 'body' || target.kind === 'surface' ? !!getBody(target.id) : !!getWorld(state).get(target.id);
+  return target.kind === 'body' || target.kind === 'surface' || target.kind === 'orbit' ? !!getBody(target.id) : !!getWorld(state).get(target.id);
 }
 
 /** A corridor mouth at `minute`: the collar's frame, out along its normal. */
@@ -83,7 +89,7 @@ function portPoint(state, target, minute) {
 
 /** Default stop distance for a target. Bodies: a parking orbit well clear of the surface. */
 export function defaultStandoff(state, target) {
-  if (target.kind === 'slot') return STANDOFF.SLOT;
+  if (target.kind === 'slot' || target.kind === 'orbit') return STANDOFF.SLOT;
   if (target.kind === 'fix') return STANDOFF.SHIP;
   if (target.kind === 'body') {
     const b = getBody(target.id);
@@ -146,6 +152,17 @@ function stateOfTarget(state, target, minute, live) {
     orbitStateAt(o, minute, pos, vel); orbitStateAt(o, minute + 1, p1, v1);
     const days = minute / DAY_MIN;
     const swings = o.period > 0 ? [swing(o.r, o.period, o.phase + 2 * Math.PI * days / o.period, o.body)] : [];
+    const b = getBody(o.body);
+    if (b) bodySwings(b, days, swings);
+    return { pos, vel, ax: 0, ay: 0, atx: (v1.vx - vel.vx) / MIN_S, aty: (v1.vy - vel.vy) / MIN_S, swings };
+  }
+  if (target.kind === 'orbit') {
+    // a place on a world's parking orbit: free, as a slot is (no fuel to keep it)
+    const o = { body: target.id, r: target.rKm * 1000 / AU_M, phase: target.phase, period: target.period };
+    const pos = { x: 0, y: 0 }, vel = { vx: 0, vy: 0 }, p1 = { x: 0, y: 0 }, v1 = { vx: 0, vy: 0 };
+    orbitStateAt(o, minute, pos, vel); orbitStateAt(o, minute + 1, p1, v1);
+    const days = minute / DAY_MIN;
+    const swings = [swing(o.r, o.period, o.phase + 2 * Math.PI * days / o.period, o.body)];
     const b = getBody(o.body);
     if (b) bodySwings(b, days, swings);
     return { pos, vel, ax: 0, ay: 0, atx: (v1.vx - vel.vx) / MIN_S, aty: (v1.vy - vel.vy) / MIN_S, swings };
@@ -222,7 +239,7 @@ function stateOfTarget(state, target, minute, live) {
  * incrementally from a private copy (O(1) per step, never mutates the world).
  */
 export function targetTracker(state, target, t0) {
-  if (target.kind === 'body' || target.kind === 'port' || target.kind === 'surface' || target.kind === 'slot' || target.kind === 'fix') return (t) => targetStateAt(state, target, t);
+  if (target.kind === 'body' || target.kind === 'port' || target.kind === 'surface' || target.kind === 'slot' || target.kind === 'orbit' || target.kind === 'fix') return (t) => targetStateAt(state, target, t);
   const e = getWorld(state).get(target.id);
   if (!e) return () => null;
   if (e.orbit || e.transit) return (t) => targetStateAt(state, target, t);
@@ -564,7 +581,7 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
   const raw = [];
   const arrivalTgt = plan.kind === 'transfer' ? targetStateAt(state, plan.target, plan.arriveAt) : null;
   const track = targetTracker(state, plan.target, t0);
-  let arrived = false, climbing = false, hit = null;
+  let arrived = false, climbing = false, hit = null, air = false;
   let steps = 0;
 
   while (t - t0 < maxMinutes && steps < 400_000) {
@@ -591,12 +608,56 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
     t += dtMin;
     // (a plan that comes down on a rock is no plan: in flight the guard would fight it all the way)
     const sf = nearestSurface(f.pos.x, f.pos.y, t);
+    // (nor one that goes into a world's air, or through it to the ground in one step: no atmospheric flight yet, worlds.js)
+    if (sf?.body.atmo && sf.alt < sf.body.atmo.interfaceKm * 1000) { hit = sf.body.name; air = true; break; }
     if (sf && sf.alt < 0) { hit = sf.body.name; break; }
   }
   raw.push({ x: f.pos.x, y: f.pos.y });
   const stride = Math.max(1, Math.ceil(raw.length / pathPoints));
   const path = raw.filter((_, i) => i % stride === 0 || i === raw.length - 1);
-  return { arrived, hit, minutes: t - t0, fuel, dv, peakSpeed: peak, maxG, path, end: { x: f.pos.x, y: f.pos.y } };
+  return { arrived, hit, air, minutes: t - t0, fuel, dv, peakSpeed: peak, maxG, path, end: { x: f.pos.x, y: f.pos.y } };
+}
+
+// ---- PARKING ORBITS ----
+
+/**
+ * A world's parking orbit as a target (worlds.js parkingOrbit: at the edge of
+ * its planetary space), the place on it chosen to be on our side of the world
+ * when we should get there (`arriveMinute`): the orbit runs the way the worlds
+ * go round the Sun (counterclockwise in the plane, whichever way the world
+ * itself turns), its speed and period Kepler's for its radius. Null for a body
+ * too small to be a world (a route to a rock still ends at its standoff).
+ */
+export function parkingTarget(state, bodyName, arriveMinute) {
+  const w = worldOf(bodyName);
+  if (!w) return null;
+  const rM = parkingOrbit(w);
+  const days = orbitPeriodS(w, rM) / 86400;
+  const c = bodyPos(w.body, state.clock.minute / DAY_MIN);
+  const ang = Math.atan2(state.flight.pos.y - c.y, state.flight.pos.x - c.x);
+  return { kind: 'orbit', id: w.name, rKm: rM / 1000, phase: ang - 2 * Math.PI * (arriveMinute / DAY_MIN) / days, period: days };
+}
+
+/**
+ * A world's stationary orbit over one of its airspaces (`airspaceId`): the
+ * orbit as long as the world's turn, its place over the airspace's spaceport,
+ * where it stays (the ground turns under it at the orbit's own rate). Null
+ * for a world that has no stationary orbit (worlds.js: the moons, Venus).
+ */
+export function stationaryTarget(state, airspaceId) {
+  const a = airspaceById(airspaceId);
+  const w = a && worldOf(a.world);
+  if (!w?.sync || w.rotS <= 0) return null;
+  return { kind: 'orbit', id: w.name, rKm: w.sync / 1000, phase: a.port.ang, period: w.rotS / 86400, over: a.id };
+}
+
+/** A rough time to a target for a profile (min): a brachistochrone of `accelG` over the distance, the crew strapping in first. */
+function roughMinutes(state, target, accelG, cruise) {
+  const t = targetStateAt(state, target, state.clock.minute);
+  if (!t) return 0;
+  const d = Math.hypot(t.pos.x - state.flight.pos.x, t.pos.y - state.flight.pos.y) * AU_M;
+  const s = 2 * Math.sqrt(d / Math.max(1e-3, accelG * G0));
+  return PREP_MINUTES + (cruise ? 1.6 : 1) * s / MIN_S;
 }
 
 // ---- TRANSFER WINDOW SEARCH ----
@@ -664,10 +725,15 @@ export function planRoutes(state, target, opts = {}) {
     .filter(d => d.accelG <= (state.$planG ?? state.flight.maxG) && d.accelG > minG);
 
   const options = [];
+  // (a world's ORBIT: its parking orbit, the place on it ours for when each profile gets there; or
+  // its stationary orbit over an airspace, whose place is the airspace's)
+  const over = opts.over && target.kind === 'body' ? stationaryTarget(state, opts.over) : null;
+  const park = !over && opts.orbit && target.kind === 'body' && worldOf(target.id);
   for (const d of defs) {
     const cruise = d.cruiseFrac ? Math.max(500, d.cruiseFrac * Math.sqrt(Math.max(0, distM - standoff) * d.accelG * G0)) : null;
-    const plan = createPlan('closing', target, { accelG: d.accelG, cruise, standoff, name: d.name, label: d.label });
-    plan.port = portOfTarget(state, target);
+    const to = over || (park ? parkingTarget(state, target.id, t0 + roughMinutes(state, target, d.accelG, !!d.cruiseFrac)) : target);
+    const plan = createPlan('closing', to, { accelG: d.accelG, cruise, standoff: over || park ? STANDOFF.SLOT : standoff, name: d.name, label: d.label });
+    plan.port = portOfTarget(state, to);
     const opt = finishOption(state, plan, d.desc, fuelAvail);
     opt.flank = !!d.flank;
     options.push(opt);
@@ -679,8 +745,9 @@ export function planRoutes(state, target, opts = {}) {
   if (ballisticOK) {
     const tr = findTransfer(state, target);
     if (tr) {
-      const plan = createPlan('transfer', target, { accelG: 0.3, arriveAt: tr.arriveAt, standoff, name: 'BALLISTIC', label: `Lambert transfer · ${Math.round(tr.days)}d` });
-      plan.port = portOfTarget(state, target);
+      const to = over || (park ? parkingTarget(state, target.id, tr.arriveAt) : target);
+      const plan = createPlan('transfer', to, { accelG: 0.3, arriveAt: tr.arriveAt, standoff: over || park ? STANDOFF.SLOT : standoff, name: 'BALLISTIC', label: `Lambert transfer · ${Math.round(tr.days)}d` });
+      plan.port = portOfTarget(state, to);
       options.push(finishOption(state, plan, 'Burn onto a free-fall arc and coast. Minimum fuel, very long transit.', fuelAvail));
     }
   }
@@ -700,7 +767,7 @@ function finishOption(state, plan, desc, fuelAvail) {
     departMin: departMinutes(state, plan),
     fuel: est.fuel,
     feasible: est.arrived && est.fuel <= fuelAvail * 0.95,
-    reason: est.hit ? `Would come down on ${est.hit}` : !est.arrived ? 'No convergent trajectory' : est.fuel > fuelAvail * 0.95 ? 'Insufficient reaction mass' : '',
+    reason: est.air ? `Would enter ${est.hit}'s atmosphere: no atmospheric flight yet` : est.hit ? `Would come down on ${est.hit}` : !est.arrived ? 'No convergent trajectory' : est.fuel > fuelAvail * 0.95 ? 'Insufficient reaction mass' : '',
     juice: plan.accelG > 1.5,
   };
 }

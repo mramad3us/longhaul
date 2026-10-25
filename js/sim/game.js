@@ -45,6 +45,7 @@ import { destroyPlayer } from './damage.js';
 import { snapshot, PDC_ROUNDS_PER_MOUNT } from './combatants.js';
 import { dockingTick, finishMinute, dockHold, dockHolds, inFrame, frameStep, dockInstant, PROX_RATES, hoverG, hoverOnRcs } from './docking.js';
 import { terrainTick } from './terrain.js';
+import { worldsTick, airDrag } from './worlds.js';
 import { createTrafficControl, trafficControlTick, keepOutDriveCap } from './traffic-control.js';
 import { stationsTick } from './station-defense.js';
 import { createDossier, dossierTick } from './manifest.js';
@@ -299,6 +300,8 @@ export function minuteTick(state, { lite = false } = {}) {
     }
     const before = { x: f.pos.x, y: f.pos.y };
     out = flightStep(f, cmd, 1);
+    // (a world's air drags on us: worlds.js)
+    airDrag(state, 60);
     state.stats.distance += Math.hypot(f.pos.x - before.x, f.pos.y - before.y) * AU_M;
     autopilotAfterStep(state, out);
   }
@@ -331,6 +334,7 @@ export function minuteTick(state, { lite = false } = {}) {
   combatMove(state, emit);
   // Flying free near a body: the ground (terrain.js)
   terrainTick(state, emit, { free: !held && !f.hold && !dockHolds(state) });
+  worldsTick(state, emit);
   // A drone out can't keep up with a burn (drones.js)
   dronesTick(state, emit);
 

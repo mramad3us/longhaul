@@ -7,10 +7,10 @@
 //
 // Each body also carries its physical data: mean radius, rotation
 // period (a station built on an asteroid's surface rides round with
-// it: sim/stations.js), GM, and for the bodies that have one, the
-// atmosphere (surface pressure, scale height, the entry interface).
-// Nothing pulls on ships yet but the Sun; the rest is here for the
-// stations on the surface today, and atmospheric flight later.
+// it: sim/stations.js), GM (every body pulls: gravity.js), and for the
+// bodies that have one, the atmosphere (surface pressure, scale height,
+// the entry interface: worlds.js makes it air). What else is known of a
+// body, for its sheet, is in bodyfacts.js.
 // ============================================================
 
 import { AU_M, GM_SUN, TWO_PI } from '../core/constants.js';

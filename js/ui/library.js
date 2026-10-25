@@ -51,6 +51,7 @@ import { FLAG_LETTERS } from '../sim/flags.js';
 import { DRONE_RACK, DRONE_FOLLOW_G, DRONE_LAUNCH_MIN, DRONE_RECOVER_MIN, DRONE_ENDURANCE_MIN, DRONE_PRICE } from '../sim/drones.js';
 import { SCOPES, WAVELENGTH_M, MAG_LIMIT, reflectMag, HULL_ALBEDO, FILTERS } from '../sim/telescope.js';
 import { HULL_CAMS } from './hullcam.js';
+import { WORLDS, airspacesOf, controlWords, WELL_G } from '../sim/worlds.js';
 import { OWN_ARRIVAL_S } from '../sim/combat.js';
 
 const CATEGORIES = [
@@ -370,6 +371,18 @@ function navigation(add) {
     specs: [['Rack', Object.entries(DRONE_RACK).map(([k, n]) => `${SIZES[k].label} ${n}`).join(' · ')], ['Out to its standoff', `${DRONE_LAUNCH_MIN} min`], ['Home and in its bay', `${DRONE_RECOVER_MIN} min`],
       ['Endurance', `${DRONE_ENDURANCE_MIN / 60} h`], ['Keeps up with', `${DRONE_FOLLOW_G} G`], ['Price', `${fmtNum(DRONE_PRICE)} MCR, any port`]],
     links: [['The hull cameras', 'nav:hullcams'], ['The telescope', 'nav:telescope']] });
+  add({ id: 'nav:worlds', cat: 'nav', group: 'Worlds', title: 'Planetary space',
+    text: [`Out in the system a planet is a dot. Close in it is the biggest thing there is. A world (a planet, or a moon a thousand kilometres across or more) holds a space of its own: out to where its pull falls to ${WELL_G} G, half what an RCS pushes, inside half its Hill sphere. Inside it no ship can hold a place on its thrusters: it orbits, or it holds on the drive. There the nav computer flies planetary flight, and the world's ground control, where it has one, answers for it.`,
+      'Inside: high orbit, from the edge down; the stationary orbit, where an orbit keeps pace with the ground (Earth\'s at 42,164 km), if the world turns fast enough for one inside its space (Venus doesn\'t, nor any moon that keeps one face to its planet); low orbit, from just over the air to a third of a radius up, ground control\'s to clear; and the air, an exponential column from the ground to the entry interface.',
+      'A route to a world ends in a high orbit: ORBIT, its parking orbit at the edge of planetary space, a free orbit that costs nothing to keep; or, from a world\'s airspace on its sheet (ORBIT OVER), its stationary orbit over that airspace. There is no atmospheric flight yet: the nav computer keeps out of the air as it keeps off a rock, the planner refuses a route that goes into it, and a ship that falls in anyway is dragged by it, and told of the heat of it.',
+      'Picked on the map, a world shows its space: its pull as a faint wash with contours, the edge, the Hill sphere, the high and stationary orbits, the low band, the air, and its airspaces round its limb. FOCUS frames it.'],
+    specs: WORLDS.map(w => [w.name, `space ${Math.round(w.wellM / 1000).toLocaleString()} km · high orbit ${Math.round(w.parkM / 1000).toLocaleString()} km${w.sync ? ` · stationary ${Math.round(w.sync / 1000).toLocaleString()} km` : ''}${w.atmo ? ` · air to ${Math.round(w.atmo.interfaceM / 1000)} km` : ''} · ${controlWords(w)}`]),
+    links: [['Airspaces', 'nav:airspaces']] });
+  add({ id: 'nav:airspaces', cat: 'nav', group: 'Worlds', title: 'Airspaces and the ground',
+    text: ['A world with ground shares it out: its airspaces run round its equator, one for every 3,500 km of it, each with its authority and its controller, from the ground up through low orbit. A low orbit over one, and in time a landing in it, is that controller\'s to clear. They turn with the world. The giants have no ground and no airspaces.',
+      'Each airspace has its spaceport. More places will come: fixed ports and settlements, and the bare sites missions send a ship to (camps, mines, wrecks), each made from a seed, hundreds to a world.'],
+    specs: WORLDS.filter(w => airspacesOf(w).length).map(w => [w.name, `${airspacesOf(w).length}: ${airspacesOf(w).map(a => a.name).join(', ')}`]),
+    links: [['Planetary space', 'nav:worlds']] });
   add({ id: 'nav:hullcams', cat: 'nav', group: 'The cameras', title: 'The hull cameras',
     text: ['Four fixed wide-angle cameras on our own plating, looking out, as an airliner\'s do (HULL on the EXTERIOR display\'s bar, or K; K again steps to the next). Nothing to send out or call home: they are always there, burning or not, and a piece of the ship is in every frame.',
       'FWD sits on a mast over the dorsal plating near the stern and looks forward along the spine; AFT on a mast near the bow, looking back down the hull to the drive. PORT and STBD are on short booms off the flanks aft, looking forward and out, the flank along one edge of the frame. Each is placed on the hull\'s own plating, whatever the class, and moves with it, flying or mated at a collar.',

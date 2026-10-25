@@ -21,6 +21,8 @@
 // minute: one figure everywhere.
 // ============================================================
 
+import { bodySheet } from './bodysheet.js';
+import { worldOf } from '../sim/worlds.js';
 import { ui } from './context.js';
 import { $, $$, esc, setText, setHTML, show, toggleClass, fmtSpeed, fmtMeters, fmtKm, fmtG, fmtNum, fmtAngle } from './dom.js';
 import { toast } from './toast.js';
@@ -524,6 +526,7 @@ function renderSelection() {
       <span>DIST <b>${rel ? fmtMeters(rel.dist) : '—'}</b></span>
       <span>REL V <b>${rel ? fmtSpeed(rel.speed) : '—'}</b></span>
     </div>
+    ${t.kind === 'body' ? `<div class="ms-sheet">${bodySheet(s, t.id)}</div>` : ''}
     <div class="panel-actions">
       ${routing ? '<button class="route-abort-btn" data-act="abort">ABORT ROUTE</button>' : t.id === 'Sol' ? '' : '<button class="route-plot-btn" data-act="plot">PLOT ROUTE</button>'}
       ${t.id === 'Sol' ? '' : '<button class="route-zoom-btn" data-act="stance">STANCE</button>'}
@@ -601,7 +604,13 @@ function onPanelClick(e) {
     case 'hail': if (t) hooks.hail(t.id); break;
     case 'dock': if (t) { const e = getWorld(s).get(t.id); hooks.dock?.({ kind: e?.type === 'station' ? 'station' : 'ship', id: t.id }); } break;
     case 'board': if (t) hooks.board?.(t.id); break;
-    case 'focus': if (t) { const p = navTargetPos(); if (p) map.focusOn(p, t.kind === 'entity' ? 2e6 : Math.max(map.scale, 300)); } break;
+    case 'focus': if (t) {
+      const p = navTargetPos();
+      // (a world: framed on its planetary space, its zones drawn: solar-map.js)
+      const w = t.kind === 'body' && worldOf(t.id);
+      if (p) map.focusOn(p, t.kind === 'entity' ? 2e6 : w ? 0.42 * Math.min(map.fc.w, map.fc.h) / (2 * w.wellM / AU_M) : Math.max(map.scale, 300));
+    } break;
+    case 'orbit-over': if (t && btn.dataset.air) openRoutePanel({ kind: 'body', id: t.id }, { over: btn.dataset.air }); break;
     case 'abort':
       if (abortRoute(s, (type, p) => bus.emit(type, p))) { toast('Route aborted — drive cut', 'warn'); }
       renderSelection();
@@ -757,7 +766,8 @@ const STANDOFFS = {
   formation: { label: 'FORMATION', m: STANDOFF.TACTICAL, desc: `${(STANDOFF.TACTICAL / 1000).toFixed(1)} km — boarding, tow, EVA` },
   close: { label: 'CLOSE', m: STANDOFF.CLOSE, desc: '100,000 km — full sensor lock' },
   scanner: { label: 'SCANNER', m: STANDOFF.SCANNER, desc: '15M km — inside long-range sensors' },
-  orbit: { label: 'ORBIT', m: null, desc: 'Parking orbit' },
+  orbit: { label: 'ORBIT', m: null, desc: 'A world: its high parking orbit at the edge of planetary space, a free orbit, no fuel to keep it. A rock: a standoff held on the drive' },
+  stationary: { label: 'STATIONARY', m: null, desc: 'The stationary orbit over the chosen airspace: round in a sidereal day, the ground below keeping still' },
   slot: { label: 'HOLD', m: STANDOFF.SLOT, desc: 'Into our slot in the holding pattern: a free orbit, in port, no fuel to keep it' },
 };
 
@@ -778,9 +788,10 @@ export function openRoutePanel(target, opts = {}) {
   closeStance();
   ui.nav.target = target.kind === 'fix' ? { kind: 'entity', id: target.id } : target;
   if (ui.nav.tab === 'exterior' || ui.nav.tab === 'combat') openNav(target.kind === 'entity' && contactById(s, target.id) ? 'scanner' : 'solar');
-  const choices = standoffChoices(s, target);
-  const key = opts.dock && choices.includes('dock') ? 'dock' : opts.dock && choices.includes('rendezvous') ? 'rendezvous' : choices[0];
-  routeUI = { target, choices, standoffKey: key, options: [], selected: -1, computing: true };
+  // (from a world's airspace: its stationary orbit over it, first)
+  const choices = opts.over ? ['stationary', ...standoffChoices(s, target)] : standoffChoices(s, target);
+  const key = opts.over ? 'stationary' : opts.dock && choices.includes('dock') ? 'dock' : opts.dock && choices.includes('rendezvous') ? 'rendezvous' : choices[0];
+  routeUI = { target, choices, standoffKey: key, over: opts.over || null, options: [], selected: -1, computing: true };
   show($('#map-selection'), false); show($('#scanner-detail'), false);
   show($('#route-panel'), true, 'flex');
   hooks.showPanel?.('route');
@@ -802,7 +813,7 @@ function computeRoutes() {
     const e = t.kind === 'entity' ? getWorld(s).get(t.id) : null;
     const minG = e && !e.orbit && !e.transit && e.thrust > 0 ? e.thrust : 0;
     const t0 = performance.now();
-    routeUI.options = planRoutes(s, t, { standoff, combat: s.combatStations, minG });
+    routeUI.options = planRoutes(s, t, { standoff, combat: s.combatStations, minG, orbit: routeUI.standoffKey === 'orbit', over: routeUI.standoffKey === 'stationary' ? routeUI.over : null });
     routeUI.ms = performance.now() - t0;
     routeUI.computing = false;
     const best = routeUI.options.findIndex(o => o.feasible && o.name === 'STANDARD');

@@ -180,6 +180,7 @@ export function holdStation(state, target) {
 /** Up from the body a held target goes round (unit, solar frame), or null for something that doesn't. */
 function turningUp(state, target, minute) {
   const body = target.kind === 'slot' ? slotOrbit(target.id, target.slot)?.body
+    : target.kind === 'orbit' ? target.id
     : target.kind === 'entity' ? getWorld(state).get(target.id)?.orbit?.body : null;
   const b = body && getBody(body);
   const tgt = b && targetStateAt(state, target, minute);
