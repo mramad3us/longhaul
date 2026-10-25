@@ -12,11 +12,18 @@
 //
 // The craft flies as its run's flight path has it (planetary.js: every
 // stretch flown once as physics, ridden on rails), and is turned as it
-// would be: on the drive, its nose along its thrust (flipped to brake);
-// in the entry, belly first into the air flowing past it (the air turning
-// with the world), its nose pitched up by its angle of attack, steep at
-// the top and easing as it slows, level for the powered landing; on the
-// pad, on its skids; climbing out, nose up, pitching over downrange.
+// would be: on the drive, its nose along its push (planetary.js
+// pushOnLeg, worked from the path's own curve: what bends it round the
+// world as well as what speeds it up, flipped to brake), its back away
+// from the world, rolled through the plane's north as the push passes
+// straight up or down (the world's up is no guide then, and a back held
+// to it would turn the craft over from one frame to the next); in the
+// entry, belly first into the air flowing past it (the air turning with
+// the world), its nose pitched up by its angle of attack, steep at the top
+// and easing as it slows, level for the powered landing; on the pad, on
+// its skids; climbing out, nose up, pitching over downrange. Over the
+// ground it heads the way the leg goes, falling or climbing straight
+// (the air's speed along the ground nothing, and either way).
 //
 // What they see is the scene the hull cameras see, posed round the
 // shuttle (our own ship among it, with its plume when it burns), lit the
@@ -32,10 +39,10 @@
 // Without WebGL2 there is no picture: the cameras say so.
 // ============================================================
 
-import { AU_M, DAY_MIN, G0 } from '../core/constants.js';
+import { AU_M, DAY_MIN, G0, MIN_S } from '../core/constants.js';
 import { getWorld, predictEntity } from '../sim/world.js';
 import { activeRuns, runOf, runReadout } from '../sim/shuttles.js';
-import { flightPathAt } from '../sim/planetary.js';
+import { flightPathAt, pushOnLeg } from '../sim/planetary.js';
 import { worldOf, worldAngle, airspaceById, airspacesOf } from '../sim/worlds.js';
 import { bodyPos, bodyVel, BODIES } from '../sim/ephemeris.js';
 import { hullOf, partExtent } from '../sim/hulls.js';
@@ -63,6 +70,8 @@ const SUN_GLARE_RAD = 0.35;
 const FONT = '10px "IBM Plex Mono", monospace';
 const PAD_R = { gig: 25, pinnace: 40, lander: 60 };
 const TURN_S = 0.45;              // how quickly the picture follows a change of attitude (s of real time)
+const FLIP_S = 30;                // s of game time either side of the flip to brake: the craft turning end for end
+const ROLL_K = 0.15;              // the plane's north in the craft's up (the push this near straight up or down, sin: rolled through it)
 
 /**
  * What each world's air does to light, for the GPU (world3d.js): its own
@@ -145,33 +154,42 @@ export function shuttleAttitude(state, run, tm) {
   // the attitude in the plane: the nose `th` above the horizontal `h` (the way it moves along the ground)
   const pitched = (h, th) => ({ X: add(scale(h, Math.cos(th)), ur, Math.sin(th)), Z: add(scale(h, -Math.sin(th)), ur, Math.cos(th)) });
   let att, plume = 0;
-  const along = (v) => { const vh = add(v, ur, -dot(v, ur)), l = Math.hypot(vh[0], vh[1]); return l > 1e-6 ? scale(vh, 1 / l) : east; };
   if (fp.leg === 'ground') att = pitched(east, 0);
   else if (fp.leg === 'down' || fp.leg === 'up') {
-    const s = Math.hypot(vAir[0], vAir[1]), h = along(vAir);
-    const gam = s > 1 ? Math.atan2(dot(vAir, ur), dot(vAir, h)) : fp.leg === 'up' ? Math.PI / 2 : 0;
+    // (the way its ground angle grows: the profiles fly that way)
+    const way = [-ur[1], ur[0], 0];
+    const s = Math.hypot(vAir[0], vAir[1]);
+    const gam = s > 1 ? Math.atan2(dot(vAir, ur), dot(vAir, way)) : fp.leg === 'up' ? Math.PI / 2 : 0;
     if (fp.leg === 'down') {
       // belly first: steep at the top of the air, easing as it slows, level for the powered landing
       const aoa = (12 + 28 * smooth(600, 2500, s)) * Math.PI / 180;
       const level = 1 - smooth(120, 420, s) * smooth(1500, 6000, fp.h ?? 1e9);
-      att = pitched(h, (gam + aoa) * (1 - level));
+      att = pitched(way, (gam + aoa) * (1 - level));
       plume = level > 0.3 ? Math.max(0.3, fp.g || 0) : 0;
     } else {
-      att = pitched(h, gam);
+      att = pitched(way, gam);
       plume = craft.drive.maxG * 0.85;
     }
   } else if (fp.leg === 'path' || fp.leg === 'hold') {
-    // on the drive: the nose along its thrust (the pull taken out of what moves it); coasting, along its way
-    const fp2 = flightPathAt(world, path, tm + 1 / 60);
-    const a = [(fp2.vel.vx - fp.vel.vx), (fp2.vel.vy - fp.vel.vy), 0];
-    const gk = W.GM / (r * r);
-    const ad = add(a, ur, gk);
-    const al = Math.hypot(ad[0], ad[1]);
-    const X = al > 0.25 ? scale(ad, 1 / al) : norm(Math.hypot(vr[0], vr[1]) > 1 ? vr : east);
-    let Z = [-X[1], X[0], 0];
-    if (dot(Z, ur) < 0) Z = scale(Z, -1);
-    att = { X, Z };
-    plume = al > 0.25 ? al / G0 : 0;
+    // on the drive: the nose along its push; coasting (a hold is free fall), along its way
+    let leg = path.legs[0];
+    for (const l of path.legs) { if (tm >= l.t0) leg = l; else break; }
+    const g = leg.kind === 'path' ? leg.g : null, sec = Math.max(0, (tm - leg.t0) * MIN_S);
+    const p = g ? pushOnLeg(W, g, sec) : { ax: 0, ay: 0 };
+    const al = Math.hypot(p.ax, p.ay), pd = al > 0.25 ? [p.ax / al, p.ay / al, 0] : null;
+    let X = pd || norm(Math.hypot(vr[0], vr[1]) > 1 ? vr : east);
+    const t1 = g ? (g.vm - g.vA) / g.a : 0;
+    if (pd && t1 > 0 && Math.abs(sec - t1) < FLIP_S) {
+      // (the rails turn the push to brake at once; the craft turns end for end over a minute, yawing through the
+      // plane's north, its back to the sky all the way round, its drive off while its nose is off the push)
+      const dirAt = (x) => { const q = pushOnLeg(W, g, x), l = Math.hypot(q.ax, q.ay) || 1; return [q.ax / l, q.ay / l, 0]; };
+      const before = sec <= t1 ? pd : dirAt(t1), after = sec > t1 ? pd : dirAt(t1 + 1e-3);
+      const k = smooth(t1 - FLIP_S, t1 + FLIP_S, sec), c = Math.max(0, -dot(dirAt(t1), dirAt(t1 + 1e-3)));
+      X = norm(add(add(scale(before, 1 - k), after, k), [0, 0, 1], Math.sin(Math.PI * k) * c));
+    }
+    const u = add(ur, [0, 0, 1], ROLL_K);
+    att = { X, Z: add(u, X, -dot(u, X)) };
+    plume = pd ? Math.min(craft.drive.maxG, al / G0) * Math.max(0, dot(X, pd)) : 0;
   } else att = pitched(east, 0);
   const X = norm(att.X), Z = norm(att.Z);
   return { fp, W, c, X, Y: cross(Z, X), Z, ur, vAir, plume, r };

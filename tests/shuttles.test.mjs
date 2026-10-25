@@ -25,7 +25,9 @@ import { getWorld } from '../js/sim/world.js';
 import { serialize, deserialize } from '../js/sim/save.js';
 import { CLASSES, CLASS_IDS, bayOf, landsBy } from '../js/sim/ship-classes.js';
 import { worldOf, airspacesOf, airspaceById } from '../js/sim/worlds.js';
-import { entryProfile, ascentProfile, craftOf, flightPathAt, HEAT_LIMIT, runMinutes } from '../js/sim/planetary.js';
+import { entryProfile, ascentProfile, craftOf, flightPathAt, placeOnLeg, pushOnLeg, HEAT_LIMIT, runMinutes } from '../js/sim/planetary.js';
+import { shuttleAttitude } from '../js/ui/shuttlecam.js';
+import { estimate, liveKnowledge } from '../js/sim/intel.js';
 import { planRun, launchRun, activeRuns, runReadout, landingClearance, runRefusal, abortRun, shuttleCrew, seatsOf } from '../js/sim/shuttles.js';
 import { WORLDS } from '../js/sim/worlds.js';
 import { LEAVE_MIN, LEAVE_COST } from '../js/sim/crew-services.js';
@@ -329,18 +331,23 @@ export default [
     },
   },
   {
-    name: 'NPC carriers call at settled worlds; near one, their shuttles fly real runs where we can see them, and the carrier waits for its own',
+    name: 'NPC carriers call at settled worlds; near one, their shuttles fly real runs where we can see them, and the carrier waits for its own; none leaves a shadow on the plot (seen going aboard or down, never in a station\'s digest, a lost one let go in hours), ours on telemetry',
     fn: () => {
       const s = inOrbit('Mars', { traffic: 3000, seed: 7 });
       advance(s, 2 * DAY_MIN);
       const calling = s.entities.filter(e => e.tags?.traffic && e.tags.call?.phase === 'planet');
       const worlds = new Set(calling.map(e => e.tags.planet));
       assert(calling.length > 20 && worlds.size >= 3 && calling.every(e => bayOf(e.cls).length), `${calling.length} on planetary calls, at ${[...worlds].join(', ')}`);
-      let peak = 0, seen = new Set(), waited = 0;
+      let peak = 0, seen = new Set(), waited = 0, shadows = 0, ours = 0, oursOut = 0;
       const world = getWorld(s);
+      const run = launchRun(s, planRun(s, s.shuttles.bay[0].id, airspacesOf(worldOf('Mars'))[0].id, {}).plan, () => {}, { crew: { pilot: shuttleCrew(s)[0].id } }).run;
+      const craftFix = (id, r) => r.kind === 'fix' && (id.startsWith('npcsh-') || id === run.entity) && estimate(s, r, s.clock.minute);
       for (let i = 0; i < 6 * 60; i++) {
         advance(s, 1);
         peak = Math.max(peak, s.shuttles.npc.length);
+        shadows = Math.max(shadows, Object.entries(s.intel.tracks).filter(([id, r]) => craftFix(id, r)).length);
+        const e = world.get(run.entity);
+        if (e && !e.$inBay) { oursOut++; if (liveKnowledge(s, e) === 'live') ours++; }
         for (const id of s.shuttles.npc) {
           seen.add(id);
           const e = world.get(id), c = e && world.get(e.tags.carrier);
@@ -348,9 +355,56 @@ export default [
         }
       }
       assert(seen.size >= 5 && peak <= 10 && waited > 0, `${seen.size} NPC shuttles seen, ${peak} out at once at most`);
+      assert(shadows <= 2, `${shadows} shuttles' fixes coasting on the plot at once`);
+      assert(oursOut > 60 && ours === oursOut, `ours on telemetry the whole way (${ours} of ${oursOut} minutes)`);
+      // (an old save's: a pinnace's fix from a digest, seven hours old, is let go)
+      const old = { id: 'npcsh-x', kind: 'fix', shipClass: 'Pinnace', at: s.clock.minute - 7 * 60, x: 1, y: 0, vx: 0, vy: 0 };
+      assert(!estimate(s, old, s.clock.minute) && estimate(s, { ...old, shipClass: 'Corvette' }, s.clock.minute), 'an old shuttle fix let go, a ship\'s kept');
       const t = runMinutes('Mars', 'lander', 200, 2);
       assert(t > 0 && t < 3 * DAY_MIN, `200 t to Mars' ground by two landers: ${fmt(t / 60, 1)} h`);
-      console.log(`      ${calling.length} carriers on planetary calls after two days (${[...worlds].join(', ')}); ${seen.size} NPC shuttles flown off Mars in six hours, ${peak} at once; 200 t by two landers ${fmt(t / 60, 1)} h`);
+      console.log(`      ${calling.length} carriers on planetary calls after two days (${[...worlds].join(', ')}); ${seen.size} NPC shuttles flown off Mars in six hours, ${peak} at once, ${shadows} left coasting on the plot at once; 200 t by two landers ${fmt(t / 60, 1)} h`);
+    },
+  },
+  {
+    name: 'the shuttle\'s cameras ride a craft that turns, never one that jumps: on the drive its nose along its push (the curve\'s own, as its motion has it), its back through the push passing straight up or down, end for end to brake; falling or climbing straight, its heading kept',
+    fn: () => {
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const rows = [];
+      for (const [world, classId] of [['Mars', 'ares'], ['Earth', 'ares'], ['Titan', 'ares'], ['Luna', 'freighter']]) {
+        const s = inOrbit(world, { classId });
+        const w = worldOf(world);
+        const p = planRun(s, s.shuttles.bay[0].id, airspacesOf(w)[0].id, {});
+        const r = launchRun(s, p.plan, () => {}, { crew: { pilot: shuttleCrew(s)[0].id } });
+        assert(r.ok, `${world}: ${r.text}`);
+        const run = r.run, path = { world, cls: run.cls };
+        // the push against the motion's own second difference, wide enough that the arc table's steps average out
+        let off = 0;
+        for (const leg of run.legs.filter(l => l.kind === 'path')) {
+          const h = 40, T = (leg.t1 - leg.t0) * 60, flip = (leg.g.vm - leg.g.vA) / leg.g.a;
+          const rel = (sec) => { const m = leg.t0 + sec / 60, q = placeOnLeg(path, leg, m).pos, c = bodyPos(w.body, m / DAY_MIN); return [(q.x - c.x) * AU_M, (q.y - c.y) * AU_M]; };
+          for (let t = h; t < T - h; t += 31) {
+            if (Math.abs(t - flip) < h + 1) continue;
+            const A = rel(t - h), B = rel(t), C = rel(t + h), rr = Math.hypot(...B), q = pushOnLeg(w, leg.g, t);
+            const ax = (A[0] - 2 * B[0] + C[0]) / h / h + w.GM / rr ** 3 * B[0], ay = (A[1] - 2 * B[1] + C[1]) / h / h + w.GM / rr ** 3 * B[1];
+            off = Math.max(off, Math.hypot(ax - q.ax, ay - q.ay) / Math.max(1, Math.hypot(q.ax, q.ay)));
+          }
+        }
+        assert(off < 0.05, `${world}: the push is the motion's (${fmt(100 * off, 1)}% off at worst)`);
+        // a frame every game second, the whole way: the nose and the back never far from the last frame's
+        let worst = 1, at = '';
+        for (const leg of run.legs) {
+          if (leg.kind === 'dock') continue;
+          let prev = null;
+          for (let tm = leg.t0 + 1 / 60; tm < leg.t1 - 1 / 60; tm += 1 / 60) {
+            const A = shuttleAttitude(s, run, tm);
+            if (prev) { const d = Math.min(dot(prev.X, A.X), dot(prev.Z, A.Z)); if (d < worst) { worst = d; at = leg.phase; } }
+            prev = A;
+          }
+        }
+        assert(worst > 0.9, `${world}: the craft turns ${fmt(Math.acos(Math.min(1, worst)) * 180 / Math.PI, 0)}° in a second on its ${at}`);
+        rows.push(`${world} ${run.cls}: the push ${fmt(100 * off, 1)}% from the motion, at most ${fmt(Math.acos(Math.min(1, worst)) * 180 / Math.PI, 1)}° a second (${at})`);
+      }
+      console.log(`      ${rows.join('\n      ')}`);
     },
   },
 ];

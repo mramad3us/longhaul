@@ -10,10 +10,17 @@
 //   OUR OWN TRACKS. A contact that drops off the board leaves its last
 //     fix. The plot coasts it on its last velocity, and the circle it
 //     could be in grows with the hours (it may have burned since). While
-//     a contact is on the board, the board is the plot.
+//     a contact is on the board, the board is the plot. A shuttle seen
+//     going aboard its carrier, or setting down on a world's ground,
+//     leaves none (it is where we saw it go, not coasting off into
+//     space), and a carried craft's fix is let go after a few hours (by
+//     then it is back aboard or on the ground). Our own shuttles report
+//     by telemetry, as our torpedoes do: never a track.
 //   TRAFFIC DIGESTS. Every station's traffic control publishes, every
 //     six hours, the transponder ships in its control space: who is
-//     berthed there, and the flight plans of ships coming and going.
+//     berthed there, and the flight plans of ships coming and going (not
+//     the shuttles between a carrier and a world's ground: the
+//     spaceports').
 //     Relayed system-wide, a digest reaches us after the light time
 //     from that station: Ganymede's is forty minutes old when it lands
 //     at Ceres, and six hours older again by the next one. A filed plan
@@ -40,6 +47,7 @@ import { hashString } from '../core/rng.js';
 import { getWorld, transitStateAt } from './world.js';
 import { radioRangeFactor } from './systems.js';
 import { declaredSouls } from './manifest.js';
+import { CLASSES } from './ship-classes.js';
 
 export const C_MS = 299_792_458;                        // speed of light, m/s
 export const LIGHT_SECOND_AU = C_MS / AU_M;             // ≈ 0.002 AU (300,000 km)
@@ -55,6 +63,7 @@ const DRIFT_MS = 30;                   // velocity error of a fix, m/s
 const MANEUVER_G = 0.05;               // what an unseen ship might have burned since, on average
 const PLAN_DRIFT_AU_PER_DAY = 0.0005;  // filed plans are flown, but not to the kilometre
 const FORGET_FIX_MIN = 5 * DAY_MIN;    // a coasting fix is worthless after this
+const FORGET_CRAFT_MIN = 6 * 60;       // …a carried craft's sooner: a run is a few hours, and it is back aboard or on the ground
 const FORGET_BERTH_MIN = 4 * DAY_MIN;  // ships don't stay berthed forever
 const FORGET_PLAN_AFTER_MIN = 2 * DAY_MIN;   // …past a plan's arrival
 
@@ -74,6 +83,10 @@ export function ensureIntel(state) {
 
 /** What the plot keeps of a zone: where it is and what it is (its news may be old). */
 const zoneNote = (z, heard) => ({ kind: z.kind, body: z.body, factions: z.factions, r: z.r, phase: z.phase, radius: z.radius, heard });
+
+/** A shuttle's (a carried craft's: its class seen, or so marked)? */
+const CRAFT = new Set(Object.values(CLASSES).filter(c => c.carried).map(c => c.name));
+const isCraft = (r) => !!r.craft || CRAFT.has(r.shipClass);
 
 /** Light time over a distance, in game-minutes (fractional). */
 export const lightMinutes = (distAU) => distAU * AU_M / C_MS / MIN_S;
@@ -153,12 +166,17 @@ export function recordContacts(state) {
     const e = world.get(c.id);
     if (!e || e.type === 'nav') continue;
     const old = I.tracks[c.id];
+    // (seen going aboard its carrier or down on a pad: where we saw it go; ours report by telemetry)
+    if (e.$inBay || e.$landed || e.tags?.ours) {
+      if (old) { delete I.tracks[c.id]; if (I.$size != null) I.$size--; }
+      continue;
+    }
     if (!old) grew(I);
     // Identity is learned, and kept once learned
     const known = c.name ? c : old?.name ? old : null;
     I.tracks[c.id] = {
       id: c.id, name: known?.name || null, faction: known?.faction || null, shipClass: known?.shipClass || null,
-      kind: 'fix', src: 'SENSORS', at: now, rx: now, wreck: !!c.wreck, dark: !!c.dark,
+      kind: 'fix', src: 'SENSORS', at: now, rx: now, wreck: !!c.wreck, dark: !!c.dark, craft: !!CLASSES[e.cls]?.carried,
       x: e.pos.x, y: e.pos.y, vx: e.vel.vx, vy: e.vel.vy,
     };
   }
@@ -177,7 +195,8 @@ function publishDigest(state, st) {
   const list = [];
   for (const e of _q) {
     if (list.length >= DIGEST_MAX) break;
-    if (e.type !== 'ship' || !e.transponder || e.tags?.wreck) continue;
+    // (the ships in its space: not the craft shuttling between a carrier and a world's ground, the spaceports' business)
+    if (e.type !== 'ship' || !e.transponder || e.tags?.wreck || e.tags?.shuttle) continue;
     const rec = { id: e.id, name: e.name, faction: e.faction, shipClass: e.shipClass };
     const tr = e.transit;
     if (tr && !tr.fix) {
@@ -291,7 +310,7 @@ function forget(state) {
   for (const id of Object.keys(I.tracks)) {
     const r = I.tracks[id];
     const age = now - r.at;
-    const stale = r.kind === 'fix' ? age > FORGET_FIX_MIN
+    const stale = r.kind === 'fix' ? age > (isCraft(r) ? FORGET_CRAFT_MIN : FORGET_FIX_MIN)
       : r.kind === 'berth' ? age > FORGET_BERTH_MIN
       : r.kind === 'plan' ? now > r.plan.t1 + FORGET_PLAN_AFTER_MIN
       : !world.get(id);
@@ -315,6 +334,8 @@ export function estimate(state, r, minute, out = {}) {
   const ageMin = Math.max(0, minute - r.at);
   const ageS = ageMin * MIN_S;
   if (r.kind === 'fix') {
+    // (a shuttle's, past a run's length: let go, though the day's forgetting hasn't come round yet)
+    if (ageMin > FORGET_CRAFT_MIN && isCraft(r)) return null;
     out.x = r.x + r.vx * ageS / AU_M;
     out.y = r.y + r.vy * ageS / AU_M;
     out.sigmaAU = (DRIFT_MS * ageS + 0.5 * MANEUVER_G * G0 * ageS * ageS) / AU_M;
@@ -359,10 +380,11 @@ export const trackOf = (state, id) => state.intel?.tracks[id] || null;
 /**
  * Do we see this entity live (sensors), or know it from a chart? Stations,
  * nav marks and contract targets on published orbits are charted; our own
- * ordnance reports by telemetry.
+ * ordnance and our own shuttles out report by telemetry.
  */
 export function liveKnowledge(state, e) {
   if (state.sensors.$seen?.has(e.id)) return 'live';
+  if (e.tags?.ours && !e.$inBay) return 'live';
   if (e.type === 'station') return 'charted';
   if (e.type === 'ordnance' && e.ord?.owner === 'player') return 'live';
   if (e.type === 'nav') return 'charted';

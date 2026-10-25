@@ -40,6 +40,10 @@
 // (worlds.js groundAngle) for the ground, and plane angles round its centre
 // for orbit.
 //
+// What the drive does on a leg (pushOnLeg: the shuttle's cameras turn the
+// craft by it) is worked from the curve itself, its bend and its speed's
+// change along it, less the world's pull.
+//
 // Cost: an entry is a few thousand steps of a few dozen flops, once per
 // world and craft; a path's place is a table lookup.
 // ============================================================
@@ -301,15 +305,59 @@ export function speedAt(g, s) {
   const t1 = (g.vm - g.vA) / g.a;
   return s <= t1 ? g.vA + g.a * s : Math.max(g.vB, g.vm - g.a * (s - t1));
 }
-/** The place on a leg `dist` metres along it: { r, th }. */
-export function placeAlong(g, dist) {
+/** How far along its curve (0–1) a leg is `dist` metres along it. */
+function uAlong(g, dist) {
   const Ls = arcOf(g);
-  if (dist <= 0) return { r: g.rA, th: g.thA };
-  if (dist >= Ls[ARC_N]) return { r: g.rB, th: g.thA + g.span };
+  if (dist <= 0) return 0;
+  if (dist >= Ls[ARC_N]) return 1;
   let lo = 0, hi = ARC_N;
   while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (Ls[mid] <= dist) lo = mid; else hi = mid; }
-  const dl = Ls[hi] - Ls[lo], uu = (lo + (dl > 0 ? (dist - Ls[lo]) / dl : 0)) / ARC_N;
-  return { r: radiusAt(g.rA, g.rB, uu, g.flat), th: g.thA + g.span * uu };
+  const dl = Ls[hi] - Ls[lo];
+  return (lo + (dl > 0 ? (dist - Ls[lo]) / dl : 0)) / ARC_N;
+}
+/** The place on a leg `dist` metres along it: { r, th }. */
+export function placeAlong(g, dist) {
+  const u = uAlong(g, dist);
+  if (u === 0) return { r: g.rA, th: g.thA };
+  if (u === 1) return { r: g.rB, th: g.thA + g.span };
+  return { r: radiusAt(g.rA, g.rB, u, g.flat), th: g.thA + g.span * u };
+}
+/** A leg's radius `u` of the way along and how it bends there: [r, dr/du, d²r/du²] (radiusAt's shapes, differentiated). */
+function radiusSlopes(rA, rB, u, flat) {
+  if (flat === 'end') return [rB + (rA - rB) * (1 - u) * (1 - u), -2 * (rA - rB) * (1 - u), 2 * (rA - rB)];
+  if (flat === 'start') return [rA + (rB - rA) * u * u, 2 * (rB - rA) * u, 2 * (rB - rA)];
+  const a = Math.log(rA), b = Math.log(rB), u2 = u * u;
+  let f1, f2;
+  if (flat === 'both') { f1 = (b - a) * 6 * u * (1 - u); f2 = (b - a) * (6 - 12 * u); }
+  else {
+    const m0 = flat.span * flat.t0, m1 = flat.span * flat.t1;
+    f1 = (6 * u2 - 6 * u) * a + (3 * u2 - 4 * u + 1) * m0 + (6 * u - 6 * u2) * b + (3 * u2 - 2 * u) * m1;
+    f2 = (12 * u - 6) * a + (6 * u - 4) * m0 + (6 - 12 * u) * b + (6 * u - 2) * m1;
+  }
+  const r = radiusAt(rA, rB, u, flat);
+  return [r, r * f1, r * (f2 + f1 * f1)];
+}
+/**
+ * The drive's push on a leg `s` seconds in (m/s², in the world's frame that
+ * doesn't turn, round its centre): what moves it along its curve (its
+ * change of speed along the way, and the turn the curve asks at that
+ * speed) less the world's pull. Worked from the curve itself, not from its
+ * place a moment apart (the arc table's steps would kick it every few
+ * seconds). A leg that goes far round a world fast turns hard: held to its
+ * curve by a push toward the world of a G or more.
+ */
+export function pushOnLeg(w, g, s) {
+  const u = uAlong(g, distanceAt(g, s)), v = speedAt(g, s);
+  const [r, r1, r2] = radiusSlopes(g.rA, g.rB, u, g.flat), sp = g.span, th = g.thA + sp * u;
+  // (out and round: P' = r' e_r + r·span e_θ, P'' = (r'' − r·span²) e_r + 2r'·span e_θ)
+  const p1r = r1, p1t = r * sp, p2r = r2 - r * sp * sp, p2t = 2 * r1 * sp;
+  const l = Math.hypot(p1r, p1t) || 1, tr = p1r / l, tt = p1t / l;
+  const t1 = (g.vm - g.vA) / g.a, dv = s <= t1 ? g.a : v > g.vB ? -g.a : 0;
+  const along = p2r * tr + p2t * tt, k = v * v / (l * l);
+  const ar = dv * tr + k * (p2r - along * tr) + w.GM / (r * r);
+  const at = dv * tt + k * (p2t - along * tt);
+  const c = Math.cos(th), sn = Math.sin(th);
+  return { ax: ar * c - at * sn, ay: ar * sn + at * c };
 }
 
 // ---- RAILS: a flight path's place at any moment ----
@@ -415,6 +463,9 @@ export function carrierPlace(world, id, minute) {
 FLIGHT_PATH.at = (world, e, minute, pos, vel) => {
   const p = flightPathAt(world, e.flightPath, minute);
   pos.x = p.pos.x; pos.y = p.pos.y; vel.vx = p.vel.vx; vel.vy = p.vel.vy;
-  // (in its carrier's bay it is part of the carrier: the sensors and the pictures pass it by)
+  // (in its carrier's bay it is part of the carrier: the sensors and the pictures pass it by; on the pad, the plot knows it
+  // landed. Only as the world moves it: a look at where it will be, at another minute, leaves it as it is)
+  if (pos !== e.pos) return;
   e.$inBay = p.leg === 'dock';
+  e.$landed = p.leg === 'ground';
 };

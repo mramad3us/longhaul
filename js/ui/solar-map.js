@@ -39,6 +39,7 @@ import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, paintMark, MARK_COL } from './marks.js';
 import { ourName } from '../sim/service.js';
 import { worldOf } from '../sim/worlds.js';
+import { activeRuns } from '../sim/shuttles.js';
 import { drawWorldZones, drawShuttleTracks } from './worldzones.js';
 
 const LIGHT_RINGS = [[LIGHT_SECOND_AU, '1 LIGHT-SEC'], [LIGHT_MINUTE_AU, '1 LIGHT-MIN'], [LIGHT_MINUTE_AU * 10, '10 LIGHT-MIN']];
@@ -440,6 +441,7 @@ export class SolarMap {
     { const e = opts.targetId && world.get(opts.targetId); if (e && liveKnowledge(state, e)) add(e); }
     for (const c of state.sensors.contacts) add(world.get(c.id));
     for (const e of world.driven) if (e.type === 'ordnance' && e.ord.owner === 'player') add(e);
+    for (const r of activeRuns(state)) { const e = r.carrier === 'player' && world.get(r.entity); if (e && !e.$inBay) add(e); }   // our shuttles out: telemetry
     const tracks = state.intel?.tracks || {};
     for (const id in tracks) if (tracks[id].kind === 'chart') add(world.get(id));    // wrecks in the news: charted
     for (const e of world.forces) if (e.tags?.command && liveKnowledge(state, e)) add(e);   // the navies' forward commands (FOBs) on their posts: charted
