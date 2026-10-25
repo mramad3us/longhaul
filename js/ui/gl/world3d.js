@@ -31,10 +31,19 @@
 //                them; the ground under a cloud on the map is taken as sea.
 //   THE PAD      the spaceport a run lands at: an apron of slabs, the pad
 //                ringed and marked, its rim lights blinking, floodlit by
-//                night.
+//                night; round it its spaceport and town (town3d.js), on
+//                land out to the town's reach (the map knows no coast
+//                that close) and lit by its own lights, so the ground's
+//                town glow is left to the other ports.
+//
+// The air is air3d.js's, shared with the town; its noise is hashed as
+// integers (air3d.js hcell), the ground's coordinates being metres round
+// a world.
 // ============================================================
 
 import { program } from './gl.js';
+import { AIR_GLSL, setAir } from './air3d.js';
+import { townGround } from './town3d.js';
 
 const VS = `#version 300 es
 out vec2 vClip;
@@ -49,31 +58,21 @@ const MAX_PORTS = 12;
 const FS = `#version 300 es
 precision highp float;
 in vec2 vClip;
-uniform vec3 uP0, uAx, uAy, uW;      // the lens' rays (ships3d.js perspectiveCamera: W toward the eye)
+uniform vec3 uAx, uAy, uW;           // the lens' rays (ships3d.js perspectiveCamera: W toward the eye)
 uniform mat4 uVP;
 uniform float uFocal;                // device px per unit of tangent
-uniform vec3 uS, uN;                 // the ground under the eye (m from the scene's origin), and up there
-uniform float uR;                    // the world's radius (m)
 uniform vec3 uEx, uEy;               // the world's own axes now (its turn), in the plane
 uniform sampler2D uMap, uLights, uCloud;
 uniform float uHasLights, uHasClouds, uCloudH;
-uniform vec4 uAir;                   // top of the air (m), its scale height (m), on, the haze's scale height (m)
-uniform vec3 uRay, uHaze;            // vertical optical depth at the ground, by colour: the air's own, its haze's
-uniform float uHazeG, uSkyK;         // the haze's forward throw; the sky's brightness against the Sun's
-uniform vec3 uSun;
-uniform float uSunI, uExposure, uTonemap, uTime;
+${AIR_GLSL}
 uniform vec3 uPadP;                  // the pad (m from the origin)
 uniform vec4 uPad;                   // its up, its radius (m; 0: none)
+uniform vec4 uTown;                  // the town round it (town3d.js): its reach (m; 0: none), the built ground's colour
 uniform vec3 uPorts[${MAX_PORTS}];   // spaceports, as directions from the world's centre (lights by night)
 uniform int uPortN;
 uniform vec4 uTer;                   // its ground's make: craters, ridged hills, how high its relief stands, dunes (0–1 each)
 out vec4 frag;
 
-float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
-float vn(vec2 p) {
-  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y);
-}
 float gPx;
 // how much of a feature this size (m) the picture can show here (none under a few pixels)
 float lod(float size) { return smoothstep(1.5, 5.0, size * gPx); }
@@ -83,6 +82,8 @@ float fbm(vec2 p, float size) {
   return s;
 }
 // craters in a grid of cells (the rock shader's, ships3d.js): a bowl, its raised rim, its ejecta. x: m
+// (the bowl eased into its rim, and the floor's darker ground into the wall: no crease for the
+// shading's slope to fall across, no hard ring)
 vec2 craters(vec2 x, float cell, float chance) {
   vec2 c = floor(x / cell);
   float hs = 0.0, am = 0.0;
@@ -92,8 +93,10 @@ vec2 craters(vec2 x, float cell, float chance) {
     vec2 ctr = (id + vec2(h21(id + 3.1), h21(id + 7.7))) * cell;
     float rad = cell * (0.12 + 0.3 * h21(id + 11.3));
     float d = length(x - ctr) / rad;
-    hs += ((d < 1.0 ? (d * d - 1.0) * 0.22 : 0.0) + exp(-pow((d - 1.0) / 0.22, 2.0)) * 0.07 + (d > 1.0 ? 0.03 * exp(-(d - 1.0) * 2.5) : 0.0)) * rad;
-    am += (d < 0.85 ? -0.18 : 0.0) + exp(-pow((d - 1.0) / 0.25, 2.0)) * 0.22 + (d > 1.0 ? 0.12 * exp(-(d - 1.0) * 1.6) : 0.0);
+    float bowl = d < 1.0 ? (d * d - 1.0) * 0.22 * (1.0 - smoothstep(0.72, 1.0, d)) : 0.0;
+    float ej = 0.03 * exp(-max(d - 1.0, 0.0) * 2.5) * smoothstep(0.9, 1.15, d);
+    hs += (bowl + exp(-pow((d - 1.0) / 0.22, 2.0)) * 0.07 + ej) * rad;
+    am += -0.18 * (1.0 - smoothstep(0.62, 0.9, d)) + exp(-pow((d - 1.0) / 0.25, 2.0)) * 0.22 + 0.12 * exp(-max(d - 1.0, 0.0) * 1.6) * smoothstep(0.9, 1.15, d);
   }
   return vec2(hs, am);
 }
@@ -112,34 +115,6 @@ float relief(vec2 x) {
   if (uTer.w > 0.0) h += uTer.w * sin(dot(x, vec2(0.0062, 0.0021)) + 3.0 * vn(x / 2500.0)) * 14.0 * lod(400.0);
   return h;
 }
-vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
-
-// a ray from p (m from the ground under the eye) along d against a sphere of radius r whose surface
-// passes through o·n above that point: the near and far t (both < 0 when it misses or lies behind)
-vec2 shell(vec3 q, vec3 d, float r, float off) {
-  vec3 qa = q - off * uN;
-  float b = dot(qa, d) + r * dot(d, uN);
-  float c = dot(qa, qa) + 2.0 * r * dot(qa, uN);
-  float disc = b * b - c;
-  if (disc < 0.0) return vec2(-1.0);
-  float sq = sqrt(disc);
-  if (c < 0.0) return vec2(0.0, -b + sq);              // (inside it)
-  if (b >= 0.0) return vec2(-1.0);
-  return vec2(c / (-b + sq), -b + sq);
-}
-// how far up a point is (from the ground under the eye: p), and its up
-float heightOf(vec3 p, out vec3 up) {
-  float k = dot(p, p) + 2.0 * uR * dot(p, uN);
-  float r = sqrt(uR * uR + k);
-  up = (p + uR * uN) / r;
-  return k / (r + uR);
-}
-// the air a ray from a point toward the Sun goes through, as airmasses (Kasten–Young), none past the world's edge
-float airmass(float mu) {
-  float z = degrees(acos(clamp(mu, -1.0, 1.0)));
-  return 1.0 / max(mu + 0.15 * pow(max(93.885 - z, 0.05), -1.253), 0.025);
-}
-
 void main() {
   vec3 dir = normalize(-(uW + vClip.x * uAx + vClip.y * uAy));   // from the eye into the scene
   vec3 q = uP0 - uS;                                               // the eye, from the ground under it
@@ -169,30 +144,8 @@ void main() {
 
   // ---- the light the air scatters toward the eye, and how much of what is behind it gets through
   vec3 tauV = vec3(0.0), Lr = vec3(0.0), Lm = vec3(0.0);
-  if (air && ta.y > 0.0) {
-    float t0 = max(ta.x, 0.0), t1 = tG > 0.0 ? min(ta.y, tG) : ta.y;
-    const int NS = 14;
-    float ds = (t1 - t0) / float(NS);
-    for (int i = 0; i < NS; i++) {
-      float t = t0 + (float(i) + 0.5) * ds;
-      vec3 up;
-      float h = heightOf(q + t * dir, up);
-      float rho = exp(-max(h, 0.0) / uAir.y), rhoH = exp(-max(h, 0.0) / uAir.w);
-      vec3 dTau = (uRay * rho / uAir.y + uHaze * rhoH / uAir.w) * ds;
-      float mu = dot(up, uSun), r = uR + max(h, 0.0);
-      float edge = -sqrt(max(0.0, 1.0 - (uR / r) * (uR / r)));
-      float lit = smoothstep(edge - 0.03, edge + 0.02, mu);
-      vec3 Ts = exp(-(uRay * rho + uHaze * rhoH) * min(airmass(mu), 40.0)) * lit;
-      vec3 Tv = exp(-(tauV + 0.5 * dTau));
-      Lr += uRay * rho / uAir.y * ds * Ts * Tv;
-      Lm += uHaze * rhoH / uAir.w * ds * Ts * Tv;
-      tauV += dTau;
-    }
-  }
-  float cs = dot(dir, uSun), g = uHazeG;
-  float phR = 0.0596831 * (1.0 + cs * cs);
-  float phM = 0.0795775 * (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cs, 1.5);
-  vec3 sky = uSunI * uSkyK * (Lr * phR + Lm * phM);
+  if (air && ta.y > 0.0) airAlong(q, dir, max(ta.x, 0.0), tG > 0.0 ? min(ta.y, tG) : ta.y, tauV, Lr, Lm);
+  vec3 sky = skyOf(dir, Lr, Lm);
   vec3 Tview = exp(-tauV);
 
   // the cloud there: its cover off the map, broken up; lit from above, through the air over it
@@ -225,6 +178,15 @@ void main() {
     vec2 uv = vec2(fract(lon / 6.2831853 + 1.0), 0.5 - lat / 3.14159265);
     vec3 alb = pow(texture(uMap, uv).rgb, vec3(2.2));
     float sea = smoothstep(0.02, 0.09, alb.b - alb.r) * smoothstep(0.25, 0.1, alb.r + alb.g);
+    // (the town our pad is in stands on land: the map's forty-kilometre texels know nothing of a coast
+    // that close; built ground out to the town's reach, a ragged shore beyond)
+    vec2 xm0 = vec2(lon * uR * cos(lat), lat * uR);
+    if (uTown.x > 0.0) {
+      float dT = length(uS + p - uPadP);
+      float land = 1.0 - smoothstep(uTown.x * 0.8, uTown.x * 1.05, dT + uTown.x * 0.25 * (vn(xm0 / 1800.0) - 0.5));
+      sea *= 1.0 - land;
+      alb = mix(alb, uTown.yzw, land * step(0.001, uTown.y + uTown.z + uTown.w));
+    }
     // detail at every scale the picture shows (the map is forty kilometres a texel): the ground's
     // colour broken up, and its relief, lit through its own slopes (the sea flat)
     vec2 xm = vec2(lon * uR * cos(lat), lat * uR);
@@ -287,10 +249,13 @@ void main() {
         float dk = length(ng - uPorts[i]) * uR / 1000.0;       // km from the port
         city += exp(-dk * dk / 30.0) * 0.9 + exp(-dk * dk / 160.0) * 0.25;
       }
-      // (close to, single lamps on dark ground; farther, lit blocks; farther still, their average)
-      float blocks = smoothstep(0.55, 0.75, vn(xm / 260.0)) * (0.4 + 0.8 * vn(xm / 31.0));
-      float lamps = smoothstep(0.84, 0.93, vn(xm / 14.0)) * 3.0;
-      float lit = mix(mix(0.12, blocks, lod(260.0)), blocks * lamps, lod(14.0));
+      // (its streets: a grid of lit lines where the town is built up, lamps along them close to; farther,
+      // the grid's average)
+      vec2 gs = abs(fract(xm / 130.0 + 0.5 * vn(xm / 900.0)) - 0.5);
+      float street = 1.0 - smoothstep(0.02, 0.07, min(gs.x, gs.y));
+      float built = smoothstep(0.35, 0.6, vn(xm / 700.0));
+      float lamps = 0.5 + 2.5 * smoothstep(0.75, 0.9, vn(xm / 14.0));
+      float lit = mix(0.12 * built, street * built * mix(1.0, lamps, lod(14.0)), lod(130.0));
       lightsAdd += vec3(1.0, 0.74, 0.44) * 0.22 * city * lit * night;
     }
     col += lightsAdd;
@@ -357,6 +322,7 @@ function texOf(gl, key, surf) {
   return tx;
 }
 
+
 /**
  * Draw scene.world in the current pass (depth written where the ground is,
  * far for the sky). w: { name, surf ({ rgb, lights, w, h }), S, n, R, ex,
@@ -369,11 +335,10 @@ export function drawWorld(gl, scene, empty) {
   const p = setup(gl), u = p.prog.u;
   gl.useProgram(p.prog.p);
   gl.depthFunc(gl.ALWAYS);
-  gl.uniform3fv(u.uP0, ray.P0); gl.uniform3fv(u.uAx, ray.Ax); gl.uniform3fv(u.uAy, ray.Ay); gl.uniform3fv(u.uW, ray.W);
+  gl.uniform3fv(u.uAx, ray.Ax); gl.uniform3fv(u.uAy, ray.Ay); gl.uniform3fv(u.uW, ray.W);
   gl.uniformMatrix4fv(u.uVP, false, ray.VP);
   gl.uniform1f(u.uFocal, scene.focalPx || 1);
-  gl.uniform3fv(u.uS, w.S); gl.uniform3fv(u.uN, w.n);
-  gl.uniform1f(u.uR, w.R);
+  setAir(gl, u, scene);
   gl.uniform3fv(u.uEx, w.ex); gl.uniform3fv(u.uEy, w.ey);
   const tx = texOf(gl, w.name, w.surf);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tx.map); gl.uniform1i(u.uMap, 1);
@@ -383,19 +348,9 @@ export function drawWorld(gl, scene, empty) {
   gl.uniform1f(u.uHasLights, tx.lights ? 1 : 0);
   gl.uniform1f(u.uHasClouds, tx.cloud ? 1 : 0);
   gl.uniform1f(u.uCloudH, w.cloudH || 6000);
-  const a = w.air;
-  gl.uniform4f(u.uAir, a ? a.topM : 0, a ? a.H : 1, a ? 1 : 0, a ? a.hazeH : 1);
-  gl.uniform3fv(u.uRay, a ? a.ray : [0, 0, 0]);
-  gl.uniform3fv(u.uHaze, a ? a.haze : [0, 0, 0]);
-  gl.uniform1f(u.uHazeG, a ? a.g : 0.7);
-  gl.uniform1f(u.uSkyK, a ? a.skyK : 1);
-  gl.uniform3fv(u.uSun, scene.sun);
-  gl.uniform1f(u.uSunI, scene.sunI ?? 3.2);
-  gl.uniform1f(u.uExposure, scene.exposure ?? 1);
-  gl.uniform1f(u.uTonemap, scene.$tonemap);
-  gl.uniform1f(u.uTime, scene.t || 0);
   gl.uniform3fv(u.uPadP, w.pad ? w.pad.p : [0, 0, 0]);
   gl.uniform4f(u.uPad, ...(w.pad ? [...w.pad.up, w.pad.r] : [0, 0, 1, 0]));
+  gl.uniform4f(u.uTown, ...(w.town && w.pad && (w.eyeH ?? 0) < 200_000 ? townGround(w.town.world, w.town.port, w.pad.r) : [0, 0, 0, 0]));
   const ports = new Float32Array(MAX_PORTS * 3);
   const pn = Math.min(MAX_PORTS, w.ports?.length || 0);
   for (let i = 0; i < pn; i++) ports.set(w.ports[i], i * 3);

@@ -318,8 +318,10 @@ export class ShuttleCamView {
     const padUp = padAng != null ? [Math.cos(padAng), Math.sin(padAng), 0] : null;
     const C = scale(A.ur, -(Wd2.R + hM));
     const pad = padUp ? { p: add(C, padUp, Wd2.R), up: padUp, r: PAD_R[run.cls] || 40 } : null;
-    const ports = airspacesOf(Wd2).map(x => { const g = worldAngle(Wd2, x.port.ang, tm); return [Math.cos(g), Math.sin(g), 0]; });
-    const sceneWorld = { name: Wd2.name, surf: surfaceMap(Wd2.name, Wd2.body.color), S, n, R: Wd2.R, ex: [Math.cos(s0), Math.sin(s0), 0], ey: [-Math.sin(s0), Math.cos(s0), 0], air, pad, ports, ter: GROUND[Wd2.name] || [0.8, 0.3, 1, 0] };
+    // (the town lights round the spaceports by night; ours is built, and lit, by town3d.js)
+    const ports = airspacesOf(Wd2).filter(x => x.port.id !== a?.port.id).map(x => { const g = worldAngle(Wd2, x.port.ang, tm); return [Math.cos(g), Math.sin(g), 0]; });
+    const sceneWorld = { name: Wd2.name, surf: surfaceMap(Wd2.name, Wd2.body.color), S, n, R: Wd2.R, ex: [Math.cos(s0), Math.sin(s0), 0], ey: [-Math.sin(s0), Math.cos(s0), 0], air, pad, ports, ter: GROUND[Wd2.name] || [0.8, 0.3, 1, 0],
+      town: a ? { world: Wd2.name, port: a.port.id } : null, eyeH: A.r - Wd2.R };
 
     const out = renderScene({
       w: Wd, h: Hd, ...camera, sun: sunDir, sunI: 3.2, exposure: 1, objects: objs, t, pxPerM: focal * dpr / Math.max(4, hull.L),

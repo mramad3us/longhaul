@@ -41,6 +41,7 @@ import { sharedGL, beginRender, program, vertexArray, drawArray, onContextLost, 
 import { buildHullMesh, buildStationMesh, buildDebrisMesh } from './hullmesh.js';
 import { Post } from './post.js';
 import { drawWorld } from './world3d.js';
+import { drawTown } from './town3d.js';
 
 const LAYOUT = [['aPos', 3], ['aNrm', 3], ['aCol', 3], ['aMat', 1]];
 const MAX_SCARS = 16;
@@ -197,6 +198,7 @@ export function renderScene(scene) {
     scene.$tonemap = tonemap;
     if (rk && scene.ray) drawRock(gl, scene, lightVP);
     if (scene.world && scene.ray) drawWorld(gl, scene, R.empty);     // (a world from close: a shuttle's cameras, world3d.js)
+    if (scene.world && scene.ray) drawTown(gl, scene);               // (and its spaceport and town, near the ground: town3d.js)
     gl.useProgram(R.lit.p);
     const u = R.lit.u;
     gl.uniformMatrix4fv(u.uView, false, scene.view);
