@@ -31,7 +31,7 @@ import { AU_M, AU_KM, RANGE, DAY_MIN, G0 } from '../core/constants.js';
 import { formatDuration } from '../core/clock.js';
 import { getBody, BODIES } from '../sim/ephemeris.js';
 import { getWorld } from '../sim/world.js';
-import { planRoutes, simulatePlan, targetStateAt, targetName, defaultStandoff, STANDOFF, PREP_MINUTES } from '../sim/nav.js';
+import { planRoutes, planRun, targetStateAt, targetName, defaultStandoff, STANDOFF, PREP_MINUTES } from '../sim/nav.js';
 import { engageRoute, abortRoute, overrideSecure, forceTurn, TURN_HOLD_MAX_MIN } from '../sim/autopilot.js';
 import { crewSecureStatus, isSecured } from '../sim/crew-ai.js';
 import { driveLimitG, systemPerf, flightComputerState } from '../sim/systems.js';
@@ -70,6 +70,9 @@ import { frameMarks, marksOf, markChips, markWords } from './marks.js';
 let tacModal = null, map = null, scanner = null, threat = null;
 let routeUI = null;          // { target, standoffKey, options, selected, computing }
 let etaCache = { at: 0, key: '', minutes: null, path: null };
+let etaRun = null;                 // the ETA's flight under way (sim/nav.js planRun), a slice a frame
+const ETA_SLICE_MS = 3;            // of a frame given to it
+const ETA_STEPS = 150;             // minutes flown between looks at the clock
 let hooks = {};
 
 export function initNav(h) {
@@ -974,15 +977,30 @@ function crewDots(state, st) {
   return `<div class="mp-crew-row">${dots}</div>`;
 }
 
+/**
+ * The route's ETA, flown forward from where we are every few seconds: a
+ * slice a frame (ETA_SLICE_MS), the last answer shown meanwhile, so a long
+ * flight, or a chase of a ship that outruns us, never holds up the picture.
+ */
 function refreshEta(s) {
   const ap = s.autopilot;
-  if (!ap) { etaCache.key = ''; return null; }
+  if (!ap) { etaCache.key = ''; etaRun = null; return null; }
   const key = `${ap.plan.target.id}:${ap.createdAt}`;
+  if (etaCache.key !== key) etaCache = { key, at: -Infinity, minutes: null, path: null, fuel: null, outrun: false };
+  if (etaRun && etaRun.key !== key) etaRun = null;
   const now = performance.now();
-  if (etaCache.key !== key || now - etaCache.at > 2500) {
-    // (a stance that can't get into place within days is shown as such, not chased for years)
-    const est = simulatePlan(s, ap.plan, { pathPoints: 120, maxMinutes: ap.plan.kind === 'stance' ? 3 * DAY_MIN : undefined });
-    etaCache = { key, at: now, minutes: est.arrived ? est.minutes + (ap.phase === 'prepare' ? PREP_MINUTES : 0) : null, path: est.path, fuel: est.fuel };
+  // (a stance that can't get into place within days is shown as such, not chased for years)
+  if (!etaRun && now - etaCache.at > 2500) etaRun = { key, run: planRun(s, ap.plan, { pathPoints: 120, maxMinutes: ap.plan.kind === 'stance' ? 3 * DAY_MIN : undefined }), prep: ap.phase === 'prepare' ? PREP_MINUTES : 0 };
+  if (etaRun) {
+    const until = now + ETA_SLICE_MS;
+    while (!etaRun.run.advance(ETA_STEPS) && performance.now() < until);
+    if (etaRun.run.done) {
+      const est = etaRun.run.result();
+      // (flown from the minute it started: what is left of it now)
+      const gone = s.clock.minute - etaRun.run.t0;
+      etaCache = { key, at: performance.now(), minutes: est.arrived ? Math.max(0, est.minutes - gone) + etaRun.prep : null, path: est.path, fuel: est.fuel, outrun: est.outrun };
+      etaRun = null;
+    }
   }
   return etaCache;
 }
@@ -1056,7 +1074,7 @@ function renderRouteStatus(state, eta, box, full) {
   const tp = targetStateAt(state, ap.plan.target, state.clock.minute)?.pos;
   const total = tp ? Math.hypot(ap.startPos.x - tp.x, ap.startPos.y - tp.y) * AU_M : 0;
   const frac = dist != null && total > 0 ? Math.max(0, Math.min(1, 1 - dist / total)) : 0;
-  const etaTxt = eta?.minutes != null ? formatDuration(eta.minutes) : '—';
+  const etaTxt = eta?.minutes != null ? formatDuration(eta.minutes) : eta?.outrun ? 'none · it outburns us' : '—';
   const phase = ap.helm === 'unmanned' ? 'HELM UNMANNED — COASTING' : (PHASE_LABEL[ap.display] || ap.display.toUpperCase()) + (ap.helm === 'manual' ? ` · HAND-FLOWN (${ap.helmBy})` : ap.helm === 'degraded' ? ' · GUIDANCE DEGRADED' : '');
   const flip = ap.flipIn !== Infinity && ap.flipIn < 120 && (ap.display === 'burn' || ap.display === 'coast') ? ` · flip in ${formatDuration(ap.flipIn)}` : '';
   if (!full) {

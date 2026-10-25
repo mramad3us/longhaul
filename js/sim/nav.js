@@ -567,9 +567,22 @@ export function guidanceStep(plan, flight, minute, tgtNow, arrivalTarget, dtSec 
 
 /**
  * Fly a plan forward from the current state without touching it.
- * Returns { arrived, minutes, fuel, dv, peakSpeed, maxG, path:[{x,y}], end }.
+ * Returns { arrived, minutes, fuel, dv, peakSpeed, maxG, path:[{x,y}], end,
+ * outrun (a target burning away harder than we can: never caught), hit, air }.
  */
-export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pathPoints = 160 } = {}) {
+export function simulatePlan(state, planIn, opts) {
+  const run = planRun(state, planIn, opts);
+  run.advance(Infinity);
+  return run.result();
+}
+
+/**
+ * The same flight a piece at a time: { advance(steps) → done, done,
+ * result() }. The nav display flies its ETA a slice a frame (ui/nav.js), so
+ * a flight of months, or a chase that never ends, never holds the picture
+ * up; the planner flies it at once (simulatePlan).
+ */
+export function planRun(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pathPoints = 160 } = {}) {
   // (a copy: what the plan remembers, it remembers for the live flight only)
   const plan = { ...planIn, target: { ...planIn.target }, $memo: planIn.$memo && { ...planIn.$memo } };
   const f = createFlight(state.flight.pos, state.flight.vel, state.flight.facing);
@@ -581,41 +594,61 @@ export function simulatePlan(state, planIn, { maxMinutes = 2 * 365 * DAY_MIN, pa
   const raw = [];
   const arrivalTgt = plan.kind === 'transfer' ? targetStateAt(state, plan.target, plan.arriveAt) : null;
   const track = targetTracker(state, plan.target, t0);
-  let arrived = false, climbing = false, hit = null, air = false;
-  let steps = 0;
+  let arrived = false, climbing = false, hit = null, air = false, outrun = false;
+  let steps = 0, done = false;
+  // (the most we can do: the plan's drive and the RCS on it)
+  const ourA = (Math.min(plan.accelG, f.maxG) + RCS_MAX_G) * G0;
 
-  while (t - t0 < maxMinutes && steps < 400_000) {
-    steps++;
-    const tgt = track(t);
-    if (!tgt) break;
-    // Coarse steps on long ballistic coasts far from the target
-    let dtMin = 1;
-    const rd = Math.hypot(tgt.pos.x - f.pos.x, tgt.pos.y - f.pos.y);
-    if (plan.stage === 'transfer' && f.thrustG === 0 && rd > 0.05 && plan.arriveAt - t > 2 * DAY_MIN) dtMin = 30;
-    const g = guidanceStep(plan, f, t, tgt, arrivalTgt, dtMin * MIN_S);
-    if (g.arrived) { arrived = true; break; }
-    f.t = t;
-    // the terrain guard flies over the plan here as it will in flight (terrain.js)
-    const guard = terrainGuard(f.pos, f.vel, g.cmd, g.toward, Math.min(plan.accelG, f.maxG) * G0, t, climbing);
-    climbing = !!guard;
-    if (guard) dtMin = 1;
-    const out = flightStep(f, guard || g.cmd, dtMin);
-    fuel += fuelUsed(out.mainG, out.rcsG, dtMin, rated);
-    dv += (out.mainG + out.rcsG) * G0 * dtMin * MIN_S;
-    if (out.mainG > maxG) maxG = out.mainG;
-    if (g.relSpeed > peak) peak = g.relSpeed;
-    if (steps % 10 === 1) raw.push({ x: f.pos.x, y: f.pos.y });
-    t += dtMin;
-    // (a plan that comes down on a rock is no plan: in flight the guard would fight it all the way)
-    const sf = nearestSurface(f.pos.x, f.pos.y, t);
-    // (nor one that goes into a world's air, or through it to the ground in one step: our hull isn't rated for one; shuttles go down, shuttles.js)
-    if (sf?.body.atmo && sf.alt < sf.body.atmo.interfaceKm * 1000) { hit = sf.body.name; air = true; break; }
-    if (sf && sf.alt < 0) { hit = sf.body.name; break; }
-  }
-  raw.push({ x: f.pos.x, y: f.pos.y });
-  const stride = Math.max(1, Math.ceil(raw.length / pathPoints));
-  const path = raw.filter((_, i) => i % stride === 0 || i === raw.length - 1);
-  return { arrived, hit, air, minutes: t - t0, fuel, dv, peakSpeed: peak, maxG, path, end: { x: f.pos.x, y: f.pos.y } };
+  const advance = (n) => {
+    for (let k = 0; k < n && !done; k++) {
+      if (!(t - t0 < maxMinutes && steps < 400_000)) { done = true; break; }
+      steps++;
+      const tgt = track(t);
+      if (!tgt) { done = true; break; }
+      // A target on a burn harder than ours, out past us along its heading and opening along it, is never caught:
+      // that gap only grows (its second derivative is the difference of the burns), and the tracker flies its
+      // burn on, so the flight ends here instead of chasing it for years
+      if (tgt.ax != null && steps % 10 === 1) {
+        const B = Math.hypot(tgt.ax, tgt.ay);
+        if (B > ourA + 0.1 * G0) {
+          const hx = tgt.ax / B, hy = tgt.ay / B;
+          const along = ((tgt.pos.x - f.pos.x) * hx + (tgt.pos.y - f.pos.y) * hy) * AU_M;
+          if (along > plan.standoff + 1e6 && (tgt.vel.vx - f.vel.vx) * hx + (tgt.vel.vy - f.vel.vy) * hy > 0) { outrun = true; done = true; break; }
+        }
+      }
+      // Coarse steps on long ballistic coasts far from the target
+      let dtMin = 1;
+      const rd = Math.hypot(tgt.pos.x - f.pos.x, tgt.pos.y - f.pos.y);
+      if (plan.stage === 'transfer' && f.thrustG === 0 && rd > 0.05 && plan.arriveAt - t > 2 * DAY_MIN) dtMin = 30;
+      const g = guidanceStep(plan, f, t, tgt, arrivalTgt, dtMin * MIN_S);
+      if (g.arrived) { arrived = true; done = true; break; }
+      f.t = t;
+      // the terrain guard flies over the plan here as it will in flight (terrain.js)
+      const guard = terrainGuard(f.pos, f.vel, g.cmd, g.toward, Math.min(plan.accelG, f.maxG) * G0, t, climbing);
+      climbing = !!guard;
+      if (guard) dtMin = 1;
+      const out = flightStep(f, guard || g.cmd, dtMin);
+      fuel += fuelUsed(out.mainG, out.rcsG, dtMin, rated);
+      dv += (out.mainG + out.rcsG) * G0 * dtMin * MIN_S;
+      if (out.mainG > maxG) maxG = out.mainG;
+      if (g.relSpeed > peak) peak = g.relSpeed;
+      if (steps % 10 === 1) raw.push({ x: f.pos.x, y: f.pos.y });
+      t += dtMin;
+      // (a plan that comes down on a rock is no plan: in flight the guard would fight it all the way)
+      const sf = nearestSurface(f.pos.x, f.pos.y, t);
+      // (nor one that goes into a world's air, or through it to the ground in one step: our hull isn't rated for one; shuttles go down, shuttles.js)
+      if (sf?.body.atmo && sf.alt < sf.body.atmo.interfaceKm * 1000) { hit = sf.body.name; air = true; done = true; break; }
+      if (sf && sf.alt < 0) { hit = sf.body.name; done = true; break; }
+    }
+    return done;
+  };
+  const result = () => {
+    const pts = [...raw, { x: f.pos.x, y: f.pos.y }];
+    const stride = Math.max(1, Math.ceil(pts.length / pathPoints));
+    const path = pts.filter((_, i) => i % stride === 0 || i === pts.length - 1);
+    return { arrived, hit, air, outrun, minutes: t - t0, fuel, dv, peakSpeed: peak, maxG, path, end: { x: f.pos.x, y: f.pos.y } };
+  };
+  return { advance, result, get done() { return done; }, t0 };
 }
 
 // ---- PARKING ORBITS ----

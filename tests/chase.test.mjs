@@ -12,7 +12,7 @@ import { spawnAgent, respondToRequest } from '../js/sim/agents.js';
 import { launchTorpedo, torpedoForecast } from '../js/sim/ordnance.js';
 import { PLAYER } from '../js/sim/combatants.js';
 import { releaseHold, engageRoute, overrideSecure } from '../js/sim/autopilot.js';
-import { createPlan, planRoutes, targetName } from '../js/sim/nav.js';
+import { createPlan, planRoutes, targetName, simulatePlan, planRun } from '../js/sim/nav.js';
 import { controlAt } from '../js/sim/factions.js';
 import { hullSignature, playerSensorQuality } from '../js/sim/sensors.js';
 import { freeBerths, freeCells } from '../js/sim/manifest.js';
@@ -348,6 +348,32 @@ export default [
       console.log(`      SUSPECT with Mars, a Martian Security cutter about: stopped in a Tharsis ${tharsis}, in a light freighter ${freighter}`);
       assert(!tharsis, 'under its own banner, no stop');
       assert(freighter, 'a suspect civilian hull is stopped');
+    },
+  },
+  {
+    name: 'a route after a ship burning away harder than we can is seen never to close, at once, not flown for years (the nav display\'s ETA froze the game on one); one we outburn is caught, flown whole or a slice at a time',
+    fn: () => {
+      const s = game(6);
+      const KM = 1000 / AU_M, f = s.flight;
+      const away = (g) => {
+        const e = spawnAgent(s, { role: 'pirate', cls: 'pirate-runner', faction: 'pirate', pos: { x: f.pos.x + 200_000 * KM, y: f.pos.y }, vel: { ...f.vel } });
+        e.thrust = g; e.heading = 0;              // (burning straight away from us)
+        return e;
+      };
+      const fast = away(6), slow = away(3);
+      const chase = (e) => createPlan('closing', { kind: 'entity', id: e.id }, { accelG: 5, standoff: 1900 });
+      let t = performance.now();
+      const lost = simulatePlan(s, chase(fast));
+      const ms = performance.now() - t;
+      assert(lost.outrun && !lost.arrived && ms < 400 && lost.minutes < DAY_MIN, `6G away from our 5G: never caught, seen in ${fmt(lost.minutes, 0)} min of flight, ${fmt(ms, 0)} ms`);
+      const caught = simulatePlan(s, chase(slow));
+      assert(caught.arrived && !caught.outrun, `3G away from our 5G: caught in ${fmt(caught.minutes / 60, 1)} h`);
+      const run = planRun(s, chase(slow));
+      let slices = 0;
+      while (!run.advance(20)) slices++;
+      const r = run.result();
+      assert(r.arrived && r.minutes === caught.minutes && Math.abs(r.fuel - caught.fuel) < 1e-6, `a slice at a time (${slices + 1} slices): the same flight`);
+      console.log(`      a 6G runner from our 5G: given up after ${fmt(lost.minutes, 0)} simulated min (${fmt(ms, 0)} ms); a 3G one caught in ${fmt(caught.minutes / 60, 1)} h, ${slices + 1} slices of 20 min`);
     },
   },
 ];
