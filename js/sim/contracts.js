@@ -4,6 +4,8 @@
 // Stations in range post contracts on a schedule. Every contract is a
 // physical errand with an entity to fly to:
 //   CARGO / PASSENGERS / FUEL  — dock at the destination station, deliver
+//   PLANETSIDE                 — take freight to a high orbit round a
+//                                settled world, land it by shuttle
 //   INVESTIGATE / MEDEVAC      — rendezvous with a ship, hail it, return
 //   SALVAGE                    — hold formation with a derelict while the
 //                                crew strips it (2h), return
@@ -48,6 +50,12 @@
 // (c.log, at most LOG_MAX lines, each stamped with its minute), signed to
 // turned in or failed. The mission log shows both (ui/brief.js), for the
 // work in hand and the last 40 finished.
+//
+// SERVICES: a ship's stores in port (PRICES: reaction mass, water, rations,
+// air, med units, spares, PDC rounds; torpedoes, drones, an overhaul) are
+// priced by the station's market (market.js storeFactor: each store by the
+// good it is made of: goods.js STORE_GOOD), and at a tenth at our command
+// ship in a fight (service.js).
 // ============================================================
 
 import { AU_M, AU_KM, RANGE, DAY_MIN, G0, MIN_S } from '../core/constants.js';
@@ -71,6 +79,8 @@ import { gateOrbit } from './stations.js';
 import { freeBerths } from './manifest.js';
 import { MIL_TYPES, MIL_LABEL, milShare, milRefusal, generateMil, spawnMil, milProgress, milTurnIn } from './military.js';
 import { WORLDS, airspacesOf, worldOf } from './worlds.js';
+import { storeFactor } from './market.js';
+import { STORE_GOOD } from './goods.js';
 import { bodyPos } from './ephemeris.js';
 import { entryProfile, ascentProfile } from './planetary.js';
 import { licenseOf, ourCommandShip, supplyPriceFactor, creditMission, rankOf, RANK_FOR } from './service.js';
@@ -104,8 +114,15 @@ export const PRICES = { fuel: 2, water: 0.5, food: 3, o2Tank: 4, n2Tank: 1, medS
 /** Spares and yard time are priced by how the ship was built (TECH.price): Martian kit costs the most. */
 const shipTech = (state) => TECH[state.ship.tl || CLASSES[state.ship.classId || PLAYER_CLASS].tl];
 
-/** Unit price of a resource for our ship (a tenth of it at our command ship in a fight: service.js). */
-export const priceOf = (state, key) => PRICES[key] * (key === 'parts' ? shipTech(state).price : 1) * supplyPriceFactor(state);
+/**
+ * Unit price of a resource for our ship where we are docked: what the
+ * station's market makes of the good it is priced by (market.js
+ * storeFactor: dear where it is short, cheap where it is plenty), and a
+ * tenth of it at our command ship in a fight (service.js).
+ */
+export const priceOf = (state, key) => PRICES[key] * (key === 'parts' ? shipTech(state).price : 1) * supplyPriceFactor(state) * localFactor(state, STORE_GOOD[key]);
+/** The market's say in a store's price where we are docked (none at a command ship, or away from a market). */
+const localFactor = (state, good) => { const st = dockedStationEntity(state); return st && good ? storeFactor(state, st.id, good) : 1; };
 
 export function createContracts() {
   return { active: [], history: [], nextId: 1 };
@@ -982,7 +999,7 @@ export function torpedoRefusal(state, station, warhead) {
 }
 
 /** What a warhead costs us here. */
-export const torpedoPrice = (state, warhead) => Math.round(AMMO_PRICES[warhead] * supplyPriceFactor(state));
+export const torpedoPrice = (state, warhead) => Math.round(AMMO_PRICES[warhead] * supplyPriceFactor(state) * localFactor(state, 'munitions'));
 
 export function buyTorpedo(state, warhead) {
   const st = dockedPort(state);

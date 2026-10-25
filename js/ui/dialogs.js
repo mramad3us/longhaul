@@ -23,13 +23,14 @@ import { jobLabel, describeActivity } from './shipboard.js';
 import { respondToRequest } from '../sim/agents.js';
 import { WARHEADS } from '../sim/weapons.js';
 import { TECH } from '../sim/ship-classes.js';
-import { WANTED_LABEL } from '../sim/law.js';
+import { WANTED_LABEL, turnOverHere } from '../sim/law.js';
 import { STATIONS, stationModel } from '../sim/stations.js';
 import { clearanceFor, requestDocking, stationTraffic } from '../sim/traffic-control.js';
 import { hiringHall, hire, dismiss, shoreLeave, recallLeave, LEAVE_COST, LEAVE_MIN } from '../sim/crew-services.js';
 import { leaseSummary, extendLease, leaseShortfall, FREE_LEASE_MIN } from '../sim/leases.js';
 import { maxCrew } from '../sim/ship-classes.js';
 import { briefHTML, progressLine } from './brief.js';
+import { marketHTML, onMarketAction } from './trade.js';
 
 let hooks = {};
 let onClose = null;
@@ -325,6 +326,7 @@ export function openStation(station = dockedPort(ui.state), tab = null) {
   if (tab) stationTab = tab;
   if (dockedPort(s)?.id !== station.id && DOCKED_TABS.has(stationTab)) stationTab = 'board';
   if (station.tags?.command && !['board', 'deliver', 'services'].includes(stationTab)) stationTab = 'board';
+  if (stationTab === 'market' && !STATIONS[station.id]?.services.includes('market')) stationTab = 'board';
   renderStation();
   show($('#dialog-station'), true, 'flex');
   logEntry(`Channel open: ${station.name}`, 'comms');
@@ -340,7 +342,7 @@ function renderStation() {
   const port = inPort(s, st);
   const spec = STATIONS[st.id];
   const tabs = command ? [['board', `MISSIONS (${board.length})`], ['deliver', `REPORT (${deliver.length})`], ['services', 'SUPPLIES']]
-    : [['board', `CONTRACTS (${board.length})`], ['deliver', `DELIVER (${deliver.length})`], ['services', 'SERVICES'], ['berth', 'BERTH'],
+    : [['board', `CONTRACTS (${board.length})`], ['deliver', `DELIVER (${deliver.length})`], ...(spec?.services.includes('market') ? [['market', 'MARKET']] : []), ['services', 'SERVICES'], ['berth', 'BERTH'],
       ...(spec?.services.includes('hiring') ? [['hire', 'HIRING']] : []), ...(spec?.services.includes('leave') ? [['leave', 'LEAVE']] : []), ['traffic', 'TRAFFIC']];
   let content = '';
   if (stationTab === 'board') {
@@ -371,6 +373,8 @@ function renderStation() {
     content = !docked ? '<div class="station-mission-empty">Our berth and its lease, once we are docked.</div>' : berthHTML(s);
   } else if (stationTab === 'traffic') {
     content = trafficHTML(s, st);
+  } else if (stationTab === 'market') {
+    content = marketHTML(s, st);
   } else {
     if (!docked) content = command ? '<div class="station-mission-empty">Come alongside: supplies cross a mated collar.</div>' : '<div class="station-mission-empty">Dock at one of the station\'s berths to trade: a hard seal, not a hold off its gate.</div>';
     else {
@@ -393,7 +397,9 @@ function renderStation() {
           <span class="service-price">${fmtNum(dronePrice(s))} MCR each</span>
           <button class="station-mission-accept" data-act="buy-drones" ${dq.qty < 1 ? 'disabled' : ''}>${dq.qty < 1 ? 'FULL' : `FILL · ${fmtNum(dq.cost)} MCR`}</button></div>`;
       const cheap = supplyPriceFactor(s) < 1 ? `<div class="station-mission-desc">Forward command supplies its contractors at a tenth of the price while the fight lasts.</div>` : '';
-      content = `<div class="service-list">${cheap}${rows}${drones}${torps}
+      const turn = turnOverHere(s);
+      const turnRow = turn ? `<div class="service-row"><span class="service-name">Contraband aboard</span><span class="service-stock">${turn.items.map(c => `${(c.mass / 1000).toFixed(1)} t ${esc(c.name.toLowerCase())}`).join(', ')}: turned over, for reputation and standing</span><span class="service-price"></span><button class="station-mission-accept" data-act="mkt-turn">TURN IT OVER</button></div>` : '';
+      content = `<div class="service-list">${cheap}${turnRow}${rows}${drones}${torps}
         <div class="service-row"><span class="service-name">${command ? 'Field repairs' : 'Dockside overhaul'}</span><span class="service-stock">Hull ${Math.round(s.hull.integrity)}% · every system to spec, suits, containment</span><span class="service-price">${fmtNum(overhaulQuote(s))} MCR</span>
         <button class="station-mission-accept" data-act="overhaul">OVERHAUL</button></div>
         <div class="service-credits">Credits: <b>${fmtNum(s.resources.credits.current)} MCR</b></div></div>`;
@@ -470,6 +476,7 @@ function onStationClick(e) {
   const b = e.target.closest('[data-act]');
   if (!b || !currentStation) return;
   const s = ui.state;
+  if (onMarketAction(s, currentStation, b)) { renderStation(); return; }
   switch (b.dataset.act) {
     case 'close': closeDialog('#dialog-station'); return;
     case 'tab': stationTab = b.dataset.tab; break;

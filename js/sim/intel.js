@@ -129,6 +129,8 @@ function deliverNews(state, item, emit) {
     else I.zones[z.id] = zoneNote(z, state.clock.minute);
   }
   if (item.payload?.chart) chart(state, item.payload.chart, item.sent, item.payload.source || 'NEWSFEED');
+  // (market news, kept as heard: the markets window lists it)
+  if (item.type === 'market-news' && state.market) { const H = (state.market.heard ||= []); H.push({ at: item.sent, id: item.payload.id, good: item.payload.good, text: item.payload.text }); if (H.length > 12) H.shift(); }
   emit(item.type, { ...item.payload, lagMin: state.clock.minute - item.sent });
 }
 

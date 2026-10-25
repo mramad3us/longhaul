@@ -17,6 +17,9 @@ import { getWorld } from '../sim/world.js';
 import { boardable, eligibleBoarders, startBoarding, boardingActions, orderAboard, recallParty } from '../sim/boarding.js';
 import { overallHealth } from '../sim/crew.js';
 import { lawfulTarget } from '../sim/law.js';
+import { holdOf, holdRoom } from '../sim/market.js';
+import { GOODS, tonnes } from '../sim/goods.js';
+import { cargoMinutes } from '../sim/boarding.js';
 
 const emit = (t, p) => bus.emit(t, p);
 let target = null, via = null, picked = new Set();
@@ -79,10 +82,25 @@ function render() {
       <div class="bd-phase">${PH[b.phase] || b.phase.toUpperCase()}${b.phase === 'fight' ? ` · ${b.defenders} resisting` : ''}${b.action ? ` · ${esc(b.action.id)} (${Math.max(0, b.action.until - s.clock.minute)} min)` : ''}</div>
       <p class="dialog-text">Party: ${b.party.map(id => s.ship.crew.find(m => m.id === id)).filter(Boolean).map(m => `${esc(m.name)}${m.dead ? ' (dead)' : m.away?.captured ? ' (captured)' : ''}`).join(', ')}</p>
       ${b.phase === 'secured' ? `<div class="bd-actions">${acts.map(a => `<button class="btn ${a.why ? 'btn-secondary' : 'btn-primary'}" data-act="order" data-a="${a.id}" title="${esc(a.desc)}" ${a.why || b.action ? 'disabled' : ''}>${esc(a.label)}${a.why ? ` · ${esc(a.why)}` : ''}</button>`).join('')}<button class="btn btn-secondary" data-act="order" data-a="withdraw">COME BACK</button></div>` : ''}
+      ${b.phase === 'secured' && b.found ? holdHTML(s, b, e, acts.find(a => a.id === 'cargo')) : ''}
       <div class="bd-log">${b.log.slice().reverse().map(l => `<div>${esc(l.text)}</div>`).join('')}</div>
       <div class="form-actions">${b.phase !== 'return' ? '<button class="btn btn-secondary" data-act="recall">RECALL THE PARTY</button>' : ''}<button class="btn btn-secondary" data-act="close">Close</button></div>`;
   }
   body.innerHTML = html;
+}
+
+/** Its hold, as the search found it: each good, what it is worth at the good's base price, a TAKE for each (docked). */
+function holdHTML(s, b, e, cargo) {
+  const hold = holdOf(s, e).filter(x => x.t > 0.005);
+  if (!hold.length) return '<div class="bd-hold"><div class="missions-section">ITS HOLD</div><p class="dialog-text">Empty.</p></div>';
+  const room = holdRoom(s) / 1000;
+  const blocked = cargo?.why && cargo.why !== 'done' ? cargo.why : b.action ? 'busy' : null;
+  return `<div class="bd-hold"><div class="missions-section">ITS HOLD · ${tonnes(room)} of room in ours</div>${hold.map(x => {
+    const t = Math.min(x.t, room);
+    const worth = GOODS[x.good].base * x.t;
+    return `<div class="bd-good"><span>${tonnes(x.t)} ${esc(GOODS[x.good].name.toLowerCase())}${GOODS[x.good].illegalIn ? ' <span class="mkt-dear">contraband</span>' : ''}</span><span class="scanner-val-dim">worth ~${Math.round(worth).toLocaleString()} MCR at base</span>
+      <button class="mkt-btn" data-act="take" data-good="${x.good}" ${blocked || t <= 0.005 ? `disabled title="${esc(blocked || 'no room in our hold')}"` : ''}>TAKE ${tonnes(t)} · ${cargoMinutes(t)} min</button></div>`;
+  }).join('')}</div>`;
 }
 
 function onClick(ev) {
@@ -100,6 +118,7 @@ function onClick(ev) {
       break;
     }
     case 'order': { const r = orderAboard(s, btn.dataset.a, emit); if (!r.ok) toast(r.text, 'warn'); break; }
+    case 'take': { const r = orderAboard(s, 'cargo', emit, { good: btn.dataset.good }); if (!r.ok) toast(r.text, 'warn'); break; }
     case 'recall': recallParty(s, emit); break;
   }
   render();

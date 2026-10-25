@@ -35,6 +35,7 @@ import { initStage, updateStage, resetStage, lookAt, toggleScope, toggleHullCams
 import { initComms, openComms, closeComms, updateComms, commsOpen } from './comms.js';
 import { initBoarding, openBoarding, closeBoarding, updateBoarding } from './boarding.js';
 import { initShuttleBay, openShuttleBay, closeShuttleBay, toggleShuttleBay, updateShuttleBay } from './shuttlebay.js';
+import { initMarkets, openMarkets, closeMarkets, toggleMarkets, updateMarkets } from './trade.js';
 import { initService, openService } from './service.js';
 import { setPhase } from '../sim/politics.js';
 import { addRep, ourName } from '../sim/service.js';
@@ -123,7 +124,7 @@ export async function boot() {
   initTooltips();
   initPointers();
   initConsole({
-    closeDialog: (id) => closeDialog(id), closeComms: () => closeComms(), closeBoarding: () => closeBoarding(), closeShuttle: () => closeShuttleBay(), closeLibrary: () => closeLibrary(),
+    closeDialog: (id) => closeDialog(id), closeComms: () => closeComms(), closeBoarding: () => closeBoarding(), closeShuttle: () => closeShuttleBay(), closeMarkets: () => closeMarkets(), closeLibrary: () => closeLibrary(),
     onExteriorPlaced: (floating) => { if (!floating && currentTab() !== 'exterior') setTab('exterior'); },
     roomsVisible: (on) => setCamsVisible(on),
   });
@@ -142,6 +143,7 @@ export async function boot() {
   setDockHandler((id) => dockWith({ kind: 'station', id }));
   initBoarding();
   initShuttleBay();
+  initMarkets();
   initService({ openDialog, closeDialog, plotRoute: (t, o) => openRoutePanel(t, o), showOnMap: (t) => { setTab('solar'); selectTarget(t); } });
   setHailHandler((id) => openComms(id));
   initStage({ state: () => ui.state, select: (id) => showOnBoard(id), currentTab, setTab, isFloating: exteriorIsFloating, pick: pickedTarget,
@@ -154,7 +156,7 @@ export async function boot() {
     station: () => dockedStation(ui.state) ? openStation() : toast('Not docked', 'warn'),
     combat: toggleCombat, suits: toggleSuits, weapons: () => toggleNav('combat'), library: toggleLibrary, service: openService, escape: onEscape, save: () => quickSave(), devFlip, devCut,
     exterior: () => exteriorIsFloating() ? setExteriorFloating(false) : toggleNav('exterior'), scope: () => toggleScope(pickedTarget()), log: () => toggleLog(), flag: toggleFlagOnPick,
-    hullcams: toggleHullCams, zoomScope, shuttles: toggleShuttleBay,
+    hullcams: toggleHullCams, zoomScope, shuttles: toggleShuttleBay, markets: toggleMarkets,
     comms: () => commsOpen() ? closeComms() : openComms(),
   });
   $$('[data-action]').forEach(b => {
@@ -265,7 +267,7 @@ function startGame(state, fresh) {
   resetResourceAlerts();
   resetStage();
   clearTicker();
-  closeComms(); closeBoarding(); closeShuttleBay();
+  closeComms(); closeBoarding(); closeShuttleBay(); closeMarkets();
   rebuildCrewViews();
   resetAiLine();
   clearSelection();
@@ -354,6 +356,7 @@ function aiHooks() {
       else if (what === 'service') openService();
       else if (what === 'boarding') openBoarding(id);
       else if (what === 'shuttles') openShuttleBay(id || null);
+      else if (what === 'markets') openMarkets();
       else if (what === 'jobs') openJobs();
       else if (what === 'weapons') openNav('combat');
       else if (what === 'map') openNav('solar');
@@ -395,6 +398,7 @@ function frame(state, alpha) {
   updateComms();
   updateBoarding();
   updateShuttleBay();
+  updateMarkets();
   renderSelection();
   renderLog();
 

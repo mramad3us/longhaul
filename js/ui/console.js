@@ -60,6 +60,7 @@ export function initConsole(h) {
   adoptWindow('comms', $('#dialog-comms'), { onClose: () => hooks.closeComms?.(), title: 'COMMS', w: 900, h: 600 });
   adoptWindow('boarding', $('#dialog-boarding'), { onClose: () => hooks.closeBoarding?.(), title: 'BOARDING', w: 640 });
   adoptWindow('shuttle', $('#dialog-shuttle'), { onClose: () => hooks.closeShuttle?.(), title: 'SHUTTLES', w: 700 });
+  adoptWindow('markets', $('#dialog-markets'), { onClose: () => hooks.closeMarkets?.(), title: 'MARKETS', w: 1080, h: 640 });
   adoptWindow('library', $('#library'), { onClose: () => hooks.closeLibrary?.(), title: "SHIP'S LIBRARY", w: 980, h: 640 });
   $('#wm-layer').appendChild($('#library'));
 

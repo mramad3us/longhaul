@@ -109,6 +109,7 @@ export function learn(state, e, facts, src, { by = '', at = state.clock.minute }
     }
   }
   if (facts.pax != null) r.pax = { n: facts.pax, src, at, by };
+  if (facts.hold) r.hold = { items: facts.hold.map(x => ({ good: x.good, t: x.t })), src, at, by };
   if (facts.from) r.from = facts.from;
   if (facts.to) r.to = facts.to;
   if (facts.note) { (r.notes ||= []).push({ at, text: facts.note }); if (r.notes.length > 6) r.notes.shift(); }

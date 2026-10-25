@@ -56,6 +56,7 @@ import { setGravityEpoch } from './gravity.js';
 import { fireTick } from './fire.js';
 import { createDroneStores, dronesTick } from './drones.js';
 import { createShuttles, shuttlesTick, npcShuttlesTick } from './shuttles.js';
+import { createMarket, marketTick } from './market.js';
 
 export const SAVE_SCHEMA = 7;
 
@@ -160,6 +161,7 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
   placeCrew(state);
   seedTraffic(state);
   if (forces) seedForces(state);
+  createMarket(state);
   return state;
 }
 
@@ -179,6 +181,7 @@ export function upgradeState(state) {
   state.resources.drones ??= createDroneStores(state.ship.classId);
   if (state.drone === undefined) state.drone = null;
   state.shuttles ??= createShuttles(state.ship.classId);
+  if (!state.market) createMarket(state);
   if (state.dock === undefined) state.dock = null;
   if (state.boarding === undefined) state.boarding = null;
   state.combat.fuses ??= [];
@@ -446,6 +449,7 @@ export function minuteTick(state, { lite = false } = {}) {
   serviceTick(state, emit, { commandShipFor });
   missionsTick(state, emit);
   contractsTick(state, emit);
+  marketTick(state);
   trafficTick(state);
   forcesTick(state, { lite });
   intelTick(state, emit);

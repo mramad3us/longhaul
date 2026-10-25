@@ -16,8 +16,10 @@
 //   down      the entry, the glide, the powered landing (or, airless, the
 //             powered landing from HOVER_M over the pad)
 //   ground    at the spaceport: the cargo bound there is handed over (a
-//             PLANETSIDE contract is paid by the head of what is landed:
-//             contracts.js), and it waits out the turnaround
+//             PLANETSIDE contract is paid for what is landed: contracts.js),
+//             goods it carried down are sold on the world's market and a
+//             purchase loaded to bring up (market.js shuttleTrade: paid by
+//             radio), and it waits out the turnaround
 //   up        the ascent, off the pad to the top of the air
 //   return    back up to us on the drive, to where we will be on our orbit
 //   recover   into the bay (RECOVER_MIN): the crew back aboard
@@ -56,6 +58,8 @@ import { FUEL_PER_G_MIN } from './flight.js';
 import { isAble } from './crew.js';
 import { shipGeometry, airlockFor } from './ship-layout.js';
 import { deliverPlanetside } from './contracts.js';
+import { marketOfWorld, shuttleTrade, stow, holdRoom } from './market.js';
+import { GOODS } from './goods.js';
 
 const SPAN_MIN = 0.4;                        // a leg round a world goes at least this far round (rad): a gentle spiral, never a plunge
 const RENDEZVOUS_M = 20_000;                 // a shuttle home further than this from us (we moved) chases us
@@ -275,7 +279,7 @@ export function cargoFor(state, airspaceId, cls) {
  * the pilot away, the cargo moved into the shuttle, the shuttle a world
  * entity on its flight path. Returns { ok, text, run }.
  */
-export function launchRun(state, plan, emit = () => {}, { crew = null } = {}) {
+export function launchRun(state, plan, emit = () => {}, { crew = null, trade = null } = {}) {
   const sh = state.shuttles.bay.find(s => s.id === plan.shuttle);
   if (!sh || sh.run) return { ok: false, text: 'That shuttle is not in its bay.' };
   const clr = landingClearance(state, plan.airspace);
@@ -292,9 +296,11 @@ export function launchRun(state, plan, emit = () => {}, { crew = null } = {}) {
     const item = state.cargo.find(x => x.contract === it.contract);
     if (item) { item.mass -= it.mass; if (item.mass <= 0) state.cargo.splice(state.cargo.indexOf(item), 1); }
   }
+  // goods to sell on the world's market go down with it too, in what room is left; a purchase comes up
+  const { sell, buy } = tradeLoad(state, sh.cls, load.mass, trade);
   const run = {
     id, shuttle: sh.id, cls: sh.cls, name: sh.name, world: plan.summary.world, airspace: a.id, port: { id: a.port.id, name: a.port.name },
-    carrier: 'player', phase: 'launch', legs: plan.legs, summary: plan.summary, crew: party, cargo: load.items, delivered: [],
+    carrier: 'player', phase: 'launch', legs: plan.legs, summary: plan.summary, crew: party, cargo: load.items, delivered: [], sell, buy, up: [],
     clearance: clr.text, startedAt: state.clock.minute, entity: `shuttle-${id}`, log: [],
   };
   S.runs.push(run);
@@ -463,10 +469,51 @@ export function shuttlesTick(state, emit = () => {}) {
   }
 }
 
-/** Down at the pad: the cargo bound there handed over (a PLANETSIDE contract paid for what lands: contracts.js). */
+/**
+ * What a run takes down to sell (out of our hold: lots of the goods named in
+ * `trade.sell`, in the room the freight leaves) and what it is to buy for
+ * the way up ({ good, t }, at most a shuttle's load).
+ */
+function tradeLoad(state, cls, usedKg, trade) {
+  const room = CLASSES[cls].cargoT * 1000;
+  let left = room - usedKg;
+  const sell = [];
+  for (const g of trade?.sell || []) {
+    for (const x of state.cargo.filter(c => c.good === g && !c.contract)) {
+      if (left <= 0.5) break;
+      const kg = Math.min(x.mass, left);
+      const share = kg / x.mass;
+      sell.push({ ...x, mass: kg, cost: (x.cost || 0) * share });
+      x.cost = (x.cost || 0) * (1 - share); x.mass -= kg; left -= kg;
+    }
+  }
+  state.cargo = state.cargo.filter(x => x.mass > 0.5);
+  const buy = trade?.buy?.good && trade.buy.t > 0 ? { good: trade.buy.good, t: Math.min(trade.buy.t, CLASSES[cls].cargoT) } : null;
+  return { sell, buy };
+}
+
+/** What a plan's trade would carry down and bring up, for the window: { downT, upT, room }. */
+export function tradeRoom(state, cls, airspaceId) {
+  const used = cargoFor(state, airspaceId, cls).mass;
+  return { room: CLASSES[cls].cargoT, freeDownT: Math.max(0, CLASSES[cls].cargoT - used / 1000) };
+}
+
+/** Down at the pad: the cargo bound there handed over (a PLANETSIDE contract paid for what lands: contracts.js), its trade done. */
 function landed(state, run, emit) {
   log(run, state, `Down at ${run.port.name}`);
   const groundLeg = run.legs.find(l => l.phase === 'ground');
+  const mid = marketOfWorld(run.world);
+  if (mid && (run.sell?.length || run.buy)) {
+    // (the purchase no more than will fit in our hold when it is home)
+    const buy = run.buy ? { ...run.buy, t: Math.min(run.buy.t, holdRoom(state) / 1000) } : null;
+    const r = shuttleTrade(state, mid, run.sell || [], buy);
+    run.sell = r.back;
+    run.up = r.up;
+    if (r.text) {
+      log(run, state, `Market: ${r.text}`);
+      emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} at ${worldOfs(run.world)} market: ${r.text}.` });
+    }
+  }
   const handed = [];
   for (const it of run.cargo) {
     const c = state.contracts.active.find(x => x.id === it.contract);
@@ -486,12 +533,14 @@ function recover(state, run, emit) {
   run.doneAt = state.clock.minute;
   const sh = state.shuttles.bay.find(s => s.id === run.shuttle);
   if (sh) sh.run = null;
-  // anything it brought back (cargo that didn't land) goes back in our hold
+  // anything it brought back (cargo that didn't land, goods it didn't sell) goes back in our hold, and what it bought
   for (const it of run.cargo) {
     const item = state.cargo.find(x => x.contract === it.contract);
     if (item) item.mass += it.mass; else state.cargo.push({ contract: it.contract, name: it.name, mass: it.mass });
   }
   run.cargo = [];
+  for (const x of [...(run.sell || []), ...(run.up || [])]) stow(state, x);
+  run.sell = []; run.up = [];
   state.resources.fuel.current = Math.max(0, state.resources.fuel.current - run.summary.fuelKg);
   const geo = shipGeometry(state.ship);
   const lock = airlockFor(state.ship, null);

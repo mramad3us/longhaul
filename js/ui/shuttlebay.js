@@ -8,24 +8,28 @@
 // what it costs the shield and the crew, the landing, the turnaround, the
 // climb, the way back), its controller's answer to the landing, and the
 // freight bound for that pad that will go down with it (PLANETSIDE
-// contracts). Launched, the window follows it: its phase, its height and
+// contracts), and the world's market (sim/market.js, its prices live from
+// its space): goods of ours to sell down, and one to buy and bring up, in
+// the shuttle's room. Launched, the window follows it: its phase, its height and
 // speed, the heat and the G of the entry as they come, and its log, and it
 // can be called back (CALL BACK: shuttles.js abortRun). G opens it; a
 // world's sheet sends a shuttle to an airspace (SEND SHUTTLE).
 // ============================================================
 
 import { ui } from './context.js';
-import { $, esc, show, fmtMeters } from './dom.js';
+import { $, esc, show, fmtMeters, fmtNum } from './dom.js';
 import { toast } from './toast.js';
 import { logEntry } from './log.js';
 import { bus } from '../core/events.js';
 import { formatDuration } from '../core/clock.js';
 import { CLASSES } from '../sim/ship-classes.js';
-import { airspacesOf } from '../sim/worlds.js';
-import { runRefusal, planRun, launchRun, runReadout, activeRuns, landingClearance, cargoFor, defaultPilot, abortRun } from '../sim/shuttles.js';
+import { airspacesOf, worldOfs } from '../sim/worlds.js';
+import { runRefusal, planRun, launchRun, runReadout, activeRuns, landingClearance, cargoFor, defaultPilot, abortRun, tradeRoom } from '../sim/shuttles.js';
+import { marketOfWorld, priceAt, quote, tradeRefusal, holdRoom, SPREAD } from '../sim/market.js';
+import { GOODS, GOOD_IDS, tonnes } from '../sim/goods.js';
 
 const emit = (t, p) => bus.emit(t, p);
-let chosen = { shuttle: null, airspace: null };
+let chosen = { shuttle: null, airspace: null, sell: new Set(), buy: null, buyT: 0 };
 
 export function initShuttleBay() {
   const ov = $('#dialog-shuttle');
@@ -95,6 +99,7 @@ function render() {
           <div class="sb-line"><b>CLEARANCE</b> <span class="${clr.ok ? 'sb-ok' : 'sb-bad'}">${esc(clr.text)}</span></div>
           <div class="sb-line"><b>FREIGHT</b> ${load.items.length ? `${load.items.map(i => `${Math.round(i.mass).toLocaleString()} kg of ${esc(i.name)}`).join(', ')} (of ${Math.round(load.room).toLocaleString()} kg room)` : 'nothing aboard bound for this pad'}</div>
           <div class="sb-line"><b>PILOT</b> ${pilot ? `${esc(pilot.name)} (${esc(pilot.role)}, piloting ${Math.round(pilot.skills.piloting)}): away from the ship until it is home` : 'nobody fit to fly it'}</div>
+          ${tradeHTML(s, w, sh)}
           <div class="form-actions"><button class="btn btn-primary" data-act="launch" ${p.ok && clr.ok && pilot ? '' : 'disabled'}>LAUNCH ${esc(sh.name.toUpperCase())}</button></div>
         </div>`;
       }
@@ -105,6 +110,32 @@ function render() {
     ${out}
     ${plan}
     <div class="form-actions"><button class="btn btn-secondary" data-act="close">Close</button></div>`;
+}
+
+/** The world's market for the run: what of ours to sell down, what to bring up. */
+function tradeHTML(s, w, sh) {
+  const id = marketOfWorld(w.name);
+  if (!id || !s.market) return '';
+  const { freeDownT, room } = tradeRoom(s, sh.cls, chosen.airspace);
+  const ours = GOOD_IDS.map(g => ({ g, t: s.cargo.filter(x => x.good === g && !x.contract).reduce((a, x) => a + x.mass, 0) / 1000 })).filter(x => x.t > 0.004);
+  let down = 0;
+  const sells = ours.map(({ g, t }) => {
+    const no = tradeRefusal(s, id, g, 'sell');
+    const on = chosen.sell.has(g) && !no;
+    const take = on ? Math.min(t, Math.max(0, freeDownT - down)) : 0;
+    down += take;
+    return `<label class="sb-check ${no ? 'off' : ''}" title="${esc(no || '')}"><input type="checkbox" data-sell="${g}" ${on ? 'checked' : ''} ${no ? 'disabled' : ''}> ${tonnes(t)} ${esc(GOODS[g].name.toLowerCase())} · ${no ? 'not traded here' : `${fmtNum(Math.round(priceAt(s, id, g) * (1 - SPREAD)))}/t`}${on && take < t ? ` · ${tonnes(take)} fits` : ''}</label>`;
+  }).join('') || '<span class="sb-none">nothing of ours to sell</span>';
+  const buyable = GOOD_IDS.filter(g => !tradeRefusal(s, id, g, 'buy'));
+  if (chosen.buy && !buyable.includes(chosen.buy)) chosen.buy = null;
+  const maxUp = Math.min(room, holdRoom(s) / 1000);
+  const t = chosen.buy ? Math.min(chosen.buyT || maxUp, maxUp) : 0;
+  const q = chosen.buy && t > 0 ? quote(s, id, chosen.buy, t, 'buy') : null;
+  const short = q && q.total > s.resources.credits.current;
+  return `<div class="sb-trade"><div class="sb-line"><b>MARKET</b> ${esc(worldOfs(w.name))} ground, its prices live: sold and bought by radio on the pad</div>
+    <div class="sb-tradecol"><span class="sb-k">SELL DOWN</span><span class="sb-sells">${sells}</span></div>
+    <div class="sb-tradecol"><span class="sb-k">BRING UP</span><select data-pick="buy"><option value="">nothing</option>${buyable.map(g => `<option value="${g}" ${g === chosen.buy ? 'selected' : ''}>${esc(GOODS[g].name)} · ${fmtNum(Math.round(priceAt(s, id, g) * (1 + SPREAD)))}/t</option>`).join('')}</select>
+      ${chosen.buy ? `<input type="number" data-pick="buyT" min="0" max="${maxUp.toFixed(2)}" step="0.5" value="${t.toFixed(1)}"> t of ${tonnes(maxUp)} · ${q ? `about ${fmtNum(Math.round(q.total))} MCR${short ? ` <span class="sb-bad">(we have ${fmtNum(Math.round(s.resources.credits.current))}: as much as we can pay for, after what sells)</span>` : ''}` : ''}` : ''}</div></div>`;
 }
 
 /** A plan's whole run, stretch by stretch. */
@@ -131,9 +162,13 @@ function runPanel(s, run) {
 }
 
 function onChange(ev) {
+  const box = ev.target.closest('[data-sell]');
+  if (box) { if (box.checked) chosen.sell.add(box.dataset.sell); else chosen.sell.delete(box.dataset.sell); render(); return; }
   const sel = ev.target.closest('[data-pick]');
   if (!sel) return;
-  chosen[sel.dataset.pick] = sel.value;
+  const k = sel.dataset.pick;
+  chosen[k] = k === 'buyT' ? Math.max(0, +sel.value || 0) : k === 'buy' ? sel.value || null : sel.value;
+  if (k === 'buy') chosen.buyT = 0;
   render();
 }
 
@@ -147,7 +182,8 @@ function onClick(ev) {
     case 'launch': {
       const p = planRun(s, chosen.shuttle, chosen.airspace);
       if (!p.ok) { toast(p.why, 'warn'); break; }
-      const r = launchRun(s, p.plan, emit);
+      const r = launchRun(s, p.plan, emit, { trade: { sell: [...chosen.sell], buy: chosen.buy ? { good: chosen.buy, t: chosen.buyT || Infinity } : null } });
+      if (r.ok) { chosen.sell.clear(); chosen.buy = null; chosen.buyT = 0; }
       toast(r.text, r.ok ? 'nav' : 'warn');
       if (r.ok) logEntry(r.text, 'nav');
       break;
@@ -162,7 +198,7 @@ export function updateShuttleBay() {
   const now = performance.now();
   if (now - (updateShuttleBay.at || 0) < 400) return;
   updateShuttleBay.at = now;
-  // (not while a select is open: the redraw would close it)
-  if (document.activeElement?.tagName === 'SELECT') return;
+  // (not while a select is open or a figure being typed: the redraw would lose it)
+  if (['SELECT', 'INPUT'].includes(document.activeElement?.tagName)) return;
   render();
 }

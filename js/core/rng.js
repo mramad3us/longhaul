@@ -46,3 +46,22 @@ export function hashString(s) {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
   return h >>> 0;
 }
+
+/**
+ * A draw from a generator of its own (mulberry32), whose 32-bit state the
+ * caller keeps in its plain data (`holder[key]`, saved with it): a
+ * subsystem that draws on its own schedule (the market's shocks) leaves
+ * the main stream, and every test seeded on it, alone. Seed the state
+ * once (seedOf).
+ */
+export function nextOf(holder, key = 'rng') {
+  let a = holder[key] >>> 0;
+  a = (a + 0x6D2B79F5) | 0;
+  holder[key] = a >>> 0;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+/** A seed for such a generator from a string (a game's own particulars): stable, and off the main stream. */
+export const seedOf = (s) => hashString(s) || 1;

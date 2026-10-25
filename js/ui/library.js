@@ -54,6 +54,8 @@ import { HULL_CAMS } from './hullcam.js';
 import { WORLDS, airspacesOf, controlWords, WELL_G, SETTLEMENTS, UNSETTLED } from '../sim/worlds.js';
 import { entryProfile, ascentProfile, HEAT_LIMIT } from '../sim/planetary.js';
 import { BAYS } from '../sim/ship-classes.js';
+import { GOODS, GOOD_IDS } from '../sim/goods.js';
+import { MARKETS, MARKET_IDS, SPREAD, FENCE, PRICE_MIN, PRICE_MAX } from '../sim/market.js';
 import { OWN_ARRIVAL_S } from '../sim/combat.js';
 
 const CATEGORIES = [
@@ -65,6 +67,7 @@ const CATEGORIES = [
   { id: 'nav', label: 'NAVIGATION' },
   { id: 'crew', label: 'CREW & MEDICINE' },
   { id: 'factions', label: 'FACTIONS' },
+  { id: 'trade', label: 'TRADE' },
   { id: 'stations', label: 'STATIONS' },
 ];
 
@@ -470,7 +473,30 @@ function factions(add) {
       `A contractor earns reputation with its power (time in service, enemy hulls destroyed, military missions) and rank with it: ${RANKS.UN.join(', ')} in the UNN. Rank raises military pay by ${Math.round(PAY_PER_RANK * 100)}% a step, opens the harder missions, gets nuclear warheads issued by command ships, and waves it through its own side\'s patrols.`,
       `When its power fights within ${CALLUP_AU} AU, command orders it to the command ship: alongside, supplies cost a tenth while the fight lasts, and the board is all military work: intelligence, holding a control point at a front, strikes on high-value targets, now and then a covert job for a sub-faction against a rival inside the power.`],
     specs: [['Rank needed', `hold a point ${RANK_FOR.hold}+ · strike ${RANK_FOR.strike}+ · warheads ${RANK_FOR.nukes}+`], ['Reputation for each rank', RANK_REP.join(' · ')]],
-    links: [['How the powers stand', 'fac:politics']] });
+    links: [['How the powers stand', 'fac:politics'], ['Contraband and the law', 'trade:law']] });
+
+  // ---- TRADE ----
+  const mname = (id) => MARKETS[id].world ? `${MARKETS[id].world} (by shuttle)` : (ui.state ? getWorld(ui.state).get(id)?.name : null) || id.replace(/-/g, ' ');
+  add({ id: 'trade:market', cat: 'trade', group: 'The market', title: 'The market',
+    text: ['Fifteen markets trade fourteen goods: the stations (but Phobos\' naval yard, which trades with nobody passing) and the ground of the seven settled worlds, traded with by shuttle from a high orbit. Each makes some goods and wants others, and keeps a stock of everything.',
+      `A good\'s price is its base price over how full its stock is: plenty is cheap, scarcity dear, between ${PRICE_MIN} and ${PRICE_MAX} times base. We pay ${SPREAD * 100}% over the price and are paid ${SPREAD * 100}% under it, and as we buy the stock falls and the price climbs with it: a deep market (Earth\'s, Mars\') takes a lot before it moves, a shallow one (Vesta\'s electronics) little.`,
+      'The whole of it runs on its own, four times a day: every market makes and uses its goods, the goods move between them from the fuller to the emptier, faster between near ones, and now and then a strike, a blight or a boom moves a price for a week or two, and the news says so. Near a hot zone, munitions, medical supplies and food are wanted more, and less is shipped. It is a closed loop: across the system each good is made as fast as it is used.',
+      'So a good is cheap where it is made and dear where it is wanted, and a trader\'s margin is the gap less the spread and the walk of the price. Bulk goods (ice, ore) pay little a tonne; the dear ones (machine parts, electronics, pharmaceuticals) pay well, and want capital. What we know of a market far off is its prices a light-time old: the MARKETS window (P). A ship\'s stores in port follow its market too.'],
+    specs: MARKET_IDS.map(id => [mname(id), `makes ${Object.keys(MARKETS[id].make).map(g => GOODS[g].name.toLowerCase()).join(', ') || 'nothing'} · wants ${Object.keys(MARKETS[id].want).map(g => GOODS[g].name.toLowerCase()).join(', ')}${MARKETS[id].open === false ? ' · closed to traders' : ''}`]),
+    links: [['Goods', 'trade:goods'], ['Holds and cargo', 'trade:holds'], ['Shuttles', 'nav:shuttles']] });
+  add({ id: 'trade:goods', cat: 'trade', group: 'The market', title: 'Goods',
+    text: ['What is bought and sold, each at its base price: what it fetches where it is neither short nor plentiful. Cargo is labelled by its good, bought or taken.'],
+    specs: GOOD_IDS.map(g => [GOODS[g].name, `${GOODS[g].base.toLocaleString()} MCR a tonne · ${GOODS[g].illegalIn ? 'contraband in every power\'s space' : GOODS[g].restricted ? 'restricted' : GOODS[g].cat} · ${GOODS[g].desc}`]),
+    links: [['The market', 'trade:market'], ['Contraband and the law', 'trade:law']] });
+  add({ id: 'trade:holds', cat: 'trade', group: 'The market', title: 'Holds and cargo',
+    text: ['Every hull carries what its trade carries: an ice hauler ice, a tanker volatiles, a miner or an ore scow ore, a freighter what its last port makes, a warship munitions and parts, a pirate loot. A lawful ship with its transponder on has filed its manifest with traffic control, shown on its contact sheet once we know who it is: never the contraband.',
+      'A boarding party\'s SEARCH reads the real hold, good by good, and the dossier keeps it. Mated at the collar, TAKE CARGO moves it into ours at thirty tonnes an hour: one good, or all that fits, the dearest first.'],
+    links: [['Contraband and the law', 'trade:law'], ['The market', 'trade:market']] });
+  add({ id: 'trade:law', cat: 'trade', group: 'The law', title: 'Contraband and the law',
+    text: ['Narcotics are contraband wherever a power\'s law runs: only the independent ports (Vesta Depot, Ganymede) trade them, and any power\'s patrol that finds them seizes them and fines us. Munitions are restricted: legal aboard outside Earth\'s and Mars\'s space, and there only with that power\'s license; a UN or MCR port sells them only to its own navy\'s contractors.',
+      `Cargo taken from a lawful ship we had no right to board is stolen: its owners\' ports won\'t buy it, other ports pay a fence\'s price for it (${Math.round(FENCE * 100)}%), and its owners\' inspectors seize it. A wreck\'s cargo is salvage, a pirate\'s a prize, and the cargo of a ship that fought us and struck a capture.`,
+      'A licensed captain who comes by contraband goods turns them over at its own power\'s port, docked (or alongside its navy\'s command ship): reputation toward the next rank and standing, in proportion to what they are worth. Its own power\'s inspectors take such goods as evidence coming in; anyone else\'s seize them as ever. A smuggling contract\'s cargo is not for turning over, nor goods stolen from our own side.'],
+    links: [['Goods', 'trade:goods'], ['Military licenses', 'fac:service'], ['Police stops', 'nav:police']] });
 }
 
 function stations(add) {

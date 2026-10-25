@@ -59,8 +59,8 @@
 // ACTIONS are plain descriptors the UI executes (act.type):
 //   plot { target, dock? }    open the route planner on a target
 //   open { window, id?, tab? } windows: station (tabs board, deliver,
-//        services, berth, hire, leave, traffic), missions, comms, systems,
-//        roster, service, library, boarding, shuttles, jobs, weapons, map
+//        market, services, berth, hire, leave, traffic), missions, comms, systems,
+//        roster, service, library, boarding, shuttles, markets, jobs, weapons, map
 //   toggle { what }           'combat' (battle stations) | 'suits'
 //   respond { request, option } answer a comm request
 //   hail { id }               open a channel (also completes a rescue or
@@ -114,6 +114,9 @@ import { contractor, hullLegal, navyOf, openCallups } from '../sim/service.js';
 import { milRefusal } from '../sim/military.js';
 import { dockedPort, deliverable, inPort, needsBerth, contractsAt, CONTRACT_LABEL } from '../sim/contracts.js';
 import { activeRuns, runReadout, runRefusal } from '../sim/shuttles.js';
+import { marketHere, quote, tradeRefusal } from '../sim/market.js';
+import { GOODS } from '../sim/goods.js';
+import { turnOverHere } from '../sim/law.js';
 
 export const AI_NAME = 'VIGIL';
 export const LEVELS = { warning: 3, caution: 2, advice: 1, info: 0 };
@@ -1054,6 +1057,41 @@ function ruleShuttles(state, c, add) {
   });
 }
 
+/**
+ * The market where we are docked: goods aboard it pays more for than we
+ * paid (the best of them, if it is worth the saying), and contraband a
+ * licensed captain can turn over here.
+ */
+function ruleMarket(state, c, add) {
+  const turn = turnOverHere(state);
+  if (turn) {
+    add({
+      key: 'turn-over', level: ADVICE, rank: 52, sig: turn.items.map(x => x.good).join(','),
+      text: `Contraband aboard: turn it over to ${turn.port.name} for reputation.`,
+      detail: 'A licensed captain hands contraband goods to its own power: reputation toward the next rank, and standing. Carried in anyone else\'s space, it is seized and fined.',
+      actions: [A.station(turn.port.id, turn.port.tags?.command ? 'services' : 'market', 'TURN IT OVER')],
+    });
+  }
+  const id = marketHere(state);
+  if (!id) return;
+  let best = null;
+  for (const g of new Set(state.cargo.filter(x => x.good && !x.contract && x.cost > 0).map(x => x.good))) {
+    if (tradeRefusal(state, id, g, 'sell')) continue;
+    const items = state.cargo.filter(x => x.good === g && !x.contract && !x.stolen);
+    const t = items.reduce((s, x) => s + x.mass, 0) / 1000, paid = items.reduce((s, x) => s + (x.cost || 0), 0);
+    if (t < 0.05) continue;
+    const gain = quote(state, id, g, t, 'sell').total - paid;
+    if (gain > 500 && (!best || gain > best.gain)) best = { g, t, gain };
+  }
+  if (best) {
+    add({
+      key: 'market-sell', level: ADVICE, rank: 44, sig: `${best.g}:${Math.round(best.gain / 500)}`,
+      text: `${GOODS[best.g].name} sells here for ${Math.round(best.gain).toLocaleString()} MCR more than we paid.`,
+      actions: [A.station(id, 'market', 'MARKET')],
+    });
+  }
+}
+
 function ruleScuttle(state, c, add) {
   for (const id of state.combat.fuses || []) {
     const e = c.world.get(id);
@@ -1244,7 +1282,7 @@ function ruleSituation(state, c, add) {
 
 const RULES = [
   ruleReactor, ruleOrdnance, ruleDecks, ruleCrew, ruleHostiles, rulePort, ruleFlight,
-  ruleRequests, ruleBoarding, ruleScuttle, ruleShuttles, ruleDistress, ruleOrders, ruleContracts, ruleLaw,
+  ruleRequests, ruleBoarding, ruleScuttle, ruleShuttles, ruleMarket, ruleDistress, ruleOrders, ruleContracts, ruleLaw,
   ruleStores, ruleMachinery, rulePortCall, ruleSituation,
 ];
 

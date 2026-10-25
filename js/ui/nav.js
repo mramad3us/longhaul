@@ -48,6 +48,7 @@ import { boardable } from '../sim/boarding.js';
 import { droneStatus } from '../sim/drones.js';
 import { clearanceFor, requestDeparture } from '../sim/traffic-control.js';
 import { knownCrew } from '../sim/manifest.js';
+import { knownHold, holdWords } from '../sim/market.js';
 import { hullOf, portSummary } from '../sim/hulls.js';
 import { CLASSES } from '../sim/ship-classes.js';
 import { drawHullPortrait } from './hull-art.js';
@@ -738,7 +739,9 @@ function shipRows(s, e, c, row) {
   const hull = known ? `<canvas class="scanner-detail-hull" width="260" height="60" data-hull="${e.id}"></canvas>` : '';
   // (a command ship says what it is: the forward command of its navy's fight)
   const cmd = known && e.tags?.command ? row('ROLE', `${esc(FACTIONS[e.faction]?.navy || '')} forward command · ${esc(e.tags.command.body)}`) : '';
+  const hold = CLASSES[e.cls]?.cargoT > 0 ? knownHold(s, e, known) : null;
   return `${hull}${cmd}${row('ABOARD', crew ? `${esc(crew.text)} <span class="scanner-val-dim">${esc(crew.src)}</span>` : 'unknown', crew ? '' : 'scanner-val-dim')}
+    ${CLASSES[e.cls]?.cargoT > 0 ? row('HOLD', hold ? `${esc(holdWords(hold.items))} <span class="scanner-val-dim">${esc(hold.src)}</span>` : known ? 'no manifest filed' : 'unknown', hold ? 'scanner-val-wrap' : 'scanner-val-dim') : ''}
     ${row('COLLARS', known ? esc(portSummary(e.cls)) : '—')}
     ${known && CLASSES[e.cls]?.atmo ? row('ATMOSPHERE', 'rated for entry') : ''}`;
 }

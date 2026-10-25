@@ -38,14 +38,27 @@
 // its license. Military-grade kit is contraband without a license: a navy
 // hull flown without its navy's license (a stolen one, always), and
 // nuclear torpedoes, legal only to a licensed captain, and only in its
-// own power's space where Earth and Mars are concerned.
+// own power's space where Earth and Mars are concerned; munitions in the
+// hold the same (goods.js restricted).
+//
+// TURNING IT OVER. A licensed captain who comes by contraband goods
+// (narcotics, goods stolen from other powers' ships: goods.js) may turn
+// them over at one of its own power's ports, docked, or alongside its
+// navy's command ship: reputation toward its next rank and standing with
+// its power, in proportion to what the goods are worth
+// (turnOverContraband). Its own power's inspectors take them as evidence
+// coming in, without a fine; anyone else's seize them, and fine us, as
+// from anyone. A smuggling contract's cargo is not for turning over, nor
+// goods stolen from our own side.
 // ============================================================
 
 import { DAY_MIN } from '../core/constants.js';
 import { POWERS, controlAt } from './factions.js';
 import { orbitStateAt } from './world.js';
 import { classOf } from './ship-classes.js';
-import { licenseOf, hullLegal, navyOf, enemyCombatant, ownSideCrime } from './service.js';
+import { licenseOf, hullLegal, navyOf, enemyCombatant, ownSideCrime, addRep } from './service.js';
+import { getWorld } from './world.js';
+import { GOODS } from './goods.js';
 
 export const WANTED_LABEL = ['CLEAN', 'SUSPECT', 'WANTED', 'HOSTILE'];
 const SEVERITY = { fired: 1, hit: 1, disabled: 2, destroyed: 3 };
@@ -209,16 +222,57 @@ export function nukesLegal(state, faction) {
   return !!lic && (faction === lic || !NUKES_ILLEGAL_IN.includes(faction));
 }
 
+/** Are munitions in the hold legal under `faction`'s law? (Anywhere but Earth's and Mars's space; there only with that power's license.) */
+export const munitionsLegal = (state, faction) => !NUKES_ILLEGAL_IN.includes(faction) || licenseOf(state) === faction;
+
 /**
  * What an inspector of `faction` would seize or levy: { cargo: [items],
  * nukes: n, hull: 'unlicensed' | 'stolen' | null }.
  */
 export function contrabandFor(state, faction) {
-  const cargo = state.cargo.filter(c => c.contraband && (c.illegalIn || POWERS).includes(faction));
+  const ours = licenseOf(state) === faction;
+  const cargo = state.cargo.filter(c => (c.contraband && (c.illegalIn || POWERS).includes(faction) && !(ours && turnable(state, c)))
+    || (c.restricted && !munitionsLegal(state, faction)));
   const nukes = nukesLegal(state, faction) ? 0 : state.magazine.nuke;
   const navy = navyOf(state.ship.classId);
   const hull = hullLegal(state) ? null : navy === 'stolen' || navy === faction ? 'stolen' : 'unlicensed';
   return { cargo, nukes, hull };
+}
+
+/** Contraband goods a licensed captain may turn over to its own power (not a contract's, not stolen from its own side). */
+export const turnable = (state, c) => !!licenseOf(state) && c.contraband && !!c.good && !c.contract && c.stolen !== licenseOf(state);
+
+/** What we could turn over here: our power's port, docked (or its command ship, alongside). { port, items } or null. */
+export function turnOverHere(state) {
+  const L = licenseOf(state), d = state.dock;
+  if (!L || d?.phase !== 'docked') return null;
+  const port = getWorld(state).get(d.target.id);
+  if (!port || port.faction !== L || (port.type !== 'station' && !port.tags?.command)) return null;
+  const items = state.cargo.filter(c => turnable(state, c));
+  return items.length ? { port, items } : null;
+}
+
+/** Its worth in the turning over: the goods at their base price. */
+const turnedValue = (items) => items.reduce((s, c) => s + c.mass / 1000 * (GOODS[c.good]?.base || 0), 0);
+
+/**
+ * Turn over the contraband goods aboard at our power's port: they go;
+ * reputation toward our next rank (5, and one for every 4,000 MCR they
+ * are worth, 80 at most) and standing (up to 6). Returns { ok, text }.
+ */
+export function turnOverContraband(state, emit = () => {}) {
+  const here = turnOverHere(state);
+  if (!here) return { ok: false, text: licenseOf(state) ? 'Nothing to turn over, or not at one of our own ports.' : 'Only a licensed captain turns contraband over.' };
+  const value = turnedValue(here.items);
+  const rep = Math.min(80, Math.round(5 + value / 4000));
+  const standing = Math.min(6, Math.round(1 + value / 20000));
+  const what = here.items.map(c => `${(c.mass / 1000).toFixed(c.mass < 10_000 ? 2 : 1)} t of ${c.name.toLowerCase()}`).join(', ');
+  state.cargo = state.cargo.filter(c => !here.items.includes(c));
+  addRep(state, rep, `contraband turned over at ${here.port.name}`, emit);
+  adjustStanding(state, here.port.faction, standing);
+  const text = `Turned over at ${here.port.name}: ${what}. Logged as evidence: +${rep} reputation, standing +${standing}.`;
+  emit('contraband-turned-over', { text, rep, value });
+  return { ok: true, text, rep, standing };
 }
 
 /**

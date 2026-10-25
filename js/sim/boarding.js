@@ -38,6 +38,14 @@
 // time (the easy pickings go first: SALVAGE_DECAY). A wreck is dangerous
 // to work in: a party member can be hurt by what shifts.
 //
+// THE HOLD. A search reads its hold, good by good (market.js holdOf: what
+// its trade carries), into the dossier. Mated at the collar, TAKE CARGO
+// moves it into ours, thirty tonnes an hour: one good, or all that fits,
+// the dearest first. A wreck's cargo is salvage, a pirate's or an outlaw's
+// a prize, a ship that fought us and struck a capture; a lawful ship's,
+// taken, is stolen (its owners' power on the goods: market.js, law.js), and
+// theft.
+//
 // What can be boarded is a question for BOARDABLE: ships today; stations
 // (a docking ring, a hab section) come later, through the same phases.
 // ============================================================
@@ -56,6 +64,8 @@ import { lawfulTarget, recordOffense } from './law.js';
 import { isDocked, dockedTo } from './docking.js';
 import { shipGeometry, airlockFor } from './ship-layout.js';
 import { ourName } from './service.js';
+import { holdOf, holdWords, stow, holdRoom } from './market.js';
+import { GOODS, tonnes } from './goods.js';
 
 export const EVA_RANGE_M = 2_000;
 const EVA_SPEED_MS = 2;
@@ -305,7 +315,7 @@ function secure(state, b, e, emit) {
 export const BOARDING_ACTIONS = {
   search: { label: 'SEARCH', min: SEARCH_MIN, desc: 'Go through the ship: manifest, cargo, logs, anything hidden.' },
   strip: { label: 'TAKE STORES', min: STRIP_MIN, desc: 'Carry over reaction mass, spares, food, water, medical supplies and ammunition, as much as we hold.' },
-  cargo: { label: 'TAKE CARGO', min: STRIP_MIN, desc: 'Move their hold into ours (docked only: nobody carries tonnes by EVA).' },
+  cargo: { label: 'TAKE CARGO', min: STRIP_MIN, repeat: true, desc: 'Move their hold into ours, the dearest goods first, as much as fits (docked only: nobody carries tonnes by EVA). Thirty tonnes an hour. A wreck\'s cargo is salvage, a pirate\'s a prize; a lawful ship\'s, taken, is stolen.' },
   prisoners: { label: 'TAKE PRISONERS', min: PRISONERS_MIN, desc: 'Bring their crew aboard as prisoners: into the brig\'s cells (a warship has them), then any empty berths.' },
   scuttle: { label: 'SCUTTLE', min: SCUTTLE_MIN, desc: 'Set their reactor to lose containment in two hours, and get off.' },
   salvage: { label: 'SALVAGE', min: SALVAGE_MIN, repeat: true, desc: 'Cut what is still good out of the wreck: scrap for the machine shop, spare parts, stores from tanks that held. Each run gives less. Wrecks shift: someone can get hurt.' },
@@ -322,27 +332,52 @@ export function boardingActions(state) {
     if (!why && id === 'salvage' && ensureHull(e).status !== 'wreck') why = 'not a wreck: take stores';
     if (!why && id === 'salvage' && (e.tags.salvageLeft ?? 1) < 0.05) why = 'stripped bare';
     if (!why && id === 'cargo' && !(b.via === 'dock' && state.dock?.target.id === b.target && state.dock.phase === 'docked')) why = 'dock first';
+    if (!why && id === 'cargo' && !holdOf(state, e).some(x => x.t > 0.005)) why = 'its hold is empty';
+    if (!why && id === 'cargo' && holdRoom(state) < 5) why = 'no room in our hold';
     if (!why && id === 'prisoners' && freeCells(state) <= 0) why = 'no free cells or berths';
     if (!why && id === 'prisoners' && crewAboard(e) <= 0) why = 'nobody left aboard';
     return { id, ...a, why, running: b.action?.id === id };
   });
 }
 
-/** Orders that empty a hull once, whoever boards it after (its stores, its hold, its credit store). */
-const ONCE_PER_HULL = new Set(['strip', 'cargo', 'accounts']);
+/** Orders that empty a hull once, whoever boards it after (its stores, its credit store). Its hold empties as it is taken. */
+const ONCE_PER_HULL = new Set(['strip', 'accounts']);
+
+/**
+ * Whose goods its cargo is, taken: nobody's (a wreck's, salvage; a pirate's
+ * or an outlaw's, a prize; one that fought us and struck, a capture), or its
+ * owners' (a lawful ship's, taken: stolen, and theft).
+ */
+function stolenFrom(state, e) {
+  if (ensureHull(e).status === 'wreck' || !lawfulTarget(e) || e.agent?.aggressor) return null;
+  return e.faction;
+}
+
+/** How long moving goods across a mated collar takes the party (min): thirty tonnes an hour, ten minutes at the least. */
+export const cargoMinutes = (t) => Math.max(10, Math.round(t * 2));
 
 
 /** Give the party an order aboard. */
-export function orderAboard(state, actionId, emit = () => {}) {
+export function orderAboard(state, actionId, emit = () => {}, { good = null } = {}) {
   const b = state.boarding;
   if (!b || b.phase !== 'secured') return { ok: false, text: 'Nothing secured.' };
   if (actionId === 'withdraw') { b.phase = 'return'; b.since = state.clock.minute; b.action = null; note(state, 'Party returning.', emit); return { ok: true, text: 'Party coming back across.' }; }
   const a = boardingActions(state).find(x => x.id === actionId);
   if (!a) return { ok: false, text: 'No such order.' };
   if (a.why) return { ok: false, text: a.why };
-  b.action = { id: actionId, until: state.clock.minute + a.min };
-  note(state, `${a.label.toLowerCase()} — ${a.min} minutes.`, emit);
-  return { ok: true, text: `${a.label}: ${a.min} minutes.` };
+  let min = a.min, label = a.label;
+  if (actionId === 'cargo') {
+    // (as long as the tonnes take to move: one good, or all of it that fits)
+    const e = getWorld(state).get(b.target);
+    const hold = holdOf(state, e).filter(x => !good || x.good === good);
+    const t = Math.min(hold.reduce((s, x) => s + x.t, 0), holdRoom(state) / 1000);
+    if (good && !hold.length) return { ok: false, text: 'None of that in its hold.' };
+    min = cargoMinutes(t);
+    if (good) label = `TAKE ${GOODS[good].name.toUpperCase()}`;
+  }
+  b.action = { id: actionId, until: state.clock.minute + min, ...(good ? { good } : {}) };
+  note(state, `${label.toLowerCase()} — ${min} minutes.`, emit);
+  return { ok: true, text: `${label}: ${min} minutes.` };
 }
 
 function actionMinute(state, b, e, party, emit) {
@@ -356,11 +391,13 @@ function actionMinute(state, b, e, party, emit) {
   const c = classOf(e);
   switch (a.id) {
     case 'search': {
+      // (the hold as it is: market.js holdOf, its goods labelled)
       const crew = crewAboard(e), pax = passengersAboard(e);
-      const fill = 0.2 + 0.7 * random();
-      b.found = { crew, pax, holdT: Math.round((c?.cargoT || 0) * fill), contraband: e.faction === 'pirate' || chance(0.08) };
-      learn(state, e, { crew, pax, note: `Searched: ${b.found.holdT.toLocaleString()} t in the hold${b.found.contraband ? ', contraband among it' : ''}` }, 'boarded');
-      note(state, `Search done: ${crew} crew, ${pax} passengers, ${b.found.holdT.toLocaleString()} t in the hold${b.found.contraband ? ' — some of it contraband' : ''}.`, emit, 'ok');
+      const hold = holdOf(state, e).filter(x => x.t > 0.01);
+      const contraband = hold.some(x => GOODS[x.good].illegalIn);
+      b.found = { crew, pax, holdT: Math.round(hold.reduce((s, x) => s + x.t, 0) * 10) / 10, contraband };
+      learn(state, e, { crew, pax, hold, note: `Searched: ${holdWords(hold)}${contraband ? ' (contraband among it)' : ''}` }, 'boarded');
+      note(state, `Search done: ${crew} crew, ${pax} passengers. The hold: ${holdWords(hold)}${contraband ? ', contraband among it' : ''}.`, emit, 'ok');
       return;
     }
     case 'strip': {
@@ -381,12 +418,22 @@ function actionMinute(state, b, e, party, emit) {
       return;
     }
     case 'cargo': {
-      const holdT = b.found?.holdT ?? Math.round((c?.cargoT || 0) * 0.5);
-      const roomKg = state.cargoCapacity - state.cargo.reduce((s, x) => s + x.mass, 0);
-      const mass = Math.max(0, Math.min(roomKg, holdT * 1000));
-      if (mass <= 0) { note(state, 'No room in our hold.', emit, 'warn'); return; }
-      state.cargo.push({ name: `Seized cargo (${e.name})`, mass, value: Math.round(mass * 0.4), seized: true, from: e.id, contraband: !b.lawful || b.found?.contraband, illegalIn: !b.lawful ? null : undefined });
-      note(state, `${Math.round(mass / 1000).toLocaleString()} t moved into our hold.`, emit, 'ok');
+      // its hold into ours, good by good (one asked for, or the dearest a tonne first), as much as fits
+      const hold = holdOf(state, e);
+      const goods = a.good ? hold.filter(x => x.good === a.good) : [...hold].sort((p, q) => GOODS[q.good].base - GOODS[p.good].base);
+      const stolen = stolenFrom(state, e);
+      const moved = [];
+      for (const x of goods) {
+        const t = Math.min(x.t, holdRoom(state) / 1000);
+        if (t <= 0.005) break;
+        stow(state, { good: x.good, mass: t * 1000, cost: 0, seized: true, from: e.id, ...(stolen ? { stolen } : {}) });
+        x.t = Math.round((x.t - t) * 1000) / 1000;
+        moved.push({ good: x.good, t });
+      }
+      e.tags.hold = hold.filter(x => x.t > 0.005);
+      if (!moved.length) { note(state, holdRoom(state) <= 0 ? 'No room in our hold.' : 'Nothing left in its hold.', emit, 'warn'); return; }
+      note(state, `Into our hold: ${moved.map(m => `${tonnes(m.t)} ${GOODS[m.good].name.toLowerCase()}`).join(', ')}${stolen ? '. Stolen goods: its owners\' ports won\'t touch them' : ''}.`, emit, 'ok');
+      if (stolen && stolen in state.law.standing) recordOffense(state, stolen, 'theft', 1, emit, `took ${e.name}'s cargo`);
       return;
     }
     case 'prisoners': {

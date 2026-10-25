@@ -218,6 +218,8 @@ const HANDLERS = {
     logEntry(`Newsfeed${aged(lagMin)}: ${text}`, kind === 'war' ? 'danger' : loud ? 'ok' : 'comms');
     if (loud) { toast(text, kind === 'war' ? 'danger' : 'ok'); pushTicker(text, kind === 'war' ? 'danger' : 'comms', 'NEWS'); }
   },
+  'contraband-turned-over': ({ text }) => logEntry(text, 'ok'),
+  'market-news': ({ text, lagMin }) => { logEntry(`Market news${aged(lagMin)}: ${text}`, 'comms'); pushTicker(text, 'comms', 'MARKETS'); },
   'politics-phase': () => {},
   'proxy-war': () => {},
   'yard-sabotage': () => {},
