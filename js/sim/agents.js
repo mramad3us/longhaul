@@ -96,6 +96,7 @@ export const ROLES = {
 
 const IDLE_THINK = 5;                 // minutes between decisions when nothing is happening
 const DESPAWN_AU = 0.25;              // ambient agents this far from us leave the simulation
+const HOME_AU = 0.0005;               // a warship this close to its yard (75,000 km; it cruises in to 30,000) is home
 const LEAVE_AU = 0.05;                // agents done with their business vanish past this
 const DEMAND_AU = 0.0005;             // pirates make their demand from ~75,000 km
 const HAIL_AU = 0.002;                // patrols order a stop from ~300,000 km
@@ -408,6 +409,14 @@ function leaves(state, e) {
   if (a.contract && a.mode !== 'leave') return false;
   const d = distAU(e.pos, state.flight.pos);
   if ((a.ambient && d > DESPAWN_AU) || (a.mode === 'leave' && d > LEAVE_AU)) return true;
+  // A warship home from a fight, with no business with anyone: berthed, though we are near (forces.js
+  // putToSleep sends it the last stretch). (A captain at a navy yard would otherwise keep every hull
+  // that came home awake, cruising off its slips, and the yards would build more.)
+  const f = e.tags?.force;
+  if (f && !f.zone && (f.role === 'navy' || f.role === 'command') && !a.hostile.length && (a.mode === 'patrol' || a.mode === 'cruise')) {
+    const home = getWorld(state).get(f.home);
+    if (home && distAU(e.pos, home.pos) < HOME_AU) return true;
+  }
   // Traffic woken by a fight, with nothing left to fear, sound, no beacon lit: back on its route from
   // where it is (forces.js putToSleep: a transit from its fix, so it moves on as it was moving), though
   // we are near. (A captain parked at a port for years would otherwise collect every calmed hull round it.)

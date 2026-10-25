@@ -29,8 +29,13 @@
 // it (licensed captains report there). Pirate zones gather packs; proxy
 // zones the proxy's raiders. Far from us those hulls stay on rails and a
 // zone produces outcomes, hourly: warships of both sides on station may
-// lose one, raiders may take a passing hauler, a blockade may stop one
-// that runs it. The losses are real ships, left as wrecks where they
+// lose one (the side facing the stronger squadron the likelier), raiders
+// may take a passing hauler (and now and then lose one to its escort), a
+// blockade may stop one that runs it (and with the runners' navy on
+// station, the two squadrons now and then come to blows), a proxy's
+// raiders are hunted by the navy of the power they prey on, and an
+// insurgency's cells cost the navy hulls while it stops their runners.
+// The losses are real ships, left as wrecks where they
 // fell, and every one between two powers is an incident (politics.js):
 // it feeds the crisis, or wears the war down. News of all of it travels
 // at light speed (intel.js).
@@ -79,8 +84,14 @@ export const NAVAL_KINDS = new Set(['standoff', 'blockade', 'skirmish', 'front']
 const MAX_ZONES = 8;                   // flashpoints at once…
 export const ZONE_CAP = MAX_ZONES + 2;  // …and with a war's front and a proxy's raiding ground on top, at most
 const MAX_AMBIENT = 6;                 // agents the director keeps around us at most
+// A zone's losses: at most this many in any WRECK_WINDOW_MIN (a wreck's
+// life: forces.js wreckInPlace), so a long war is fought all the way through
+// at a pace the yards can answer, and its wrecks stay few; and a lifetime
+// ceiling, never met by a war of the usual length.
 const MAX_ZONE_WRECKS = 4;
 const MAX_FRONT_WRECKS = 10;
+const WRECK_WINDOW_MIN = 8 * DAY_MIN;
+const MAX_ZONE_LOSSES = 40, MAX_FRONT_LOSSES = 80;
 const QUIET_MIN = [6 * 60, 24 * 60];   // rest after an encounter (minutes)
 const FRONT_POINTS = ['ALPHA', 'BRAVO', 'CHARLIE'];
 
@@ -280,23 +291,29 @@ function zoneHeadline(z) {
 /**
  * Off-screen consequences, hourly. With the background forces running,
  * the losses are real hulls: warships on station at a standoff, a
- * skirmish or a front, traffic in the lanes through a pirate zone, a
- * proxy's raiding ground or a blockade. Nobody there, nothing happens
- * (the squadrons may still be on their way). Without them (test suites),
- * and for insurgencies, a loss is rolled up from the zone's politics. A
- * wreck stays where it fell.
+ * skirmish or a front (and at a blockade or a proxy's raiding ground when
+ * both sides are there), traffic in the lanes through a pirate zone, a
+ * proxy's raiding ground or a blockade, raiders lost to a hauler's guns,
+ * an insurgency's navy hulls and the runners it stops. Nobody there,
+ * nothing happens (the squadrons may still be on their way). Without them
+ * (test suites), and an insurgency's toll with nothing passing, a loss is
+ * rolled up from the zone's politics. A wreck stays where it fell.
  */
 const INCIDENT_RATE = { front: 0.1, skirmish: 0.06, pirates: 0.04, proxy: 0.04, blockade: 0.01, standoff: 0.005, insurgency: 0.01 };
 
 function zoneIncidents(state, z, emit) {
-  if (z.wrecks >= (z.kind === 'front' ? MAX_FRONT_WRECKS : MAX_ZONE_WRECKS)) return;
+  const front = z.kind === 'front', now = state.clock.minute;
+  if (z.wrecks >= (front ? MAX_FRONT_LOSSES : MAX_ZONE_LOSSES)) return;
+  const recent = (z.lossAt ||= []);
+  while (recent.length && now - recent[0] > WRECK_WINDOW_MIN) recent.shift();
+  if (recent.length >= (front ? MAX_FRONT_WRECKS : MAX_ZONE_WRECKS)) return;
   const rate = (INCIDENT_RATE[z.kind] || 0) * z.intensity;
-  if (forcesOn(state) && z.kind !== 'insurgency') {
+  if (forcesOn(state)) {
     const loss = zoneLoss(state, z, rate);
-    if (loss) reportLoss(state, z, loss.e, loss.text);
-    return;
-  }
-  if (!chance(rate)) return;
+    if (loss) { reportLoss(state, z, loss.e, loss.text); return; }
+    if (loss !== undefined) return;
+    // (an insurgency's toll this hour with nothing passing to take it: rolled up, as without the forces)
+  } else if (!chance(rate)) return;
   const world = getWorld(state);
   const victim = z.kind === 'skirmish' || z.kind === 'front'
     ? rollIdentity({ category: 'military', faction: pick(z.factions), state })
@@ -313,31 +330,75 @@ function zoneIncidents(state, z, emit) {
   reportLoss(state, z, e, `${victim.shipClass} ${victim.name} lost near ${z.body}.`);
 }
 
-/** Who, if anyone, the zone costs this hour. */
+/** Of the hours a blockade could cost a ship, the share its squadron and the runners' navy (on station too) fight instead. */
+const BLOCKADE_CLASH = 0.3;
+/** Of a proxy zone's hours, the share the target power's navy (on station) spends hunting the raiders. */
+const PROXY_HUNT = 0.5;
+/** Of a pirate zone's takings, the share that costs the raiders one instead (a hauler's guns, its escort). */
+const PIRATE_TOLL = 0.15;
+/** Of an insurgency's hours with the navy on station, the share the cells cost it a hull (a mine, a bomb aboard). */
+const CELL_STRIKE = 0.4;
+
+/**
+ * Who, if anyone, the zone costs this hour: { e, text }, or null. (An
+ * insurgency with nobody there to hit and nobody passing: undefined, for
+ * the toll rolled up from its politics.)
+ */
 function zoneLoss(state, z, rate) {
   const there = forcesAt(state, z);
-  if (z.kind === 'skirmish' || z.kind === 'standoff' || z.kind === 'front') {
-    const [a, b] = z.factions.map(f => there[f] || []);
-    if (!a.length || !b.length || !chance(rate * Math.min(1, (a.length + b.length) / 4))) return null;
-    // The side facing the stronger squadron loses a ship (a Martian TL4 frigate
-    // is worth several Belt refits)
-    const might = (side) => side.reduce((m, e) => m + (CLASSES[e.cls] ? classStrength(e.cls) : 1), 0);
-    const ma = might(a), mb = might(b);
-    const side = chance(mb / (ma + mb)) ? a : b;
-    const e = pick(side);
-    // At a front the loser may lose ground too: a control point it held
-    if (z.points && chance(0.35)) {
-      const held = z.points.filter(pt => pt.held === e.faction);
-      if (held.length) pick(held).held = z.factions.find(f => f !== e.faction);
+  const [f0, f1] = z.factions;
+  const ours = there[f0] || [];
+  if (z.kind === 'skirmish' || z.kind === 'standoff' || z.kind === 'front') return clash(z, ours, there[f1] || [], rate);
+  if (z.kind === 'blockade' && ours.length && there[f1]?.length && chance(BLOCKADE_CLASH)) return clash(z, ours, there[f1], rate);
+  if (z.kind === 'proxy' && ours.length && there.$proxy?.length && chance(PROXY_HUNT)) return clash(z, ours, there.$proxy, rate);
+  if (z.kind === 'insurgency') {
+    if (ours.length && chance(CELL_STRIKE)) {
+      if (!chance(rate)) return null;
+      const e = pick(ours);
+      return { e, text: `${e.shipClass} ${e.name} lost to a cell's mine near ${z.body}.` };
     }
-    return { e, text: `${e.shipClass} ${e.name} lost near ${z.body}${z.kind === 'standoff' ? '' : ' in the fighting'}.` };
+    if (!chance(rate)) return null;
+    const lane = traffickedNear(state, z);
+    if (!lane) return undefined;
+    return { e: lane, text: ours.length ? `${lane.shipClass} ${lane.name} disabled near ${z.body} by the ${FACTIONS[f0].navy}, suspected of running for the cells.` : `${lane.shipClass} ${lane.name} bombed by the cells near ${z.body}.` };
   }
-  const hunters = z.kind === 'pirates' ? (there.pirate || []) : z.kind === 'proxy' ? (there.$proxy || []) : (there[z.factions[0]] || []);
+  const hunters = z.kind === 'pirates' ? (there.pirate || []) : z.kind === 'proxy' ? (there.$proxy || []) : ours;
   if (!hunters.length || !chance(rate * Math.min(1, hunters.length / 3))) return null;
-  const lane = traffickedNear(state, z, z.kind === 'proxy' ? z.factions[0] : null);
+  const lane = traffickedNear(state, z, z.kind === 'proxy' ? f0 : null);
   if (!lane) return null;
-  const how = z.kind === 'pirates' ? 'taken by raiders' : z.kind === 'proxy' ? `taken by ${SUBFACTIONS[z.sub]?.name || 'raiders'}` : `disabled running the ${FACTIONS[z.factions[0]].navy} blockade`;
+  if (z.kind === 'pirates' && chance(PIRATE_TOLL)) {
+    const e = pick(hunters);
+    return { e, text: `${e.shipClass} ${e.name} lost near ${z.body}, to the guns of the ${lane.name} it meant to take.` };
+  }
+  const how = z.kind === 'pirates' ? 'taken by raiders' : z.kind === 'proxy' ? `taken by ${SUBFACTIONS[z.sub]?.name || 'raiders'}` : `disabled running the ${FACTIONS[f0].navy} blockade`;
   return { e: lane, text: `${lane.shipClass} ${lane.name} ${how} near ${z.body}.` };
+}
+
+/**
+ * Two squadrons on station come to blows (as often as the hour's rate and
+ * their numbers allow), and one of them loses a ship. Which: each side's
+ * hulls fall as fast as the other side's guns allow and as hard as its own
+ * hulls are to kill (Lanchester's linear law, a hull's worth its
+ * toughness: side A loses ∝ nA·mightB/mightA). So twenty-two UNN corvettes
+ * against five MCRN frigates of the same total might lose about five hulls
+ * for each of the Martians', the worth lost on each side about even, and
+ * a few good ships are not traded one for one against many poor ones. At a
+ * front the loser may lose ground too, a control point it held.
+ */
+function clash(z, a, b, rate) {
+  if (!a.length || !b.length || !chance(rate * Math.min(1, (a.length + b.length) / 4))) return null;
+  const might = (side) => side.reduce((m, e) => m + (CLASSES[e.cls] ? classStrength(e.cls) : 1), 0);
+  const ma = might(a), mb = might(b);
+  const la = a.length * mb / ma, lb = b.length * ma / mb;
+  const side = chance(la / (la + lb)) ? a : b;
+  const e = pick(side);
+  if (z.points && chance(0.35)) {
+    const held = z.points.filter(pt => pt.held === e.faction);
+    if (held.length) pick(held).held = z.factions.find(f => f !== e.faction);
+  }
+  const raider = e.tags?.force?.role === 'proxy';
+  return { e, text: raider ? `${e.shipClass} ${e.name} hunted down near ${z.body} by the ${FACTIONS[z.factions[0]].navy}.`
+    : `${e.shipClass} ${e.name} lost near ${z.body}${z.kind === 'standoff' ? '' : ' in the fighting'}.` };
 }
 
 /**
@@ -366,6 +427,7 @@ function reportLoss(state, z, e, text) {
   if (!e.tags.wreck) wreckInPlace(state, e, z.body);
   e.tags.zone = z.id;
   z.wrecks++;
+  (z.lossAt ||= []).push(state.clock.minute);
   // Every loss between two powers is an incident: it feeds a crisis, or wears a war down
   if (z.factions.length === 2 && NAVAL_KINDS.has(z.kind)) incident(state, z.factions[0], z.factions[1], z.kind === 'blockade' ? 0.3 : 1);
   else if (z.kind === 'insurgency') incident(state, 'OPA', z.factions[0], 0.5);

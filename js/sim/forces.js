@@ -10,8 +10,14 @@
 //     orbits within a couple of million km of it.
 //   NAVIES berth at their yards (UNN at Luna, MCRN at Phobos, OPA at
 //     Tycho and Ceres) until a hot zone calls for them. Then a squadron
-//     flies out on a filed course and holds station at the zone, and
-//     flies home when the zone is over.
+//     (ZONE_FORCES: a share of the navy) flies out on a filed course and
+//     holds station at the zone, and flies home when the zone is over. A
+//     fight short of its squadron (its hulls lost, a yard empty when it
+//     began, a standoff gone to a skirmish) is sent what is berthed once
+//     a day, the fiercest fights first (reinforce), and only once enough
+//     are in to go together (GATHER of the squadron: no navy feeds a fight
+//     a hull at a time). Only what is berthed goes: hulls come from the
+//     yards, in their time, never on the spot.
 //   PIRATES lie up cold in lawless space, near rocks nobody holds, each
 //     with its clan (factions.js). A pirate zone gathers a pack.
 //   COMMAND SHIPS, a few capital hulls per power (a battleship for Earth
@@ -33,8 +39,8 @@
 //     militia hulls. They prey on the target power's shipping.
 //
 // THE YARDS make good what is lost, with time: a census each day counts
-// every power's hulls, and what is missing is laid down at its yards and
-// launched when it is built (BUILD_DAYS: a cutter in days, a destroyer in
+// every power's hulls (at sea, berthed and on the slips), and what is
+// missing is laid down at its yards and launched when it is built (BUILD_DAYS: a cutter in days, a destroyer in
 // a fortnight, a battleship in a month; faster in a war; slower when
 // someone has had a yard sabotaged). Each yard builds a few at a time.
 // A new hull is born at its yard and flies out to its beat or berth.
@@ -296,8 +302,9 @@ function zoneAnchor(state, z) {
 
 /**
  * A hot zone was born: the powers in it send ships. Navies take hulls
- * berthed at their yards (commissioning more if none are in), which fly
- * out on a filed course; a pirate zone draws a pack straight away.
+ * berthed at their yards, which fly out on a filed course (none in, none
+ * goes: the daily top-up sends what the yards launch, reinforce); a
+ * pirate zone draws a pack straight away.
  */
 export function deployToZone(state, z) {
   if (!forcesOn(state)) return;
@@ -318,21 +325,67 @@ export function deployToZone(state, z) {
   // Every power in the fight sends a command ship to the rear of it
   z.factions.forEach((fac, i) => { if (COMMAND_CLASS[fac]) sendCommand(state, z, fac, i); });
   z.factions.forEach((fac, i) => {
-    if (!plan[i] || !NAVY_STRENGTH[fac]) return;
-    const want = Math.max(1, Math.round(plan[i] * NAVY_STRENGTH[fac]));
+    const want = squadronOf(z, i);
+    if (!want) return;
     const pool = [];
     for (const e of world.forces) {
       const f = e.tags.force;
       if (f.role === 'navy' && e.faction === fac && f.state === 'berth' && !e.agent) pool.push(e);
     }
-    for (let k = 0; k < want; k++) {
-      const e = pool[k] || addNavy(state, fac);
-      if (!e) break;
-      e.tags.force.zone = z.id;
-      e.tags.force.post = anchor.id;
-      sendTo(state, e, anchor);
-    }
+    if (!gathered(0, pool.length, want)) return;
+    for (let k = 0; k < want && k < pool.length; k++) post(state, pool[k], z, anchor);
   });
+}
+
+/**
+ * A navy doesn't feed a fight a hull at a time: it sends when what it can
+ * put on station together (`have` there, `avail` berthed) is at least
+ * GATHER of the squadron, and waits in port, gathering, until then.
+ */
+const GATHER = 0.6;
+const gathered = (have, avail, want) => have + avail >= Math.ceil(GATHER * want);
+
+/** The squadron a zone's `i`th power commits to it (hulls), or 0. */
+const squadronOf = (z, i) => {
+  const share = ZONE_FORCES[z.kind]?.[i], fac = z.factions[i];
+  return share && NAVY_STRENGTH[fac] ? Math.max(1, Math.round(share * NAVY_STRENGTH[fac])) : 0;
+};
+
+/** A warship sent to hold station at a zone. */
+function post(state, e, z, anchor) {
+  e.tags.force.zone = z.id;
+  e.tags.force.post = anchor.id;
+  sendTo(state, e, anchor);
+}
+
+/**
+ * Daily, after the census: a fight short of the squadron its powers commit
+ * to it (its hulls lost, a yard empty when it began, a standoff gone to a
+ * skirmish) is sent what is berthed, the fiercest fights first
+ * (REINFORCE_ORDER), once enough are in to go together (gathered). A zone
+ * about to end isn't (REINFORCE_MIN_LEFT).
+ */
+const REINFORCE_ORDER = { front: 0, skirmish: 1, blockade: 2, standoff: 3, proxy: 4, insurgency: 5 };
+const REINFORCE_MIN_LEFT = 3 * DAY_MIN;
+function reinforce(state) {
+  const world = getWorld(state), now = state.clock.minute;
+  const zones = state.politics.zones.filter(z => ZONE_FORCES[z.kind] && !(z.until - now < REINFORCE_MIN_LEFT))
+    .sort((a, b) => REINFORCE_ORDER[a.kind] - REINFORCE_ORDER[b.kind]);
+  if (!zones.length) return;
+  const have = new Map(), berthed = {};
+  for (const e of world.forces) {
+    const f = e.tags.force;
+    if (f.role !== 'navy' || e.combat?.status === 'wreck') continue;
+    if (f.zone) have.set(`${f.zone}:${e.faction}`, (have.get(`${f.zone}:${e.faction}`) || 0) + 1);
+    else if (f.state === 'berth' && !e.agent) (berthed[e.faction] ||= []).push(e);
+  }
+  for (const z of zones) {
+    z.factions.forEach((fac, i) => {
+      const want = squadronOf(z, i), pool = berthed[fac] || [], there = have.get(`${z.id}:${fac}`) || 0;
+      if (there >= want || !gathered(there, pool.length, want)) return;
+      for (let n = there; n < want && pool.length; n++) post(state, pool.pop(), z, zoneAnchor(state, z));
+    });
+  }
 }
 
 /**
@@ -450,7 +503,7 @@ export function forcesTick(state, { lite = false } = {}) {
   const now = state.clock.minute;
   if (!lite && !state.lost) wakeNear(state);
   if (now % 60 === 41) fobsWanted(state);
-  if (now % DAY_MIN === 420) census(state);
+  if (now % DAY_MIN === 420) { census(state); reinforce(state); }
 }
 
 /** Hourly: a fight that went without a power's command ship (none was in port) gets one once a yard has one. */
