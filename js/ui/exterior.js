@@ -90,7 +90,7 @@ const FAR_FRAME_M = 8_000;       // docking further than this from the berth: we
 const FAR_SPAN_M = 3_000;
 const FOCUS_SWITCH = 0.7;        // another thing takes the frame when it is this much closer than the one framed
 const OBLIQUE_K = 0.42;          // the drone looks down at ~23° off the plane's normal: z metres off the plane show k·z to the right
-const SUN_RAISE = 48 * Math.PI / 180;  // the Sun's light raised out of the plane (it lies in it) so the tops of hulls take it
+export const SUN_RAISE = 48 * Math.PI / 180;  // the Sun's light raised out of the plane (it lies in it) so the tops of hulls take it (the hull cameras' too)
 
 export class ExteriorView {
   constructor(container, { onSelect } = {}) {
@@ -121,34 +121,8 @@ export class ExteriorView {
     return best ? best.id : null;
   }
 
-  /**
-   * Our drawn place, against the nearest station: where the sim moves us
-   * by a whole minute's worth at once (the first minute of a docking phase
-   * is flown inside the minute tick), the step is spread over a third of a
-   * second instead of shown as a jump. A step that agrees with how we were
-   * moving isn't one; a jump of kilometres (a new game, a long warp) is
-   * shown as it is. Shifts `us` and the objects' offsets in place.
-   */
-  smooth(objects, tm, us) {
-    const st = objects.find(o => o.e.type === 'station');
-    const sm = this._sm ||= { id: null, tm: 0, x: 0, y: 0, vx: 0, vy: 0, ex: 0, ey: 0, wall: performance.now() };
-    const now = performance.now(), wall = Math.min(0.25, (now - sm.wall) / 1000);
-    sm.wall = now;
-    if (!st || st.e.id !== sm.id) { Object.assign(sm, { id: st?.e.id ?? null, tm, x: st ? -st.dx : 0, y: st ? -st.dy : 0, vx: 0, vy: 0, ex: 0, ey: 0 }); return; }
-    const x = -st.dx, y = -st.dy, dS = (tm - sm.tm) * 60;      // us from the station (m); sim seconds since the last frame
-    if (dS > 0) {
-      const px = sm.x + sm.vx * dS, py = sm.y + sm.vy * dS;
-      const jx = x - px, jy = y - py, j = Math.hypot(jx, jy);
-      if (j > Math.max(2, 4 * Math.hypot(sm.vx, sm.vy) * dS) && j < 20_000) { sm.ex -= jx; sm.ey -= jy; }
-      else { sm.vx = (x - sm.x) / dS; sm.vy = (y - sm.y) / dS; }
-      sm.x = x; sm.y = y; sm.tm = tm;
-    } else if (dS < 0) Object.assign(sm, { tm, x, y, ex: 0, ey: 0 });
-    const k = Math.exp(-wall / 0.12);
-    sm.ex *= k; sm.ey *= k;
-    if (Math.hypot(sm.ex, sm.ey) < 0.05) { sm.ex = sm.ey = 0; return; }
-    us.x += sm.ex / AU_M; us.y += sm.ey / AU_M;
-    for (const o of objects) { o.dx -= sm.ex; o.dy -= sm.ey; o.d = Math.hypot(o.dx, o.dy); }
-  }
+  /** Our drawn place spread over a moment where the sim steps us a minute at once (smoothStep). */
+  smooth(objects, tm, us) { this._sm = smoothStep(this._sm, objects, tm, us); }
 
   /** What to look at: the dock's berth and us, or us and the nearest thing close by. */
   frame(state, objects, tm, us) {
@@ -196,23 +170,7 @@ export class ExteriorView {
     if (!has3D()) return false;
     const cam = this.cam, dpr = fc.dpr;
     const Wd = fc.canvas.width, Hd = fc.canvas.height, sc = cam.scale * dpr;
-    const objs = [], looks = [];
-    for (const o of objects) {
-      const e = o.e, p = o.pose;
-      if (!p) continue;
-      if (e.type === 'station') {
-        const model = stationModel(e.id);
-        if (model) objs.push({ kind: 'station', key: e.id, model, m: stationMatrix(p.mx, p.my, p.angle), tint: factionColor(e.faction), lights: true });
-      } else if (o.hull && o.hull.L * cam.scale >= 1.5) {
-        const look = damageLook(e, o.hull, tm);
-        this.hulk(objs, looks, look, { kind: 'hull', key: e.cls, model: o.hull, tl: CLASSES[e.cls]?.tl ?? 2, m: poseMatrix(p), tint: factionColor(e.faction), plume: e.thrust || 0, lights: !isDark(e) && !e.tags?.wreck });
-      }
-    }
-    const ourCls = state.ship.classId || PLAYER_CLASS;
-    if (ours.L * cam.scale >= 1.5) {
-      const look = damageLook({ id: 'player', hull: state.hull, decks: state.ship.decks }, ours, tm);
-      this.hulk(objs, looks, look, { kind: 'hull', key: ourCls, model: ours, tl: CLASSES[ourCls]?.tl ?? 2, m: poseMatrix(mine), tint: '#5FD38D', plume: ourPlume || 0, lights: true });
-    }
+    const { objs, looks } = gpuObjects(state, objects, tm, { ours, mine, ourPlume, seen: (hull) => hull.L * cam.scale >= 1.5 });
     const rock = st ? rockOf(st, us, tm) : null;
     if (!objs.length && !rock) return false;
     const camera = obliqueCamera(Wd, Hd, sc, cam.rot, cam.x, cam.y, OBLIQUE_K, Math.max(60_000, Math.max(Wd, Hd) / sc * 4));
@@ -235,25 +193,8 @@ export class ExteriorView {
     // the air going out of fresh holes, the glow of hot edges: over the picture, where the camera puts them
     const cr = Math.cos(-cam.rot), sr = Math.sin(-cam.rot), W = fc.w, H = fc.h;
     const screen = (w) => { const x = w[0] - cam.x, y = w[1] - cam.y; return [W / 2 + (x * cr - y * sr) * cam.scale + OBLIQUE_K * w[2] * cam.scale, H / 2 - (x * sr + y * cr) * cam.scale]; };
-    for (const { look, parts } of looks) {
-      const at = (q) => { const piece = parts.find(x => !x.clip || x.clip[0] * q[0] + x.clip[1] * q[1] + x.clip[2] * q[2] >= x.clip[3]) || parts[0]; const M = piece.m; return screen([M[0] * q[0] + M[4] * q[1] + M[8] * q[2] + M[12], M[1] * q[0] + M[5] * q[1] + M[9] * q[2] + M[13], M[2] * q[0] + M[6] * q[1] + M[10] * q[2] + M[14]]); };
-      drawVents(ctx, look, at, cam.scale, t);
-    }
+    ventsOver(ctx, looks, screen, cam.scale, t);
     return true;
-  }
-
-  /**
-   * A hull for the GPU with its damage (gl/damage.js): tumbling and in pieces
-   * if it is a wreck, its fragments round it; untouched, as it is.
-   */
-  hulk(objs, looks, look, o) {
-    if (!look) { objs.push(o); return; }
-    const parts = pieces(o.m, look);
-    // (a fresh break still glows along the tear)
-    const fresh = look.debris ? Math.max(0, 1 - look.debris.sinceS / 60 / 20) : 0;
-    for (const pc of parts) objs.push({ ...o, m: pc.m, clip: pc.clip, clipHeat: fresh, damage: look, plume: look.wreck ? 0 : o.plume });
-    if (look.debris) look.debris.forEach((d, i) => objs.push({ kind: 'debris', key: String(d.shape), m: mul4(o.m, debrisMatrix(look, d, i)), tint: o.tint, tl: 1, lights: false }));
-    looks.push({ look, parts });
   }
 
   render(state, alpha, opts = {}) {
@@ -263,43 +204,9 @@ export class ExteriorView {
     const t = (performance.now() - this.t0) / 1000;
     const f = state.flight;
     const world = getWorld(state);
-    // The moment this frame stands for, between two sim minutes
-    const a = Math.max(0, Math.min(1, alpha ?? 1));
-    const tm = state.clock.minute + a, dtS = a * 60;
-    const d = state.dock;
-    const held = d && d.phase !== 'inbound' && d.phase !== 'awaiting';
-    // Held by a dock, our place is rel in the collar's frame; in the frame
-    // phases rel has been flown to dock.t seconds into the minute, and the
-    // rest is carried on its rates (a minute flown whole leaves dock.t at 0)
-    let ourPose = null;
-    if (held) {
-      const lead = d.rel && IN_FRAME_PHASES.has(d.phase) ? Math.max(0, dtS - (d.t || 0)) : 0;
-      const dd = lead ? { ...d, rel: { ...d.rel, x: d.rel.x + (d.rel.vx || 0) * lead, y: d.rel.y + (d.rel.vy || 0) * lead, yaw: (d.rel.yaw || 0) + (d.rel.wy || 0) * lead } } : d;
-      ourPose = dockPose(state, dd, collarFrame(state, d, tm));
-    }
-    const us = ourPose ? ourPose.pos : ourPlace(state, tm, dtS);
-    /** Where an entity is at tm: where the sim would put it (rails and transits exactly, free flight flown on). */
-    const at = (e) => predictEntity(e, tm, world).pos;
-
-    // Who is close
-    _q.length = 0;
-    world.query(f.pos, LOOK_M / AU_M, _q);
-    const objects = [];
-    for (const e of _q) {
-      if (e.type === 'nav' || e.type === 'ordnance') continue;
-      if (!liveKnowledge(state, e) && e.type !== 'station') continue;
-      const ep = at(e);
-      const dx = (ep.x - us.x) * AU_M, dy = (ep.y - us.y) * AU_M;
-      const d = Math.hypot(dx, dy);
-      if (d > LOOK_M) continue;
-      const size = e.type === 'station' ? stationModel(e.id)?.sizeM || 1000 : hullOf(e.cls)?.L || 50;
-      objects.push({ e, dx, dy, d, size });
-    }
-    // the station a dock holds us to is always in the picture, however far (its rock, the frame's turn)
-    if (held && d.target.kind === 'station' && !objects.some(o => o.e.id === d.target.id)) {
-      const e = world.get(d.target.id);
-      if (e) { const ep = at(e); const dx = (ep.x - us.x) * AU_M, dy = (ep.y - us.y) * AU_M; objects.push({ e, dx, dy, d: Math.hypot(dx, dy), size: stationModel(e.id)?.sizeM || 1000 }); }
-    }
+    const g = surroundings(state, alpha, LOOK_M);
+    const { tm, d, held, ourPose, objects } = g;
+    const us = g.us;
     this.smooth(objects, tm, us);
     const want = this.frame(state, objects, tm, us);
     const cam = this.cam;
@@ -354,37 +261,8 @@ export class ExteriorView {
 
     // What is in the picture, posed: stations turned with their rock, hulls in a berth (posed by it) or
     // flying, and ours (mated at a collar, or flying)
-    for (const o of objects) {
-      const e = o.e;
-      if (e.type === 'station') { o.pose = { mx: o.dx, my: o.dy, mz: 0, angle: stationAngle(e.orbit, tm) }; continue; }
-      const hull = e.type === 'ship' ? hullOf(e.cls) : null;
-      if (!hull) continue;
-      let pose = null;
-      if (e.tags?.berth && e.tags.at) {
-        const host = world.get(e.tags.at);
-        const b = host && berthOf(host.id, e.tags.berth);
-        const port = b && hull.ports.find(p => b.accepts.includes(p.size));
-        if (b && port) {
-          const fr = berthFrame(state, host, b, tm);
-          const mp = matePose(fr, port);
-          pose = { mx: (mp.center.x - us.x) * AU_M, my: (mp.center.y - us.y) * AU_M, mz: mp.offZ, facing: mp.facing, view: mp.view, R: mp.R };
-        }
-      }
-      o.pose = pose || { mx: o.dx, my: o.dy, mz: 0, facing: facingOf(e), view: 'top', R: null };
-      o.hull = hull;
-    }
-    const ours = hullOf(state.ship.classId || PLAYER_CLASS);
-    const mine = { mx: 0, my: 0, mz: 0, facing: ourPose ? ourPose.facing : f.facing, view: ourPose ? ourPose.view : 'top', R: null };
-    if (ourPose?.R) {
-      // mated: the collar's rotation, turned by the yaw the dock holds; our centre off the plane by our port's place
-      const yaw = d.rel?.yaw || 0, c = Math.cos(yaw), s = Math.sin(yaw);
-      const rz = (v) => [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
-      mine.R = { X: rz(ourPose.R.X), Y: rz(ourPose.R.Y), Z: rz(ourPose.R.Z) };
-      const port = ours.ports.find(p => p.id === d.port) || ours.ports[0];
-      mine.mz = -turn(ourPose.R, [port.x, port.y, port.z])[2];
-    }
-    const ourPlume = d?.phase === 'approach' ? state.$dockThrust || 0 : f.thrustG;
-    const ourRcs = Math.min(1, (d && IN_FRAME_PHASES.has(d.phase) ? state.$dockRcs || 0 : 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0));
+    poseObjects(state, objects, us, tm);
+    const { ours, mine, ourPlume, ourRcs } = ourMount(state, g);
 
     // The picture itself: on the GPU, lit solids in sunlight (ships3d.js); else drawn flat
     const st = objects.find(o => o.e.type === 'station');
@@ -503,6 +381,182 @@ export class ExteriorView {
 
 
 /**
+ * Our drawn place, against the nearest station (`memo` kept across frames,
+ * and returned): where the sim moves us by a whole minute's worth at once
+ * (the first minute of a docking phase is flown inside the minute tick),
+ * the step is spread over a third of a second instead of shown as a jump.
+ * A step that agrees with how we were moving isn't one; a jump of
+ * kilometres (a new game, a long warp) is shown as it is. Shifts `us` and
+ * the objects' offsets in place.
+ */
+export function smoothStep(memo, objects, tm, us) {
+  const st = objects.find(o => o.e.type === 'station');
+  const sm = memo || { id: null, tm: 0, x: 0, y: 0, vx: 0, vy: 0, ex: 0, ey: 0, wall: performance.now() };
+  const now = performance.now(), wall = Math.min(0.25, (now - sm.wall) / 1000);
+  sm.wall = now;
+  if (!st || st.e.id !== sm.id) { Object.assign(sm, { id: st?.e.id ?? null, tm, x: st ? -st.dx : 0, y: st ? -st.dy : 0, vx: 0, vy: 0, ex: 0, ey: 0 }); return sm; }
+  const x = -st.dx, y = -st.dy, dS = (tm - sm.tm) * 60;      // us from the station (m); sim seconds since the last frame
+  if (dS > 0) {
+    const px = sm.x + sm.vx * dS, py = sm.y + sm.vy * dS;
+    const jx = x - px, jy = y - py, j = Math.hypot(jx, jy);
+    if (j > Math.max(2, 4 * Math.hypot(sm.vx, sm.vy) * dS) && j < 20_000) { sm.ex -= jx; sm.ey -= jy; }
+    else { sm.vx = (x - sm.x) / dS; sm.vy = (y - sm.y) / dS; }
+    sm.x = x; sm.y = y; sm.tm = tm;
+  } else if (dS < 0) Object.assign(sm, { tm, x, y, ex: 0, ey: 0 });
+  const k = Math.exp(-wall / 0.12);
+  sm.ex *= k; sm.ey *= k;
+  if (Math.hypot(sm.ex, sm.ey) < 0.05) { sm.ex = sm.ey = 0; return sm; }
+  us.x += sm.ex / AU_M; us.y += sm.ey / AU_M;
+  for (const o of objects) { o.dx -= sm.ex; o.dy -= sm.ey; o.d = Math.hypot(o.dx, o.dy); }
+  return sm;
+}
+
+/**
+ * A hull for the GPU with its damage (gl/damage.js): tumbling and in pieces
+ * if it is a wreck, its fragments round it; untouched, as it is.
+ */
+function hulk(objs, looks, look, o) {
+  if (!look) { objs.push(o); return; }
+  const parts = pieces(o.m, look);
+  // (a fresh break still glows along the tear)
+  const fresh = look.debris ? Math.max(0, 1 - look.debris.sinceS / 60 / 20) : 0;
+  for (const pc of parts) objs.push({ ...o, m: pc.m, clip: pc.clip, clipHeat: fresh, damage: look, plume: look.wreck ? 0 : o.plume });
+  if (look.debris) look.debris.forEach((d, i) => objs.push({ kind: 'debris', key: String(d.shape), m: mul4(o.m, debrisMatrix(look, d, i)), tint: o.tint, tl: 1, lights: false }));
+  looks.push({ look, parts });
+}
+
+/**
+ * The solids for the GPU (gl/ships3d.js) from the posed objects round us
+ * (surroundings, poseObjects) and our own hull: stations, the hulls big
+ * enough on the screen to draw (`seen(hull, o)`), wrecks in their pieces.
+ * Returns { objs, looks } (looks: the damaged ones, for their vents).
+ */
+export function gpuObjects(state, objects, tm, { ours, mine, ourPlume, seen }) {
+  const objs = [], looks = [];
+  for (const o of objects) {
+    const e = o.e, p = o.pose;
+    if (!p) continue;
+    if (e.type === 'station') {
+      const model = stationModel(e.id);
+      if (model) objs.push({ kind: 'station', key: e.id, model, m: stationMatrix(p.mx, p.my, p.angle), tint: factionColor(e.faction), lights: true });
+    } else if (o.hull && seen(o.hull, o)) {
+      const look = damageLook(e, o.hull, tm);
+      hulk(objs, looks, look, { kind: 'hull', key: e.cls, model: o.hull, tl: CLASSES[e.cls]?.tl ?? 2, m: poseMatrix(p), tint: factionColor(e.faction), plume: e.thrust || 0, lights: !isDark(e) && !e.tags?.wreck });
+    }
+  }
+  const ourCls = state.ship.classId || PLAYER_CLASS;
+  if (seen(ours, null)) {
+    const look = damageLook({ id: 'player', hull: state.hull, decks: state.ship.decks }, ours, tm);
+    hulk(objs, looks, look, { kind: 'hull', key: ourCls, model: ours, tl: CLASSES[ourCls]?.tl ?? 2, m: poseMatrix(mine), tint: '#5FD38D', plume: ourPlume || 0, lights: true });
+  }
+  return { objs, looks };
+}
+
+/** The air going out of fresh holes, the glow of hot edges, over a picture: `screen` takes a world point (m) to the canvas. */
+export function ventsOver(ctx, looks, screen, scale, t) {
+  for (const { look, parts } of looks) {
+    const at = (q) => { const piece = parts.find(x => !x.clip || x.clip[0] * q[0] + x.clip[1] * q[1] + x.clip[2] * q[2] >= x.clip[3]) || parts[0]; const M = piece.m; return screen([M[0] * q[0] + M[4] * q[1] + M[8] * q[2] + M[12], M[1] * q[0] + M[5] * q[1] + M[9] * q[2] + M[13], M[2] * q[0] + M[6] * q[1] + M[10] * q[2] + M[14]]); };
+    drawVents(ctx, look, at, scale, t);
+  }
+}
+
+/**
+ * What is round us at the moment a frame stands for (`alpha` between two
+ * sim minutes), within `lookM`: where we are (`us`: held by a dock, our
+ * place in the collar's frame, flown to the second; else ourPlace), and the
+ * stations and the hulls we know of, with their offsets from us in metres
+ * (the station a dock holds us to always, however far: its rock, its turn).
+ * Shared by the drone's picture and the hull cameras (hullcam.js).
+ */
+export function surroundings(state, alpha, lookM) {
+  const f = state.flight;
+  const world = getWorld(state);
+  // The moment this frame stands for, between two sim minutes
+  const a = Math.max(0, Math.min(1, alpha ?? 1));
+  const tm = state.clock.minute + a, dtS = a * 60;
+  const d = state.dock;
+  const held = d && d.phase !== 'inbound' && d.phase !== 'awaiting';
+  // Held by a dock, our place is rel in the collar's frame; in the frame
+  // phases rel has been flown to dock.t seconds into the minute, and the
+  // rest is carried on its rates (a minute flown whole leaves dock.t at 0)
+  let ourPose = null;
+  if (held) {
+    const lead = d.rel && IN_FRAME_PHASES.has(d.phase) ? Math.max(0, dtS - (d.t || 0)) : 0;
+    const dd = lead ? { ...d, rel: { ...d.rel, x: d.rel.x + (d.rel.vx || 0) * lead, y: d.rel.y + (d.rel.vy || 0) * lead, yaw: (d.rel.yaw || 0) + (d.rel.wy || 0) * lead } } : d;
+    ourPose = dockPose(state, dd, collarFrame(state, d, tm));
+  }
+  const us = ourPose ? ourPose.pos : ourPlace(state, tm, dtS);
+  /** Where an entity is at tm: where the sim would put it (rails and transits exactly, free flight flown on). */
+  const at = (e) => predictEntity(e, tm, world).pos;
+
+  // Who is close
+  _q.length = 0;
+  world.query(f.pos, lookM / AU_M, _q);
+  const objects = [];
+  for (const e of _q) {
+    if (e.type === 'nav' || e.type === 'ordnance') continue;
+    if (!liveKnowledge(state, e) && e.type !== 'station') continue;
+    const ep = at(e);
+    const dx = (ep.x - us.x) * AU_M, dy = (ep.y - us.y) * AU_M;
+    const dist = Math.hypot(dx, dy);
+    if (dist > lookM) continue;
+    const size = e.type === 'station' ? stationModel(e.id)?.sizeM || 1000 : hullOf(e.cls)?.L || 50;
+    objects.push({ e, dx, dy, d: dist, size });
+  }
+  if (held && d.target.kind === 'station' && !objects.some(o => o.e.id === d.target.id)) {
+    const e = world.get(d.target.id);
+    if (e) { const ep = at(e); const dx = (ep.x - us.x) * AU_M, dy = (ep.y - us.y) * AU_M; objects.push({ e, dx, dy, d: Math.hypot(dx, dy), size: stationModel(e.id)?.sizeM || 1000 }); }
+  }
+  return { tm, dtS, d, held, ourPose, us, objects };
+}
+
+/** Pose what is round us (after any smoothing of `us`): stations turned with their rock, hulls in a berth (posed by it) or flying. */
+export function poseObjects(state, objects, us, tm) {
+  const world = getWorld(state);
+  for (const o of objects) {
+    const e = o.e;
+    if (e.type === 'station') { o.pose = { mx: o.dx, my: o.dy, mz: 0, angle: stationAngle(e.orbit, tm) }; continue; }
+    const hull = e.type === 'ship' ? hullOf(e.cls) : null;
+    if (!hull) continue;
+    let pose = null;
+    if (e.tags?.berth && e.tags.at) {
+      const host = world.get(e.tags.at);
+      const b = host && berthOf(host.id, e.tags.berth);
+      const port = b && hull.ports.find(p => b.accepts.includes(p.size));
+      if (b && port) {
+        const fr = berthFrame(state, host, b, tm);
+        const mp = matePose(fr, port);
+        pose = { mx: (mp.center.x - us.x) * AU_M, my: (mp.center.y - us.y) * AU_M, mz: mp.offZ, facing: mp.facing, view: mp.view, R: mp.R };
+      }
+    }
+    o.pose = pose || { mx: o.dx, my: o.dy, mz: 0, facing: facingOf(e), view: 'top', R: null };
+    o.hull = hull;
+  }
+}
+
+/**
+ * Our own hull in the picture (at the origin of its metres): its model, its
+ * pose (mated at a collar: the collar's rotation, turned by the yaw the
+ * dock holds, our centre off the plane by our port's place; else flying in
+ * the plane), the plume and the RCS's puffs. `g` is surroundings()'s result.
+ */
+export function ourMount(state, g) {
+  const f = state.flight, d = g.d, ourPose = g.ourPose;
+  const ours = hullOf(state.ship.classId || PLAYER_CLASS);
+  const mine = { mx: 0, my: 0, mz: 0, facing: ourPose ? ourPose.facing : f.facing, view: ourPose ? ourPose.view : 'top', R: null };
+  if (ourPose?.R) {
+    const yaw = d.rel?.yaw || 0, c = Math.cos(yaw), s = Math.sin(yaw);
+    const rz = (v) => [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+    mine.R = { X: rz(ourPose.R.X), Y: rz(ourPose.R.Y), Z: rz(ourPose.R.Z) };
+    const port = ours.ports.find(p => p.id === d.port) || ours.ports[0];
+    mine.mz = -turn(ourPose.R, [port.x, port.y, port.z])[2];
+  }
+  const ourPlume = d?.phase === 'approach' ? state.$dockThrust || 0 : f.thrustG;
+  const ourRcs = Math.min(1, (d && IN_FRAME_PHASES.has(d.phase) ? state.$dockRcs || 0 : 0) * 30 + (Math.abs(f.turning) > 0.01 ? 0.5 : 0));
+  return { ours, mine, ourPlume, ourRcs };
+}
+
+/**
  * Our place at tm (between the minute the sim has flown and the next):
  * holding station, at the hold's place off what we hold on (so the two
  * never drift apart on the screen); flying, flown on under the drive's
@@ -552,7 +606,7 @@ function hullBox(hull, angle, sc, solid = false, tumbling = false) {
 }
 
 /** A hull's model matrix from its pose: the rotation a collar gives it, or flying in the plane. */
-function poseMatrix(p) {
+export function poseMatrix(p) {
   return p.R ? mat4.basis(p.R.X, p.R.Y, p.R.Z, [p.mx, p.my, p.mz || 0]) : hullMatrix(p.mx, p.my, p.facing, p.view, p.mz || 0);
 }
 
@@ -561,7 +615,7 @@ function poseMatrix(p) {
  * is on its rock's night side (shining down off the towers, out of the plane
  * toward the drone); far from one only the faint glow of the sky.
  */
-function fillLight(st, rock, sun) {
+export function fillLight(st, rock, sun) {
   if (!st) return { dir: [0.3, -0.2, 1], col: [0.02, 0.021, 0.025] };
   const up = rock ? rock.n : [0, 1, 0];
   const day = rock ? Math.max(0, Math.min(1, (up[0] * sun[0] + up[1] * sun[1]) * 3 + 0.4)) : 1;
@@ -573,7 +627,7 @@ function fillLight(st, rock, sun) {
 const ROCK_ALBEDO = { Ceres: [0.1, 0.095, 0.09], Pallas: [0.15, 0.155, 0.16], Vesta: [0.32, 0.29, 0.26], Phobos: [0.075, 0.066, 0.06] };
 
 /** The rock under a surface port as the GPU draws it (ships3d.js): its surface under the station, its radius. */
-function rockOf(st, us, tm) {
+export function rockOf(st, us, tm) {
   const b = getBody(st.e.orbit?.body);
   if (!b || st.e.orbit.r * AU_M > b.radius * 1000 * 1.05) return null;
   const c = bodyPos(b, tm / DAY_MIN);

@@ -31,7 +31,7 @@ import { initSettings, renderSettings } from './settings.js';
 import { saveCurrent, loadSave, latestSave, renderSaveList, scheduleAutosave, stopAutosave } from './persistence.js';
 import { initKeyboard } from './keyboard.js';
 import { initLibrary, toggleLibrary, closeLibrary, openLibrary } from './library.js';
-import { initStage, updateStage, resetStage, lookAt, toggleScope } from './stage.js';
+import { initStage, updateStage, resetStage, lookAt, toggleScope, toggleHullCams, zoomScope } from './stage.js';
 import { initComms, openComms, closeComms, updateComms, commsOpen } from './comms.js';
 import { initBoarding, openBoarding, closeBoarding, updateBoarding } from './boarding.js';
 import { initService, openService } from './service.js';
@@ -152,6 +152,7 @@ export async function boot() {
     station: () => dockedStation(ui.state) ? openStation() : toast('Not docked', 'warn'),
     combat: toggleCombat, suits: toggleSuits, weapons: () => toggleNav('combat'), library: toggleLibrary, service: openService, escape: onEscape, save: () => quickSave(), devFlip, devCut,
     exterior: () => exteriorIsFloating() ? setExteriorFloating(false) : toggleNav('exterior'), scope: () => toggleScope(pickedTarget()), log: () => toggleLog(), flag: toggleFlagOnPick,
+    hullcams: toggleHullCams, zoomScope,
     comms: () => commsOpen() ? closeComms() : openComms(),
   });
   $$('[data-action]').forEach(b => {

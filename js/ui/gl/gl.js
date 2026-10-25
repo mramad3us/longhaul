@@ -152,6 +152,11 @@ export const mat4 = {
   ortho(l, r, b, t, n, f) {
     return new Float32Array([2 / (r - l), 0, 0, 0, 0, 2 / (t - b), 0, 0, 0, 0, -2 / (f - n), 0, -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1]);
   },
+  /** A perspective projection: a vertical field `fovy` (rad), `aspect` w/h, the depth from `n` to `f` (looking down −z). */
+  perspective(fovy, aspect, n, f) {
+    const k = 1 / Math.tan(fovy / 2);
+    return new Float32Array([k / aspect, 0, 0, 0, 0, k, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, 2 * f * n / (n - f), 0]);
+  },
   /** A view matrix: eye, looking along `fwd`, with `up` (orthonormalised). */
   lookDir(eye, fwd, up) {
     const f = norm(fwd), s = norm(cross(f, up)), u = cross(s, f);

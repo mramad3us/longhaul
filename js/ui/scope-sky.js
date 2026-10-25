@@ -523,5 +523,34 @@ export function drawStars(ctx, W, H, bearing, fov, ppr, mShow, psfPx, streakPx, 
   }
 }
 
+/**
+ * The bright sky as directions, for a wide lens that can look any way (the
+ * hull cameras, hullcam.js): the same stars drawStars puts in its wide
+ * fields (its coarse cells, azimuth round the plane from −π to π,
+ * elevation out of it), those down to magnitude `faintest`, each a unit
+ * vector (x, y in the plane, z out of it), its magnitude and colour. Made
+ * once, the first time it is asked for.
+ */
+let _bright = null;
+export function brightStars(faintest = 6.5) {
+  if (_bright?.faintest === faintest) return _bright.list;
+  const list = [], cell = BRIGHT_CELL, per = BRIGHT_PER_CELL, salt = 5000;
+  const i0 = Math.floor(-Math.PI / cell), i1 = Math.floor(Math.PI / cell);
+  const j0 = Math.floor(-Math.PI / 2 / cell), j1 = Math.floor(Math.PI / 2 / cell);
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+    const n = Math.floor(per * (0.55 + 0.9 * hash(i, j, 1 + salt)));
+    for (let k = 0; k < n; k++) {
+      const m = BRIGHT_FAINT + Math.log10(Math.max(1e-9, hash(i, j, 10 + k * 3 + salt))) / 0.45;
+      if (m > faintest) continue;
+      const az = (i + hash(i, j, 11 + k * 3 + salt)) * cell, el = (j + hash(i, j, 12 + k * 3 + salt)) * cell;
+      if (Math.abs(el) > Math.PI / 2) continue;
+      const tint = hash(i, j, 13 + k * 3 + salt);
+      list.push({ x: Math.cos(el) * Math.cos(az), y: Math.cos(el) * Math.sin(az), z: Math.sin(el), m, rgb: tint < 0.2 ? [190, 210, 255] : tint > 0.8 ? [255, 214, 170] : [228, 232, 245] });
+    }
+  }
+  _bright = { faintest, list };
+  return list;
+}
+
 /** Every world (for the telescope's sky): the ephemeris list. */
 export const WORLDS = BODIES;

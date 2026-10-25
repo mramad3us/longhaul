@@ -29,11 +29,14 @@
 //   camera reaches for faint things
 //
 // The mount slews to a new target (fast, eased: the stars streak), then
-// holds it exactly. The frame takes in the whole of what it holds, a hull
-// or a world: zooming out as far as a close ship takes, or in, past the
-// optics' narrowest field digitally (to DIGITAL resolution elements across:
-// a far hull blurred, as it is); anything smaller is shown in the narrowest
-// field, a point in a great deal of black. When the
+// holds it exactly. The camera zooms in steps (zoomLevels: its widest field
+// halved, step by step, down past the optics' narrowest field digitally, to
+// DIGITAL resolution elements across: a far hull blurred, as it is). The
+// computer picks the step that takes in the whole of what it holds, a hull
+// or a world (AUTO: the narrowest field it fits in), or for anything
+// smaller the narrowest of the optics, a point in a great deal of black;
+// the captain may pick another step (zoomStep), and it holds until AUTO or
+// a new target. When the
 // target goes (blown apart), the mount holds where it was going (its
 // debris keeps its velocity) and the frame holds still, so what happened
 // is seen out (stage.js waits for it). The readouts say what the camera is
@@ -74,6 +77,7 @@ const DIGITAL = 24;              // closer than the optics' narrowest field, dig
 const FILL = 0.55;               // a framed hull fills this share of the frame (its length or its height)
 const FILL_WORLD = 0.62;
 const ZOOM_TAU_S = 0.6;
+const ZOOM_STEP = 2;             // each zoom step halves the field
 const SLEW_RATE = 1.4;           // rad/s, after the start; a slew takes 0.35–1.6 s
 const LINGER_MS = 13000;         // a target blown apart: the frame holds this long on where it was (its fireball's life)
 const SOLAR_ND = 12.5;           // the solar filter, in magnitudes
@@ -81,6 +85,32 @@ const Z_SPREAD = 0.2;            // ships in the field sit off the plane by up t
 const FONT = '10px "IBM Plex Mono", monospace';
 const DIM = 'rgba(122,142,162,0.9)', TEXT = 'rgba(190,205,220,0.95)', CYAN = 'rgba(62,199,230,0.75)', WARN = 'rgba(240,169,58,0.98)', SUNC = 'rgba(255,196,110,0.95)';
 const KIND_WORD = { star: 'STAR', planet: 'PLANET', moon: 'MOON', asteroid: 'ASTEROID' };
+
+/**
+ * The camera's zoom steps for this telescope (fields, rad, widest first):
+ * its widest field halved step by step, the last the digital limit (DIGITAL
+ * resolution elements across). Past NATIVE_FIELD elements a step is digital.
+ */
+export function zoomLevels(sc) {
+  const min = DIGITAL * sc.resRad, out = [];
+  for (let f = WIDE_FIELD_RAD; f > min * 1.0001; f /= ZOOM_STEP) out.push(f);
+  out.push(min);
+  return out;
+}
+
+/** The computer's zoom step: the narrowest field that takes in `wantFov` (the widest, if nothing does). */
+export function autoZoom(levels, wantFov) {
+  let i = 0;
+  for (let k = 0; k < levels.length; k++) if (levels[k] >= wantFov * 0.999) i = k;
+  return i;
+}
+
+/** The zoom in words for the readout: the step's magnification over the widest field, AUTO or the computer's pick beside the captain's. */
+function zoomWords(z) {
+  if (!z?.can) return 'ZOOM —';
+  const mag = (i) => `×${Math.round(z.levels[0] / z.levels[i]).toLocaleString()}`;
+  return z.manual ? `ZOOM ${mag(z.i)} (AUTO ${mag(z.autoI)})` : `ZOOM ${mag(z.i)} AUTO`;
+}
 
 const angDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -112,9 +142,27 @@ export class ScopeView {
     this.held = null;
     this.lastPose = null;
     this.burst = null;
+    this.zoomSel = null;             // the captain's zoom step (an index of zoomLevels), or null: the computer's
+    this.zoom = null;                // { levels, autoI, i, manual, can }: for the bar
     this.poses = new Map();
     this.fx.clear();
   }
+
+  /**
+   * The zoom a step in (+1: the field halved) or out (−1), from where it is:
+   * the captain's pick from then on. Only while something is held (a
+   * contact the mount tracks, or a world). Returns whether it moved.
+   */
+  zoomStep(step) {
+    const z = this.zoom;
+    if (!z?.can) return false;
+    const i = clamp((this.zoomSel ?? z.autoI) + step, 0, z.levels.length - 1);
+    if (i === z.i && this.zoomSel != null) return false;
+    this.zoomSel = i;
+    return true;
+  }
+  /** Back to the zoom the computer picks. */
+  zoomAuto() { this.zoomSel = null; }
 
   /** The filter in: 'off' | 'plume' | 'deep'; FILTER on the bar steps through them. */
   cycleFilter() { this.filter = FILTER_ORDER[(FILTER_ORDER.indexOf(this.filter) + 1) % FILTER_ORDER.length]; return this.filter; }
@@ -132,7 +180,7 @@ export class ScopeView {
     this.wall = now;
     const key = target ? `${target.kind}:${target.id}` : null;
     const fresh = key !== this.key;
-    if (fresh) { this.key = key; this.track = null; this.held = null; this.lastPose = null; }
+    if (fresh) { this.key = key; this.track = null; this.held = null; this.lastPose = null; this.zoomSel = null; }
     const world = getWorld(state);
     const a = clamp(alpha ?? 1, 0, 1);
     const tm = state.clock.minute + a;
@@ -195,8 +243,16 @@ export class ScopeView {
       const ext = getBody(target.id)?.rings ? 2.35 : 1.1;
       wantFov = clamp(Math.max(wv.angRad * ext, wv.angRad * (W / H)) / FILL_WORLD, DIGITAL * sc.resRad, WIDE_FIELD_RAD);
     } else if (this.held && this.fov) wantFov = this.fov;                // (gone: the frame holds still)
-    // a burst near what we hold: pulled back to take in its fireball while it lasts
-    if (this.burst && now < this.burst.until) wantFov = Math.max(wantFov, Math.min(WIDE_FIELD_RAD, this.burst.fov));
+    // ---- The zoom, in steps: the one that frames it (the narrowest it fits in), or the captain's
+    const levels = zoomLevels(sc);
+    const can = !!(sight || wv);
+    const autoI = autoZoom(levels, wantFov);
+    if (this.zoomSel != null) this.zoomSel = clamp(this.zoomSel, 0, levels.length - 1);
+    const zi = can ? this.zoomSel ?? autoI : autoI;
+    if (can) wantFov = levels[zi];
+    this.zoom = { levels, autoI, i: zi, manual: can && this.zoomSel != null, can };
+    // a burst near what we hold: pulled back to take in its fireball while it lasts (unless the captain holds the zoom)
+    if (this.burst && now < this.burst.until) { if (!this.zoom.manual) wantFov = Math.max(wantFov, Math.min(WIDE_FIELD_RAD, this.burst.fov)); }
     else this.burst = null;
     // (eased; pulling back for a burst, quickly: the fireball grows fast)
     this.fov = !this.fov ? wantFov : this.fov * Math.pow(wantFov / this.fov, 1 - Math.exp(-wall / (this.burst && wantFov > this.fov ? 0.2 : ZOOM_TAU_S)));
@@ -382,7 +438,7 @@ export class ScopeView {
     const marks = e && e.type !== 'ordnance' ? markWords(marksOf(frameMarks(state), e.id, isDark(e), e.tags?.wreck)) : '';
     const mode = this.slew ? 'SLEWING' : lost ? 'HOLDING LAST POSITION' : hider ? 'OCCULTED' : lock && !lock.ok ? (lock.why === 'range' ? 'NO LOCK' : 'NO TRACK') : 'TRACKING';
     this.hud(ctx, W, H, state, {
-      sc, sight: hider ? null : sight, wv, lock, name: named, marks, fov, ppr, box: box || this.worldBox, own, faction: e?.faction, lost, hider, mode,
+      sc, sight: hider ? null : sight, wv, lock, name: named, marks, fov, ppr, zoom: this.zoom, box: box || this.worldBox, own, faction: e?.faction, lost, hider, mode,
       rangeM: e && !lost ? relativeTo(state, { kind: 'entity', id: e.id })?.dist : null,
       expS, gain, filter, sunInField, sunOff, us, bearing, lag: sight?.lagS ?? wv?.lagS ?? null, event: this.fx.event(now),
     });
@@ -612,11 +668,11 @@ export class ScopeView {
         lines.push([`SIZE ${fmtRad(s.angRad)} · RESOLVES ${fmtRad(s.resRad)} (${fmtLen(s.resM)})`, DIM]);
         const mags = [s.hullMag < 40 ? `HULL MAG ${s.hullMag.toFixed(1)}` : null, s.plumeMag < Infinity ? `PLUME ${s.plumeMag.toFixed(1)}` : null].filter(Boolean).join(' · ');
         lines.push([`${mags} · LIMIT ${s.magLimit.toFixed(1)}`, DIM]);
-        lines.push([`FIELD ${fmtRad(o.fov)} · PHASE ${Math.round(s.phase * 180 / Math.PI)}°`, DIM]);
+        lines.push([`FIELD ${fmtRad(o.fov)} · ${zoomWords(o.zoom)} · PHASE ${Math.round(s.phase * 180 / Math.PI)}°`, DIM]);
       } else if (wv) {
         lines.push([`DIAMETER ${fmtArc(wv.angRad)} (${fmtKm(wv.body.radius * 2)}) · MAG ${wv.mag.toFixed(1)}`, DIM]);
         if (!wv.sun) lines.push([`PHASE ${Math.round(wv.phase * 180 / Math.PI)}° · ${Math.round((1 + Math.cos(wv.phase)) * 50)}% LIT`, DIM]);
-        lines.push([`FIELD ${fmtArc(o.fov)}`, DIM]);
+        lines.push([`FIELD ${fmtArc(o.fov)} · ${zoomWords(o.zoom)}`, DIM]);
       }
       lines.forEach(([txt, col], i) => label(ctx, txt, W - 12, 20 + i * 14, col));
     }

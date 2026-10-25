@@ -19,7 +19,13 @@
 //
 // renderScene() draws a scene (objects with their model matrices, a
 // camera, the Sun) into the shared GPU canvas (gl.js) and returns the
-// rectangle to copy out; null when there is no GPU.
+// rectangle to copy out; null when there is no GPU. The drone and the
+// telescope look with parallel rays (obliqueCamera, orthoCamera); a hull
+// camera through a wide lens (perspectiveCamera): the eye a few metres off
+// our plating, everything from our hull to a station kilometres off in one
+// picture. Then the shading looks from the eye to each point (the light it
+// sees off a surface, the detail a pixel can hold at that distance), the
+// plume is turned to face the eye, and the rock's rays fan out from it.
 // ============================================================
 
 import { sharedGL, beginRender, program, vertexArray, drawArray, onContextLost, mat4, norm, linear } from './gl.js';
@@ -177,6 +183,10 @@ export function renderScene(scene) {
     gl.uniformMatrix4fv(u.uProj, false, scene.proj);
     gl.uniformMatrix4fv(u.uLight, false, lightVP);
     gl.uniform3fv(u.uViewDir, scene.viewDir);
+    // (a wide lens: the eye, and its focal length in device px, for what each point shows of itself)
+    gl.uniform3fv(u.uEye, scene.eye || [0, 0, 0]);
+    gl.uniform1f(u.uPersp, scene.persp ? 1 : 0);
+    gl.uniform1f(u.uFocal, scene.focalPx || 1);
     gl.uniform3fv(u.uSun, norm(scene.sun));
     gl.uniform1f(u.uSunI, scene.sunI ?? 3.2);
     gl.uniform3fv(u.uBounceDir, scene.bounce ? norm(scene.bounce.dir) : [0, 0, 1]);
@@ -238,6 +248,8 @@ export function renderScene(scene) {
         gl.uniformMatrix4fv(R.plume.u.uModel, false, o.m);
         gl.uniform3f(R.plume.u.uShape, b.x, len, rad);
         gl.uniform3fv(R.plume.u.uViewDir, scene.viewDir);
+      gl.uniform3fv(R.plume.u.uEye, scene.eye || [0, 0, 0]);
+      gl.uniform1f(R.plume.u.uPersp, scene.persp ? 1 : 0);
         gl.uniform1f(R.plume.u.uG, g);
         drawArray(gl, R.plumeVA);
       }
@@ -264,7 +276,10 @@ function drawRock(gl, scene, lightVP) {
   gl.useProgram(R.rock.p);
   gl.depthFunc(gl.ALWAYS);
   gl.uniform3fv(u.uP0, ray.P0); gl.uniform3fv(u.uAx, ray.Ax); gl.uniform3fv(u.uAy, ray.Ay); gl.uniform3fv(u.uW, ray.W);
-  gl.uniform4fv(u.uDepth, ray.depth);
+  gl.uniform4fv(u.uDepth, ray.depth || [0, 0, 0, 0]);
+  gl.uniform1f(u.uPersp, scene.persp ? 1 : 0);
+  gl.uniformMatrix4fv(u.uVP, false, ray.VP || mat4.identity());
+  gl.uniform1f(u.uFocal, scene.focalPx || 1);
   gl.uniform3fv(u.uS, rk.S); gl.uniform3fv(u.uN, rk.n); gl.uniform3fv(u.uAlong, rk.along);
   gl.uniform1f(u.uR, rk.R);
   gl.uniform3fv(u.uAlb, rk.albedo);
@@ -327,6 +342,27 @@ function shadowCamera(scene) {
   return mat4.mul(proj, view);
 }
 
+/**
+ * A hull camera's lens: from `eye`, looking along `fwd` with `up` the
+ * screen's up, a vertical field `fovy` (rad) over w×h device px, the depth
+ * from `near` to `far` (m). Returns the scene's camera with what the shading
+ * needs (the eye, the focal length in px) and the rock's rays: from the eye
+ * through each pixel (ROCK_FS, uPersp), toward the camera as the parallel
+ * cameras' are.
+ */
+export function perspectiveCamera(eye, fwd, up, w, h, fovy, near, far) {
+  const f = norm(fwd);
+  const r = norm(cross3(f, up)), u = cross3(r, f);
+  const view = mat4.lookDir(eye, f, u);
+  const proj = mat4.perspective(fovy, w / h, near, far);
+  const tv = Math.tan(fovy / 2), th = tv * w / h;
+  return {
+    view, proj, viewDir: f, eye: [...eye], persp: true, focalPx: h / 2 / tv,
+    ray: { P0: [...eye], Ax: r.map(v => -v * th), Ay: u.map(v => -v * tv), W: f.map(v => -v), VP: mat4.mul(proj, view) },
+  };
+}
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
 /** An orthographic camera looking along `dir` at `center`, `up` the screen's up; w×h device px at `scale` px/m. */
 export function orthoCamera(center, dir, up, w, h, scale, depth) {
   const d = norm(dir);
@@ -375,8 +411,8 @@ precision highp float;
 precision highp sampler2DShadow;
 in vec3 vObj; in vec3 vONrm; in vec3 vNrm; in vec3 vCol; in vec4 vLight; in vec3 vWorld;
 flat in int vMat;
-uniform vec3 uViewDir, uSun, uBounceDir, uBounceCol, uTint;
-uniform float uSunI, uExposure, uTime, uPlume, uHeat, uLights, uWear, uPxPerM, uTonemap, uFlicker, uWorn, uClipOn, uClipHeat;
+uniform vec3 uViewDir, uSun, uBounceDir, uBounceCol, uTint, uEye;
+uniform float uSunI, uExposure, uTime, uPlume, uHeat, uLights, uWear, uPxPerM, uTonemap, uFlicker, uWorn, uClipOn, uClipHeat, uPersp, uFocal;
 uniform vec4 uClip;
 uniform int uScarN;
 uniform vec4 uScar[${MAX_SCARS}], uScarK[${MAX_SCARS}];
@@ -405,6 +441,8 @@ vec2 faceUV(vec3 p, vec3 n) {
   if (a.y > a.z) return p.xz;
   return p.xy;
 }
+// Device px a metre of this surface covers: one figure for a parallel camera; through a wide lens, by its distance from the eye
+float pxPerM() { return uPersp > 0.5 ? uFocal / max(length(uEye - vWorld), 0.05) : uPxPerM; }
 // Panel seams: dark lines on a grid (size in m), antialiased by the pixel's footprint; .x the line, .y a per-panel value
 vec2 panels(vec2 uv, vec2 size, float lw) {
   vec2 g = uv / size;
@@ -413,7 +451,7 @@ vec2 panels(vec2 uv, vec2 size, float lw) {
   vec2 dist = size * 0.5 - f;                    // metres from the nearest seam
   vec2 fw = fwidth(uv) * 0.8 + 1e-4;
   vec2 l = 1.0 - smoothstep(vec2(lw) - fw, vec2(lw) + fw, dist);
-  return vec2(max(l.x, l.y) * clamp(0.02 * uPxPerM / max(lw, 0.01), 0.0, 1.0), hash2(cell));
+  return vec2(max(l.x, l.y) * clamp(0.02 * pxPerM() / max(lw, 0.01), 0.0, 1.0), hash2(cell));
 }
 
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
@@ -463,7 +501,7 @@ vec3 brdf(vec3 N, vec3 V, vec3 L, vec3 alb, float rough, float metal) {
 
 void main() {
   vec3 N = normalize(vNrm);
-  vec3 V = -normalize(uViewDir);
+  vec3 V = uPersp > 0.5 ? normalize(uEye - vWorld) : -normalize(uViewDir);
   // a broken hull keeps its side of the tear
   float cut = 1e9;
   if (uClipOn > 0.5) { cut = clipSide(vObj); if (cut < 0.0) discard; }
@@ -673,7 +711,9 @@ precision highp sampler2DShadow;
 in vec2 vClip;
 uniform vec3 uP0, uAx, uAy, uW, uS, uN, uAlong, uSun, uAlb;
 uniform vec4 uDepth;
-uniform float uR, uSunI, uExposure, uPxPerM, uSeed, uTonemap;
+uniform float uR, uSunI, uExposure, uPxPerM, uSeed, uTonemap, uPersp, uFocal;
+uniform mat4 uVP;
+float gPx;                                         // device px per metre where this ray meets the ground (set in main)
 uniform vec3 uFillDir, uFillCol;
 uniform mat4 uLight;
 uniform sampler2DShadow uShadow;
@@ -686,7 +726,7 @@ float vn(vec2 p) {
   return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y);
 }
 // how much of a feature size metres across the picture can show (none below a few pixels)
-float lod(float size) { return smoothstep(1.5, 5.0, size * uPxPerM); }
+float lod(float size) { return smoothstep(1.5, 5.0, size * gPx); }
 float fbm(vec2 p, float size) {
   float s = 0.0, a = 0.5;
   for (int i = 0; i < 6; i++) { s += a * (vn(p) - 0.5) * lod(size); p = p * 2.03 + 17.1; a *= 0.5; size *= 0.5; }
@@ -717,27 +757,33 @@ float height(vec2 x) {
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 
 void main() {
-  vec3 p0 = uP0 + vClip.x * uAx + vClip.y * uAy;
+  // the ray toward the camera through this pixel: parallel (the drone), or from a wide lens' eye
+  bool persp = uPersp > 0.5;
+  vec3 W = persp ? uW + vClip.x * uAx + vClip.y * uAy : uW;
+  vec3 p0 = persp ? uP0 : uP0 + vClip.x * uAx + vClip.y * uAy;
   vec3 q0 = p0 - uS;
-  float A = dot(uW, uW);
-  float Bh = dot(uW, q0) + uR * dot(uW, uN);
+  float A = dot(W, W);
+  float Bh = dot(W, q0) + uR * dot(W, uN);
   float Cq = dot(q0, q0) + 2.0 * uR * dot(q0, uN);
   float disc = Bh * Bh - A * Cq;
-  float edge = -disc / (2.0 * A * uR);                 // metres outside the limb
-  float cov = clamp(0.5 - edge * uPxPerM, 0.0, 1.0);
-  if (cov <= 0.0) discard;
   float t;
   if (disc >= 0.0) { float sq = sqrt(disc); t = Bh <= 0.0 ? (-Bh + sq) / A : Cq / (-Bh - sq); }
   else t = -Bh / A;
-  vec3 h = q0 + t * uW;
+  // (through a lens, ground behind the eye is not in the picture; the detail a pixel holds goes by the distance)
+  if (persp && t > 0.0) discard;
+  gPx = persp ? uFocal / max(abs(t) * sqrt(A), 0.05) : uPxPerM;
+  float edge = -disc / (2.0 * A * uR);                 // metres outside the limb
+  float cov = clamp(0.5 - edge * gPx, 0.0, 1.0);
+  if (cov <= 0.0) discard;
+  vec3 h = q0 + t * W;
   vec3 ng = normalize(h + uR * uN);
   // the ground's own coordinates (metres along the surface round the port), and its relief
   vec3 ta = normalize(uAlong - ng * dot(uAlong, ng)), tz = normalize(cross(ng, ta));
   vec2 x = vec2(dot(h, uAlong), h.z);
-  float e = max(0.25, 0.6 / uPxPerM);
+  float e = max(0.25, 0.6 / gPx);
   float h0 = height(x), hx = height(x + vec2(e, 0.0)), hy = height(x + vec2(0.0, e));
   vec3 N = normalize(ng - ta * (hx - h0) / e - tz * (hy - h0) / e);
-  vec3 V = normalize(uW);
+  vec3 V = normalize(W);
   // regolith: dark, mottled; the craters' floors a shade apart
   float mott = 0.75 + 0.5 * vn(x / 1500.0 + 3.0) * lod(1500.0) + 0.25 * (vn(x / 90.0) - 0.5) * lod(90.0) + 0.2 * (vn(x / 7.0) - 0.5) * lod(7.0);
   vec3 alb = uAlb * mott;
@@ -760,7 +806,8 @@ void main() {
   // the port's floodlights on the ground round it
   col += alb * uFillCol * max(dot(N, uFillDir), 0.0) * 1.4 * exp(-length(h) / 1800.0);
   if (uTonemap > 0.5) col = pow(aces(col * uExposure), vec3(1.0 / 2.2));
-  float z = dot(uDepth.xyz, wp) + uDepth.w;
+  vec4 cp = uVP * vec4(wp, 1.0);
+  float z = persp ? cp.z / cp.w : dot(uDepth.xyz, wp) + uDepth.w;
   gl_FragDepth = clamp(z * 0.5 + 0.5, 0.0, 1.0);
   frag = vec4(col * cov, cov);
 }`;
@@ -768,14 +815,15 @@ void main() {
 const PLUME_VS = `#version 300 es
 layout(location=0) in vec3 aPos;
 uniform mat4 uModel, uView, uProj;
-uniform vec3 uShape, uViewDir;          // the bell's exit (x, ship frame), the plume's length and radius (m)
+uniform vec3 uShape, uViewDir, uEye;    // the bell's exit (x, ship frame), the plume's length and radius (m); the camera's look (a wide lens: its eye)
+uniform float uPersp;
 out vec2 vST;
 void main() {
   float s = aPos.x, t = aPos.y;
   // the axis in the world, and across it as the camera sees it
   vec3 a0 = (uModel * vec4(uShape.x, 0.0, 0.0, 1.0)).xyz;
   vec3 ax = normalize((uModel * vec4(-1.0, 0.0, 0.0, 0.0)).xyz);
-  vec3 side = cross(ax, normalize(uViewDir));
+  vec3 side = cross(ax, uPersp > 0.5 ? normalize(a0 - uEye) : normalize(uViewDir));
   float sl = length(side);
   side = sl > 1e-3 ? side / sl : normalize(cross(ax, vec3(0.0, 0.0, 1.0)));
   // seen end-on the plume is a disc of light: the strip grows as the axis turns toward the camera

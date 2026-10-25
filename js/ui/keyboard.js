@@ -6,7 +6,7 @@ import { ui } from './context.js';
 
 /**
  * actions: { speed(n), togglePause(), nav(tab), missions(), jobs(), systems(), roster(),
- *            station(), combat(), weapons(), library(), service(), exterior(), scope(), log(), flag(), escape(), save(), devFlip(), devCut() }
+ *            station(), combat(), weapons(), library(), service(), exterior(), scope(), hullcams(), zoomScope(step), log(), flag(), escape(), save(), devFlip(), devCut() }
  */
 export function initKeyboard(actions) {
   document.addEventListener('keydown', (e) => {
@@ -22,7 +22,9 @@ export function initKeyboard(actions) {
       m: () => actions.nav('solar'), r: () => actions.nav('scanner'), t: () => ui.settings.devMode ? actions.devCut() : actions.nav('tactical'),
       l: actions.missions, j: actions.jobs, b: actions.station, c: actions.combat, u: actions.suits,
       e: actions.systems, d: actions.roster, w: actions.weapons, i: actions.library, h: actions.comms, v: actions.service,
-      x: actions.exterior, z: actions.scope, o: actions.log,
+      x: actions.exterior, z: actions.scope, k: actions.hullcams, o: actions.log,
+      // (the telescope's zoom, while it is up: + in, − out)
+      '=': () => actions.zoomScope(1), '+': () => actions.zoomScope(1), '-': () => actions.zoomScope(-1),
       f: () => ui.settings.devMode ? actions.devFlip() : actions.flag(),
       Escape: actions.escape,
     };
