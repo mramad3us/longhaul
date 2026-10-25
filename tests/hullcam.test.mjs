@@ -14,6 +14,8 @@ import { PLAYABLE } from '../js/sim/ship-classes.js';
 import { hullOf, partExtent } from '../js/sim/hulls.js';
 import { SCOPES, WIDE_FIELD_RAD, WAVELENGTH_M, JITTER_RAD } from '../js/sim/telescope.js';
 import { HULL_CAMS, mountOf } from '../js/ui/hullcam.js';
+import { driveLights, lightK } from '../js/ui/exterior.js';
+import { poseMatrix } from '../js/ui/exterior.js';
 import { zoomLevels, autoZoom } from '../js/ui/telescope.js';
 
 const HFOV = 80 * Math.PI / 180, ASPECT = 16 / 9;
@@ -82,6 +84,26 @@ export default [
         rows.push(`TL${tl}: ${lv.length} steps, ${fmt(lv[0] * 180 / Math.PI, 0)}° to ${fmt(lv.at(-1) * 206265, 1)}″ (×${Math.round(lv[0] / lv.at(-1)).toLocaleString()})`);
       }
       console.log(`      ${rows.join(' · ')}`);
+    },
+  },
+  {
+    name: 'a lit drive through a lens with no filter: as bright as the telescope reckons it, its glare as far as its light against the Sun\'s; seen past its bow, a sixth of it from the jet beyond the hull',
+    fn: () => {
+      const hull = hullOf('freighter');
+      const o = (facing) => ({ kind: 'hull', id: 'f', model: hull, plume: 1, massKg: 40_000_000, m: poseMatrix({ mx: 5000, my: 0, mz: 0, facing, view: 'top' }) });
+      // side on, at 5 km in 1 AU's sunlight: 40,000 t at 1 G throws 625 W a square metre, near half the Sun's
+      const side = driveLights([o(Math.PI / 2)], () => [0, 0, 0], 1)[0];
+      const k = lightK(40_000_000 * 9.80665 * 500, side.d, 1);
+      assert(Math.abs(side.k - k) < 1e-9 && side.k > 0.6 && side.k < 0.75 && side.direct === 1, `side on: ${fmt(side.k, 2)} × the Sun's glare, throat in sight`);
+      // its nose toward us: its hull between us and its throat
+      const bow = driveLights([o(Math.PI)], () => [0, 0, 0], 1)[0];
+      assert(bow.direct === 0 && bow.k < side.k * 0.45 && bow.k > side.k * 0.3, `past its bow: ${fmt(bow.k, 2)}, no spikes`);
+      // looking up its jet, the throat in sight; at 1.5 AU the Sun's own fainter, the drive's glare the larger
+      const up = driveLights([o(0)], () => [0, 0, 0], 1.5)[0];
+      assert(up.direct === 1 && up.k > side.k * 1.3, `up its jet from Mars' distance: ${fmt(up.k, 2)}`);
+      const none = driveLights([{ ...o(0), plume: 0 }], () => [0, 0, 0], 1);
+      assert(!none.length, 'a cold drive: nothing');
+      console.log(`      a 40,000 t hull at 1 G, 5 km off: ${fmt(side.k, 2)} × the Sun's glare side on, ${fmt(bow.k, 2)} past its bow, ${fmt(up.k, 2)} up its jet from 1.5 AU`);
     },
   },
 ];

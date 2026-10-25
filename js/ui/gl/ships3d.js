@@ -19,7 +19,11 @@
 // each as wide as the plume is there, that perspective piles up seen down
 // the axis into the round glow round the stern a camera on our own hull sees
 // looking aft (the near glows large, the far ones small toward the axis'
-// vanishing point). Damage (damage.js) is cut and painted into the surface: holes
+// vanishing point). Far off, the jet thinner than a pixel, its core and
+// sheath are blurred to a pixel's footprint with their light kept (a far
+// jet a pixel wide and dimmer, not a broken thread), and its shock
+// diamonds smoothed away once finer than the picture holds; its glare
+// through the lens is the cameras' (exterior.js driveGlare). Damage (damage.js) is cut and painted into the surface: holes
 // (discarded, the dark inside of the hull seen through them), their torn
 // edges bent out, scorching, pits, hot metal; a broken hull keeps its side
 // of a ragged tear (the clip, in the shadow pass too). The plume is its own pass: light added, a bright core
@@ -274,6 +278,8 @@ export function renderScene(scene) {
         gl.uniform3fv(R.plume.u.uViewDir, scene.viewDir);
         gl.uniform3fv(R.plume.u.uEye, scene.eye || [0, 0, 0]);
         gl.uniform1f(R.plume.u.uPersp, scene.persp ? 1 : 0);
+        gl.uniform1f(R.plume.u.uFocal, scene.focalPx || 1);
+        gl.uniform1f(R.plume.u.uPxPerM, scene.pxPerM || 1);
         gl.uniform1f(R.plume.u.uG, g);
         drawArray(gl, R.plumeVA);
       }
@@ -286,6 +292,8 @@ export function renderScene(scene) {
       gl.uniform3fv(G.uViewDir, scene.viewDir);
       gl.uniform3fv(G.uEye, scene.eye || [0, 0, 0]);
       gl.uniform1f(G.uPersp, scene.persp ? 1 : 0);
+      gl.uniform1f(G.uFocal, scene.focalPx || 1);
+      gl.uniform1f(G.uPxPerM, scene.pxPerM || 1);
       for (const { o, m } of lit) {
         const b = m.info.bell, g = o.plume;
         const len = m.info.L * Math.min(14, 2.2 + Math.sqrt(g) * 3.2);
@@ -860,8 +868,10 @@ layout(location=0) in vec3 aPos;
 uniform mat4 uModel, uView, uProj;
 uniform vec3 uShape, uViewDir, uEye;    // the bell's exit (x, ship frame), the plume's length and radius (m); the camera's look (a wide lens: its eye)
 uniform float uPersp, uSpread;          // (the sheath's half-width once it has flared, m)
-out vec2 vST;
-out float vCore;                        // the core's share of the strip's half-width here
+uniform float uFocal, uPxPerM;          // the lens' focal length (device px), or a parallel camera's scale (px/m)
+out vec2 vST;                           // along (0–1) and across (m from the axis)
+out float vPxM;                         // metres a pixel spans there
+out float vHalf;                        // the strip's drawn half-width (m)
 out float vEnd;                         // how nearly end-on the camera sees the axis (the glows take over)
 void main() {
   float s = aPos.x, t = aPos.y;
@@ -873,36 +883,46 @@ void main() {
   float sl = length(side);
   side = sl > 1e-3 ? side / sl : normalize(cross(ax, vec3(0.0, 0.0, 1.0)));
   vEnd = 1.0 - sl;
-  // the core widens slowly off the throat; the sheath flares out past the hull within the first stretch aft
+  vec3 c = a0 + ax * (s * uShape.y);
+  float pxM = uPersp > 0.5 ? max(length(c - uEye), 0.05) / uFocal : 1.0 / max(uPxPerM, 1e-6);
+  // the core widens slowly off the throat; the sheath flares out past the hull within the first stretch aft;
+  // never drawn narrower than a few pixels (far off, the light a pixel takes in is spread over it: the fragment's blur)
   float wCore = uShape.z * (1.0 + 2.6 * s) * 1.8;
-  float w = max(wCore, mix(wCore, uSpread, smoothstep(0.0, 0.3, s)));
-  vec3 p = a0 + ax * (s * uShape.y) + side * t * w;
-  vST = vec2(s, t);
-  vCore = wCore / w;
-  gl_Position = uProj * uView * vec4(p, 1.0);
+  float w = max(max(wCore, mix(wCore, uSpread, smoothstep(0.0, 0.3, s))), 3.0 * pxM);
+  vST = vec2(s, t * w);
+  vPxM = pxM;
+  vHalf = w;
+  gl_Position = uProj * uView * vec4(c + side * t * w, 1.0);
 }`;
 
 const PLUME_FS = `#version 300 es
 precision highp float;
 in vec2 vST;
-in float vCore;
+in float vPxM;
+in float vHalf;
 in float vEnd;
-uniform float uTime, uG, uExposure;
+uniform vec3 uShape;
+uniform float uTime, uG, uExposure, uSpread;
 out vec4 frag;
 float h(float x) { return fract(sin(x * 91.7) * 47453.3); }
 void main() {
-  float s = vST.x, t = vST.y;
+  float s = vST.x, y = vST.y;
   // light through a glowing column: a hot narrow core off the throat (its width its own, however far the
-  // sheath has flared), a wide faint sheath, both fading down the plume
-  float wc = (0.09 + 0.25 * s) * vCore, ws = 0.45 + 0.3 * s;
-  float core = exp(-t * t / (wc * wc)) * (exp(-s * 7.0) * 3.0 + exp(-s * 2.2) * 0.5);
-  float sheath = exp(-t * t / (ws * ws)) * (exp(-s * 2.6) * 0.38 + 0.05 * exp(-s * 0.8));
-  // shock diamonds near the bell
+  // sheath has flared), a wide faint sheath, both fading down the plume; each as wide as it is or as a
+  // pixel's footprint blurs it, whichever is more, its light kept (a far jet thin as a thread is a pixel wide, dimmer)
+  float wCore = uShape.z * (1.0 + 2.6 * s) * 1.8;
+  float w = max(wCore, mix(wCore, uSpread, smoothstep(0.0, 0.3, s)));
+  float wc = (0.09 + 0.25 * s) * wCore, ws = (0.45 + 0.3 * s) * w, px = 0.75 * vPxM;
+  float wcE = sqrt(wc * wc + px * px), wsE = sqrt(ws * ws + px * px);
+  float core = (wc / wcE) * exp(-y * y / (wcE * wcE)) * (exp(-s * 7.0) * 3.0 + exp(-s * 2.2) * 0.5);
+  float sheath = (ws / wsE) * exp(-y * y / (wsE * wsE)) * (exp(-s * 2.6) * 0.38 + 0.05 * exp(-s * 0.8));
+  // shock diamonds near the bell (smoothed away where they are finer than the picture holds)
+  float period = uShape.y * 0.0898 / vPxM;
   float dia = 0.5 + 0.5 * cos(s * 70.0 - uTime * 2.0);
-  core *= 1.0 + 0.7 * dia * exp(-s * 10.0);
+  core *= 1.0 + 0.7 * dia * exp(-s * 10.0) * smoothstep(2.0, 6.0, period);
   float fl = 0.9 + 0.1 * h(floor(uTime * 30.0));
   vec3 col = vec3(1.0, 0.97, 0.95) * core * 2.4 + vec3(0.42, 0.58, 1.0) * sheath;
-  col *= fl * clamp(0.35 + uG * 0.25, 0.0, 2.2) * uExposure * smoothstep(1.0, 0.75, s) * smoothstep(1.0, 0.8, abs(t));
+  col *= fl * clamp(0.35 + uG * 0.25, 0.0, 2.2) * uExposure * smoothstep(1.0, 0.75, s) * smoothstep(1.0, 0.8, abs(y) / vHalf);
   // (seen down its axis the strip is edge-on: the glows carry the plume there)
   col *= pow(1.0 - vEnd, 1.5);
   frag = vec4(col, 0.0);
@@ -913,10 +933,11 @@ const GLOW_VS = `#version 300 es
 layout(location=0) in vec3 aPos;        // s along the plume (0 the bell, 1 its end), the quad's corner
 uniform mat4 uModel, uView, uProj;
 uniform vec3 uShape, uViewDir, uEye;
-uniform float uPersp, uSpread;
+uniform float uPersp, uSpread, uFocal, uPxPerM;
 out vec2 vUV;
 out float vS;
 out float vEnd;
+out float vBlur;                        // a pixel's footprint against the glow's radius
 void main() {
   float s = aPos.x;
   vec3 a0 = (uModel * vec4(uShape.x, 0.0, 0.0, 1.0)).xyz;
@@ -925,11 +946,13 @@ void main() {
   vec3 vdir = uPersp > 0.5 ? normalize(c - uEye) : normalize(uViewDir);
   vec3 up0 = abs(vdir.z) < 0.95 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
   vec3 right = normalize(cross(vdir, up0)), up = cross(right, vdir);
+  float pxM = uPersp > 0.5 ? max(length(c - uEye), 0.05) / uFocal : 1.0 / max(uPxPerM, 1e-6);
   // (the glows' sheath spreads wider than the strip's: the faint outer light of exhaust in vacuum, round the stern)
   float wCore = uShape.z * (1.0 + 2.6 * s) * 1.8;
-  float w = max(wCore, mix(wCore, 2.0 * uSpread, smoothstep(0.0, 0.35, s)));
+  float w = max(max(wCore, mix(wCore, 2.0 * uSpread, smoothstep(0.0, 0.35, s))), 3.0 * pxM);
   vEnd = 1.0 - length(cross(ax, vdir));
   vUV = aPos.yz; vS = s;
+  vBlur = 0.75 * pxM / w;
   gl_Position = uProj * uView * vec4(c + (right * aPos.y + up * aPos.z) * w, 1.0);
 }`;
 
@@ -938,13 +961,16 @@ precision highp float;
 in vec2 vUV;
 in float vS;
 in float vEnd;
+in float vBlur;
 uniform float uG, uExposure;
 out vec4 frag;
 void main() {
   float r2 = dot(vUV, vUV);
   if (r2 > 1.0) discard;
-  // a hot centre near the throat, the blue sheath round it, both thinning down the plume
-  float core = exp(-r2 * 30.0) * exp(-vS * 5.0) * 2.4;
+  // a hot centre near the throat, the blue sheath round it, both thinning down the plume (the centre
+  // no smaller than a pixel blurs it, its light kept)
+  float b2 = vBlur * vBlur, kc = 1.0 / 30.0, kcE = kc + b2;
+  float core = (kc / kcE) * exp(-r2 / kcE) * exp(-vS * 5.0) * 2.4;
   float sheath = exp(-r2 * 2.6) * (exp(-vS * 2.0) * 0.85 + 0.06);
   vec3 col = vec3(1.0, 0.97, 0.95) * core + vec3(0.42, 0.58, 1.0) * sheath;
   // one of a stack: seen down the axis they pile up into the round glow; from the side the strip carries most of it

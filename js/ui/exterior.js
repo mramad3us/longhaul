@@ -57,7 +57,7 @@
 // station at the screen's edge.
 // ============================================================
 
-import { AU_M, DAY_MIN } from '../core/constants.js';
+import { AU_M, DAY_MIN, G0 } from '../core/constants.js';
 import { getWorld, predictEntity, stepFree } from '../sim/world.js';
 import { targetStateAt } from '../sim/nav.js';
 import { holdOffset } from '../sim/autopilot.js';
@@ -67,6 +67,7 @@ import { stationModel, berthOf, stationAngle, berthFrame } from '../sim/stations
 import { matePose, turn } from '../sim/mating.js';
 import { collarFrame, dockPose, facingOf } from '../sim/docking.js';
 import { liveKnowledge } from '../sim/intel.js';
+import { PLUME_W_PER_N } from '../sim/telescope.js';
 import { isDark, isIdentified } from '../sim/sensors.js';
 import { factionColor } from '../sim/factions.js';
 import { PLAYER_CLASS, CLASSES } from '../sim/ship-classes.js';
@@ -194,6 +195,9 @@ export class ExteriorView {
     const cr = Math.cos(-cam.rot), sr = Math.sin(-cam.rot), W = fc.w, H = fc.h;
     const screen = (w) => { const x = w[0] - cam.x, y = w[1] - cam.y; return [W / 2 + (x * cr - y * sr) * cam.scale + OBLIQUE_K * w[2] * cam.scale, H / 2 - (x * sr + y * cr) * cam.scale]; };
     ventsOver(ctx, looks, screen, cam.scale, t);
+    // the lit drives through its lens (the drone stands off about as far as its picture is wide, looking down on the plane)
+    const standoff = Math.max(W, H) / cam.scale;
+    for (const L of driveLights(objs, (p) => [p[0], p[1], p[2] + standoff], r)) { const q = screen(L.p); driveGlare(ctx, q[0], q[1], L.k, W, H, L.direct); }
     return true;
   }
 
@@ -441,15 +445,95 @@ export function gpuObjects(state, objects, tm, { ours, mine, ourPlume, seen }) {
       if (model) objs.push({ kind: 'station', key: e.id, model, m: stationMatrix(p.mx, p.my, p.angle), tint: factionColor(e.faction), lights: true });
     } else if (o.hull && seen(o.hull, o)) {
       const look = damageLook(e, o.hull, tm);
-      hulk(objs, looks, look, { kind: 'hull', key: e.cls, model: o.hull, tl: CLASSES[e.cls]?.tl ?? 2, m: poseMatrix(p), tint: factionColor(e.faction), plume: e.thrust || 0, lights: !isDark(e) && !e.tags?.wreck });
+      hulk(objs, looks, look, { kind: 'hull', key: e.cls, model: o.hull, tl: CLASSES[e.cls]?.tl ?? 2, m: poseMatrix(p), tint: factionColor(e.faction), plume: e.thrust || 0, lights: !isDark(e) && !e.tags?.wreck, id: e.id, massKg: (e.mass || CLASSES[e.cls]?.massT || 100) * 1000 });
     }
   }
   const ourCls = state.ship.classId || PLAYER_CLASS;
   if (seen(ours, null)) {
     const look = damageLook({ id: 'player', hull: state.hull, decks: state.ship.decks }, ours, tm);
-    hulk(objs, looks, look, { kind: 'hull', key: ourCls, model: ours, tl: CLASSES[ourCls]?.tl ?? 2, m: poseMatrix(mine), tint: '#5FD38D', plume: ourPlume || 0, lights: true });
+    hulk(objs, looks, look, { kind: 'hull', key: ourCls, model: ours, tl: CLASSES[ourCls]?.tl ?? 2, m: poseMatrix(mine), tint: '#5FD38D', plume: ourPlume || 0, lights: true, id: 'player', massKg: ourMassKg(state) });
   }
   return { objs, looks };
+}
+
+/** Our ship's mass now (kg): its own, its cargo, its reaction mass (as the drive pushes it). */
+export const ourMassKg = (state) => state.shipMass + (state.cargo || []).reduce((a, c) => a + (c.mass || 0), 0) + state.resources.fuel.current;
+
+// ---- A LIT DRIVE THROUGH A LENS ----
+//
+// A camera exposed for sunlit plating (the drone's, the hull cameras, a
+// shuttle's) has no line filter: a torch's light, as the telescope reckons
+// it (sim/telescope.js: PLUME_W_PER_N of its thrust as light, every way),
+// is a point as bright as the Sun at a few kilometres for a big hull, and
+// many times the Sun's from our own plating. The lens draws it as it draws
+// the Sun (hullcam.js sun: a white-hot spot, its glare, the lens's four
+// spikes), the glare reaching as far as the light against the Sun's here
+// (the square root of the ratio: a glare's edge is where its light falls to
+// a set level), and past the Sun's own a veil of scattered light over the
+// whole frame. Seen past its own bow, the hull between us and its throat,
+// a drive throws no spikes (they are the lens's diffraction of a point it
+// sees): what glares is the jet beyond the hull, a hull's breadth aft of
+// the bell, with a sixth of the light (its own glow is the GPU's).
+
+const SUN_W_M2 = 1361;           // sunlight at 1 AU
+const SUN_GLARE_PX = 40;         // the Sun's glare reaches this far (px), as hullcam.js draws it
+const SUN_SPIKE_PX = 60;         // …and the lens's spikes
+
+/**
+ * The lit drives among the solids (gpuObjects' hulls), each as bright as it
+ * is at the lens: [{ p (the jet's root, world m), k (its light against the
+ * Sun's here, as a glare's reach: 1 the Sun's), d (m), direct (0–1: its
+ * throat in sight) }]. `eyeAt(p)` gives
+ * the lens for a point (one eye, or a drone's standoff over it).
+ */
+export function driveLights(objs, eyeAt, sunAU) {
+  const out = [], done = new Set();
+  for (const o of objs) {
+    if (o.kind !== 'hull' || !(o.plume > 0.01) || done.has(o.id ?? o)) continue;
+    done.add(o.id ?? o);
+    const bell = o.model.parts?.find(q => q.k === 'bell');
+    const M = o.m, ax = Math.hypot(M[0], M[1], M[2]) || 1;
+    const at = (x) => [M[0] * x + M[12], M[1] * x + M[13], M[2] * x + M[14]];
+    const x0 = bell ? bell.x0 - 0.4 * bell.r0 : o.model.bounds.x0;
+    const e0 = eyeAt(at(x0)), p0 = at(x0);
+    // (looking up its jet c is 1; past its bow, its hull before its throat, −1)
+    const c = -(M[0] * (e0[0] - p0[0]) + M[1] * (e0[1] - p0[1]) + M[2] * (e0[2] - p0[2])) / (ax * Math.max(1e-6, Math.hypot(e0[0] - p0[0], e0[1] - p0[1], e0[2] - p0[2])));
+    const hidden = Math.max(0, Math.min(1, (-c - 0.15) / 0.4));
+    const p = at(x0 - hidden * Math.max(o.model.W || 0, o.model.H || 0, bell?.r0 || 1));
+    const eye = eyeAt(p), d = Math.max(1, Math.hypot(eye[0] - p[0], eye[1] - p[1], eye[2] - p[2]));
+    const flux = o.plume * G0 * (o.massKg || 1e5) * PLUME_W_PER_N / (4 * Math.PI * d * d) * (1 - 0.85 * hidden);
+    out.push({ p, d, k: Math.sqrt(flux / (SUN_W_M2 / (sunAU * sunAU))), direct: 1 - hidden });
+  }
+  return out;
+}
+
+/** A point source's light against the Sun's at sunAU (as driveLights' k), from its watts at d metres. */
+export const lightK = (watts, d, sunAU) => Math.sqrt(watts / (4 * Math.PI * d * d) / (SUN_W_M2 / (sunAU * sunAU)));
+
+/** A drive's light through the lens at (x, y) (CSS px): `k` against the Sun's, `direct` its throat in sight (driveLights). */
+export function driveGlare(ctx, x, y, k, W, H, direct = 1) {
+  if (!(k > 0.002)) return;
+  const R = SUN_GLARE_PX * k + 1.5, core = Math.min(1, 0.35 + 0.9 * Math.sqrt(k)) * (0.35 + 0.65 * direct);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  if (k > 1.2) {
+    // past the Sun's: the lens's scattered light over the whole frame, the stars washed out
+    const a = Math.min(0.42, 0.045 * (k - 1.2)), D = Math.hypot(W, H);
+    const v = ctx.createRadialGradient(x, y, 0, x, y, D);
+    v.addColorStop(0, `rgba(215,226,255,${a.toFixed(3)})`); v.addColorStop(0.35, `rgba(200,214,250,${(a * 0.45).toFixed(3)})`); v.addColorStop(1, `rgba(190,205,245,${(a * 0.2).toFixed(3)})`);
+    ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  }
+  const g = ctx.createRadialGradient(x, y, 0, x, y, R);
+  g.addColorStop(0, `rgba(255,255,255,${core.toFixed(3)})`); g.addColorStop(0.12, `rgba(225,234,255,${(0.4 * Math.min(1, k * 2)).toFixed(3)})`); g.addColorStop(1, 'rgba(200,215,255,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.fill();
+  if (direct > 0.05 && k > 0.05) {
+    // the lens's spikes, as on the Sun, and the white-hot point
+    const l = SUN_SPIKE_PX * k;
+    ctx.strokeStyle = `rgba(235,242,255,${(Math.min(0.4, 0.35 * Math.sqrt(k)) * direct).toFixed(3)})`; ctx.lineWidth = Math.max(1, Math.min(3, 0.6 + 0.4 * k));
+    for (let i = 0; i < 4; i++) { const a = i * Math.PI / 4 + 0.3; ctx.beginPath(); ctx.moveTo(x - Math.cos(a) * l, y - Math.sin(a) * l); ctx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); ctx.stroke(); }
+  }
+  if (direct > 0.05) { ctx.fillStyle = `rgba(255,255,255,${direct.toFixed(3)})`; ctx.beginPath(); ctx.arc(x, y, Math.min(6, 1 + 1.2 * Math.sqrt(k)), 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
 }
 
 /** The air going out of fresh holes, the glow of hot edges, over a picture: `screen` takes a world point (m) to the canvas. */

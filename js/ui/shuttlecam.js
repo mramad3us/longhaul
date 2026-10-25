@@ -27,7 +27,8 @@
 //
 // What they see is the scene the hull cameras see, posed round the
 // shuttle (our own ship among it, with its plume when it burns), lit the
-// same way, and the world under it from close (gl/world3d.js): its ground
+// same way, a lit drive through the lens as the Sun is (exterior.js
+// driveGlare: its own, seen over the tail, glares), and the world under it from close (gl/world3d.js): its ground
 // at true size, turning, from the telescope's own map, its air glowing at
 // the limb from orbit and becoming the sky inside, the stars gone in
 // daylight; the pad at the spaceport, its lights blinking. Through the
@@ -53,7 +54,7 @@ import { isDark, isIdentified } from '../sim/sensors.js';
 import { factionColor } from '../sim/factions.js';
 import { FitCanvas, fmtMeters } from './dom.js';
 import { has3D, renderScene, perspectiveCamera } from './gl/ships3d.js';
-import { poseObjects, gpuObjects, poseMatrix, ourPlace, SUN_RAISE } from './exterior.js';
+import { poseObjects, gpuObjects, poseMatrix, ourPlace, ourMassKg, driveLights, driveGlare, SUN_RAISE } from './exterior.js';
 import { SkyPainter, brightStars, surfaceMap } from './scope-sky.js';
 import { Labels } from './labels.js';
 
@@ -317,8 +318,8 @@ export class ShuttleCamView {
     const op = ourPlace(state, tm, (tm - state.clock.minute) * 60);
     const ox = (op.x - us.x) * AU_M, oy = (op.y - us.y) * AU_M, od = Math.hypot(ox, oy);
     const ours = hullOf(ourCls);
-    if (od < LOOK_M) objs.push({ kind: 'hull', key: ourCls, model: ours, tl: CLASSES[ourCls]?.tl ?? 2, m: poseMatrix({ mx: ox, my: oy, mz: 0, facing: state.flight.facing, view: 'top' }), tint: '#5FD38D', plume: state.flight.thrustG || 0, lights: true });
-    objs.push({ kind: 'hull', key: run.cls, model: hull, tl: 2, m: poseMatrix({ mx: 0, my: 0, mz: 0, R: { X: A.X, Y: A.Y, Z: A.Z } }), tint: '#5FD38D', plume: A.plume, lights: true });
+    if (od < LOOK_M) objs.push({ kind: 'hull', key: ourCls, model: ours, tl: CLASSES[ourCls]?.tl ?? 2, m: poseMatrix({ mx: ox, my: oy, mz: 0, facing: state.flight.facing, view: 'top' }), tint: '#5FD38D', plume: state.flight.thrustG || 0, lights: true, id: 'player', massKg: ourMassKg(state) });
+    objs.push({ kind: 'hull', key: run.cls, model: hull, tl: 2, m: poseMatrix({ mx: 0, my: 0, mz: 0, R: { X: A.X, Y: A.Y, Z: A.Z } }), tint: '#5FD38D', plume: A.plume, lights: true, id: run.entity, massKg: (CLASSES[run.cls]?.massT || 45) * 1000 });
 
     // ---- the world under it (on the pad, and just over it, the craft stands on its skids: its middle half its height up)
     const Wd2 = A.W, hM = Math.max(A.r - Wd2.R, restHeight(hull));
@@ -351,6 +352,8 @@ export class ShuttleCamView {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(out.canvas, out.sx, out.sy, out.w, out.h, 0, 0, Wd, Hd);
       ctx.restore();
+      // the lit drives through the lens (its own over the tail, ours, the others): the Sun's glare, by how bright each is here
+      for (const L of driveLights(objs, () => eye, sr)) { const p = toS(L.p); if (p) driveGlare(ctx, p[0], p[1], L.k, W, H, L.direct); }
     }
 
     // ---- the entry's shock, glowing in front of the belly and streaming aft past the lenses

@@ -30,7 +30,11 @@
 // sunlit plating reaches (STAR_LIMIT); the worlds as discs at their phase,
 // at their true size in the frame (a moon a station circles fills it); the
 // Sun a white-hot disc with its glare; ships too far to see as hulls, a
-// point of light while their drive is lit. A station's rock is the GPU's
+// point of light while their drive is lit. A lit drive, near or far, ours
+// too, is drawn through the lens as the Sun is, its glare as far as its
+// light against the Sun's (exterior.js driveGlare: these lenses carry no
+// line filter, as the telescope does): a big hull's torch a few km off
+// glares as the Sun does, our own seen from our plating veils the frame. A station's rock is the GPU's
 // (the ground, ray-cast per pixel through the lens). Names go beside the
 // hulls and stations in the frame (labels.js), with their range; a click
 // picks one (onSelect), as on the drone's picture.
@@ -38,16 +42,16 @@
 // Without WebGL2 there is no picture: the cameras say so.
 // ============================================================
 
-import { AU_M, DAY_MIN } from '../core/constants.js';
+import { AU_M, DAY_MIN, G0 } from '../core/constants.js';
 import { getWorld } from '../sim/world.js';
 import { partExtent } from '../sim/hulls.js';
-import { bodySight } from '../sim/telescope.js';
+import { bodySight, PLUME_W_PER_N } from '../sim/telescope.js';
 import { BODIES } from '../sim/ephemeris.js';
 import { isDark, isIdentified } from '../sim/sensors.js';
 import { factionColor } from '../sim/factions.js';
 import { FitCanvas, pointAt } from './dom.js';
 import { has3D, renderScene, perspectiveCamera } from './gl/ships3d.js';
-import { surroundings, smoothStep, poseObjects, ourMount, gpuObjects, ventsOver, poseMatrix, rockOf, fillLight, SUN_RAISE } from './exterior.js';
+import { surroundings, smoothStep, poseObjects, ourMount, gpuObjects, ventsOver, poseMatrix, rockOf, fillLight, driveLights, driveGlare, lightK, SUN_RAISE } from './exterior.js';
 import { SkyPainter, brightStars } from './scope-sky.js';
 import { Labels } from './labels.js';
 
@@ -224,9 +228,9 @@ export class HullCamView {
       this.sky.drawWorld(ctx, v, p[0], p[1], rPx, { days: tm / DAY_MIN, W, H });
       ctx.restore();
     }
-    // ships too far to see as hulls: a lit drive is a point of light
+    // ships too far to see as hulls: a lit drive is a point of light, as bright as it is here (drawn with the near ones' below)
     const world = getWorld(state);
-    const far = [];
+    const far = [], farLit = [];
     world.query(state.flight.pos, FAR_AU, far);
     for (const e of far) {
       if (e.type !== 'ship' || !(e.thrust > 0.01) || !state.sensors.$seen?.has(e.id)) continue;
@@ -234,9 +238,7 @@ export class HullCamView {
       if (dist < LOOK_M * 0.5) continue;
       const p = toS([dx, dy, 0]);
       if (!p || p[0] < 0 || p[0] > W || p[1] < 0 || p[1] > H) continue;
-      const k = Math.min(1, 0.25 + 0.5 * Math.sqrt(e.thrust) * Math.min(1, 2e6 / dist));
-      ctx.fillStyle = `rgba(255,236,205,${k.toFixed(3)})`;
-      ctx.beginPath(); ctx.arc(p[0], p[1], 1.2 + k, 0, Math.PI * 2); ctx.fill();
+      farLit.push({ x: p[0], y: p[1], k: lightK(e.thrust * G0 * (e.mass || 100) * 1000 * PLUME_W_PER_N, dist, sr) });
       this._hits.push({ id: e.id, x: p[0], y: p[1] });
     }
 
@@ -262,7 +264,10 @@ export class HullCamView {
         const dist = Math.hypot(m[12] - eye[0], m[13] - eye[1], m[14] - eye[2]);
         ventsOver(ctx, [lk], (w) => toS(w) || [-1e5, -1e5], focal / Math.max(2, dist), t);
       }
+      // the lit drives through the lens, ours among them: the Sun's glare, by how bright each is here
+      for (const L of driveLights(objs, () => eye, sr)) { const p = toS(L.p); if (p) driveGlare(ctx, p[0], p[1], L.k, W, H, L.direct); }
     }
+    for (const L of farLit) driveGlare(ctx, L.x, L.y, L.k, W, H);
 
     // ---- Names beside what is in the frame, with the range
     const Lb = this.labels;
