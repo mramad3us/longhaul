@@ -139,7 +139,7 @@ CSS: `css/main.css` (the original design system and the menus), `css/ui.css` (co
 | stance | stances held against coasting, thrusting, charging and fleeing ships and stations, the doctrine under fire, saves |
 | game | whole-game integration, saves, SOS, contracts, the 200k-entity scale budget |
 | crew | medicine, inertial events, breaches, reactor procedures, juice, FLANK |
-| ship | watches, needs, wear and repair, hand flying (the flight computer kept down, the rest repaired as usual), life support failures |
+| ship | watches, needs, wear and repair, hand flying (the flight computer kept down, the rest repaired as usual; into Vesta Depot's gate, 50 km over the rock, over several seeds: every ship arrives, none hits the ground), the end of an approach strapped in past the mark too, no turn held with the ground coming up, life support failures |
 | combat | classes, torpedoes and PDC, dead reckoning, railguns, damage, fire control, patrols, pirates, surrender, saves |
 | chase | torpedoes against a ship running (full G early, the reach forecast, running dry), ships that run within their crews' limits (the sprint, going dark, cornered and striking), a pirate found and running, patrols' jurisdiction and one stop at a time, a route to a lost contact's last fix, a bounty's mark off a moon, the brig |
 | factions | influence, hot zones, the director, bounties |

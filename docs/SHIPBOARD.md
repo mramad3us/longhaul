@@ -85,7 +85,7 @@ Everyone runs one task at a time and switches only to something more important. 
 Critical jobs (a rescue, a dead flight computer, failing life support) wake sleepers. Routine work belongs to whoever holds the engineering or machine-shop watch. When the crew must secure (a burn above 1.5G, any stretch in which the nav computer may turn the ship, battle stations: FLIGHT.md):
 - the pilot takes the helm
 - at battle stations the best shot takes the weapons console, the best engineer the engineering station and the next best eye ops
-- everyone else goes to a couch
+- everyone else goes to a couch (below 1.5G, critical jobs such as damage control and rescues go on, until a turn is held for them: then they strap in too, and go back to the job after)
 
 People move along real paths. In free fall, hand over hand is slow (about half a tile per minute), so call battle stations early. The nav computer won't flip with anyone still on their way to a couch: it holds the turn for them (FLIGHT.md).
 

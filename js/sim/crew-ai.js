@@ -779,8 +779,9 @@ function decide(state, m, env) {
       if (want && seatKind(m.task.seat) !== want && nearestFixture(state, m, want, true)) { assignSecure(state, m); return; }
     }
     if (holdsUnderG(m) || (m.task?.type === 'heal' && m.seat) || (m.task?.type === 'rescue' && m.task.phase === 'carry')) return;
-    // Below 1.5G people can still move: rescues and damage control go on until the ship pulls hard
-    if (env.g <= 1.5 && isAble(m)) {
+    // Below 1.5G people can still move: rescues and damage control go on until the ship pulls hard,
+    // or until a turn is waiting on them (they strap in for it, and go back to it after)
+    if (env.g <= 1.5 && isAble(m) && state.autopilot?.turnHeld == null) {
       if (lvl() <= 3 && m.task?.type !== 'secure') return;            // already on a critical job
       const job = pickJobFor(state, m, env, JOB_LEVEL[JOB_PRIORITY.CRITICAL] + 1);
       if (job && job.type !== JobType.HELM) { startJob(state, m, job); return; }

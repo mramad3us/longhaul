@@ -20,7 +20,12 @@
 // way it is left lying on the surface, on rails with the rock.
 //
 // Routes are planned as if space were empty, so the nav computer (and an
-// NPC's) flies a guard over them near a body (terrainGuard): when the line
+// NPC's) flies a guard over them near a body (terrainGuard: inside twenty
+// radii of it, or twenty minutes at the speed we close, if that is further:
+// a ship come in too fast, its drive failed on the brake, still steers
+// round the rock rather than through it; one that can't stop short of the
+// ground puts its whole drive across its motion, away from the rock's
+// centre, for the widest miss): when the line
 // to where it is going passes through the rock, or the ground would come
 // up on the present command within five minutes and what saving the ship
 // would take (the time its braking needs to stop the fall; coasting, the
@@ -70,7 +75,8 @@ export function timeToImpact(s, vel, thrust = { ax: 0, ay: 0 }) {
   return ts.length ? Math.min(...ts) : Infinity;
 }
 
-const GUARD_RANGE_R = 20;            // radii from a body's centre the guard looks out to
+const GUARD_RANGE_R = 20;            // radii from a body's centre the guard looks out to…
+const GUARD_AHEAD_S = 20 * 60;       // …or as far as we close in this long, coming in faster
 const CLEAR_R = 1.05;               // a line to the target passing nearer than this is blocked
 const CLIMB_S = 300;                // climb and round at the speed five minutes of the drive gives…
 const CLIMB_MAX_MS = 1200;           // …held under a port's speed limit (traffic-control.js: 3,000 m/s on the approach, both together)
@@ -88,7 +94,8 @@ function blocked(p, q, c, rM) {
   const L2 = dx * dx + dy * dy;
   if (L2 <= 0) return false;
   const t = (cx * dx + cy * dy) / L2;
-  if (t <= 0 || t >= 0.98) return false;
+  // (the line's very end is the target's own neighbourhood: half a radius of it, however far off we are)
+  if (t <= 0 || t >= 1 - Math.min(0.02, 0.5 * rM / Math.sqrt(L2))) return false;
   return Math.hypot(cx - t * dx, cy - t * dy) < CLEAR_R * rM;
 }
 
@@ -100,8 +107,11 @@ function blocked(p, q, c, rM) {
  */
 export function terrainGuard(pos, vel, cmd, toward, aMax, minute, climbing = false) {
   const s = nearestSurface(pos.x, pos.y, minute);
-  if (!s || s.r > GUARD_RANGE_R * s.body.radius * 1000) return null;
+  if (!s) return null;
   const rM = s.body.radius * 1000;
+  // (a ship coming in fast is watched from further out: at 100 km/s, twenty radii of a small rock is a minute)
+  const vRel = Math.hypot(vel.vx - s.vel.vx, vel.vy - s.vel.vy);
+  if (s.r > Math.max(GUARD_RANGE_R * rM, vRel * GUARD_AHEAD_S)) return null;
   // the command as the drive will give it (held to aMax: near a station, to traffic control's 0.1G)
   const thrust = cmd ? { ax: cmd.ax || 0, ay: cmd.ay || 0 } : { ax: 0, ay: 0 };
   const tm = Math.hypot(thrust.ax, thrust.ay);
@@ -145,6 +155,18 @@ export function terrainGuard(pos, vel, cmd, toward, aMax, minute, climbing = fal
   }
   const sl = Math.hypot(sx, sy);
   if (sl < 1e-3) { sx = -uy; sy = ux; } else { sx /= sl; sy /= sl; }
+  // Too fast to stop short of the ground (a ship come in on a failed brake): no climb can be had, only
+  // a miss; the whole drive across our motion, away from the rock's centre, widens it fastest
+  const rvx0 = vel.vx - s.vel.vx, rvy0 = vel.vy - s.vel.vy, v0 = Math.hypot(rvx0, rvy0);
+  if (v0 > 0 && tti < Infinity && v0 * v0 / (2 * Math.max(1e-3, aMax)) > v0 * tti) {
+    const hx = rvx0 / v0, hy = rvy0 / v0;
+    // (the centre seen from us, less its part along our motion: what is left points at the rock across our path)
+    const cx = -ux * s.r, cy = -uy * s.r, along = cx * hx + cy * hy;
+    let px = -(cx - along * hx), py = -(cy - along * hy);
+    const pl = Math.hypot(px, py);
+    if (pl < 1) { px = sx || -hy; py = sy || hx; } else { px /= pl; py /= pl; }
+    return { ax: px * aMax, ay: py * aMax, maxG: cmd?.maxG, lean: true, climb: true, dodge: true, body: s.body.name };
+  }
   // the velocity we want against the body's centre: out, and round toward the target
   const climb = Math.max(400, Math.min(CLIMB_MAX_MS, aMax * CLIMB_S));
   const round = losBlocked && s.alt > LOW_M ? 1.8 * climb : 0;
@@ -185,8 +207,12 @@ function pathToImpact(s, vel, thrust, horizon) {
   for (let t = STEP; t <= horizon; t += STEP) {
     const r = Math.hypot(x, y), g = gm / (r * r);
     vx += (thrust.ax - g * x / r) * STEP; vy += (thrust.ay - g * y / r) * STEP;
+    const x0 = x, y0 = y;
     x += vx * STEP; y += vy * STEP;
-    if (Math.hypot(x, y) < rM) return t;
+    // (each step's whole stretch, not its end: coming in at 100 km/s a step is 3,000 km, and a small rock lies between)
+    const sx = x - x0, sy = y - y0, L2 = sx * sx + sy * sy;
+    const k = L2 > 0 ? Math.max(0, Math.min(1, -(x0 * sx + y0 * sy) / L2)) : 1;
+    if (Math.hypot(x0 + k * sx, y0 + k * sy) < rM) return t - STEP * (1 - k);
   }
   return Infinity;
 }

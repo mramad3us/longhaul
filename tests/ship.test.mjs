@@ -5,7 +5,7 @@ import { seedRandom } from '../js/core/rng.js';
 import { bus } from '../js/core/events.js';
 import { createGame, advance } from '../js/sim/game.js';
 import { planRoutes } from '../js/sim/nav.js';
-import { engageRoute } from '../js/sim/autopilot.js';
+import { engageRoute, crewPolicy, flipInterlock } from '../js/sim/autopilot.js';
 import { damageSystem, systemPerf, meteoroidStrike, partsFor, shipSystems } from '../js/sim/systems.js';
 import { CLASSES, TECH } from '../js/sim/ship-classes.js';
 import { overhaulQuote, priceOf } from '../js/sim/contracts.js';
@@ -15,6 +15,9 @@ import { minuteTick } from '../js/sim/game.js';
 import { minuteOfDay } from '../js/sim/duty.js';
 import { serialize, deserialize } from '../js/sim/save.js';
 import { seatKind } from '../js/sim/ship-layout.js';
+import { nearestSurface } from '../js/sim/gravity.js';
+import { getWorld } from '../js/sim/world.js';
+import { releaseHold } from '../js/sim/autopilot.js';
 
 function game(seed = 1, crewCount = 6, classId) {
   seedRandom(seed);
@@ -178,6 +181,69 @@ export default [
       assert(!s.autopilot && s.flight.hold?.id === 'vesta-depot-gate', 'should arrive by hand (at the gate: the route\'s end)');
       assert(unmanned <= 6, 'the helm is never left unmanned for long (watch changes are handed over)');
       assert(manual > 60, 'should have been flown by hand');
+    },
+  },
+  {
+    name: 'flown by hand into a gate beside a rock (Vesta Depot, 50 km up): every ship arrives, none hits the ground',
+    fn: () => {
+      const out = [];
+      for (const seed of [1, 4, 5, 11, 15, 21]) {
+        seedRandom(seed);
+        bus.clear();
+        const s = createGame({ docked: false, crewCount: 6, forces: false });
+        s.missions.cooldown = 1e9; s.politics.quietUntil = Infinity;
+        atHour(s, 9);
+        s.law.wanted.OPA = 0; s.law.fines = [];
+        let impacts = 0, held = 0, longest = 0;
+        bus.on('ground-impact', () => impacts++);
+        const std = planRoutes(s, { kind: 'entity', id: 'vesta-depot' }).find(o => o.name === 'STANDARD');
+        engageRoute(s, std.plan, { estimate: std.estimate });
+        runUntil(s, st => st.autopilot?.phase === 'active' && st.flight.thrustG > 0.5, 600);
+        const flown = runUntil(s, st => {
+          // (the flight computer down all the way in: the rest of the ship repaired as usual)
+          if (systemPerf(st, 'flightComputer') > 0) damageSystem(st, 'flightComputer', { severity: 'major', cause: 'test' });
+          if (st.autopilot?.turnHeld != null) { held++; longest = Math.max(longest, held); } else held = 0;
+          return !st.autopilot || st.lost;
+        }, std.estimate.minutes * 2);
+        out.push(`seed ${seed}: ${s.lost ? 'LOST' : s.autopilot ? 'not in' : `in ${fmt(flown / 60, 1)}h`} (est ${fmt(std.estimate.minutes / 60, 1)}h), longest held turn ${longest} min`);
+        assert(!s.lost && impacts === 0, `seed ${seed}: the ship hit the ground`);
+        assert(!s.autopilot && s.flight.hold?.id === 'vesta-depot-gate', `seed ${seed}: arrives at the gate by hand`);
+      }
+      console.log(`      ${out.join('\n      ')}`);
+    },
+  },
+  {
+    name: 'the end of an approach is flown strapped in, past the mark too; a turn is never held with the ground coming up',
+    fn: () => {
+      const s = game(12, 6);
+      const std = planRoutes(s, { kind: 'entity', id: 'vesta-depot' }).find(o => o.name === 'STANDARD');
+      engageRoute(s, std.plan, { estimate: std.estimate });
+      runUntil(s, st => st.autopilot?.phase === 'active', 600);
+      const ap = s.autopilot;
+      Object.assign(ap, { display: 'burn', flipIn: Infinity, ignitedAt: null, d: ap.plan.standoff + 2_000_000, vClose: -1200, relSpeed: 1200 });
+      assert(crewPolicy(s) === 'secure', 'overshot, moving away 1.2 km/s, 2,000 km out: strapped in to turn and come back');
+      Object.assign(ap, { d: ap.plan.standoff + 20e9, vClose: -1200, relSpeed: 1200 });
+      assert(crewPolicy(s) === 'free', 'far out, the crew go about the ship');
+      // A turn wanted beside Vesta, someone on their feet: held while the ship is safe, never while it falls
+      const g = getWorld(s).get('vesta-depot-gate');
+      getWorld(s).refresh(g, s.clock.minute);          // (far from us the world brings things up to date lazily)
+      releaseHold(s);
+      s.flight.pos = { ...g.pos };
+      const sf = nearestSurface(g.pos.x, g.pos.y, s.clock.minute);
+      const ship = s.ship.crew.find(m => m.role !== 'Pilot');
+      ship.seat = null; ship.task = null;
+      s.flight.facing = Math.atan2(sf.uy, sf.ux);
+      s.flight.turning = 0;
+      const cmd = { ax: -sf.ux * 5, ay: -sf.uy * 5, maxG: 1 };          // (the nose round: a flip)
+      const forced = [];
+      s.flight.vel = { vx: sf.vel.vx + sf.ux * 30, vy: sf.vel.vy + sf.uy * 30 };     // climbing away from it
+      ap.turnHeld = null;
+      const safe = flipInterlock(s, { ...cmd }, (t, p) => t === 'turn-forced' && forced.push(p));
+      assert(safe.ax === 0 && safe.ay === 0 && ap.turnHeld != null, 'safe: the turn waits for them');
+      s.flight.vel = { vx: sf.vel.vx - sf.ux * 150, vy: sf.vel.vy - sf.uy * 150 };   // falling at 150 m/s, 50 km up
+      ap.turnHeld = null;
+      const falling = flipInterlock(s, { ...cmd }, (t, p) => t === 'turn-forced' && forced.push(p));
+      assert(falling.ax !== 0 && forced.some(p => p.ground), 'falling: the turn goes, and says why');
     },
   },
   {

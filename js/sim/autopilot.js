@@ -37,7 +37,7 @@ import { gravityAt, nearestSurface } from './gravity.js';
 import { getBody, bodyPos } from './ephemeris.js';
 import { slotOrbit } from './holding.js';
 import { rcsAvailable } from './systems.js';
-import { terrainGuard, hoverCmd } from './terrain.js';
+import { terrainGuard, hoverCmd, timeToImpact } from './terrain.js';
 import { AU_M, G0, DAY_MIN, MIN_S } from '../core/constants.js';
 import { getWorld, predictEntity } from './world.js';
 import { targetStateAt, targetName, guidanceStep, portOfTarget, departingFrom, DEPART_OUT } from './nav.js';
@@ -119,6 +119,7 @@ export function overrideSecure(state) {
 }
 
 export const TURN_HOLD_MAX_MIN = 30;      // a flip waits for the crew this long at most (the longest walk to a couch, and then some)
+const TURN_GROUND_S = 10 * MIN_S;           // …and not at all with the ground this close on the path we coast (the turn is what saves the ship)
 
 /**
  * The flip interlock: given the command the autopilot is about to fly, hold
@@ -132,8 +133,11 @@ export function flipInterlock(state, cmd, emit = () => {}) {
   if (!flip || ap.display === 'evade') { ap.turnHeld = null; return cmd; }
   const st = crewSecureStatus(state);
   const now = state.clock.minute;
-  if (!st.unsecured.length || ap.forceTurn || (ap.turnHeld != null && now - ap.turnHeld >= TURN_HOLD_MAX_MIN)) {
-    if (st.unsecured.length) emit('turn-forced', { count: st.unsecured.length, names: st.unsecured.map(m => m.name), captain: !!ap.forceTurn });
+  // (held, the ship coasts: near a rock, falling, the turn can't wait for anyone)
+  const sf = st.unsecured.length ? nearestSurface(f.pos.x, f.pos.y, now) : null;
+  const ground = !!sf && timeToImpact(sf, f.vel) < TURN_GROUND_S;
+  if (!st.unsecured.length || ap.forceTurn || ground || (ap.turnHeld != null && now - ap.turnHeld >= TURN_HOLD_MAX_MIN)) {
+    if (st.unsecured.length) emit('turn-forced', { count: st.unsecured.length, names: st.unsecured.map(m => m.name), captain: !!ap.forceTurn, ground });
     ap.turnHeld = null;
     ap.forceTurn = false;
     return cmd;
@@ -536,6 +540,8 @@ export function autopilotAfterStep(state, out) {
 }
 
 // ---- POLICIES ----
+// (a turn is never held with the ground coming up: flipInterlock; and the
+// endgame hour counts a ship past its mark too, which must turn and come back)
 
 const ENDGAME_S = 60 * 60;          // the last hour of an approach is flown strapped in
 
@@ -560,9 +566,12 @@ export function crewPolicy(state) {
   if (ap.flipIn <= 30) return 'secure';                               // re-secure ahead of the flip
   if (ap.ignitedAt != null && state.clock.minute - ap.ignitedAt < 10) return 'secure';  // settle into the burn
   // The end of an approach (the last of the brake, the turn into the target's
-  // pull, the near zone, the RCS terminal) can turn the ship at any time
+  // pull, the near zone, the RCS terminal) can turn the ship at any time; so
+  // can a ship past its mark (a hand at the helm overshoots), which must turn
+  // and come back: the hour is counted on the speed between us either way
   const togo = ap.d == null ? Infinity : ap.d - ap.plan.standoff;
-  if (ap.display === 'approach' || ap.plan.$keep || (ap.vClose > 1 && togo / ap.vClose < ENDGAME_S)) return 'secure';
+  const rel = Math.max(ap.vClose, ap.relSpeed || 0);
+  if (ap.display === 'approach' || ap.plan.$keep || (rel > 1 && Math.abs(togo) / rel < ENDGAME_S)) return 'secure';
   return 'free';
 }
 
