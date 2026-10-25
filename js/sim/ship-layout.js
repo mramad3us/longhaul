@@ -10,6 +10,15 @@
 // Ship coordinates: x = tile column, y = tile row counted from the bow
 // across ALL decks, with a one-row gap between decks (the deck
 // plating / ladder shaft). Crew positions are continuous ship coords.
+//
+// Furniture faces open floor, its back to a wall if it has one
+// (fixtureFacing: the room cameras draw it that way too, ui/roomcam.js).
+// A mess table has its places (tableSpots): two stools at its front, a
+// third at an end that opens onto floor nobody uses furniture from, and
+// standing room at its front corners and, with floor behind it, its back;
+// the galley's counter two places side by side, then waiting room on the
+// open floor nearest it (counterSpots). Each crew member takes a place
+// nobody else holds (crew-ai.js).
 // ============================================================
 
 import { TileType, WALKABLE, TILE_MASS } from './tiles.js';
@@ -257,6 +266,143 @@ const _geo = new WeakMap();
  * Derived geometry for a ship's decks: row offsets, walk graph, fixtures.
  * Cached on the decks array identity.
  */
+// ---- FURNITURE: WHICH WAY IT FACES, WHERE PEOPLE GO AT A TABLE ----
+
+/** Tiles nobody is in and nothing faces into: the hull, walls, the void outside (the room cameras' too). */
+export const SOLID_TILES = new Set([T.EMPTY, T.HULL_WALL, T.INTERIOR_WALL, T.PDC_MOUNT, T.CARGO_DOOR]);
+export const FACE_DIRS = { S: [0, 1], N: [0, -1], E: [1, 0], W: [-1, 0] };
+
+/** Is a deck tile solid (outside the room)? An airlock on the hull is. */
+export function solidAt(tiles, x, y) {
+  const t = tiles[y]?.[x];
+  if (t === undefined || SOLID_TILES.has(t)) return true;
+  if (t === T.AIRLOCK) return Object.values(FACE_DIRS).some(([dx, dy]) => (tiles[y + dy]?.[x + dx] ?? T.EMPTY) === T.EMPTY);
+  return false;
+}
+
+/** Which way furniture at (x, y) faces: 'S' | 'N' | 'E' | 'W', toward open floor, its back to a wall if it has one. */
+export function fixtureFacing(tiles, x, y) {
+  const open = (dx, dy) => !solidAt(tiles, x + dx, y + dy) && WALKABLE.has(tiles[y + dy]?.[x + dx]);
+  for (const k of ['S', 'N', 'E', 'W']) { const [dx, dy] = FACE_DIRS[k]; if (open(dx, dy) && solidAt(tiles, x - dx, y - dy)) return k; }
+  for (const k of ['S', 'N', 'E', 'W']) { const [dx, dy] = FACE_DIRS[k]; if (open(dx, dy)) return k; }
+  return 'S';
+}
+
+/**
+ * A table's frame: out (from its back to its front, the way it faces),
+ * along (its u axis, as the cameras draw it: from one end to the other),
+ * and which of its sides open onto floor (the ends: low is along −1).
+ */
+export function tableFrame(tiles, x, y) {
+  const [ox, oy] = FACE_DIRS[fixtureFacing(tiles, x, y)];
+  const ax = oy, ay = -ox;
+  // (open floor, and not where anyone stands to use the furniture beside it: a stool there would be in their way)
+  const floor = (dx, dy) => tiles[y + dy]?.[x + dx] === T.FLOOR && !usedFrom(tiles, x + dx, y + dy, x, y);
+  return { ox, oy, ax, ay, low: floor(-ax, -ay), high: floor(ax, ay), back: floor(-ox, -oy) };
+}
+
+/** The mess's furniture is used from its front (where the cameras draw its stools, its counter, the rig's deck). */
+const FRONT_ACCESS = new Set([T.GALLEY, T.TABLE, T.REC]);
+
+/**
+ * Which floor tile beside furniture at (x, y) it is used from, as [dx, dy]:
+ * the front for the mess's furniture, else the first open floor east, west,
+ * south, north (shipGeometry falls back to a doorway or the ladder after).
+ */
+export function accessFrom(tiles, x, y) {
+  const floor = (dx, dy) => tiles[y + dy]?.[x + dx] === T.FLOOR;
+  if (FRONT_ACCESS.has(tiles[y]?.[x])) { const d = FACE_DIRS[fixtureFacing(tiles, x, y)]; if (floor(...d)) return d; }
+  for (const d of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (floor(...d)) return d;
+  return null;
+}
+
+/** Is floor tile (x, y) where someone stands to use a piece of furniture next to it, other than the one at (ex, ey)? */
+function usedFrom(tiles, x, y, ex, ey) {
+  for (const [dx, dy] of Object.values(FACE_DIRS)) {
+    const fx = x + dx, fy = y + dy;
+    if (fx === ex && fy === ey) continue;
+    const t = tiles[fy]?.[fx];
+    if (t === undefined || !FIXTURE_KIND[t] || WALKABLE.has(t)) continue;
+    const d = accessFrom(tiles, fx, fy);
+    if (d && fx + d[0] === x && fy + d[1] === y) return true;
+  }
+  return false;
+}
+
+const COUNTER_OUT = 0.78, COUNTER_ALONG = 0.24;     // two at a counter (the galley), side by side in front of it
+const QUEUE_PER_TILE = 0.22;                        // waiting their turn: two to a tile of open floor, this far either side of its middle
+
+/**
+ * Places at a counter (the galley): two side by side in front of it, then
+ * waiting room on the open floor nearest it, two to a tile (never a tile
+ * holding a table's places; the walk up to a table's stools last); each
+ * { sx, sy, a }, facing the counter. Cached on the fixture.
+ */
+export function counterSpots(ship, f) {
+  if (f.$spots) return f.$spots;
+  const tiles = ship.decks[f.deck].tiles;
+  const geo = shipGeometry(ship);
+  const [ox, oy] = FACE_DIRS[fixtureFacing(tiles, f.x, f.y)];
+  const ax = oy, ay = -ox;
+  const face = (x, y) => Math.atan2(f.sy - y, f.sx - x);
+  const spots = [-COUNTER_ALONG, COUNTER_ALONG].map(l => { const sx = f.sx + ox * COUNTER_OUT + ax * l, sy = f.sy + oy * COUNTER_OUT + ay * l; return { sx, sy, a: Math.atan2(-oy, -ox) }; });
+  // (the tiles taken: the counter's own front, a table's places; a table's front, where its diners walk up, last)
+  const busy = new Set([`${f.x + ox},${f.y + oy}`]), fronts = new Set();
+  for (const g of geo.fixtures.table || []) if (g.deck === f.deck) {
+    for (const p of tableSpots(ship, g)) busy.add(`${Math.round(p.sx)},${Math.round(p.sy - geo.deckStart[f.deck])}`);
+    const d = accessFrom(tiles, g.x, g.y);
+    if (d) fronts.add(`${g.x + d[0]},${g.y + d[1]}`);
+  }
+  const far = (n) => (fronts.has(`${n.x},${n.y}`) ? 100 : 0) + Math.hypot(n.sx - f.sx, n.sy - f.sy);
+  const open = geo.nodes.filter(n => n.deck === f.deck && n.tile === T.FLOOR && !busy.has(`${n.x},${n.y}`)).sort((a, b) => far(a) - far(b));
+  for (const n of open) for (const s of [-1, 1]) {
+    const sx = n.sx + s * QUEUE_PER_TILE, sy = n.sy;
+    spots.push({ sx, sy, a: face(sx, sy) });
+  }
+  f.$spots = spots;
+  return spots;
+}
+
+/** Place `i` at a counter (past them all, round the waiting room again a little aside: a deck crowded past what it holds). */
+export function counterSpot(ship, f, i) {
+  const s = counterSpots(ship, f);
+  if (i < s.length) return s[i];
+  const k = i - s.length, p = s[2 + k % Math.max(1, s.length - 2)] || s[s.length - 1], lap = 1 + Math.floor(k / Math.max(1, s.length - 2));
+  return { ...p, sy: p.sy + 0.18 * lap * (lap % 2 ? 1 : -1) };
+}
+
+const SEAT_OUT = 0.48, SEAT_ALONG = 0.24;   // the front stools, from the table's centre (tiles): where the cameras draw them
+const END_ALONG = 0.62, END_OUT = -0.04;    // an end's stool
+const OVERFLOW_OUT = 1.15;                  // past every place: standing about in front of it
+
+/**
+ * The places at a table: [{ kind: 'seat' | 'stand', sx, sy, a (rad: the
+ * way they face, at the table) }], seats first. Cached on the fixture.
+ */
+export function tableSpots(ship, f) {
+  if (f.$spots) return f.$spots;
+  const fr = tableFrame(ship.decks[f.deck].tiles, f.x, f.y);
+  const at = (kind, o, l, fx, fy) => ({ kind, sx: f.sx + fr.ox * o + fr.ax * l, sy: f.sy + fr.oy * o + fr.ay * l, a: Math.atan2(fy, fx) });
+  const spots = [at('seat', SEAT_OUT, -SEAT_ALONG, -fr.ox, -fr.oy), at('seat', SEAT_OUT, SEAT_ALONG, -fr.ox, -fr.oy)];
+  if (fr.low) spots.push(at('seat', END_OUT, -END_ALONG, fr.ax, fr.ay));
+  if (fr.high) spots.push(at('seat', END_OUT, END_ALONG, -fr.ax, -fr.ay));
+  if (fr.back) spots.push(at('stand', -0.68, -0.22, fr.ox, fr.oy), at('stand', -0.68, 0.22, fr.ox, fr.oy));
+  // (the front corners, beside the stools: leaning on the table)
+  spots.push(at('stand', 0.92, -0.62, -fr.ox * 0.8 + fr.ax * 0.6, -fr.oy * 0.8 + fr.ay * 0.6), at('stand', 0.92, 0.62, -fr.ox * 0.8 - fr.ax * 0.6, -fr.oy * 0.8 - fr.ay * 0.6));
+  f.$spots = spots;
+  return spots;
+}
+
+/** Place `i` at a table: one of its spots, or past them all, standing about in front of it (each a place of its own). */
+export function tableSpot(ship, f, i) {
+  const spots = tableSpots(ship, f);
+  if (i < spots.length) return spots[i];
+  const fr = tableFrame(ship.decks[f.deck].tiles, f.x, f.y);
+  const k = i - spots.length, r = 0.18 + 0.12 * Math.sqrt(k), th = k * 2.39996;
+  const o = OVERFLOW_OUT + Math.cos(th) * r * 0.6, l = Math.sin(th) * r * 1.6;
+  return { kind: 'stand', sx: f.sx + fr.ox * o + fr.ax * l, sy: f.sy + fr.oy * o + fr.ay * l, a: Math.atan2(-fr.oy, -fr.ox) };
+}
+
 export function shipGeometry(ship) {
   let g = _geo.get(ship.decks);
   if (!g) { g = buildGeometry(ship.decks); _geo.set(ship.decks, g); }
@@ -309,9 +455,14 @@ function buildGeometry(decks) {
     const kind = FIXTURE_KIND[t];
     if (!kind) return;
     const self = index.get(key(di, rx, ry));
-    // Access: where a crew member stands to use it — open floor preferred
-    // over the ladder shaft or a doorway
+    // Access: where a crew member stands to use it: open floor preferred
+    // over the ladder shaft or a doorway (the mess's furniture from its
+    // front, as the cameras draw it: accessFrom)
     let access = self, fallback;
+    if (access === undefined) {
+      const d = accessFrom(deck.tiles, rx, ry);
+      if (d) access = index.get(key(di, rx + d[0], ry + d[1]));
+    }
     if (access === undefined) {
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const n = index.get(key(di, rx + dx, ry + dy));

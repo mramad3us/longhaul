@@ -157,7 +157,6 @@ export default [
     name: 'flight computer dies mid-burn: the helm watch takes over and flies it in by hand',
     fn: () => {
       const s = game(8, 6);
-      noRepairs(s);
       atHour(s, 9);                     // the Pilot has the helm watch
       // (hours on Ceres' approach uncleared got us reported to station security: settled, this is about the helm)
       s.law.wanted.OPA = 0; s.law.fines = [];
@@ -167,6 +166,9 @@ export default [
       damageSystem(s, 'flightComputer', { severity: 'major', cause: 'test' });
       let unmanned = 0, manual = 0, fuel0 = s.resources.fuel.current;
       const flown = runUntil(s, st => {
+        // (the flight computer stays down all the way in; the rest of the ship is kept up as usual: a drive
+        // left broken by a test that stopped all repairs would end the trip, not the helm)
+        if (systemPerf(st, 'flightComputer') > 0) damageSystem(st, 'flightComputer', { severity: 'major', cause: 'test' });
         if (st.autopilot?.helm === 'unmanned') unmanned++;
         if (st.autopilot?.helm === 'manual') manual++;
         return !st.autopilot;

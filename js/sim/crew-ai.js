@@ -21,7 +21,7 @@
 
 import { fightFire, FIRE } from './fire.js';
 import { randInt, pick } from '../core/rng.js';
-import { shipGeometry, findPath, nearestNode, deckNodes, isSecureSeat, seatKind, airlockFor, walkDistance } from './ship-layout.js';
+import { shipGeometry, findPath, nearestNode, deckNodes, isSecureSeat, seatKind, airlockFor, walkDistance, tableSpots, tableSpot, counterSpot } from './ship-layout.js';
 import { TileType } from './tiles.js';
 import { isConscious, isAble, needsMedical, mobility, stabilize, medbayTick, hasCondition } from './crew.js';
 import { JobType, JOB_PRIORITY, JOB_SKILL, addJob, closeJob } from './jobs.js';
@@ -71,6 +71,41 @@ function standNode(geo, f) {
   }
   f.$stand = node;
   return node;
+}
+
+/**
+ * A place at a mess table nobody else holds (ship-layout.js tableSpots): a
+ * stool at the nearest table with one free, else standing room at the
+ * nearest with some, else standing about in front of the nearest. Returns
+ * { fixture, i, kind, sx, sy, a } or null (no table to go to).
+ */
+function tablePlace(state, m, ok = null) {
+  const geo = shipGeometry(state.ship);
+  const myDeck = geo.deckOfRow(m.pos.sy);
+  const tables = (geo.fixtures.table || []).filter(f => !ok || ok(f))
+    .map(f => ({ f, d: Math.abs(f.sx - m.pos.sx) + Math.abs(f.sy - m.pos.sy) + (f.deck === myDeck ? 0 : 3) }))
+    .sort((a, b) => a.d - b.d).map(x => x.f);
+  if (!tables.length) return null;
+  const held = new Set();
+  for (const o of state.ship.crew) if (o !== m && !o.dead && !o.away && o.task?.place) held.add(`${o.task.place.fixture}#${o.task.place.i}`);
+  const take = (f, i) => ({ fixture: f.id, i, ...tableSpot(state.ship, f, i) });
+  for (const kind of ['seat', 'stand']) for (const f of tables) {
+    const spots = tableSpots(state.ship, f);
+    for (let i = 0; i < spots.length; i++) if (spots[i].kind === kind && !held.has(`${f.id}#${i}`)) return take(f, i);
+  }
+  const f = tables[0];
+  let i = tableSpots(state.ship, f).length;
+  while (held.has(`${f.id}#${i}`)) i++;
+  return take(f, i);
+}
+
+/** A place at the galley's counter nobody else holds: side by side in front of it, then behind them (ship-layout.js counterSpot). */
+function counterPlace(state, m, galley) {
+  const held = new Set();
+  for (const o of state.ship.crew) if (o !== m && o.task?.type === 'eat' && o.task.counter?.fixture === galley.id) held.add(o.task.counter.i);
+  let i = 0;
+  while (held.has(i)) i++;
+  return { fixture: galley.id, i, ...counterSpot(state.ship, galley, i) };
 }
 
 function nearestFixture(state, m, kind, free = false, prefer = null) {
@@ -568,12 +603,13 @@ function startSleep(state, m, exhausted = false) {
 }
 
 function startEat(state, m, urgent = false) {
-  const geo = shipGeometry(state.ship);
   const galley = nearestFixture(state, m, 'galley');
   if (!galley || !reachable(state, m, galley.deck)) return false;
   abandonTask(state, m);
-  m.task = { type: 'eat', phase: 'galley', urgent, timer: 0 };
-  goToNode(state, m, standNode(geo, galley));
+  // (a place at the counter of their own: two cook side by side, others wait behind them)
+  const counter = counterPlace(state, m, galley);
+  m.task = { type: 'eat', phase: 'galley', urgent, timer: 0, counter };
+  setDestination(state, m, counter.sx, counter.sy);
   return true;
 }
 
@@ -588,19 +624,18 @@ function startWash(state, m) {
 }
 
 function startLeisure(state, m) {
-  const geo = shipGeometry(state.ship);
   const ok = (f) => reachable(state, m, f.deck);
   const rec = nearestFixture(state, m, 'rec', true, ok);
-  // The rig if it's free and they're not already sociable; otherwise the mess table
-  const table = nearestFixture(state, m, 'table', false, ok);
+  // The rig if it's free and they're not already sociable; otherwise a place at the mess table
   const useRec = rec && (m.id + Math.floor(state.clock.minute / 97)) % 2 === 0;
+  const place = useRec ? null : tablePlace(state, m, ok);
   abandonTask(state, m);
   if (useRec) {
     m.task = { type: 'leisure', where: 'rec', phase: 'goto', seat: rec.id, timer: randInt(35, 55) };
     goToSeat(state, m, rec);
-  } else if (table) {
-    m.task = { type: 'leisure', where: 'table', phase: 'goto', fixture: table.id, timer: randInt(30, 50) };
-    goToNode(state, m, standNode(geo, table));
+  } else if (place) {
+    m.task = { type: 'leisure', where: 'table', phase: 'goto', fixture: place.fixture, place, timer: randInt(30, 50) };
+    setDestination(state, m, place.sx, place.sy);
   } else return false;
   return true;
 }
@@ -975,8 +1010,8 @@ function stepTask(state, m, ctx, g, emit, block) {
             const f = fixtureById(G, t.seat);
             if (state.ship.crew.some(c => c.id !== m.id && c.seat === f.id)) { m.task = null; break; }
             sit(m, f);
-          } else {
-            m.pos.sx += ((m.id % 3) - 1) * 0.3;    // room around the table
+          } else if (!t.place) {
+            m.pos.sx += ((m.id % 3) - 1) * 0.3;    // (a save from before places at tables)
           }
           t.phase = 'on';
         }
@@ -1043,6 +1078,13 @@ function mealService(state) {
 function stepEat(state, m, t, speed, emit) {
   const G = shipGeometry(state.ship);
   const res = state.resources;
+  // waiting at the galley: up the queue when a place nearer the counter frees
+  if ((t.phase === 'galley' || t.phase === 'prep') && t.counter?.i > 1) {
+    const galley = G.fixtureById.get(t.counter.fixture);
+    const better = galley && counterPlace(state, m, galley);
+    if (better && better.i < t.counter.i) { t.counter = better; setDestination(state, m, better.sx, better.sy); }
+  }
+  if (t.phase === 'prep' && m.path?.length) walk(m, speed);
   switch (t.phase) {
     case 'galley':
       m.activity = 'to-galley';
@@ -1060,15 +1102,17 @@ function stepEat(state, m, t, speed, emit) {
     case 'prep':
       m.activity = t.service.kind === 'cold rations' ? 'cold-rations' : 'cooking';
       if (--t.timer <= 0) {
-        const table = nearestFixture(state, m, 'table');
+        // a stool if one is free, else room to stand at the table (and the counter free for the next)
+        t.counter = null;
+        t.place = tablePlace(state, m);
         t.phase = 'table';
-        if (table) goToNode(state, m, standNode(G, table));
+        if (t.place) setDestination(state, m, t.place.sx, t.place.sy);
       }
       return;
     case 'table':
       m.activity = 'to-mess';
       if (walk(m, speed)) {
-        m.pos.sx += ((m.id % 3) - 1) * 0.3;
+        if (!t.place) m.pos.sx += ((m.id % 3) - 1) * 0.3;    // (a save from before places at tables)
         t.phase = 'eating'; t.timer = MEAL_MINUTES;
         res.food.current = Math.max(0, res.food.current - RATION_PER_MEAL);
       }

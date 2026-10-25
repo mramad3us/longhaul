@@ -22,9 +22,10 @@ import { assert, fmt } from './helpers.mjs';
 import { seedRandom } from '../js/core/rng.js';
 import { bus } from '../js/core/events.js';
 import { createGame } from '../js/sim/game.js';
-import { shipGeometry } from '../js/sim/ship-layout.js';
+import { shipGeometry, tableSpots, tableFrame } from '../js/sim/ship-layout.js';
+import { advance } from '../js/sim/game.js';
 import { TileType } from '../js/sim/tiles.js';
-import { roomFor, posture, Lens, occludersNear } from '../js/ui/roomcam.js';
+import { roomFor, posture, Lens, occludersNear, placer } from '../js/ui/roomcam.js';
 import { makeRig, pose, skinning, blanketMesh, lookOf, LIE_LIFT } from '../js/ui/gl/figures.js';
 
 const ROOT = new URL('../', import.meta.url);
@@ -113,6 +114,12 @@ function scenes(s) {
   deck('work', {}, { work: true });
   for (const t of [0, 150, 300]) deck(`walk t${t}`, {}, { moving: true, t });
   if (nextToTable) deck('table', { activity: 'eating' }, { x: nextToTable[0], z: nextToTable[1] });
+  // on a stool the sim gives them, and standing at the table when the stools are taken (sim/ship-layout.js tableSpots)
+  const start = geo.deckStart[tableF.deck];
+  for (const [i, sp] of tableSpots(s.ship, tableF).entries()) {
+    const place = { fixture: tableF.id, i, ...sp };
+    deck(`table ${sp.kind} ${i}`, { activity: 'eating', task: { type: 'eat', phase: 'eating', place } }, { x: sp.sx, z: sp.sy - start, heading: sp.a, work: sp.kind === 'stand' });
+  }
   for (let i = 0; i < 3; i++) deck(`down ${i}`, { consciousness: 0 });
   for (let i = 0; i < 3; i++) deck(`dead ${i}`, { dead: true });
   deck('carried', { task: { type: 'carried' } });
@@ -177,6 +184,69 @@ function hiddenShare(eye, v, tris) {
 const LYING = new Set(['lying', 'down']);
 
 export default [
+  {
+    name: 'the mess: every seat the sim gives is a stool the camera draws, every standing place open floor; a full mess puts each diner in a place of their own, stools first, and each cook at the counter in theirs',
+    fn: () => {
+      const s = ship();
+      const geo = shipGeometry(s.ship);
+      let seats = 0, stands = 0;
+      for (const tf of geo.fixtures.table) {
+        const room = roomFor(s.ship, tf.deck), start = geo.deckStart[tf.deck];
+        const rf = room.fixtures.find(f => f.x === tf.x && f.z === tf.y);
+        const pl = placer(rf);
+        const stools = rf.model({ x: rf.x, z: rf.z, h: 0.5, ends: tableFrame(room.tiles, rf.x, rf.z) }).filter(p => p.col === 'stool').map(p => {
+          const cu = p.prof.reduce((a, v) => a + v[0], 0) / p.prof.length, cw = p.prof.reduce((a, v) => a + v[1], 0) / p.prof.length;
+          return pl.p(cu, cw);
+        });
+        const spots = tableSpots(s.ship, tf);
+        for (const sp of spots) {
+          const x = sp.sx + 0.5, z = sp.sy - start + 0.5;       // (the camera's tiles are drawn from their corner)
+          if (sp.kind === 'seat') {
+            seats++;
+            const d = Math.min(...stools.map(([sx, sz]) => Math.hypot(sx - x, sz - z)));
+            assert(d < 0.02, `seat ${sp.sx},${sp.sy} on a drawn stool (${fmt(d, 3)} off)`);
+          } else {
+            stands++;
+            const t = room.tiles[Math.floor(z)]?.[Math.floor(x)];
+            assert(t === TileType.FLOOR || t === TileType.TABLE, `standing place on open floor (${t})`);
+          }
+        }
+        assert(stools.length === spots.filter(p => p.kind === 'seat').length, 'a stool for every seat, none spare');
+      }
+      console.log(`      ${geo.fixtures.table.length} tables: ${seats} stools, ${stands} places to stand`);
+      // everyone hungry at once
+      s.ship.crew.forEach(m => { m.needs.food = 3; });
+      let most = 0, standing = 0, cooksMost = 0, prev = new Map();
+      const holds = () => new Map(s.ship.crew.filter(m => m.task?.place).map(m => [m.id, m.task.place]));
+      for (let t = 0; t < 180; t++) {
+        advance(s, 1);
+        // given a place to stand: every stool was held, or freed only this minute
+        const now = holds();
+        for (const [id, p] of now) if (p.kind === 'stand' && prev.get(id) !== p) {
+          const held = [...now.values()].filter(q => q.kind === 'seat').length, freed = [...prev.entries()].filter(([pid, q]) => q.kind === 'seat' && now.get(pid) !== q).length;
+          assert(held + freed >= seats, `a place to stand only when the stools are taken (${held} held, ${freed} just freed, of ${seats})`);
+        }
+        prev = now;
+        // the cooks: a place each at the counter, on the floor in front of it
+        const cooks = s.ship.crew.filter(m => m.task?.type === 'eat' && m.task.phase === 'prep');
+        assert(new Set(cooks.map(m => m.task.counter?.i)).size === cooks.length && cooks.every(m => m.task.counter), 'each cook in a place of their own at the counter');
+        for (let i = 0; i < cooks.length; i++) for (let j = i + 1; j < cooks.length; j++)
+          assert(Math.hypot(cooks[i].pos.sx - cooks[j].pos.sx, cooks[i].pos.sy - cooks[j].pos.sy) > 0.3, 'cooks apart');
+        cooksMost = Math.max(cooksMost, cooks.length);
+        const at = s.ship.crew.filter(m => m.task?.type === 'eat' && m.task.phase === 'eating');
+        const keys = new Set(at.map(m => `${m.task.place?.fixture}#${m.task.place?.i}`));
+        assert(keys.size === at.length, 'no two diners in one place');
+        for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) {
+          const d = Math.hypot(at[i].pos.sx - at[j].pos.sx, at[i].pos.sy - at[j].pos.sy);
+          assert(d > 0.3, `${at[i].name} and ${at[j].name} ${fmt(d, 2)} tiles apart`);
+        }
+        const st = at.filter(m => m.task.place.kind === 'stand').length;
+        most = Math.max(most, at.length); standing = Math.max(standing, st);
+      }
+      console.log(`      everyone hungry: up to ${most} at the tables at once, ${standing} of them standing; up to ${cooksMost} at the counter`);
+      assert(most > seats, 'more diners than stools: some stood');
+    },
+  },
   {
     name: 'the brig\'s cells: closed boxes round their bunks, the door shut and locked (red) on a cell held, open (green) on one free',
     fn: () => {

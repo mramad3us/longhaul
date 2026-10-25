@@ -47,7 +47,9 @@
 // People are a handful of joints posed from what the sim says they are
 // doing (on their feet or walking, at a station, back in a couch, asleep
 // on their side under a blanket, knees drawn up to fit the rack, on the
-// autodoc knees raised under the sheet, at the mess table, on the
+// autodoc knees raised under the sheet, at the mess table (on the stool
+// the sim gave them, forearms on the table, or standing at it when the
+// stools are taken), at the galley's counter, on the
 // treadmill, adrift in free fall, braced against a hard burn, pinned flat
 // by a crushing one, thrown along the deck or tumbling when the ship moves
 // under them, down where they fell, each their own way, in their blood if
@@ -78,7 +80,7 @@
 // ============================================================
 
 import { TileType, INTERACTIVE_TILES, WALKABLE } from '../sim/tiles.js';
-import { shipGeometry, seatKind, FIXTURE_KIND, airlockFor } from '../sim/ship-layout.js';
+import { shipGeometry, seatKind, FIXTURE_KIND, airlockFor, fixtureFacing, tableFrame } from '../sim/ship-layout.js';
 import { SYSTEM_BY_FIXTURE, Status } from '../sim/systems.js';
 import { ATMO } from '../sim/life-support.js';
 import { isConscious } from '../sim/crew.js';
@@ -301,11 +303,8 @@ function buildRoom(ship, di) {
 
 /** A fixture's front faces the open deck; its back is to the wall it stands against. */
 function facingOf(tiles, inside, x, z) {
-  const open = (dx, dz) => inside(x + dx, z + dz) && WALKABLE.has(tileAt(tiles, x + dx, z + dz));
-  const solid = (dx, dz) => !inside(x + dx, z + dz);
-  for (const k of ['S', 'N', 'E', 'W']) { const [dx, dz] = DIRS[k]; if (open(dx, dz) && solid(-dx, -dz)) return k; }
-  for (const k of ['S', 'N', 'E', 'W']) { const [dx, dz] = DIRS[k]; if (open(dx, dz)) return k; }
-  return 'S';
+  // (the sim's own rule, so the places it gives people at furniture are where it is drawn: ship-layout.js)
+  return fixtureFacing(tiles, x, z);
 }
 
 // ---- FIXTURE MODELS ----
@@ -409,12 +408,15 @@ const MODELS = {
     B(0.0, 0.05, 0, 0.86, 0.24, 0.6, 'frame'),
     B(0.95, 1.0, 0, 0.86, 0.24, 0.6, 'frame'),
   ],
-  [T.TABLE]: () => [
+  // (two stools at its front, and one at an end that opens onto floor: where the sim seats people, ship-layout.js tableSpots)
+  [T.TABLE]: (c) => [
     B(0.4, 0.6, 0.36, 0.58, 0, 0.04, 'metalDk'),
     B(0.45, 0.55, 0.42, 0.52, 0.04, 0.7, 'metalDk'),
     B(0.04, 0.96, 0.08, 0.84, 0.7, 0.76, 'tableTop'),
     CYL(0.26, 0.98, 0.09, 0, 0.44, 'stool', { n: 10 }),
     CYL(0.74, 0.98, 0.09, 0, 0.44, 'stool', { n: 10 }),
+    ...(c.ends?.low ? [CYL(-0.12, 0.46, 0.09, 0, 0.44, 'stool', { n: 10 })] : []),
+    ...(c.ends?.high ? [CYL(1.12, 0.46, 0.09, 0, 0.44, 'stool', { n: 10 })] : []),
   ],
   [T.GALLEY]: () => [
     B(0, 1, 0, 0.62, 0, 0.86, 'cabinet', { deco: 'doors' }),
@@ -532,7 +534,7 @@ function crateStack(c) {
 }
 
 // Canonical (u, w) → world (x, z) for a fixture facing each way
-function placer(fx) {
+export function placer(fx) {
   const { x, z, facing } = fx;
   switch (facing) {
     case 'N': return { p: (u, w) => [x + 1 - u, z + 1 - w], n: (nu, nw) => [-nu, -nw] };
@@ -1339,7 +1341,8 @@ function buildStatic(state, room, Wd, Hd, dpr, mode) {
   const glow = state.reactor?.status === 'online' && mode !== 'blackout' && mode !== 'vacuum';
   // Fixtures in this lighting (their models can depend on state: a suit in the locker)
   const fixtures = room.fixtures.map(f => {
-    const parts = f.model({ x: f.x, z: f.z, h: hash(f.x, f.z, room.di), zone: room.zone, suit: f.kind === 'locker' ? lockers[f.id]?.hasSuit !== false : false, glow, held: f.cell != null && f.cell < heldInCells(state) });
+    const parts = f.model({ x: f.x, z: f.z, h: hash(f.x, f.z, room.di), zone: room.zone, suit: f.kind === 'locker' ? lockers[f.id]?.hasSuit !== false : false, glow, held: f.cell != null && f.cell < heldInCells(state),
+      ends: f.t === T.TABLE ? tableFrame(room.tiles, f.x, f.z) : null });
     // the footprint on the floor (for the soft shadow under it)
     const pl = placer(f);
     let fx0 = Infinity, fz0 = Infinity, fx1 = -Infinity, fz1 = -Infinity;
@@ -1654,19 +1657,25 @@ export function posture(room, fig, t, floating) {
       for (const [k, w] of Object.entries(def)) J[k] = W(...w);
       face = [f[0], -0.25, f[1]]; kind = 'brace';
     } else {
-      const sitAt = (m.activity === 'eating' || m.activity === 'socializing') && !floating ? tableBeside(room, fig) : null;
+      // at a table: on the stool the sim gave them (its place), facing the table; a save from before places, the table beside them
+      // (by the task: the activity's label follows a minute behind)
+      const place = atTable(m);
+      const sitAt = (place || m.activity === 'eating' || m.activity === 'socializing') && !floating && !fig.moving
+        ? (place ? (place.kind === 'seat' ? { a: place.a, onStool: true } : null) : tableBeside(room, fig)) : null;
       if (sitAt) {
         a = sitAt.a; f[0] = Math.cos(a); f[1] = Math.sin(a); l[0] = -Math.sin(a); l[1] = Math.cos(a);
         const def = {
           ftL: [0.32, 0.08, 0.02], ftR: [0.32, -0.08, 0.02], knL: [0.28, 0.08, 0.48], knR: [0.28, -0.08, 0.48],
           hpL: [0.02, 0.08, 0.45], hpR: [0.02, -0.08, 0.45], shL: [0.06, 0.15, 0.84], shR: [0.06, -0.15, 0.84],
-          elL: [0.2, 0.19, 0.66], elR: [0.2, -0.19, 0.66], haL: [0.38, 0.12, 0.74], haR: [0.38, -0.12, 0.74],
-          nk: [0.07, 0, 0.88], hd: [0.09, 0, 0.97],
+          // (forearms on the table, elbows on its edge, hands together over the plate)
+          elL: [0.22, 0.16, 0.77], elR: [0.22, -0.16, 0.77], haL: [0.38, 0.06, 0.78], haR: [0.38, -0.06, 0.78],
+          nk: [0.09, 0, 0.88], hd: [0.12, 0, 0.96],
         };
-        const o = [ox + f[0] * 0.2, oz + f[1] * 0.2];
+        // (on the table's own stool: hips over it; otherwise a stool of their own, pulled up)
+        const o = sitAt.onStool ? [ox - f[0] * 0.02, oz - f[1] * 0.02] : [ox + f[0] * 0.2, oz + f[1] * 0.2];
         for (const [k, [fw, lat, up]] of Object.entries(def)) J[k] = [o[0] + f[0] * fw + l[0] * lat, up, o[1] + f[1] * fw + l[1] * lat];
         face = [f[0], 0, f[1]]; kind = 'seat';
-        stool = [o[0] - f[0] * 0.02, o[1] - f[1] * 0.02];
+        if (!sitAt.onStool) stool = [o[0] - f[0] * 0.02, o[1] - f[1] * 0.02];
       } else {
         const s = fig.moving ? Math.sin(t * 0.0105 + m.id * 1.3) : 0;
         if (floating) { lift = 0.26 + 0.05 * Math.sin(t * 0.0012 + m.id * 2.1); tilt = 0.12 + 0.05 * Math.sin(t * 0.0007 + m.id); }
@@ -1694,6 +1703,18 @@ export function posture(room, fig, t, floating) {
   }
   return { J, face, kind, blanket, sheet, stool };
 }
+
+/** The place at a mess table someone holds and has reached (sim/crew-ai.js: eating, or in company), or null. */
+function atTable(m) {
+  const t = m.task;
+  if (!t?.place) return null;
+  if (t.type === 'eat' && t.phase === 'eating') return t.place;
+  if (t.type === 'leisure' && t.where === 'table' && t.phase === 'on') return t.place;
+  return null;
+}
+
+/** Their place at the galley's counter, cooking (or waiting behind), or null. */
+const atCounter = (m) => (m.task?.type === 'eat' && m.task.phase === 'prep' && m.task.counter) || null;
 
 /** A mess table next to someone eating: which way it is. */
 function tableBeside(room, fig) {
@@ -2125,7 +2146,9 @@ function drawCam(cam, state, alpha, now) {
     let heading = cam.facing.get(m.id);
     if (last && moving) { heading = Math.atan2(z - last[1], x - last[0]); cam.facing.set(m.id, heading); }
     cam.last.set(m.id, [x, z]);
-    const work = !moving ? workHeading(room, { x, z }) : null;
+    // (at a table, the way their place faces it; else toward the machine they work at)
+    const place = !moving ? atTable(m) || atCounter(m) : null;
+    const work = !moving ? (place ? place.a : workHeading(room, { x, z })) : null;
     if (work != null) heading = work;
     if (heading == null) heading = Math.PI / 2 + 0.6 * (hash(m.id) - 0.5);
     const row = Math.max(0, Math.min(room.rows - 1, Math.floor(z + 0.5)));
