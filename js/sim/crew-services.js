@@ -7,9 +7,14 @@
 // hall's people change daily; who is there is drawn once a day and kept
 // with the station.
 //
-// Shore leave sends the crew ashore through the lock for a run: eight
+// The hall's hands come with their lives (careers.js): an age, a home, a
+// rank their years have earned, and the wage it draws, shown before they
+// sign. Shore leave sends the crew ashore through the lock for a run: eight
 // hours off the ship (they are away, as a boarding party is: off our
-// decks and stations), back rested, fed, washed and in better spirits.
+// decks and stations), back rested, fed, washed and in better spirits (the
+// more for a world's ground, the most at home: careers.js backFromLeave).
+// Those whose service is over (retired, or quitting) sign off when we are
+// in port (signOff), their back pay settled as far as the credits go.
 // The ship can't undock with anyone ashore, and the berth must be ours
 // until they are back (a long lease: leases.js), bought with the leave if
 // asked.
@@ -25,6 +30,8 @@ import { shipGeometry, airlockFor } from './ship-layout.js';
 import { abandonTask } from './crew-ai.js';
 import { closeJob } from './jobs.js';
 import { leaseShortfall, extendLease } from './leases.js';
+import { startCareer, careerDraw, backFromLeave, farewell, note, rankTitle, fullName, wageOf, ageOf } from './careers.js';
+import { getWorld } from './world.js';
 
 export const LEAVE_MIN = 8 * 60;
 export const LEAVE_COST = 60;               // MCR a head, ashore
@@ -42,8 +49,10 @@ export function hiringHall(state, st) {
     for (let i = 0; i < HALL_SIZE; i++) {
       const role = pick(ROLES.slice(1));
       const m = createMember(-1, role, names);
+      startCareer(m, state.clock.minute, { draw: careerDraw(state.ship) });
       const best = Math.max(...Object.values(m.skills));
-      people.push({ name: m.name, role, skills: m.skills, fee: Math.round((ROLE_FEE[role] || 500) * (0.6 + best / 100) / 10) * 10, morale: m.morale });
+      people.push({ name: m.name, given: m.given, role, skills: m.skills, fee: Math.round((ROLE_FEE[role] || 500) * (0.6 + best / 100) * (1 + 0.15 * m.rank) / 10) * 10, morale: m.morale,
+        born: m.born, home: m.home, rank: m.rank, xp: m.xp, retireAt: m.retireAt, title: rankTitle(m), wage: wageOf(m), age: Math.floor(ageOf(m, state.clock.minute)) });
     }
     st.hall = { day, people };
   }
@@ -67,6 +76,9 @@ export function hire(state, index) {
   const m = createMember(id, p.role, [p.name], state.ship);
   m.skills = { ...p.skills };
   m.morale = p.morale;
+  startCareer(m, state.clock.minute, { draw: careerDraw(state.ship) });
+  Object.assign(m, { given: p.given, born: p.born, home: p.home, rank: p.rank, xp: p.xp, retireAt: p.retireAt });
+  note(m, state.clock.minute, `Signed on at ${st.name}`);
   const lock = airlockFor(state.ship);
   const node = lock?.access != null ? shipGeometry(state.ship).nodes[lock.access] : null;
   if (node) { m.pos = { sx: node.sx, sy: node.sy }; m.$px = node.sx; m.$py = node.sy; }
@@ -80,8 +92,21 @@ export function dismiss(state, crewId) {
   if (!dockedStationEntity(state)) return { ok: false, text: 'Dock first.' };
   const crew = state.ship.crew;
   const m = crew.find(x => x.id === crewId);
-  if (!m || m.id === crew[0].id) return { ok: false, text: 'The captain stays.' };
+  if (!m || m.role === 'Captain') return { ok: false, text: 'The captain stays.' };
   if (m.away) return { ok: false, text: `${m.name} isn't aboard.` };
+  // (paid off is paid: what they are owed, first)
+  const owed = Math.round(m.owed || 0), res = state.resources.credits;
+  if (owed > res.current) return { ok: false, text: `Paying ${m.name} off takes the ${owed.toLocaleString()} MCR they are owed.` };
+  res.current -= owed;
+  m.owed = 0;
+  leaveShip(state, m);
+  farewell(state, m, 'paid off');
+  return { ok: true, text: `${m.name} is paid off${owed ? ` (${owed.toLocaleString()} MCR back pay)` : ''} and goes ashore.` };
+}
+
+/** Someone off the ship for good: their work put down, anyone busy with them told, the jobs about them gone. */
+function leaveShip(state, m) {
+  const crew = state.ship.crew;
   abandonTask(state, m);
   // anyone busy with them (carrying them to the autodoc) puts it down
   for (const o of crew) if (o !== m && o.task?.patient === m.id) abandonTask(state, o);
@@ -90,7 +115,28 @@ export function dismiss(state, crewId) {
   for (const j of state.jobs.list) if (j.assignee === m.id) { j.assignee = null; j.status = 'open'; }
   // and jobs about them go: a rescue of someone ashore, work set aside for them
   for (const j of state.jobs.list.filter(j => j.data.patient === m.id || j.data.engineer === m.id)) closeJob(state, j);
-  return { ok: true, text: `${m.name} is paid off and goes ashore.` };
+}
+
+/**
+ * Someone whose service is over leaves the ship in port: retired, or
+ * quitting. Their back pay is settled as far as the credits go; the crew
+ * give a retiring hand a send-off, and take a quitting one's going hard.
+ */
+export function signOff(state, m, why, emit = () => {}) {
+  const crew = state.ship.crew;
+  if (!crew.includes(m) || m.away) return false;
+  const res = state.resources.credits;
+  const pay = Math.min(m.owed || 0, res.current);
+  res.current -= pay;
+  leaveShip(state, m);
+  for (const o of state.ship.crew) if (!o.dead) o.moraleMod = (o.moraleMod || 0) + (why === 'retired' ? 3 : -3);
+  farewell(state, m, why);
+  const left = (m.owed || 0) - pay;
+  const years = Math.floor(ageOf(m, state.clock.minute));
+  const text = why === 'retired' ? `${fullName(m)}, ${rankTitle(m)}, signs off and retires at ${years}${left > 0 ? `, still owed ${Math.round(left).toLocaleString()} MCR` : ''}. The crew see them off.`
+    : `${m.name} signs off and goes ashore for good${left > 0 ? `, owed ${Math.round(left).toLocaleString()} MCR` : ''}.`;
+  emit('crew-signed-off', { member: m, why, text });
+  return true;
 }
 
 /** Send crew ashore. ids: who goes (default: everyone off watch and able). */
@@ -110,11 +156,16 @@ export function shoreLeave(state, ids = null, { extend = false } = {}) {
   return { ok: true, text: `${going.length} ashore at ${st.name} for eight hours (${cost.toLocaleString()} MCR).` };
 }
 
-/** What a run ashore does for someone: back rested, fed, washed and in better spirits (a station's, or a world's by shuttle). */
-export function restedAshore(m) {
+/**
+ * What a run ashore does for someone: back rested, fed, washed and in
+ * better spirits, the more for a world's ground under a sky than a
+ * station's corridors, the most at home (careers.js backFromLeave). Returns
+ * whether it was home.
+ */
+export function restedAshore(m, minute, where = {}) {
   m.needs.rest = Math.max(m.needs.rest, 90); m.needs.food = Math.max(m.needs.food, 90);
   m.needs.hygiene = 100; m.needs.fun = 100;
-  m.moraleMod = (m.moraleMod || 0) + 8;
+  return backFromLeave(m, minute, where);
 }
 
 /** Per minute: crew whose leave is over come back aboard through the lock. */
@@ -125,9 +176,10 @@ export function leaveTick(state, emit = () => {}) {
     if (!m.away?.ashore || now < m.away.until) continue;
     const lock = airlockFor(state.ship, state.dock?.port);
     const node = lock?.access != null ? shipGeometry(state.ship).nodes[lock.access] : shipGeometry(state.ship).nodes[0];
+    const at = m.away.ashore;
     m.away = null;
     m.pos = { sx: node.sx, sy: node.sy }; m.$px = node.sx; m.$py = node.sy;
-    restedAshore(m);
+    restedAshore(m, now, { station: STATIONS[at]?.body || getWorld(state).get(at)?.orbit?.body || null });
     m.homeDeck = homeDeckFor(state.ship, m.role);
     back++;
   }

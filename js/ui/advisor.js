@@ -60,7 +60,8 @@
 //   plot { target, dock? }    open the route planner on a target
 //   open { window, id?, tab? } windows: station (tabs board, deliver,
 //        market, services, berth, hire, leave, traffic), missions, comms, systems,
-//        roster, service, library, boarding, shuttles, markets, jobs, weapons, map
+//        roster, service, library, boarding, shuttles, markets, jobs, weapons, map;
+//        crew (id: that hand's panel)
 //   toggle { what }           'combat' (battle stations) | 'suits'
 //   respond { request, option } answer a comm request
 //   hail { id }               open a channel (also completes a rescue or
@@ -118,6 +119,7 @@ import { activeRuns, runReadout, runRefusal } from '../sim/shuttles.js';
 import { marketHere, quote, tradeRefusal } from '../sim/market.js';
 import { GOODS } from '../sim/goods.js';
 import { turnOverHere } from '../sim/law.js';
+import { promotionDue, payroll, ageOf, PAY_DAYS, CABIN_FEVER_DAYS } from '../sim/careers.js';
 
 export const AI_NAME = 'VIGIL';
 export const LEVELS = { warning: 3, caution: 2, advice: 1, info: 0 };
@@ -275,6 +277,7 @@ const A = {
   weapons: () => act('weapons', 'WEAPONS', { type: 'open', window: 'weapons' }),
   systems: () => act('systems', 'SYSTEMS', { type: 'open', window: 'systems' }),
   roster: () => act('roster', 'ROSTER', { type: 'open', window: 'roster' }),
+  crew: (m, label = m.name.toUpperCase()) => act(`crew-${m.id}`, label, { type: 'open', window: 'crew', id: m.id }),
   jobs: () => act('jobs', 'JOBS', { type: 'open', window: 'jobs' }),
   missions: () => act('missions', 'MISSIONS', { type: 'open', window: 'missions' }),
   service: () => act('service', 'SERVICE RECORD', { type: 'open', window: 'service' }),
@@ -561,6 +564,64 @@ function ruleCrew(state, c, add) {
       key: 'stores:med', level: CAUTION, rank: 56,
       text: 'We are out of medical supplies: the autodoc treats at 30% speed.',
       actions: resupplyActions(state, c),
+    });
+  }
+  ruleCareers(state, c, add);
+}
+
+/** The crew's careers (sim/careers.js): what they ask of the captain, and what the ship owes them. */
+function ruleCareers(state, c, add) {
+  const hands = c.crew.filter(m => m.role !== 'Captain');
+  if (!hands.length) return;
+  // someone means to go
+  const going = hands.filter(m => m.quit);
+  if (going.length) add({
+    key: 'quit', level: CAUTION, rank: 52, sig: going.map(m => m.id),
+    text: going.length === 1 ? `${going[0].name} has had enough: they mean to sign off at the next port.` : `${list(going.map(m => m.name))} mean to sign off at the next port.`,
+    detail: 'A week miserable and a hand goes. Rest, a run ashore, their pay and a step up they have earned lift morale; above 35 they think better of it.',
+    actions: [A.crew(going[0]), A.roster()],
+  });
+  // money owed
+  const owed = hands.reduce((s, m) => s + (m.owed || 0), 0);
+  if (owed > 0) add({
+    key: 'owed', level: CAUTION, rank: 50, sig: Math.round(owed / 500),
+    text: `We owe the crew ${fmtNum(Math.round(owed))} MCR in back pay.`,
+    detail: 'Back pay comes first out of the next pay day, and owing weighs on them until it is paid.',
+    actions: [A.roster()],
+  });
+  // pay day coming with the credits short
+  const day = Math.floor(c.now / DAY_MIN), toPay = PAY_DAYS - (day % PAY_DAYS), bill = payroll(state) + owed;
+  if (toPay <= 5 && bill > state.resources.credits.current) add({
+    key: 'payday', level: CAUTION, rank: 47, sig: toPay <= 1 ? 'tomorrow' : 'soon',
+    text: `Pay day in ${toPay === 1 ? 'a day' : `${toPay} days`}: ${fmtNum(Math.round(bill))} MCR due, ${fmtNum(Math.round(state.resources.credits.current))} in hand.`,
+    detail: 'Short, the crew are paid what there is and owed the rest.',
+    actions: [A.roster()],
+  });
+  // a retirement asked for
+  const asking = hands.filter(m => m.retire && !m.retire.granted && !m.retire.insist && m.retire.refused == null);
+  if (asking.length) add({
+    key: 'retire', level: ADVICE, rank: 42, sig: asking.map(m => m.id),
+    text: `${asking[0].name} (${Math.floor(ageOf(asking[0], c.now))}) asks to retire at the next port.${asking.length > 1 ? ` ${plural(asking.length - 1, 'other')} too.` : ''}`,
+    detail: 'Granted, they sign off at the next port and the crew see them off. Asked to stay, they stay, put out, and ask again in three months; five years past their time they go regardless.',
+    actions: [A.crew(asking[0])],
+  });
+  // a step up earned
+  const due = hands.filter(m => promotionDue(m));
+  if (due.length) add({
+    key: 'promote', level: ADVICE, rank: 36, sig: due.map(m => `${m.id}:${m.rank}`),
+    text: due.length === 1 ? `${due[0].name} has earned a step up: ${promotionDue(due[0]).title}.` : `${plural(due.length, 'hand')} have earned a step up: ${list(due.map(m => m.name))}.`,
+    detail: 'The promoted are the happier for it, and draw more pay; one left due for a month sours.',
+    actions: [A.crew(due[0], 'PROMOTE')],
+  });
+  // weeks without a run ashore (at a port with leave, the shore-leave advice says it)
+  const out = c.aboard.filter(m => (c.now - (m.lastLeave ?? c.now)) / DAY_MIN > CABIN_FEVER_DAYS);
+  if (out.length && !c.dockedSt && out.length >= Math.ceil(c.aboard.length / 2)) {
+    const days = Math.round(Math.max(...out.map(m => (c.now - m.lastLeave) / DAY_MIN)));
+    add({
+      key: 'cabin-fever', level: ADVICE, rank: 32, quiet: 3 * DAY_MIN, sig: 'out',
+      text: `The crew have gone ${days} days without a run ashore: it is telling on them.`,
+      detail: 'Cabin fever grinds morale down from three weeks out. Shore leave at a station lifts them; a world\'s ground, by shuttle, more; their own home world most.',
+      actions: [A.map()],
     });
   }
 }
@@ -1259,10 +1320,11 @@ function rulePortCall(state, c, add) {
   if (spec?.services.includes('leave') && !c.crew.some(m => m.away?.ashore) && c.aboard.length) {
     const morale = c.aboard.reduce((s, m) => s + m.morale, 0) / c.aboard.length;
     const rest = c.aboard.reduce((s, m) => s + m.needs.rest, 0) / c.aboard.length;
-    if (morale < 50 || rest < 30) {
+    const fever = c.aboard.filter(m => (c.now - (m.lastLeave ?? c.now)) / DAY_MIN > CABIN_FEVER_DAYS).length;
+    if (morale < 50 || rest < 30 || fever >= Math.ceil(c.aboard.length / 2)) {
       add({
         key: 'shore-leave', level: ADVICE, rank: 35,
-        text: `The crew are worn down (morale ${Math.round(morale)}): shore leave is 60 MCR a head.`,
+        text: morale < 50 || rest < 30 ? `The crew are worn down (morale ${Math.round(morale)}): shore leave is 60 MCR a head.` : `${plural(fever, 'hand')} ${fever === 1 ? 'has' : 'have'} gone weeks without a run ashore: leave is 60 MCR a head.`,
         detail: 'Eight hours ashore: back rested, fed, washed and in better spirits. The berth lease must cover the run.',
         actions: [A.station(st.id, 'leave', 'SHORE LEAVE')],
       });

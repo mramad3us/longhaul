@@ -1163,7 +1163,7 @@ function stepWork(state, m, t, speed, emit) {
   else if (t.kind === JobType.SEAL) { result = completeSeal(state, t.deck); m.suit.keep = !!state.suitsOn; }
   else result = completeFabrication(state);
   emit('crew-work-done', { member: m, kind: t.kind, system: t.system, result });
-  if (result.success) closeJob(state, job);
+  if (result.success) { closeJob(state, job); m.xp = (m.xp || 0) + (t.kind === JobType.REPAIR ? 2 : 0.5); }   // (a job done: experience beyond the hours, careers.js)
   else { job.status = 'open'; job.assignee = null; }
   m.task = null;
   m.pause = 2;
@@ -1188,7 +1188,7 @@ function stepRescue(state, m, t, speed, emit) {
     m.activity = 'first-aid';
     if (p.deathTimer >= 0) p.deathTimer = Math.max(p.deathTimer, 2);   // CPR holds the spiral
     if (--t.timer <= 0) {
-      if (stabilize(p)) emit('crew-stabilized', { member: p, medic: m });
+      if (stabilize(p)) { emit('crew-stabilized', { member: p, medic: m }); m.xp = (m.xp || 0) + 3; }
       if (p.seat) p.seat = null;
       p.task = { type: 'carried', by: m.id };
       p.path = [];

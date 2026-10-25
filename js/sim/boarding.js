@@ -174,7 +174,7 @@ export function boardingTick(state, emit = () => {}) {
   const party = membersOf(state, b);
   if (!e || e.tags?.blown) {
     // the ship is gone: anyone aboard went with it
-    for (const m of party) if (m.away && !m.dead) { m.away = null; m.dead = true; m.conditions.push('dead'); emit('crew-died', { member: m }); }
+    for (const m of party) if (m.away && !m.dead) { m.away = null; m.dead = true; m.deathCause = `lost with ${b.name}`; m.conditions.push('dead'); emit('crew-died', { member: m }); }
     note(state, `${b.name} is gone, and the party with it.`, emit, 'danger');
     b.phase = 'done';
     return;
@@ -277,7 +277,7 @@ function fightMinute(state, b, e, party, emit) {
     if (!r) continue;
     const what = m.dead ? 'killed' : r.severity === 'bruise' ? 'grazed' : r.severity === 'hard-impact' ? 'wounded' : 'badly hurt';
     note(state, `${m.name} ${what}.`, emit, 'danger');
-    if (m.dead) { mourn(state.ship.crew, m); emit('crew-died', { member: m }); }
+    if (m.dead) { m.deathCause = `killed boarding ${e.name}`; mourn(state.ship.crew, m); emit('crew-died', { member: m }); }
     else emit('crew-wounded', { member: m, message: `${m.name} ${what} in the fighting aboard ${e.name}` });
   }
   // they give up when most are down
@@ -299,6 +299,8 @@ function poisson(lambda) {
 function secure(state, b, e, emit) {
   b.secured = true;
   b.since = state.clock.minute;
+  // (a hull taken is experience for those who took it: careers.js)
+  for (const m of membersOf(state, b)) if (!m.dead) m.xp = (m.xp || 0) + 10;
   const h = ensureHull(e);
   if (h.status === 'ok' || h.status === 'disabled') h.status = 'surrendered';
   if (e.agent) { e.agent.mode = 'surrendered'; e.agent.cmd = null; e.agent.hostile = []; }

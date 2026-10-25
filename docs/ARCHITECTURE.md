@@ -53,7 +53,7 @@ Main branches of the state:
 4. **NPC ships fly** on the commands they chose last minute, their pilots' terrain guard over them (`moveAgents`); one that came down on a rock is wrecked there.
 5. Station-keeping (holding formation with a station, a ship, a convoy, a slot), or the dock puts us where it holds us (`dockHold`); either costs the thrust gravity doesn't give.
 6. **Ordnance flies** and is checked against its targets over the minute just flown (`combatMove`): intercepts, hits, detonations; rounds that meet the ground are spent. Then, if we flew free, the ground (`terrainTick`: call-outs, contact). A drone out keeps up, or is left behind by this minute's thrust (`dronesTick`), and is called home for a burn coming. Then where we are among the worlds (`worldsTick`: planetary space, its layer, the airspace below; worlds.js).
-7. Inertial events, then people: G-loads, physiology, crew AI, needs.
+7. Inertial events, then people: G-loads, physiology, crew AI, needs; careers (the dead remembered, a captain succeeded; once a day ages, ranks due, retirements, morale beyond the needs; pay day; those signing off when docked: careers.js).
 8. Plant: fires (fire.js), life support, reactor. A reactor that goes supercritical destroys the ship.
 9. Sensors (contacts that drop off the board go onto the plot) and comms; traffic control (zones, rules, the radio); the dossier's thermal counts.
 10. **The wider world**: combat decisions (NPCs choose next minute's command, fire weapons, make demands; our PDCs strafe), law, politics (daily: relations, influence, feuds, proxies, zones) and the encounter director, our service (call-ups, reporting aboard, daily reputation), distress calls, contracts (military work among them), the market (every six hours: made and used, shipped, shocks: market.js), traffic, the background forces (hulls that came within reach wake; daily, the census and the yards), the intel inbox (digests are published, reports that have arrived at light speed are delivered), and last the captain's flags (one whose track the plot has let go goes too; one back on the board is called out).
@@ -140,7 +140,7 @@ CSS: `css/main.css` (the original design system and the menus), `css/ui.css` (co
 
 ## Tests (`tests/`)
 
-`node tests/run.mjs [filter]`. Each `*.test.mjs` default-exports `[{ name, fn }]`.
+`node tests/run.mjs [filter]`. Each `*.test.mjs` default-exports `[{ name, fn }]`. `SKIP=a,b` leaves out the tests whose names hold any of those (`SKIP=200k node tests/run.mjs`: everything but the timed scale test, for a busy machine).
 
 | Suite | Covers |
 |---|---|
@@ -149,6 +149,7 @@ CSS: `css/main.css` (the original design system and the menus), `css/ui.css` (co
 | stance | stances held against coasting, thrusting, charging and fleeing ships and stations, the doctrine under fire, saves |
 | game | whole-game integration, saves, SOS, contracts, the 200k-entity scale budget |
 | crew | medicine, inertial events, breaches, reactor procedures, juice, FLANK |
+| careers | ages, homes and ranks at signing on (the main stream untouched), experience and promotion (passed over sours), pay day and back pay, cabin fever and leave by where, retirement granted, refused and insisted on, quitting, natural causes, succession and the memorial, morale and efficiency, saves and old crews given careers |
 | ship | watches, needs, wear and repair, hand flying (the flight computer kept down, the rest repaired as usual; into Vesta Depot's gate, 50 km over the rock, over several seeds: every ship arrives, none hits the ground), the end of an approach strapped in past the mark too, no turn held with the ground coming up, life support failures |
 | combat | classes, torpedoes and PDC, dead reckoning, railguns, damage, fire control, patrols, pirates, surrender, saves |
 | chase | torpedoes against a ship running (full G early, the reach forecast, running dry), ships that run within their crews' limits (the sprint, going dark, cornered and striking), a pirate found and running, patrols' jurisdiction and one stop at a time, a route to a lost contact's last fix, a bounty's mark off a moon, the brig |

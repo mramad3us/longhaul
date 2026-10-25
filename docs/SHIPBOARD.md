@@ -30,7 +30,7 @@ Ship coordinates count tile rows from the bow across all decks, with a one-row g
 
 **A death** lets go of what the dead held: their job goes back on the board, anyone they were carrying is set down, and the body is lifted off its seat (an autodoc, the helm). Paying someone off closes the jobs about them; a new hand never takes an old one's number.
 
-**Signing on.** A crew can be up to the class's berthed maximum (12 at most). Past the eight who fly a ship come Security (fire control watch) and Deckhands (machine shop). Docked at a station with a hiring hall, four people look for a berth each day; we can sign them on for a fee or pay anyone off but the captain.
+**Signing on.** A crew can be up to the class's berthed maximum (12 at most). Past the eight who fly a ship come Security (fire control watch) and Deckhands (machine shop). Docked at a station with a hiring hall, four people look for a berth each day, each with a rank, an age, a home and the wage their rank draws; we can sign them on for a fee or pay anyone off but the captain (their back pay settled first).
 
 ## People (`crew.js`, `needs.js`)
 
@@ -47,6 +47,23 @@ A dose stays in the blood for an hour, so a flip or a lull between combat burns 
 **Medicine.** The cameras show what the crew trauma model says: blood where a part of the body is hurt (wet on skin, soaked dark into the jumpsuit), char where someone burned, the pallor of the dead; the badly hurt and the dead lie where they fell, each their own way (on their back, on their side, face down), in a pool as wide as the wound is bad. Critical crew are stabilized and carried to the autodoc by whoever is free with medical skill. The autodoc heals over hours using med supplies; it runs faster with a medic on watch and slower when damaged.
 
 **Needs** (0–100): rest, food, hygiene, recreation. They decay with time awake and are met at the bunks, galley, head, exercise rig and mess table. At the galley each cook takes a place of their own: two side by side at the counter, the rest waiting on the nearest open floor (two to a tile, clear of the tables' places) and moving up as places free; at a table each diner (or anyone there for company) takes a place nobody holds: one of its stools (two at its front, a third at an end that opens onto floor not in front of other furniture) while one is free, else room to stand at its corners (or its back, with floor behind it), else just in front of it. The mess's furniture is used from its front, as the cameras draw it (`ship-layout.js` `tableSpots`). Sleeping in a couch is slow; long burns feed people through the couch line. Needs set morale, and morale and fatigue set work efficiency. A death aboard lowers everyone's morale for days.
+
+**Morale and work** (`needs.js` `moraleFactor`). Morale scales everything someone does: from 55 to 75 they work as they must (×1); in good heart, above 75, a little better, to ×1.08 at 100; below 55, worse and worse, to ×0.55 at nothing. Fatigue, hunger, a hangover and injuries multiply on top; efficiency is clamped to 0.2–1.08.
+
+## Careers (`careers.js`)
+
+Every hand has a life longer than a watch: an age, a home, a rank in their department, experience, a wage, a record. Daily work only (the 300th minute of each day), plus pay day; its chances come from a generator of its own kept with the ship (`ship.careerRng`), so the main random stream and every seeded test are left alone.
+
+- **Age.** `born` is a game minute (the captain 32–52 at the start, others by role). Past 50, piloting and security drift down 0.3 a year (twice that past 65); engineering and medicine hold. Natural causes by a Gompertz hazard, 0.00005·e^(0.095·age) a year (1 in 1,700 at 30, 1 in 75 at 60, 1 in 26 at 70), checked daily. A birthday aboard is +4 morale.
+- **Home.** Earth, Mars, the Belt, Luna, the Jovian moons, Titan; their given names come from it.
+- **Rank.** Five steps a department (helm, engine room, medical, guns and security, science, galley, deck: `RANKS`). A step wants the experience (`RANK_XP` 150, 450, 1,100, 2,400) and the skill in the department (`RANK_SKILL` 40, 55, 70, 82). Experience: an hour of practice is a point (`practice()`), a repair done +2 (other work +0.5), a patient stabilized +3, a hull taken by boarding +10, a shuttle run +3 for the pilot (+0.5 a rider), a minute at battle stations with an enemy on us +1/20. When due, the captain promotes (crew panel, PROMOTE): +12 morale and the new wage. Due and passed over for 30 days, morale sinks, to −10.
+- **Pay.** Every 30 days, by rank (`WAGE` 150, 210, 290, 400, 560 MCR) times the role (pilot and engineer 1.2, medic 1.15, scientist 1.1, cook 0.85, deckhand 0.8); the captain takes none. Back pay first, then the month, as far as the credits go; what is short is owed (−6 morale for a short pay day, and owed money weighs up to −20 until paid). Paying someone off settles it first.
+- **Leave.** From 21 days without a run ashore, cabin fever: −0.4 morale a day, to −15. A run ashore resets it: +8 at a station, +15 on a world's ground by shuttle, +20 at home (a Belter at a Belt station, a Martian on Mars…).
+- **The end.** Each has an age they mean to stop at (58–70). Past it they ask to retire: granted, they sign off at the next port (back pay settled as far as it goes; +3 morale to the rest, a send-off); asked to stay, they stay (−8 morale) and ask again in 90 days; five years past it they go regardless. A hand under 15 morale for 7 days means to sign off at the next port (−3 to the rest when they go), unless their morale climbs back to 35 first.
+- **Command.** A captain who dies is succeeded by the senior officer aboard: the helm's first, then by rank and experience.
+- **Records.** Each hand keeps their last 12 entries (signed on, promoted, took command…); the ship keeps a memorial of the dead (cause and day) and a list of those who left (paid off, retired, quit), 40 each.
+
+Morale beyond the needs (`moraleTarget`) adds `careerMood`: back pay owed, cabin fever and a step up overdue, worked out daily.
 
 ## Watches (`duty.js`)
 

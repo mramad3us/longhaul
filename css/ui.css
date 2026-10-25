@@ -319,6 +319,9 @@ body.reduce-motion .sys-led, body.reduce-motion .sys-frame { animation: none !im
 .roster-who { display: flex; flex-direction: column; }
 .roster-name { font-family: var(--font-display); font-weight: 600; font-size: 0.85rem; color: var(--text-primary); }
 .roster-role { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-secondary); }
+.roster-flag { margin-left: 5px; font-family: var(--font-mono); font-size: 0.66rem; color: var(--warning); font-weight: 400; }
+.roster-flag-up { color: var(--warm-bright); }
+.roster-flag-bad { color: var(--danger); }
 .roster-station { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--hull-accent); font-family: var(--font-mono); font-size: 0.72rem; padding: 3px 4px; }
 .roster-shifts { display: flex; gap: 3px; }
 .duty-shift { font-family: var(--font-mono); font-size: 0.66rem; padding: 3px 6px; background: transparent; color: var(--text-dim); border: 1px solid var(--hull-primary); cursor: var(--cur-hand, pointer); }
@@ -354,6 +357,14 @@ body.reduce-motion .sys-led, body.reduce-motion .sys-frame { animation: none !im
 .crew-stat-fill.need-fill { background: var(--ok); }
 .crew-stat-fill.need-fill.need-mid { background: var(--warning); }
 .crew-stat-fill.need-fill.need-low { background: var(--danger); }
+/* service (careers) */
+.crew-service-line { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-secondary); margin: 2px 0 4px; line-height: 1.45; }
+.crew-service-line b { color: var(--text-primary); font-weight: 400; }
+.crew-service-note { font-family: var(--font-mono); font-size: 0.66rem; color: var(--warning); margin: 2px 0 4px; }
+.crew-stat-fill.xp-fill { background: var(--info); }
+.crew-stat-fill.xp-fill.xp-due { background: var(--warm-bright); }
+.crew-record { margin-top: 4px; font-family: var(--font-mono); font-size: 0.64rem; color: var(--text-dim); line-height: 1.5; }
+.crew-record span { color: var(--text-secondary); margin-right: 4px; }
 
 /* ---- Combat (v0.10) ---- */
 .tac-tab-combat { color: #E27A6A; }

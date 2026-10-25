@@ -47,7 +47,15 @@ export function homeDeckFor(ship, role) {
 }
 
 const SURNAMES = ['Chen', 'Nakamura', 'Okafor', 'Petrov', 'Morales', 'Kim', 'Al-Rashid', 'Johansson',
-  'Mbeki', 'Kowalski', 'Tanaka', 'Adeyemi', 'Novak', 'Vasquez', 'Singh', 'Dawes', 'Ashford', 'Mao'];
+  'Mbeki', 'Kowalski', 'Tanaka', 'Adeyemi', 'Novak', 'Vasquez', 'Singh', 'Dawes', 'Ashford', 'Mao',
+  // (a game runs for decades, and hands come and go: enough names that the halls don't run dry)
+  'Halvorsen', 'Kaplan', 'Navarro', 'Brennan', 'Delgado', 'Acheampong', 'Faris', 'Pham-Ly', 'Ibarra', 'Mertens', 'Okoye', 'Bauer',
+  'Castillo', 'Dubois', 'Eriksen', 'Fujita', 'Grant', 'Haddad', 'Ivanova', 'Jaramillo', 'Kaur', 'Lindqvist', 'Maalouf', 'Nwosu',
+  'Oyelaran', 'Park', 'Quispe', 'Rahman', 'Sato', 'Teller', 'Umarov', 'Varga', 'Weiss', 'Xu', 'Yilmaz', 'Zhou',
+  'Achebe', 'Bianchi', 'Cortez', 'Dimitrov', 'Ekwueme', 'Ferreira', 'Gallagher', 'Hosseini', 'Ishikawa', 'Jensen', 'Kovac', 'Larsen',
+  'Moreau', 'Nakashima', 'Ortega', 'Pham', 'Reyes', 'Szabo', 'Tran', 'Ueda', 'Volkov', 'Wójcik', 'Yamada', 'Zielinski',
+  'Abara', 'Belanger', 'Cruz', 'Delacroix', 'Eze', 'Falk', 'Gupta', 'Hale', 'Iqbal', 'Juarez', 'Kemp', 'Lomax', 'Mensah', 'Nair', 'Osei',
+  'Pereira', 'Rossi', 'Sandoval', 'Toure', 'Vance', 'Wanjiru', 'Yusuf', 'Zaragoza', 'Brandt', 'Oduya', 'Marrero', 'Lund', 'Tsai'];
 
 export const CONDITION_LABELS = {
   dead: 'DEAD', critical: 'CRITICAL', 'brain-damage': 'BRAIN DAMAGE', crushed: 'CRUSHED',

@@ -206,7 +206,7 @@ function hitPlayer(state, hit, emit) {
       if (!r) continue;
       effects.wounded.push(m.name);
       emit('crew-wounded', { member: m, message: r.message.replace('slammed into a bulkhead', 'hit by spall and debris') });
-      if (m.dead) { mourn(state.ship.crew, m); emit('crew-died', { member: m }); }
+      if (m.dead) { m.deathCause = 'killed when the hull was hit'; mourn(state.ship.crew, m); emit('crew-died', { member: m }); }
     }
     if (deck.id === 'reactor') {
       if (hit.aim === 'kill' && !hit.spread && local >= 50 && random() < (local - 40) / 120) {

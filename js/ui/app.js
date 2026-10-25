@@ -361,6 +361,7 @@ function aiHooks() {
       else if (what === 'weapons') openNav('combat');
       else if (what === 'map') openNav('solar');
       else if (what === 'library') openLibrary(id);
+      else if (what === 'crew') selectCrew(id);
     },
     toggleCombat, toggleSuits,
     respond: (id, opt) => answerRequestById(id, opt),

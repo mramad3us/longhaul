@@ -15,6 +15,7 @@ import {
 } from '../sim/systems.js';
 import { STATIONS, STATION_IDS, SHIFTS, scheduleBlock, minutesLeftInBlock, setDuty, rostered } from '../sim/duty.js';
 import { NEEDS, NEED_LABEL, efficiency } from '../sim/needs.js';
+import { rankTitle, fullName, ageOf, promotionDue, payroll } from '../sim/careers.js';
 import { JobType } from '../sim/jobs.js';
 
 // ---- WORDS ----
@@ -172,6 +173,20 @@ function blockLabel(state, m) {
   return `<span class="duty-now duty-${b}">${txt}</span>`;
 }
 
+/** Marks by a name: a step up earned, a retirement asked, a hand meaning to go (sim/careers.js). */
+const flags = (m) => [promotionDue(m) && '<span class="roster-flag roster-flag-up" title="Due a step up: PROMOTE in their panel">▲</span>',
+  m.retire && '<span class="roster-flag" title="Asks to retire">R</span>', m.quit && '<span class="roster-flag roster-flag-bad" title="Means to sign off at the next port">✕</span>'].filter(Boolean).join('');
+
+/** The month's pay, and those the ship has lost or seen off. */
+function serviceFoot(s) {
+  const lost = (s.ship.memorial || []).slice(-8).reverse(), left = (s.ship.alumni || []).slice(-6).reverse();
+  const day = (min) => `day ${Math.floor(min / 1440) + 1}`;
+  const owed = s.ship.crew.reduce((a, m) => a + (m.dead ? 0 : m.owed || 0), 0);
+  return `<div class="missions-section">SERVICE</div><div class="roster-legend"><p><b>Payroll.</b> ${payroll(s).toLocaleString()} MCR a month, paid every thirty days${owed > 0 ? `; <span class="tc-bad">${Math.round(owed).toLocaleString()} MCR owed</span>` : ''}. The captain takes the ship's profit.</p>
+    ${lost.length ? `<p><b>In memory.</b> ${lost.map(x => `${esc(fullName(x))}, ${esc(x.rank)}: ${esc(x.cause)} (${day(x.died)})`).join(' · ')}</p>` : ''}
+    ${left.length ? `<p><b>Served aboard.</b> ${left.map(x => `${esc(fullName(x))}, ${esc(x.rank)}: ${esc(x.why)} (${day(x.left)})`).join(' · ')}</p>` : ''}</div>`;
+}
+
 export function openRoster() {
   const render = () => {
     const s = ui.state;
@@ -184,7 +199,7 @@ export function openRoster() {
       }).join('');
       const shifts = SHIFTS.map((sh, i) => `<button class="duty-shift ${m.duty.shift === i ? 'active' : ''}" data-act="duty-shift" data-id="${m.id}" data-shift="${i}" ${m.dead ? 'disabled' : ''}>${sh.label}</button>`).join('');
       return `<div class="roster-row ${m.dead ? 'roster-dead' : ''}">
-        <div class="roster-who"><span class="roster-name">${esc(m.name)}</span><span class="roster-role">${esc(m.role)}</span></div>
+        <div class="roster-who"><span class="roster-name">${esc(m.name)}${m.dead ? '' : flags(m)}</span><span class="roster-role">${esc(m.role === 'Captain' || m.born == null ? m.role : rankTitle(m))}</span>${m.born != null ? `<span class="roster-role">${m.role === 'Captain' || rankTitle(m).includes(m.role) ? '' : `${esc(m.role)} · `}${Math.floor(ageOf(m, s.clock.minute))}</span>` : ''}</div>
         <select class="roster-station" data-id="${m.id}" ${m.dead ? 'disabled' : ''}>${opts}</select>
         <div class="roster-shifts">${shifts}</div>
         <div class="roster-now">${blockLabel(s, m)}<span class="roster-activity">${esc(m.dead ? '' : describeActivity(m))}</span></div>
@@ -200,6 +215,7 @@ export function openRoster() {
       <div class="roster">${rows}</div>
       <div class="missions-section">COVERAGE</div>
       <div class="cover"><div class="cover-row cover-header"><span class="cover-station"></span>${SHIFTS.map(sh => `<span class="cover-cell">${sh.label}</span>`).join('')}</div>${cover}</div>
+      ${serviceFoot(s)}
       <div class="roster-legend">${STATION_IDS.map(id => `<p><b>${STATIONS[id].label}.</b> ${esc(STATIONS[id].desc)}</p>`).join('')}
         <p>Each watch is eight hours on station, eight off (meals, the head, the exercise rig), eight asleep. Bunks are shared between watches.</p></div>`;
   };

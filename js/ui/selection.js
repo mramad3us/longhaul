@@ -9,6 +9,7 @@
 import { ui } from './context.js';
 import { $, esc, setHTML, setText, fmtNum, fmtSpeed, fmtMass } from './dom.js';
 import { toast } from './toast.js';
+import { bus } from '../core/events.js';
 import { logEntry } from './log.js';
 import { G0, MIN_S } from '../core/constants.js';
 import { TileType, TILE_NAMES, TILE_DESCRIPTIONS } from '../sim/tiles.js';
@@ -22,6 +23,7 @@ import { JobType } from '../sim/jobs.js';
 import { SYSTEM_BY_FIXTURE, systemPerf, waterRecovery, sensorRangeFactor, flightComputerState } from '../sim/systems.js';
 import { STATIONS, SHIFTS, scheduleBlock, minutesLeftInBlock } from '../sim/duty.js';
 import { NEEDS, NEED_LABEL, efficiency } from '../sim/needs.js';
+import { rankTitle, fullName, ageOf, wageOf, promotionDue, promote, grantRetirement, askToStay, serviceOf, RANK_XP, YEAR_MIN, CABIN_FEVER_DAYS } from '../sim/careers.js';
 import { formatDuration } from '../core/clock.js';
 import { describeActivity, systemCardHTML, handleSystemAction } from './shipboard.js';
 import { reactorStatusText, ReactorState, orderShutdown, cancelShutdown, orderStartup, orderPatch, emergencyShutoff, cancelEmergencyShutoff, immediateShutoff, triggerContainmentFailure, MIN_ENGINEERING, STARTUP_MIN_FUEL } from '../sim/reactor.js';
@@ -118,8 +120,9 @@ function crewHTML(s, m) {
     <span class="duty-now duty-${block}">${block === 'duty' ? 'ON WATCH' : block === 'sleep' ? 'SLEEP' : 'OFF WATCH'} · ${formatDuration(minutesLeftInBlock(s, m))}</span></div>`;
   const needs = m.dead ? '' : `<div class="crew-section-label">NEEDS <span class="crew-eff">EFFICIENCY ${Math.round(efficiency(m) * 100)}%</span></div>` +
     NEEDS.map(k => `<div class="crew-stat"><span class="crew-stat-label">${NEED_LABEL[k]}</span><div class="crew-stat-bar"><div class="crew-stat-fill need-fill${m.needs[k] < 20 ? ' need-low' : m.needs[k] < 45 ? ' need-mid' : ''}" style="width:${Math.round(m.needs[k])}%"></div></div></div>`).join('');
-  return `<div class="crew-detail-name">${esc(m.name)}</div>
-    <div class="crew-detail-role">${esc(m.role)} · ${esc(deck?.name || '')}</div>
+  const rank = m.born != null && m.role !== 'Captain' && !rankTitle(m).includes(m.role) ? `${rankTitle(m)} · ` : '';
+  return `<div class="crew-detail-name">${esc(fullName(m))}</div>
+    <div class="crew-detail-role">${esc(rank)}${esc(m.role)} · ${esc(deck?.name || '')}</div>
     <div class="crew-activity">${esc(describeActivity(m))}</div>
     ${dutyLine}
     <div class="crew-section-label">CONDITION</div>
@@ -145,9 +148,49 @@ function crewHTML(s, m) {
     ${needs}
     <div class="crew-section-label">SKILLS</div>
     ${skills}
+    ${serviceHTML(s, m)}
     ${m.suit.wearing ? `<div class="crew-location-tag crew-location-suit">EVA suit · ${m.suit.o2.toFixed(1)}h O₂</div>` : ''}
     ${actions}`;
 }
+
+/** Their service (sim/careers.js): rank and the way to the next, age and home, pay, leave, what they ask of us, their record. */
+function serviceHTML(s, m) {
+  if (m.born == null) return '';
+  const now = s.clock.minute, DAY = 1440;
+  const age = Math.floor(ageOf(m, now));
+  const years = serviceOf(m, now) / YEAR_MIN;
+  const days = (n) => `${n} day${n === 1 ? '' : 's'}`;
+  const served = years >= 1 ? `${Math.floor(years)} y ${Math.floor((years % 1) * 12)} mo aboard` : serviceOf(m, now) < DAY ? 'joined today' : `${days(Math.floor(serviceOf(m, now) / DAY))} aboard`;
+  const rows = [`<div class="crew-service-line"><b>${esc(rankTitle(m))}</b> · ${age} · from ${esc(m.home === 'Belt' ? 'the Belt' : m.home === 'Jovian' ? 'the Jovian moons' : m.home === 'Saturnian' ? 'Titan' : m.home)} · ${served}</div>`];
+  if (m.dead) return `<div class="crew-section-label">SERVICE</div>${rows.join('')}${recordHTML(m)}`;
+  const due = promotionDue(m);
+  if (m.role !== 'Captain' && (m.rank ?? 0) < 4) {
+    const next = (m.rank ?? 0) + 1, from = RANK_XP[m.rank ?? 0], to = RANK_XP[next];
+    const pct = Math.max(0, Math.min(100, ((m.xp || 0) - from) / (to - from) * 100));
+    rows.push(`<div class="crew-stat" title="Experience: an hour of real work is a point, and more for what it brought"><span class="crew-stat-label">To next</span><div class="crew-stat-bar"><div class="crew-stat-fill xp-fill${due ? ' xp-due' : ''}" style="width:${Math.round(pct)}%"></div></div></div>`);
+    if (!due && (m.xp || 0) >= to) rows.push('<div class="crew-service-note">The experience is there; the skill for the next step isn\'t yet.</div>');
+  }
+  const wage = wageOf(m);
+  const pay = m.role === 'Captain' ? 'takes the ship\'s profit' : `${fmtNum(wage)} MCR a month${m.owed > 0 ? ` · <span class="tc-bad">owed ${fmtNum(m.owed)}</span>` : ''}`;
+  const out = m.lastLeave != null ? Math.floor((now - m.lastLeave) / DAY) : 0;
+  rows.push(`<div class="crew-service-line">${pay} · ashore ${out ? `${days(out)} ago` : 'today'}${out > CABIN_FEVER_DAYS ? ' <span class="tc-warn">(cabin fever)</span>' : ''}</div>`);
+  const btns = [];
+  if (due) btns.push(`<button class="crew-action-btn crew-action-recover" data-act="promote" title="${esc(due.title)}: ${fmtNum(due.wage)} MCR a month">PROMOTE · ${esc(due.title.toUpperCase())}</button>`);
+  if (m.retire && !m.retire.granted) {
+    rows.push(`<div class="crew-service-note">${m.retire.insist ? 'Has given the ship enough years: signs off at the next port.' : m.retire.refused != null ? 'Asked to retire; we asked them to stay on.' : 'Asks to sign off and retire at the next port.'}</div>`);
+    if (!m.retire.insist) btns.push('<button class="crew-action-btn crew-action-recover" data-act="retire-grant">GRANT RETIREMENT</button>');
+    if (!m.retire.insist && m.retire.refused == null) btns.push('<button class="crew-action-btn crew-action-cancel" data-act="retire-stay">ASK TO STAY</button>');
+  } else if (m.retire?.granted) rows.push('<div class="crew-service-note">Retiring: signs off at the next port.</div>');
+  if (m.quit) rows.push('<div class="crew-service-note tc-bad">Has had enough: means to sign off at the next port.</div>');
+  return `<div class="crew-section-label">SERVICE</div>${rows.join('')}${btns.length ? `<div class="crew-actions">${btns.join('')}</div>` : ''}${recordHTML(m)}`;
+}
+
+/** The last few lines of their record. */
+function recordHTML(m) {
+  if (!m.record?.length) return '';
+  return `<div class="crew-record">${m.record.slice(-4).reverse().map(r => `<div><span>${esc(dayOf(r.at))}</span> ${esc(r.text)}</div>`).join('')}</div>`;
+}
+const dayOf = (min) => `D${Math.floor(min / 1440) + 1}`;
 
 // ---- TILES ----
 
@@ -333,6 +376,9 @@ function onClick(e) {
   switch (act) {
     case 'heal': if (m && orderHeal(s, m)) { toast(`${m.name} → autodoc`, 'info'); logEntry(`${m.name} ordered to the autodoc`, 'crew'); } break;
     case 'stand-down': if (m) { orderStandDown(s, m); toast(`${m.name} standing down`); } break;
+    case 'promote': if (m) { const r = promote(s, m.id, (t, p) => bus.emit(t, p)); if (!r.ok) toast(r.text, 'danger'); } break;
+    case 'retire-grant': if (m) { const r = grantRetirement(s, m.id); toast(r.text, r.ok ? 'ok' : 'danger'); if (r.ok) logEntry(r.text, 'crew'); } break;
+    case 'retire-stay': if (m) { const r = askToStay(s, m.id); toast(r.text, r.ok ? 'info' : 'danger'); if (r.ok) logEntry(r.text, 'crew'); } break;
     case 'r-shutdown': report(orderShutdown(s)); break;
     case 'r-cancel': report(cancelShutdown(s)); break;
     case 'r-emergency': report(emergencyShutoff(s)); break;

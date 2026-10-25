@@ -50,7 +50,9 @@ import { createTrafficControl, trafficControlTick, keepOutDriveCap } from './tra
 import { stationsTick } from './station-defense.js';
 import { createDossier, dossierTick } from './manifest.js';
 import { boardingTick } from './boarding.js';
-import { leaveTick } from './crew-services.js';
+import { leaveTick, signOff } from './crew-services.js';
+import { careersTick, startCareer, careerDraw, remember, succession, note } from './careers.js';
+import { hostilesOfPlayer } from './agents.js';
 import { leaseTick } from './leases.js';
 import { setGravityEpoch } from './gravity.js';
 import { fireTick } from './fire.js';
@@ -91,6 +93,8 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
   const ship = { name: shipName, classId, tl: cls.tl, decks: createLayout(classId), crew: [] };
   ship.crew = createCrew(crewCount, ship);
   ship.crew[0].name = captainName;
+  for (const m of ship.crew) { startCareer(m, 0, { draw: careerDraw(ship) }); note(m, 0, m.role === 'Captain' ? `In command of the ${shipName}` : `Signed on aboard the ${shipName}`); }
+  ship.memorial = []; ship.alumni = [];
 
   const state = {
     schema: SAVE_SCHEMA,
@@ -182,6 +186,10 @@ export function upgradeState(state) {
   state.resources.drones ??= createDroneStores(state.ship.classId);
   if (state.drone === undefined) state.drone = null;
   state.shuttles ??= createShuttles(state.ship.classId);
+  // (a crew from before careers: their ages, homes, ranks and records, as their skills and roles have earned)
+  // (served since the game began, as far as anyone knows; last ashore now, so a loaded game starts without cabin fever)
+  for (const m of state.ship.crew) if (m.born == null) { startCareer(m, state.clock.minute, { draw: careerDraw(state.ship) }); m.joined = 0; }
+  state.ship.memorial ??= []; state.ship.alumni ??= [];
   // (a hull that had no craft before every hull carried one: its bay filled, nothing being out)
   if (!state.shuttles.bay.length && !state.shuttles.runs.some(r => r.phase !== 'done')) state.shuttles.bay = createShuttles(state.ship.classId).bay;
   if (!state.market) createMarket(state);
@@ -422,6 +430,16 @@ export function minuteTick(state, { lite = false } = {}) {
     emit,
     hooks: { useWater: (liters) => useWater(state, liters) },
   });
+  // ---- Careers: the day's ages, ranks, retirements; pay day; those signing off in port; the dead remembered
+  for (const m of state.ship.crew) {
+    if (!m.dead || m.diedAt != null) continue;
+    m.diedAt = state.clock.minute;
+    remember(state, m, m.deathCause || (m.away ? 'lost away from the ship' : 'lost aboard'));
+    if (m.role === 'Captain') succession(state, emit);
+  }
+  // (a minute at battle stations with an enemy on us is experience: a drill is not)
+  if (state.combatStations && hostilesOfPlayer(state).length) for (const m of state.ship.crew) if (!m.dead && !m.away && m.consciousness > 10) m.xp = (m.xp || 0) + 1 / 20;
+  careersTick(state, emit, { port: state.dock?.phase === 'docked' && state.dock.target.kind === 'station' ? state.dock.target : null, signOff });
 
   // ---- Needs & consumables (crew eat meals; passengers are fed from stores)
   const pax = state.passengers.reduce((s, p) => s + p.count, 0);

@@ -15,6 +15,7 @@
 // ============================================================
 
 import { ui } from './context.js';
+import { RANKS as CREW_RANKS, RANK_XP, RANK_SKILL, WAGE, PAY_DAYS, CABIN_FEVER_DAYS, QUIT_MORALE, naturalHazard } from '../sim/careers.js';
 import { $, esc, setHTML, show, fmtKm, fmtNum } from './dom.js';
 import { AU_KM } from '../core/constants.js';
 import { CLASSES, CLASS_IDS, KINDS, BUILDERS, TECH, SIZES, PLAYABLE, hullPoints, ratedG } from '../sim/ship-classes.js';
@@ -452,6 +453,17 @@ function crew(add) {
     text: ['Given by the couch injector for burns above 1.5 G: it keeps blood pressure up and vessels whole. A standard dose covers a burn, its flips and its lulls.',
       `Above ${HIGH_DOSE_G} G the high dose is needed, with a booster once a day. It protects more and costs more, and when it wears off the crew crash: days of weakness, low spirits and a strained heart.`],
     links: [['Autodoc', 'sys:autodoc'], ['Crash couch', `fit:${TileType.CRASH_COUCH}`]] });
+  const dept = (k, label) => [label, CREW_RANKS[k].join(' → ')];
+  add({ id: 'crew:careers', cat: 'crew', title: 'Careers', sub: 'Rank, pay, age and the end of a service',
+    text: ['Every hand aboard has a life longer than a watch: an age, a home, a rank in their department and a record of what they have done. Their panel shows it under SERVICE; the roster shows rank and age, the month\'s payroll, and those the ship has lost or seen off.',
+      `EXPERIENCE. An hour of real work (a watch at a station, a repair, the helm) is a point; a repair done, a life saved, a hull taken by boarding, a run flown and a fight come through with an enemy on us bring more. A step up wants the experience (${RANK_XP.slice(1).join(', ')} points) and the skill in their department (${RANK_SKILL.slice(1).join(', ')}). When both are there they are due, and the captain PROMOTES them: the promoted are the happier for it and draw more pay. One left due for a month sours.`,
+      `PAY. A month\'s wage by rank (${WAGE.join(', ')} MCR, more for pilots, engineers and medics, less for cooks and deckhands) comes out of the ship\'s credits every ${PAY_DAYS} days. Short, they are paid what there is and owed the rest; owed money weighs on them until it is paid, first out of the next pay day. The hiring hall\'s fee is once, to sign them on. The captain takes the ship\'s profit, not a wage.`,
+      `MORALE. Their needs set most of it; on top, back pay owed, a step up overdue and cabin fever (from ${CABIN_FEVER_DAYS} days without a run ashore) drag it down. Morale in turn sets how well they work: in good heart (75 and up) a little better than they must, to 8%; sour, much worse, to barely half at the bottom. A hand under ${QUIT_MORALE} for a week means to sign off at the next port, unless things look up.`,
+      'LEAVE. A run ashore at a station lifts them; one on a world\'s ground, under a sky, by shuttle, more; one at home (Earth, Mars, Luna, the Belt\'s stations, the Jovian moons, Titan) most.',
+      `AGE. Past fifty the body\'s quickness goes, a little a year: piloting and security drift down, engineering and medicine (which are knowing) hold. Natural causes take a few each year from sixty on (about 1 in ${Math.round(1 / naturalHazard(60))} a year at 60, 1 in ${Math.round(1 / naturalHazard(70))} at 70). Each has an age they mean to stop at, 58 to 70: past it they ask to retire. Granted, they sign off at the next port with their back pay, and the crew see them off; asked to stay, they stay, put out, and ask again in three months. Five years past it they go regardless.`,
+      'COMMAND. A captain who dies is succeeded by the senior officer aboard: the helm\'s first, then by rank and experience.'],
+    specs: [dept('helm', 'Helm'), dept('engine', 'Engine room'), dept('medical', 'Medical'), dept('arms', 'Guns & security'), dept('science', 'Science'), dept('galley', 'Galley'), dept('deck', 'Deck')],
+    links: [['Acceleration', 'crew:g'], ['Juice', 'crew:juice']] });
 }
 
 function factions(add) {

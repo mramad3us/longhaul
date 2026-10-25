@@ -625,8 +625,9 @@ function recover(state, run, emit) {
     m.pos = { sx: node.sx, sy: node.sy };
     m.$px = node.sx; m.$py = node.sy;
     m.task = null; m.path = []; m.seat = null;
-    // (back from a run ashore, unless it was cut short: called back off the pad)
-    if (run.ashore && !run.leaveCut) restedAshore(m);
+    // (back from a run ashore, unless it was cut short: called back off the pad; a run flown is experience)
+    if (run.ashore && !run.leaveCut) restedAshore(m, state.clock.minute, { world: run.world });
+    m.xp = (m.xp || 0) + (m.id === run.pilot ? 3 : 0.5);
   }
   const world = getWorld(state);
   const e = world.get(run.entity);

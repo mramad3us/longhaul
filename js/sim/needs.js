@@ -3,8 +3,12 @@
 // Four needs (0 = desperate, 100 = fully met) decay with time awake
 // and are met at the ship's facilities: rest in a bunk, food from the
 // galley, hygiene in the head, recreation at the exercise rig or the
-// mess table. Needs set morale, and morale and fatigue set how well
-// people work. Everything here runs per game-minute.
+// mess table. Needs set morale (with what weighs on them beyond the
+// needs: back pay, cabin fever, a step up overdue, careers.js), and
+// morale and fatigue set how well people work: a crew in good heart a
+// little better than it must (to ×1.08), a sour one much worse (to ×0.55).
+// Practice raises skills, and an hour of it is a point of experience.
+// Everything here runs per game-minute.
 // ============================================================
 
 import { overallHealth, isConscious, addCondition, removeCondition } from './crew.js';
@@ -92,24 +96,34 @@ export function moraleTarget(m) {
   for (const k of NEEDS) if (n[k] < 15) t -= 5;
   if (m.conditions.includes('injured')) t -= 8;
   if (m.juiceHangover > 0) t -= m.juiceCrash ? 15 : 5;
-  return clamp(t + (m.moraleMod || 0));
+  // (what weighs on them beyond their needs: money owed, cabin fever, a step up overdue: careers.js)
+  return clamp(t + (m.moraleMod || 0) + (m.careerMood || 0));
 }
 
 /**
- * How well someone works right now (0.2–1): fatigue, morale, hunger,
+ * What morale does to someone's work: a good ship works better than it
+ * must (to 1.08 from 75 up), a sour one worse and worse (0.55 at nothing).
+ */
+export function moraleFactor(morale) {
+  if (morale >= 75) return 1 + 0.08 * Math.min(1, (morale - 75) / 25);
+  if (morale >= 55) return 1;
+  return 0.55 + 0.45 * Math.max(0, morale) / 55;
+}
+
+/**
+ * How well someone works right now (0.2–1.08): fatigue, morale, hunger,
  * hangover and injuries all count.
  */
 export function efficiency(m) {
   if (!isConscious(m)) return 0;
   const n = m.needs;
-  let e = 1;
+  let e = moraleFactor(m.morale);
   if (n.rest < 30) e *= 0.55 + 0.45 * n.rest / 30;
-  if (m.morale < 40) e *= 0.75 + 0.25 * m.morale / 40;
   if (n.food < URGENT.food) e *= 0.85;
   if (m.juiceHangover > 0) e *= m.juiceCrash ? 0.6 : 0.85;
   const h = overallHealth(m);
   if (h < 70) e *= 0.5 + 0.5 * h / 70;
-  return clamp(e, 0.2, 1);
+  return clamp(e, 0.2, 1.08);
 }
 
 /** The need most in want of attention off watch, or null when all are fine. */
@@ -122,8 +136,9 @@ export function pressingNeed(m) {
   return best;
 }
 
-/** Practice makes better: slow skill growth from real work. */
+/** Practice makes better: slow skill growth from real work, and an hour of it a point of experience (careers.js). */
 export function practice(m, skill, minutes = 1) {
   if (!skill || m.skills[skill] == null) return;
   m.skills[skill] = Math.min(100, m.skills[skill] + 0.0006 * minutes * (1 - m.skills[skill] / 110));
+  m.xp = (m.xp || 0) + minutes / 60;
 }
