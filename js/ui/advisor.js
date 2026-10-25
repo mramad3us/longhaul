@@ -119,7 +119,8 @@ import { activeRuns, runReadout, runRefusal } from '../sim/shuttles.js';
 import { marketHere, quote, tradeRefusal } from '../sim/market.js';
 import { GOODS } from '../sim/goods.js';
 import { turnOverHere } from '../sim/law.js';
-import { promotionDue, payroll, ageOf, PAY_DAYS, CABIN_FEVER_DAYS } from '../sim/careers.js';
+import { promotionDue, payroll, ageOf, PAY_DAYS, CABIN_FEVER_DAYS, RANK_XP, RANK_SKILL, skillOf, homeOfWorld } from '../sim/careers.js';
+import { groundOf, treatmentFor, nextCourse } from '../sim/ground.js';
 
 export const AI_NAME = 'VIGIL';
 export const LEVELS = { warning: 3, caution: 2, advice: 1, info: 0 };
@@ -613,9 +614,11 @@ function ruleCareers(state, c, add) {
     detail: 'The promoted are the happier for it, and draw more pay; one left due for a month sours.',
     actions: [A.crew(due[0], 'PROMOTE')],
   });
-  // weeks without a run ashore (at a port with leave, the shore-leave advice says it)
+  // weeks without a run ashore (at a port with leave, the shore-leave advice says it; over a settled
+  // world with a shuttle free, ruleGround: a run ashore on its ground)
   const out = c.aboard.filter(m => (c.now - (m.lastLeave ?? c.now)) / DAY_MIN > CABIN_FEVER_DAYS);
-  if (out.length && !c.dockedSt && out.length >= Math.ceil(c.aboard.length / 2)) {
+  const over = c.f.hold?.kind === 'orbit' && !c.dock && runRefusal(state);
+  if (out.length && !c.dockedSt && out.length >= Math.ceil(c.aboard.length / 2) && !(over && !over.why && groundOf(over.w.name))) {
     const days = Math.round(Math.max(...out.map(m => (c.now - m.lastLeave) / DAY_MIN)));
     add({
       key: 'cabin-fever', level: ADVICE, rank: 32, quiet: 3 * DAY_MIN, sig: 'out',
@@ -1135,11 +1138,55 @@ function ruleShuttles(state, c, add) {
   const no = runRefusal(state);
   if (no.why) return;
   const freight = state.contracts.active.filter(x => x.type === 'PLANETSIDE' && x.world === no.w.name && state.cargo.some(i => i.contract === x.id));
-  if (!freight.length) return;
-  add({
+  if (freight.length) add({
     key: `shuttle-freight:${no.w.name}`, level: ADVICE, rank: 46, sig: freight.map(x => x.id).join(','),
     text: `Freight aboard for ${freight[0].destName}${freight.length > 1 ? ` and ${freight.length - 1} more` : ''}: a shuttle can take it down.`,
     actions: [A.shuttles(freight[0].airspace)],
+  });
+  ruleGround(state, c, add, no.w.name);
+}
+
+/**
+ * Over a settled world with a shuttle free (sim/ground.js): what its ground
+ * has for our crew that the ship hasn't. The hospital for what the autodoc
+ * can't mend, a run ashore for a crew weeks out, a course for a hand with
+ * the experience for a step up and not yet the skill, home for one asking
+ * to retire.
+ */
+function ruleGround(state, c, add, world) {
+  const g = groundOf(world);
+  if (!g) return;
+  const crew = c.crew.filter(m => !m.away);
+  const mend = crew.filter(m => treatmentFor(m, world)?.brain);
+  if (mend.length) add({
+    key: `ground-hospital:${world}`, level: ADVICE, rank: 48, sig: mend.map(m => m.id),
+    text: `${mend[0].name}'s brain damage can be mended on ${world}: the autodoc never will.`,
+    detail: 'Send them down on a run ashore (ASHORE, then HOSPITAL): the pad is held eight hours, paid on landing.',
+    actions: [A.shuttles()],
+  });
+  const out = crew.filter(m => (c.now - (m.lastLeave ?? c.now)) / DAY_MIN > CABIN_FEVER_DAYS);
+  if (out.length >= Math.ceil(crew.length / 2)) add({
+    key: `ground-leave:${world}`, level: ADVICE, rank: 38, quiet: 2 * DAY_MIN, sig: 'out',
+    text: `${plural(out.length, 'hand')} weeks from shore: a run ashore on ${world} lifts them more than a station.`,
+    detail: `ASHORE in the shuttle window: eight hours on ${world}'s ground, more for those who call it home.`,
+    actions: [A.shuttles()],
+  });
+  const now = c.now;
+  const study = crew.find(m => {
+    if (m.role === 'Captain' || (m.rank ?? 0) >= 4 || promotionDue(m) || nextCourse(m) > now) return false;
+    const next = (m.rank ?? 0) + 1, k = skillOf(m);
+    return (m.xp || 0) >= RANK_XP[next] && (m.skills[k] || 0) < RANK_SKILL[next] && g.courses.includes(k) && (m.skills[k] || 0) >= RANK_SKILL[next] - 8;
+  });
+  if (study) add({
+    key: `ground-course:${world}`, level: ADVICE, rank: 30, sig: study.id,
+    text: `${study.name} has the experience for a step up, not the skill: ${g.academy} on ${world} teach it.`,
+    actions: [A.shuttles()],
+  });
+  const going = crew.find(m => m.retire && !m.retire.granted && homeOfWorld(world) === m.home);
+  if (going) add({
+    key: `ground-retire:${world}`, level: ADVICE, rank: 40, sig: going.id,
+    text: `${going.name} asks to retire, and ${world} is home: they could sign off on its ground.`,
+    actions: [A.shuttles()],
   });
 }
 

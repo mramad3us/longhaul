@@ -19,7 +19,7 @@ Main branches of the state:
 | Key | Module | |
 |---|---|---|
 | `flight`, `autopilot` | flight.js, autopilot.js, nav.js, guidance.js, stance.js | our ship's motion, plans (routes and stances) and guidance |
-| `ship` (`decks`, `crew`, `classId`, `tl`) | ship-layout.js, crew.js, crew-ai.js | interior, people |
+| `ship` (`decks`, `crew`, `classId`, `tl`, `memorial`, `alumni`, `careerRng`) | ship-layout.js, crew.js, crew-ai.js, careers.js | interior, people (each with a career: age, home, rank, experience, pay owed, record), the dead remembered, those who left, the careers' own random generator's state |
 | `systems`, `reactor`, `lifeSupport`, `jobs` | systems.js, reactor.js, life-support.js, jobs.js | machinery and the work it makes |
 | `hull`, `magazine`, `combat` | combat.js, damage.js | structure, torpedoes aboard, fire control |
 | `law` | law.js | standing and wanted level with each power |
@@ -36,6 +36,7 @@ Main branches of the state:
 | `passengers`, `berths`, `brig` | manifest.js, prisoners.js | who rides with us: passengers in their berths, prisoners in the brig (then any free berth), each prisoner group with its ship, its side and its officers (turned over in port, or ransomed) |
 | `dossier` | manifest.js | what we have learned about other ships (crew, passengers, routes) and from where |
 | `intel` | intel.js | the plot: reports with an age (lost contacts, traffic digests, news), the inbox of news in flight, the zones we have heard of |
+| `ground` | ground.js | each settled world's spaceport hall today |
 | `navFlags` | flags.js | the captain's flags on ships and stations, lettered A to Z, each for as long as we hold a track of it |
 | `drone` | drones.js | the camera drone out, if one is: launching, on station, coming home, its camera closing on our hull as it does (the rack is `resources.drones`) |
 | `traffic` | traffic.js, forces.js | population target, replacements on the slips, and whether the background forces run |
@@ -150,6 +151,7 @@ CSS: `css/main.css` (the original design system and the menus), `css/ui.css` (co
 | game | whole-game integration, saves, SOS, contracts, the 200k-entity scale budget |
 | crew | medicine, inertial events, breaches, reactor procedures, juice, FLANK |
 | careers | ages, homes and ranks at signing on (the main stream untouched), experience and promotion (passed over sours), pay day and back pay, cabin fever and leave by where, retirement granted, refused and insisted on, quitting, natural causes, succession and the memorial, morale and efficiency, saves and old crews given careers |
+| ground | what a world's ground has (courses by world, hospitals and clinics, a hall at each settled world), a run ashore with errands (a course, brain damage mended, leave; paid on landing; a course every sixty days), patients (never at the controls, not the critical; a treatment called in refunded), the spaceport's hall (signed on at the pad, up in the seats left free), retiring on a world |
 | ship | watches, needs, wear and repair, hand flying (the flight computer kept down, the rest repaired as usual; into Vesta Depot's gate, 50 km over the rock, over several seeds: every ship arrives, none hits the ground), the end of an approach strapped in past the mark too, no turn held with the ground coming up, life support failures |
 | combat | classes, torpedoes and PDC, dead reckoning, railguns, damage, fire control, patrols, pirates, surrender, saves |
 | chase | torpedoes against a ship running (full G early, the reach forecast, running dry), ships that run within their crews' limits (the sprint, going dark, cornered and striking), a pirate found and running, patrols' jurisdiction and one stop at a time, a route to a lost contact's last fix, a bounty's mark off a moon, the brig |

@@ -9,7 +9,10 @@
 // climb, the way back), its controller's answer to the landing, and the
 // freight bound for that pad that will go down with it (PLANETSIDE
 // contracts), who goes (the pilot, the riders in its seats, and ASHORE:
-// a run of leave at the spaceport, the pad held eight hours), and the
+// a run ashore at the spaceport, the pad held eight hours, each who goes
+// doing one thing there: leave, a course, the hospital, retiring; the hurt
+// riding down as patients: sim/ground.js), the spaceport's hall (hands to
+// sign on at the pad, up in the seats left free), and the
 // world's market (sim/market.js, its prices live from
 // its space): goods of ours to sell down, and one to buy and bring up, in
 // the shuttle's room. Launched, the window follows it: its phase, its height and
@@ -27,14 +30,17 @@ import { bus } from '../core/events.js';
 import { formatDuration } from '../core/clock.js';
 import { CLASSES } from '../sim/ship-classes.js';
 import { airspacesOf, worldOfs } from '../sim/worlds.js';
-import { runRefusal, planRun, launchRun, runReadout, activeRuns, landingClearance, cargoFor, shuttleCrew, seatsOf, leaveCost, abortRun, tradeRoom } from '../sim/shuttles.js';
+import { runRefusal, planRun, launchRun, runReadout, activeRuns, landingClearance, cargoFor, shuttleCrew, shuttlePatients, seatsOf, leaveCost, abortRun, tradeRoom } from '../sim/shuttles.js';
+import { errandsFor, groundHall, groundOf } from '../sim/ground.js';
+import { maxCrew } from '../sim/ship-classes.js';
+import { fullName } from '../sim/careers.js';
 import { marketOfWorld, priceAt, quote, tradeRefusal, holdRoom, SPREAD, MARKETS } from '../sim/market.js';
 import { GOODS, GOOD_IDS, tonnes } from '../sim/goods.js';
 import { watchShuttle } from './stage.js';
 import { followOnMap } from './nav.js';
 
 const emit = (t, p) => bus.emit(t, p);
-let chosen = { shuttle: null, airspace: null, sell: new Set(), buy: null, buyT: 0, pilot: null, riders: new Set(), leave: false };
+let chosen = { shuttle: null, airspace: null, sell: new Set(), buy: null, buyT: 0, pilot: null, riders: new Set(), leave: false, errands: {}, hires: new Set() };
 
 export function initShuttleBay() {
   const ov = $('#dialog-shuttle');
@@ -96,14 +102,15 @@ function render() {
         const clr = landingClearance(s, chosen.airspace, p.ok ? p.plan.groundMin : undefined);
         const sh = bay.find(x => x.id === chosen.shuttle);
         const load = cargoFor(s, chosen.airspace, sh.cls);
-        const pilot = pickCrew(s, sh);
+        const pilot = pickCrew(s, sh, w.name);
         plan = `<div class="sb-plan">
           <div class="sb-pick"><label>SHUTTLE <select data-pick="shuttle">${free.map(x => `<option value="${x.id}" ${x.id === chosen.shuttle ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
             <label>TO <select data-pick="airspace">${air.map(a => `<option value="${a.id}" ${a.id === chosen.airspace ? 'selected' : ''}>${esc(a.port.name)} · ${esc(a.controller)}</option>`).join('')}</select></label></div>
           ${p.ok ? timeline(p.plan.summary) : `<p class="dialog-text sb-why">${esc(p.why)}</p>`}
           <div class="sb-line"><b>CLEARANCE</b> <span class="${clr.ok ? 'sb-ok' : 'sb-bad'}">${esc(clr.text)}</span></div>
           <div class="sb-line"><b>FREIGHT</b> ${load.items.length ? `${load.items.map(i => `${Math.round(i.mass).toLocaleString()} kg of ${esc(i.name)}`).join(', ')} (of ${Math.round(load.room).toLocaleString()} kg room)` : 'nothing aboard bound for this pad'}</div>
-          ${crewHTML(s, sh, airspacesOf(w).find(a => a.id === chosen.airspace))}
+          ${crewHTML(s, sh, airspacesOf(w).find(a => a.id === chosen.airspace), w.name)}
+          ${hallHTML(s, sh, w.name)}
           ${tradeHTML(s, w, sh)}
           <div class="form-actions"><button class="btn btn-primary" data-act="launch" ${p.ok && clr.ok && pilot ? '' : 'disabled'}>LAUNCH ${esc(sh.name.toUpperCase())}</button></div>
         </div>`;
@@ -122,31 +129,71 @@ function render() {
  * rides down in the seats, and whether they go ashore at the spaceport (a
  * run ashore: the shuttle on the pad eight hours). Kept to who can go.
  */
-function pickCrew(s, sh) {
-  // (kept as strings, as the form gives them)
+function pickCrew(s, sh, world = null) {
+  // (kept as strings, as the form gives them; patients ride only on a run ashore)
   const able = shuttleCrew(s), ids = new Set(able.map(m => String(m.id)));
+  const patients = chosen.leave && world ? shuttlePatients(s, world) : [];
+  const riderIds = new Set([...ids, ...patients.map(m => String(m.id))]);
   if (!ids.has(chosen.pilot)) chosen.pilot = able[0] ? String(able[0].id) : null;
-  for (const id of [...chosen.riders]) if (!ids.has(id) || id === chosen.pilot) chosen.riders.delete(id);
+  for (const id of [...chosen.riders]) if (!riderIds.has(id) || id === chosen.pilot) chosen.riders.delete(id);
   const seats = seatsOf(sh.cls);
   while (chosen.riders.size > seats) chosen.riders.delete([...chosen.riders].at(-1));
   return able.find(m => String(m.id) === chosen.pilot) || null;
 }
 
-function crewHTML(s, sh, a) {
+function crewHTML(s, sh, a, world) {
   const able = shuttleCrew(s), seats = seatsOf(sh.cls);
   if (!able.length) return '<div class="sb-line"><b>CREW</b> <span class="sb-bad">nobody fit to fly it</span></div>';
   const full = chosen.riders.size >= seats;
-  const riders = able.filter(m => String(m.id) !== chosen.pilot).map(m => {
-    const on = chosen.riders.has(String(m.id));
-    return `<label class="sb-check ${!on && full ? 'off' : ''}"><input type="checkbox" data-rider="${esc(m.id)}" ${on ? 'checked' : ''} ${!on && full ? 'disabled' : ''}> ${esc(m.name)} <span class="sb-dim">${esc(m.role)}</span></label>`;
+  const patients = chosen.leave ? shuttlePatients(s, world) : [];
+  const riders = [...able.filter(m => String(m.id) !== chosen.pilot), ...patients].map(m => {
+    const on = chosen.riders.has(String(m.id)), patient = patients.includes(m);
+    return `<label class="sb-check ${!on && full ? 'off' : ''}"><input type="checkbox" data-rider="${esc(m.id)}" ${on ? 'checked' : ''} ${!on && full ? 'disabled' : ''}> ${esc(m.name)} <span class="sb-dim">${esc(patient ? 'patient, for the hospital' : m.role)}</span></label>`;
   }).join('') || '<span class="sb-none">nobody else free</span>';
   const n = 1 + chosen.riders.size;
+  const g = groundOf(world);
   return `<div class="sb-crew">
     <div class="sb-line"><b>PILOT</b> <select data-pick="pilot">${able.map(m => `<option value="${esc(m.id)}" ${String(m.id) === chosen.pilot ? 'selected' : ''}>${esc(m.name)} · ${esc(m.role)} · piloting ${Math.round(m.skills?.piloting || 0)}</option>`).join('')}</select></div>
     <div class="sb-riders"><span class="sb-k">RIDING DOWN</span><div class="sb-ridergrid">${riders}</div><span class="sb-seats">${chosen.riders.size} OF ${seats} SEAT${seats === 1 ? '' : 'S'} TAKEN</span></div>
-    <label class="sb-leave"><input type="checkbox" data-leave ${chosen.leave ? 'checked' : ''}><span><b>ASHORE</b> ${n === 1 ? 'the pilot' : `all ${n}`} on leave at ${esc(a?.port.name || 'the spaceport')}: the pad held eight hours, ${leaveCost(n).toLocaleString()} MCR paid there, back rested and in better spirits</span></label>
+    <label class="sb-leave"><input type="checkbox" data-leave ${chosen.leave ? 'checked' : ''}><span><b>ASHORE</b> ${n === 1 ? 'the pilot' : n === 2 ? 'both' : `all ${n}`} at ${esc(a?.port.name || 'the spaceport')}: the pad held eight hours, ${leaveCost(n).toLocaleString()} MCR paid there, back rested and in better spirits${g ? `; each can do one thing there (${esc(world)}'s ${g.hospital === 'full' ? 'hospitals' : 'clinic'}, ${esc(g.academy)})` : ''}</span></label>
+    ${chosen.leave ? errandsHTML(s, world) : ''}
     <div class="sb-line sb-dim">Whoever goes is away from the ship until the shuttle is home: their stations go unmanned, and our routes wait for them.</div>
   </div>`;
+}
+
+/** What each who goes does ashore (sim/ground.js): leave, a course, the hospital, retiring. */
+function errandsHTML(s, world) {
+  const going = [chosen.pilot, ...chosen.riders].map(id => s.ship.crew.find(m => String(m.id) === id)).filter(Boolean);
+  let total = 0;
+  const rows = going.map(m => {
+    const opts = errandsFor(s, m, world);
+    const patient = shuttlePatients(s, world).includes(m);
+    let pick = chosen.errands[m.id];
+    if (patient) pick = 'hospital';
+    if (!opts.some(o => o.id === pick && !o.why)) pick = 'leave';
+    chosen.errands[m.id] = pick;
+    total += opts.find(o => o.id === pick)?.cost || 0;
+    return `<div class="sb-errand"><span>${esc(m.name)} <span class="sb-dim">${esc(m.role)}</span></span><select data-errand="${esc(m.id)}" ${patient ? 'disabled' : ''}>${opts.map(o => `<option value="${esc(o.id)}" ${o.id === pick ? 'selected' : ''} ${o.why ? 'disabled' : ''} title="${esc(o.why || '')}">${esc(o.label)}${o.cost ? ` · ${fmtNum(o.cost)} MCR` : ''}${o.why ? ' (not yet)' : ''}</option>`).join('')}</select></div>`;
+  }).join('');
+  return `<div class="sb-errands"><span class="sb-k">ASHORE</span><div>${rows}${total ? `<div class="sb-dim">${fmtNum(total)} MCR besides the leave, paid on landing</div>` : ''}</div></div>`;
+}
+
+/** The spaceport's hall (sim/ground.js groundHall): hands to sign on at the pad, up in the seats left free. */
+function hallHTML(s, sh, world) {
+  const hall = groundHall(s, world);
+  if (!hall.length) return '';
+  const retiring = Object.entries(chosen.errands).filter(([id, e]) => e === 'retire' && (id === chosen.pilot || chosen.riders.has(id))).length;
+  const free = seatsOf(sh.cls) - chosen.riders.size + (chosen.leave ? retiring : 0);
+  const berths = maxCrew(s.ship.classId) - s.ship.crew.filter(m => !m.dead).length + (chosen.leave ? retiring : 0);
+  for (const i of [...chosen.hires]) if (!hall[+i]) chosen.hires.delete(i);
+  const room = Math.min(free, berths);
+  while (chosen.hires.size > Math.max(0, room)) chosen.hires.delete([...chosen.hires].at(-1));
+  const sk = (p) => Object.entries(p.skills).map(([k, v]) => `${k.slice(0, 3)} ${Math.round(v)}`).join(' · ');
+  const rows = hall.map((p, i) => {
+    const on = chosen.hires.has(String(i)), off = !on && chosen.hires.size >= room;
+    return `<label class="sb-check sb-hire ${off ? 'off' : ''}"><input type="checkbox" data-hire="${i}" ${on ? 'checked' : ''} ${off ? 'disabled' : ''}><span class="sb-who">${esc(fullName(p))}</span><span class="sb-dim">${esc(p.title)}${p.title.includes(p.role) ? '' : ` · ${esc(p.role)}`} · ${p.age} · ${esc(sk(p))} · ${fmtNum(p.fee)} MCR, ${fmtNum(p.wage)} a month</span></label>`;
+  }).join('');
+  return `<div class="sb-riders"><span class="sb-k">SIGN ON</span><div class="sb-ridergrid sb-hall">${rows}</div><span class="sb-seats">THE SPACEPORT'S HALL · ${Math.max(0, room)} ${room === 1 ? 'SEAT' : 'SEATS'} FREE FOR THE WAY UP${berths < free ? ` (${Math.max(0, berths)} BERTH${berths === 1 ? '' : 'S'} ABOARD)` : ''} · FEE PAID ON LANDING</span></div>`;
 }
 
 /** The world's market for the run: what of ours to sell down, what to bring up. */
@@ -211,6 +258,10 @@ function onChange(ev) {
   const rider = ev.target.closest('[data-rider]');
   if (rider) { if (rider.checked) chosen.riders.add(rider.dataset.rider); else chosen.riders.delete(rider.dataset.rider); render(); return; }
   if (ev.target.closest('[data-leave]')) { chosen.leave = ev.target.checked; render(); return; }
+  const er = ev.target.closest('[data-errand]');
+  if (er) { chosen.errands[er.dataset.errand] = er.value; render(); return; }
+  const hi = ev.target.closest('[data-hire]');
+  if (hi) { if (hi.checked) chosen.hires.add(hi.dataset.hire); else chosen.hires.delete(hi.dataset.hire); render(); return; }
   const sel = ev.target.closest('[data-pick]');
   if (!sel) return;
   const k = sel.dataset.pick;
@@ -231,8 +282,9 @@ function onClick(ev) {
     case 'launch': {
       const p = planRun(s, chosen.shuttle, chosen.airspace, { leave: chosen.leave });
       if (!p.ok) { toast(p.why, 'warn'); break; }
-      const r = launchRun(s, p.plan, emit, { crew: { pilot: chosen.pilot, riders: [...chosen.riders] }, trade: { sell: [...chosen.sell], buy: chosen.buy ? { good: chosen.buy, t: chosen.buyT || Infinity } : null } });
-      if (r.ok) { chosen.sell.clear(); chosen.buy = null; chosen.buyT = 0; chosen.riders.clear(); chosen.leave = false; }
+      const r = launchRun(s, p.plan, emit, { crew: { pilot: chosen.pilot, riders: [...chosen.riders] }, trade: { sell: [...chosen.sell], buy: chosen.buy ? { good: chosen.buy, t: chosen.buyT || Infinity } : null },
+        errands: chosen.leave ? chosen.errands : null, hires: [...chosen.hires].map(Number) });
+      if (r.ok) { chosen.sell.clear(); chosen.buy = null; chosen.buyT = 0; chosen.riders.clear(); chosen.leave = false; chosen.errands = {}; chosen.hires.clear(); }
       toast(r.text, r.ok ? 'nav' : 'warn');
       if (r.ok) logEntry(r.text, 'nav');
       break;

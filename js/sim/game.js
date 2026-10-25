@@ -93,7 +93,8 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
   const ship = { name: shipName, classId, tl: cls.tl, decks: createLayout(classId), crew: [] };
   ship.crew = createCrew(crewCount, ship);
   ship.crew[0].name = captainName;
-  for (const m of ship.crew) { startCareer(m, 0, { draw: careerDraw(ship) }); note(m, 0, m.role === 'Captain' ? `In command of the ${shipName}` : `Signed on aboard the ${shipName}`); }
+  const givens = new Set();
+  for (const m of ship.crew) { startCareer(m, 0, { draw: careerDraw(ship), avoid: givens }); givens.add(m.given); note(m, 0, m.role === 'Captain' ? `In command of the ${shipName}` : `Signed on aboard the ${shipName}`); }
   ship.memorial = []; ship.alumni = [];
 
   const state = {

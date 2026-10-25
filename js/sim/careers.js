@@ -92,12 +92,18 @@ const ROLE_PAY = { Pilot: 1.2, Engineer: 1.2, Medic: 1.15, Scientist: 1.1, Gunne
 /** Where people come from, how often, and the names they carry. */
 const HOMES = [['Earth', 30], ['Mars', 24], ['Belt', 30], ['Luna', 7], ['Jovian', 6], ['Saturnian', 3]];
 const GIVEN = {
-  Earth: ['Amara', 'Wei', 'Priya', 'Mateo', 'Sofia', 'Kwame', 'Hana', 'Omar', 'Elena', 'Jonas', 'Aiko', 'Diego', 'Leila', 'Tomas', 'Nia', 'Ravi', 'Ines', 'Kofi', 'Mei', 'Arjun'],
-  Mars: ['Bobbie', 'Ares', 'Solveig', 'Tariq', 'Ilse', 'Cyrus', 'Noor', 'Anders', 'Dara', 'Lucan', 'Vesna', 'Kai', 'Mira', 'Orin', 'Thea', 'Rook'],
-  Belt: ['Naomi', 'Diogo', 'Camina', 'Anton', 'Kima', 'Bez', 'Oksana', 'Fen', 'Sadavir', 'Pash', 'Lio', 'Marco', 'Yanz', 'Ochi', 'Tilly', 'Ren'],
-  Luna: ['Selene', 'Yuri', 'Imani', 'Hal', 'Rhea', 'Ezra', 'Lin', 'Cass'],
-  Jovian: ['Io', 'Callum', 'Europa', 'Gan', 'Ama', 'Bram', 'Sela', 'Dov'],
-  Saturnian: ['Titania', 'Enzo', 'Rhea', 'Mimo', 'Hyperion', 'Lark'],
+  Earth: ['Amara', 'Wei', 'Priya', 'Mateo', 'Sofia', 'Kwame', 'Hana', 'Omar', 'Elena', 'Jonas', 'Aiko', 'Diego', 'Leila', 'Tomas', 'Nia', 'Ravi', 'Ines', 'Kofi', 'Mei', 'Arjun',
+    'Chioma', 'Luca', 'Yara', 'Felix', 'Zainab', 'Hiro', 'Ana', 'Samir', 'Ingrid', 'Tunde', 'Lucia', 'Dmitri', 'Asha', 'Pedro', 'Freya', 'Jun', 'Esther', 'Malik', 'Rosa', 'Viktor'],
+  Mars: ['Bobbie', 'Ares', 'Solveig', 'Tariq', 'Ilse', 'Cyrus', 'Noor', 'Anders', 'Dara', 'Lucan', 'Vesna', 'Kai', 'Mira', 'Orin', 'Thea', 'Rook',
+    'Calla', 'Desmond', 'Hollis', 'Juno', 'Kestrel', 'Lars', 'Maren', 'Nils', 'Petra', 'Quinn', 'Reza', 'Signe', 'Teodor', 'Una', 'Vidar', 'Wren', 'Yusuf', 'Zora', 'Bram', 'Elin'],
+  Belt: ['Naomi', 'Diogo', 'Camina', 'Anton', 'Kima', 'Bez', 'Oksana', 'Fen', 'Sadavir', 'Pash', 'Lio', 'Marco', 'Yanz', 'Ochi', 'Tilly', 'Ren',
+    'Ashaki', 'Bastien', 'Chiku', 'Dawit', 'Esai', 'Filip', 'Galo', 'Hiroko', 'Ilsa', 'Jabbe', 'Koto', 'Lacey', 'Mika', 'Nen', 'Ozi', 'Pell', 'Rilka', 'Sabe', 'Tovo', 'Weng'],
+  Luna: ['Selene', 'Yuri', 'Imani', 'Hal', 'Rhea', 'Ezra', 'Lin', 'Cass', 'Arden', 'Bea', 'Corin', 'Della', 'Emil', 'Faye', 'Gideon', 'Hester', 'Ivo', 'Jessa', 'Kit', 'Lark',
+    'Mabel', 'Noah', 'Opal', 'Piers', 'Romy', 'Silas', 'Tamsin', 'Vale', 'Wynn', 'Zeke'],
+  Jovian: ['Io', 'Callum', 'Europa', 'Gan', 'Ama', 'Bram', 'Sela', 'Dov', 'Anya', 'Bodhi', 'Cato', 'Dalia', 'Elio', 'Galen', 'Hesper', 'Ira', 'Jory', 'Kael', 'Liora', 'Maxim',
+    'Nyx', 'Odile', 'Pax', 'Rasmus', 'Saoirse', 'Taavi', 'Ulla', 'Varis', 'Xan', 'Yael'],
+  Saturnian: ['Titania', 'Enzo', 'Rhea', 'Mimo', 'Hyperion', 'Lark', 'Aster', 'Brielle', 'Caspian', 'Dione', 'Ember', 'Fenna', 'Gray', 'Helio', 'Isla', 'Janus', 'Kelda', 'Linus',
+    'Marlo', 'Nesta', 'Orla', 'Phoebe', 'Rune', 'Soren', 'Tethys', 'Ulric', 'Vega', 'Wilder', 'Ysolde', 'Zephyr'],
 };
 /** The stations' bodies as homes (a station of the Belt is home to a Belter). */
 const STATION_HOME = { Ceres: 'Belt', Pallas: 'Belt', Vesta: 'Belt', Hygiea: 'Belt', Juno: 'Belt', Luna: 'Luna', Phobos: 'Mars', Ganymede: 'Jovian' };
@@ -113,11 +119,15 @@ export function careerDraw(ship) {
 }
 
 export const deptOf = (m) => DEPT[m.role] || 'deck';
+/** Whose home a world's ground is (Earth, Mars, Luna; the Jovian moons; Titan), or null. */
+export const homeOfWorld = (world) => WORLD_HOME[world] || null;
 export const fullName = (m) => m.given ? `${m.given} ${m.name}` : m.name;
 export const rankTitle = (m) => m.role === 'Captain' ? 'Captain' : RANKS[deptOf(m)][Math.max(0, Math.min(4, m.rank || 0))];
 export const ageOf = (m, minute) => Math.max(0, (minute - (m.born ?? minute - 30 * YEAR_MIN)) / YEAR_MIN);
 export const wageOf = (m) => m.role === 'Captain' ? 0 : Math.round(WAGE[Math.max(0, Math.min(4, m.rank || 0))] * (ROLE_PAY[m.role] || 1) / 10) * 10;
-const deptSkill = (m) => m.skills?.[DEPT_SKILL[deptOf(m)]] || 0;
+/** The skill someone's department ranks them by. */
+export const skillOf = (m) => DEPT_SKILL[deptOf(m)];
+const deptSkill = (m) => m.skills?.[skillOf(m)] || 0;
 /** Gompertz: natural causes, per year of life, at an age. */
 export const naturalHazard = (age) => 0.00005 * Math.exp(0.095 * age);
 
@@ -126,13 +136,13 @@ export const naturalHazard = (age) => 0.00005 * Math.exp(0.095 * age);
  * role, a home, a rank their skill and years have earned, the experience
  * behind it, an age they mean to stop at, a full name.
  */
-export function startCareer(m, minute, { draw, home = null }) {
+export function startCareer(m, minute, { draw, home = null, avoid = null }) {
   const [a0, a1] = AGE_BY_ROLE[m.role] || [20, 45];
   const age = a0 + draw() * (a1 - a0);
   m.born = Math.round(minute - age * YEAR_MIN);
   if (!home) { let r = draw() * HOMES.reduce((s, h) => s + h[1], 0); for (const h of HOMES) { r -= h[1]; if (r <= 0) { home = h[0]; break; } } }
   m.home = home || 'Earth';
-  const given = GIVEN[m.home] || GIVEN.Earth;
+  const given = (GIVEN[m.home] || GIVEN.Earth).filter(x => !avoid?.has(x));
   // (the captain's name is the player's own, given as they typed it)
   m.given = m.role === 'Captain' ? null : given[Math.floor(draw() * given.length)];
   const sk = deptSkill(m);
@@ -202,11 +212,16 @@ export function askToStay(state, id) {
   return { ok: true, text: `${m.name} stays on, for now.` };
 }
 
-/** Someone back from a run ashore: rested, and how much better for it by where (crew-services.js calls this). */
-export function backFromLeave(m, minute, { world = null, station = null } = {}) {
+/**
+ * Someone back from a run ashore: rested, and how much better for it by
+ * where (crew-services.js calls this); a day ashore at work (a course, the
+ * hospital: ground.js) lifts them less, and resets the weeks aboard all
+ * the same.
+ */
+export function backFromLeave(m, minute, { world = null, station = null, work = false } = {}) {
   const home = (world && WORLD_HOME[world] === m.home) || (station && STATION_HOME[station] === m.home);
   m.lastLeave = minute;
-  m.moraleMod = (m.moraleMod || 0) + (home ? 20 : world ? 15 : 8);
+  m.moraleMod = (m.moraleMod || 0) + (work ? 6 : home ? 20 : world ? 15 : 8);
   return home;
 }
 

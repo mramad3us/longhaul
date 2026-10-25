@@ -32,7 +32,14 @@
 // for them, autopilot.js). A run planned for leave (planRun opts.leave)
 // holds the pad LEAVE_MIN instead of the turnaround; the party goes ashore,
 // paid for on landing (LEAVE_COST a head), and comes home rested
-// (crew-services.js restedAshore), unless called in off the pad. The shuttle is a
+// (crew-services.js restedAshore), unless called in off the pad. Ashore,
+// each who goes does one thing there (ground.js ERRANDS: leave, a course
+// at an academy, the hospital, retiring; launchRun errands), paid on
+// landing and done when they are home (a course or a treatment called in
+// off the pad is refunded); the hurt may ride down for the hospital, as
+// patients. The spaceport's hall (ground.js groundHall) signs hands on
+// at the pad (launchRun hires: the fee paid on landing), who ride up in
+// the seats left free and come aboard with the shuttle. The shuttle is a
 // world entity on its flight path (world.js FLIGHT_PATH), seen on the
 // displays like any other hull. What it burns comes out of our tanks when
 // it is home.
@@ -50,7 +57,7 @@ import { AU_M, G0, DAY_MIN, MIN_S } from '../core/constants.js';
 import { random, pick } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { createEntity } from './entities.js';
-import { CLASSES, bayOf } from './ship-classes.js';
+import { CLASSES, bayOf, maxCrew } from './ship-classes.js';
 import { bodyPos, bodyVel } from './ephemeris.js';
 import { worldOf, worldAt, airspaceById, airspacesOf, worldAngle, controlWords, worldOfs } from './worlds.js';
 import { entryProfile, ascentProfile, pathLeg, craftOf, flightPathAt, carrierPlace, placeOnLeg, distanceAt, speedAt, placeAlong, PLAYER_AT, HOVER_M, LAUNCH_MIN, RECOVER_MIN, GROUND_MIN, runMinutes } from './planetary.js';
@@ -64,7 +71,8 @@ import { shipGeometry, airlockFor } from './ship-layout.js';
 import { deliverPlanetside } from './contracts.js';
 import { marketOfWorld, shuttleTrade, stow, holdRoom, tradeRefusal, MARKETS } from './market.js';
 import { GOODS } from './goods.js';
-import { LEAVE_MIN, LEAVE_COST, restedAshore } from './crew-services.js';
+import { LEAVE_MIN, LEAVE_COST, restedAshore, signOn } from './crew-services.js';
+import { errandsFor, errandCost, finishErrand, retireOnWorld, groundHall, treatmentFor } from './ground.js';
 
 const SPAN_MIN = 0.4;                        // a leg round a world goes at least this far round (rad): a gentle spiral, never a plunge
 const RENDEZVOUS_M = 20_000;                 // a shuttle home further than this from us (we moved) chases us
@@ -286,6 +294,11 @@ export function shuttleCrew(state) {
     .sort((x, y) => (x.role === 'Captain') - (y.role === 'Captain') || (y.skills?.piloting || 0) - (x.skills?.piloting || 0));
 }
 
+/** Who may ride down only as a patient, for a world's hospital: hurt past working but stable (not critical), aboard. */
+export function shuttlePatients(state, world) {
+  return state.ship.crew.filter(m => !m.dead && !m.away && !isAble(m) && !m.conditions.includes('critical') && treatmentFor(m, world));
+}
+
 /** The seats a craft has besides its pilot's. */
 export const seatsOf = (cls) => CLASSES[cls]?.berths || 0;
 
@@ -320,20 +333,42 @@ export function cargoFor(state, airspaceId, cls) {
  * for leave (planRun opts.leave) sends the party ashore at the spaceport.
  * Returns { ok, text, run }.
  */
-export function launchRun(state, plan, emit = () => {}, { crew = null, trade = null } = {}) {
+export function launchRun(state, plan, emit = () => {}, { crew = null, trade = null, errands = null, hires = null } = {}) {
   const sh = state.shuttles.bay.find(s => s.id === plan.shuttle);
   if (!sh || sh.run) return { ok: false, text: 'That shuttle is not in its bay.' };
   const clr = landingClearance(state, plan.airspace, plan.groundMin);
   if (!clr.ok) return { ok: false, text: clr.text };
+  const where = plan.summary.world;
   // (ids as the crew keep them, whether they come as numbers or as a form's strings)
-  const able = shuttleCrew(state), byKey = new Map(able.map(m => [String(m.id), m.id]));
+  const able = shuttleCrew(state), patients = plan.leave ? shuttlePatients(state, where) : [];
+  const byKey = new Map([...able, ...patients].map(m => [String(m.id), m.id]));
   const list = (Array.isArray(crew) ? crew : crew ? [crew.pilot, ...(crew.riders || [])] : []).filter(x => x != null && x !== '').map(String);
-  const pilotId = list.length ? byKey.get(list[0]) : able[0]?.id;
-  if (pilotId == null) return { ok: false, text: 'Nobody fit to fly it.' };
+  const pilotId = list.length ? able.find(m => String(m.id) === list[0])?.id : able[0]?.id;
+  if (pilotId == null) return { ok: false, text: list.length && byKey.has(list[0]) ? 'A patient can ride down, not fly.' : 'Nobody fit to fly it.' };
   if (list.slice(1).some(k => !byKey.has(k))) return { ok: false, text: 'Someone chosen to ride down is not fit to go.' };
   const riders = [...new Set(list.slice(1).map(k => byKey.get(k)))].filter(id => id !== pilotId);
   if (riders.length > seatsOf(sh.cls)) return { ok: false, text: `A ${CLASSES[sh.cls].name.toLowerCase()} seats ${seatsOf(sh.cls)} besides its pilot.` };
   const party = [pilotId, ...riders];
+  // what each does ashore (a run for leave only; a patient goes for the hospital), and who signs on at the pad
+  const doing = {};
+  if (plan.leave) {
+    for (const id of party) {
+      const m = state.ship.crew.find(x => x.id === id);
+      const want = errands?.[id] ?? errands?.[String(id)] ?? (patients.includes(m) ? 'hospital' : 'leave');
+      const opt = errandsFor(state, m, where).find(e => e.id === want);
+      if (!opt || opt.why) return { ok: false, text: `${m.name} can't do that on ${where}${opt?.why ? `: ${opt.why}` : ''}.` };
+      if (patients.includes(m) && want !== 'hospital') return { ok: false, text: `${m.name} rides down only for the hospital.` };
+      doing[id] = want;
+    }
+  }
+  const hall = groundHall(state, where);
+  const signing = [...new Set((hires || []).map(Number))].filter(i => hall[i]).map(i => hall[i]);
+  const retiring = Object.values(doing).filter(x => x === 'retire').length;
+  const upSeats = seatsOf(sh.cls) - riders.length + retiring;
+  if (signing.length > upSeats) return { ok: false, text: `${signing.length} to bring up, and ${upSeats} seat${upSeats === 1 ? '' : 's'} free on the way back.` };
+  const aboard = state.ship.crew.filter(m => !m.dead).length - retiring;
+  if (aboard + signing.length > maxCrew(state.ship.classId)) return { ok: false, text: `No berth aboard for ${signing.length === 1 ? 'another hand' : `${signing.length} more`}.` };
+  for (const p of signing) hall.splice(hall.indexOf(p), 1);
   const S = state.shuttles;
   const id = `run-${S.nextId++}`;
   const a = airspaceById(plan.airspace);
@@ -349,6 +384,7 @@ export function launchRun(state, plan, emit = () => {}, { crew = null, trade = n
   const run = {
     id, shuttle: sh.id, cls: sh.cls, name: sh.name, world: plan.summary.world, airspace: a.id, port: { id: a.port.id, name: a.port.name },
     carrier: 'player', phase: 'launch', legs: plan.legs, summary: plan.summary, crew: party, pilot: pilotId, leave: !!plan.leave, cargo: load.items, delivered: [], sell, buy, up: [],
+    errands: doing, hires: signing, paid: {},
     clearance: clr.text, startedAt: state.clock.minute, entity: `shuttle-${id}`, log: [],
   };
   S.runs.push(run);
@@ -595,10 +631,46 @@ function landed(state, run, emit) {
       state.resources.credits.current -= cost;
       run.ashore = true;
       log(run, state, `${run.crew.length} ashore at ${run.port.name} (${cost.toLocaleString()} MCR)`);
+      errandsAshore(state, run, emit);
     } else log(run, state, `No leave: ${cost.toLocaleString()} MCR to go ashore, and not that much aboard`);
+  }
+  // hands signed on at the pad: the fee paid here, aboard the shuttle for the way up
+  if (run.hires?.length && !run.aborted) {
+    for (const p of run.hires) {
+      if (state.resources.credits.current < p.fee) { log(run, state, `${p.name} stays ashore: ${p.fee.toLocaleString()} MCR to sign, and not that much aboard`); continue; }
+      state.resources.credits.current -= p.fee;
+      const m = signOn(state, p, `${run.port.name}, ${run.world}`);
+      m.away = { op: run.id, shuttle: true, pilot: false }; m.activity = 'away'; m.seat = null; m.path = [];
+      run.crew.push(m.id);
+      (run.joined ||= []).push(m.id);
+      log(run, state, `${m.given ? `${m.given} ` : ''}${m.name} (${m.role}) signs on at the pad for ${p.fee.toLocaleString()} MCR`);
+    }
+    run.hires = [];
   }
   emit('shuttle-landed', { run: run.id, name: run.name, port: run.port.name, world: run.world, delivered: handed, airspace: run.airspace });
   emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} down at ${run.port.name}${handed.length ? `: ${Math.round(handed.reduce((s, x) => s + x.mass, 0)).toLocaleString()} kg of ${handed[0].name} handed over` : ''}. Lift-off in ${Math.round(groundLeg.t1 - groundLeg.t0)} min.` });
+}
+
+/**
+ * On the ground, a run ashore: what each is doing there paid for (short of
+ * the credits, plain leave instead), and those retiring sign off on the
+ * pad. The rest is done when they are home (finishErrand).
+ */
+function errandsAshore(state, run, emit) {
+  for (const id of [...run.crew]) {
+    const m = state.ship.crew.find(x => x.id === id);
+    const what = run.errands?.[id];
+    if (!m || !what || what === 'leave') continue;
+    if (what === 'retire') {
+      if (retireOnWorld(state, m, run.world, emit)) { run.crew = run.crew.filter(x => x !== id); log(run, state, `${m.name} signs off and retires on ${run.world}`); }
+      continue;
+    }
+    const cost = errandCost(state, m, what, run.world);
+    if (state.resources.credits.current < cost) { run.errands[id] = 'leave'; log(run, state, `${m.name}: ${cost.toLocaleString()} MCR for that, and not that much aboard: leave instead`); continue; }
+    state.resources.credits.current -= cost;
+    run.paid[id] = cost;
+    log(run, state, `${m.name}: ${what === 'hospital' ? 'to the hospital' : `a course in ${what.slice(7)}`} (${cost.toLocaleString()} MCR)`);
+  }
 }
 
 /** Home: into the bay, the crew aboard at our airlock, the fuel it burned out of our tanks, the entity gone. */
@@ -625,8 +697,14 @@ function recover(state, run, emit) {
     m.pos = { sx: node.sx, sy: node.sy };
     m.$px = node.sx; m.$py = node.sy;
     m.task = null; m.path = []; m.seat = null;
-    // (back from a run ashore, unless it was cut short: called back off the pad; a run flown is experience)
-    if (run.ashore && !run.leaveCut) restedAshore(m, state.clock.minute, { world: run.world });
+    // (back from a run ashore, unless it was cut short: called back off the pad, what was paid for
+    // and not done refunded; a hand who signed on at the pad just comes aboard; a run flown is experience)
+    const errand = run.errands?.[m.id];
+    if (run.joined?.includes(m.id)) { /* new aboard */ }
+    else if (run.ashore && !run.leaveCut) {
+      restedAshore(m, state.clock.minute, { world: run.world, work: !!errand && errand !== 'leave' });
+      finishErrand(state, m, errand, run.world);
+    } else if (run.paid?.[m.id]) { state.resources.credits.current += run.paid[m.id]; run.paid[m.id] = 0; }
     m.xp = (m.xp || 0) + (m.id === run.pilot ? 3 : 0.5);
   }
   const world = getWorld(state);

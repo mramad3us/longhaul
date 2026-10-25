@@ -223,6 +223,15 @@
 .sb-leave input { margin-top: 2px; }
 .sb-leave b { color: var(--text-primary); font-weight: normal; letter-spacing: 0.06em; }
 .sb-crew .sb-dim { color: var(--text-dim); }
+.sb-errands { display: grid; grid-template-columns: 80px 1fr; gap: 4px 12px; align-items: start; margin: 2px 0 6px; font: 11px var(--font-mono); color: var(--text-secondary); }
+.sb-errands .sb-k { padding-top: 4px; }
+.sb-errand { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 2px 0; }
+.sb-errand select { max-width: 60%; }
+.sb-hall { grid-template-columns: 1fr; }
+.sb-hire { display: grid; grid-template-columns: auto 140px 1fr; align-items: start; gap: 6px; line-height: 1.4; }
+.sb-hire input { margin-top: 2px; }
+.sb-hire .sb-who { color: var(--text-primary); }
+.sb-hire .sb-dim { margin-left: 0; }
 .sb-bad, .sb-why { color: var(--warn, #E8C45A); }
 
 /* ---- CONTACT PANEL ADDITIONS ---- */

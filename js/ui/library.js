@@ -16,6 +16,7 @@
 
 import { ui } from './context.js';
 import { RANKS as CREW_RANKS, RANK_XP, RANK_SKILL, WAGE, PAY_DAYS, CABIN_FEVER_DAYS, QUIT_MORALE, naturalHazard } from '../sim/careers.js';
+import { GROUND, COURSE_COST, COURSE_DAYS, COURSE_GAIN, NEURAL_COST } from '../sim/ground.js';
 import { $, esc, setHTML, show, fmtKm, fmtNum } from './dom.js';
 import { AU_KM } from '../core/constants.js';
 import { CLASSES, CLASS_IDS, KINDS, BUILDERS, TECH, SIZES, PLAYABLE, hullPoints, ratedG } from '../sim/ship-classes.js';
@@ -463,7 +464,16 @@ function crew(add) {
       `AGE. Past fifty the body\'s quickness goes, a little a year: piloting and security drift down, engineering and medicine (which are knowing) hold. Natural causes take a few each year from sixty on (about 1 in ${Math.round(1 / naturalHazard(60))} a year at 60, 1 in ${Math.round(1 / naturalHazard(70))} at 70). Each has an age they mean to stop at, 58 to 70: past it they ask to retire. Granted, they sign off at the next port with their back pay, and the crew see them off; asked to stay, they stay, put out, and ask again in three months. Five years past it they go regardless.`,
       'COMMAND. A captain who dies is succeeded by the senior officer aboard: the helm\'s first, then by rank and experience.'],
     specs: [dept('helm', 'Helm'), dept('engine', 'Engine room'), dept('medical', 'Medical'), dept('arms', 'Guns & security'), dept('science', 'Science'), dept('galley', 'Galley'), dept('deck', 'Deck')],
-    links: [['Acceleration', 'crew:g'], ['Juice', 'crew:juice']] });
+    links: [['A world\'s ground', 'crew:ground'], ['Acceleration', 'crew:g'], ['Juice', 'crew:juice']] });
+  add({ id: 'crew:ground', cat: 'crew', title: 'A world\'s ground', sub: 'What a settled world has for a crew',
+    text: ['A station is corridors and a concourse; a settled world is millions or billions of people under a sky, and it has what they have built. On a run ashore by shuttle (ASHORE in the shuttle window: the pad held eight hours) each who goes does one thing there, paid on landing and done when they are home; called in off the pad, what was paid for and not done is refunded.',
+      'LEAVE. A run ashore under a sky lifts them more than a station\'s (+15 against +8), and at home most (+20): Earth for the Earthers, Mars for the Martians, Luna, the Jovian moons, Titan.',
+      `COURSE. A day at an academy in a skill the world teaches: the skill raised, the more the less they know (+${COURSE_GAIN} at nothing, half that at fifty), and experience for it. ${COURSE_COST} MCR; one every ${COURSE_DAYS} days a head. The way for a hand with the years for a step up and not yet the skill.`,
+      `HOSPITAL. What the ship can't mend, or not as fast: body and heart made whole, the juice\'s hangover cleared. Brain damage, which the autodoc never mends, only the big worlds\' hospitals can (Earth, Mars, Luna: about ${NEURAL_COST.toLocaleString()} MCR more); a moon\'s clinic heals the rest. The hurt may ride down as patients, though not the critical (stabilize them first), and never at the controls.`,
+      'RETIRE. A hand who has asked to retire can sign off on the pad, at home best: the crew\'s send-off the warmer, their seat free for the way up.',
+      'THE HALL. Every settled world\'s spaceports have people looking for a berth, most of them from there, the big worlds\' academy-trained. Signed on at the pad (the fee paid on landing), they ride up in the seats left free and come aboard with the shuttle.'],
+    specs: Object.entries(GROUND).map(([w, g]) => [w, `${g.hospital === 'full' ? 'hospital' : 'clinic'} · courses: ${g.courses.join(', ')} · hall ${g.hall}`]),
+    links: [['Careers', 'crew:careers'], ['Shuttles', 'nav:shuttles']] });
 }
 
 function factions(add) {
