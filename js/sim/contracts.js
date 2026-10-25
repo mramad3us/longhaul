@@ -10,8 +10,11 @@
 //   SURVEY                     — loiter within 150k km of a survey mark
 //                                for the required time, return
 // Near hot zones (conflict.js) the boards also carry the dangerous work:
-//   BOUNTY   — find a wanted pirate; destroy it, or disable it and take
-//              its surrender (paid half again), return. Graded PETTY to
+//   BOUNTY   — find a wanted pirate and put it out of action (destroyed,
+//              wrecked, or its colours struck), return: the fee, and a
+//              fixed sum a head for its crew brought back alive in our brig
+//              (its captain worth CAPTAIN_HEADS of them), handed over with
+//              the contract (bountyHeads). Graded PETTY to
 //              MOST WANTED (BOUNTY_GRADES: its ship, its escorts, what it is
 //              wanted for, how old and loose the last fix is, the pay). It
 //              runs dark and is on no registry: it is named only by its
@@ -219,15 +222,31 @@ const LOG_MAX = 30;                   // lines a contract's timeline keeps
  * Who a wanted pirate is to the stations that post it. The grade sets its
  * ship (cls: weights), the raiders that run with it, how many counts it is
  * wanted on, how old the last fix is when posted (hours) and so how wide
- * its search area, the pay, the days given, and the one chance a brief has
- * no drive signature on file (only the most wanted: about 3 bounties in 100).
+ * its search area, the pay, the days given, the one chance a brief has no
+ * drive signature on file (only the most wanted: about 3 bounties in 100),
+ * and what each of its crew brought back alive is worth (perHead: always
+ * more than the PIRATE_BOUNTY any pirate turned over earns, prisoners.js).
  */
 export const BOUNTY_GRADES = [
-  { grade: 1, label: 'PETTY', w: 0.35, cls: { 'pirate-runner': 2, 'pirate-raider': 1 }, escorts: [0, 0], counts: [1, 2], fixH: [3, 16], pay: [2000, 4000], days: [5, 10], sigUnknown: 0 },
-  { grade: 2, label: 'WANTED', w: 0.4, cls: { 'pirate-raider': 3, 'pirate-gunship': 1 }, escorts: [0, 0], counts: [2, 4], fixH: [6, 30], pay: [3500, 7500], days: [6, 12], sigUnknown: 0 },
-  { grade: 3, label: 'NOTORIOUS', w: 0.18, cls: { 'pirate-gunship': 2, 'pirate-corvette': 1 }, escorts: [0, 1], counts: [3, 7], fixH: [12, 48], pay: [8000, 15000], days: [8, 16], sigUnknown: 0 },
-  { grade: 4, label: 'MOST WANTED', w: 0.07, cls: { 'pirate-corvette': 1 }, escorts: [1, 2], counts: [5, 12], fixH: [24, 96], pay: [18000, 32000], days: [10, 20], sigUnknown: 0.4 },
+  { grade: 1, label: 'PETTY', w: 0.35, cls: { 'pirate-runner': 2, 'pirate-raider': 1 }, escorts: [0, 0], counts: [1, 2], fixH: [3, 16], pay: [2000, 4000], perHead: 900, days: [5, 10], sigUnknown: 0 },
+  { grade: 2, label: 'WANTED', w: 0.4, cls: { 'pirate-raider': 3, 'pirate-gunship': 1 }, escorts: [0, 0], counts: [2, 4], fixH: [6, 30], pay: [3500, 7500], perHead: 1000, days: [6, 12], sigUnknown: 0 },
+  { grade: 3, label: 'NOTORIOUS', w: 0.18, cls: { 'pirate-gunship': 2, 'pirate-corvette': 1 }, escorts: [0, 1], counts: [3, 7], fixH: [12, 48], pay: [8000, 15000], perHead: 1200, days: [8, 16], sigUnknown: 0 },
+  { grade: 4, label: 'MOST WANTED', w: 0.07, cls: { 'pirate-corvette': 1 }, escorts: [1, 2], counts: [5, 12], fixH: [24, 96], pay: [18000, 32000], perHead: 1500, days: [10, 20], sigUnknown: 0.4 },
 ];
+export const CAPTAIN_HEADS = 4;       // a bounty's captain brought back alive is worth this many of its crew (a pirate captain turned over, three)
+
+/**
+ * What a bounty's crew in our brig is worth at its turn-in: { heads, captains,
+ * pay, groups }. Only those taken off the bounty's own ship (prisoners.js
+ * groups remember it), and only once the ship is out of action.
+ */
+export function bountyHeads(state, c) {
+  const groups = c.type === ContractType.BOUNTY && c.perHead ? state.passengers.filter(p => p.kind === 'prisoners' && p.from === c.targetId) : [];
+  let heads = 0, captains = 0;
+  for (const g of groups) { heads += g.count; captains += g.notables || 0; }
+  const pay = c.perHead ? c.perHead * (heads - captains) + (c.captainHead || c.perHead * CAPTAIN_HEADS) * captains : 0;
+  return { heads, captains, pay, groups };
+}
 const SEARCH_KM = { base: 40_000, perHour: 5_000, min: 50_000, max: 500_000 };   // a fix's search area: older, wider
 
 /** Why the most wanted can be posted with no drive signature on file: the authorities' own words. */
@@ -305,10 +324,10 @@ export function bountyOffer(state, station, zone = null, base = null) {
   const wanted = wantedFor(state, g, where);
   return { ...base, ship, grade: g.grade, gradeLabel: g.label, sigKnown, signature, sigWhy, wanted, fix, escorts, body, distAU,
     title: `Bounty: the ${ship.name}`,
-    description: `${g.label}. The ${ship.shipClass} "${ship.name}" is wanted for ${wanted.length > 1 ? `${wanted.slice(0, -1).join(', ')} and ${wanted.at(-1)}` : wanted[0]}. ${station.name} pays for it destroyed — half again if you disable it and take the crew's surrender. Last fixed ${fix.distKm.toLocaleString()} km off ${body}, ${Math.round(fixH)} hours before this posting (${fix.by}): search within ${rKm.toLocaleString()} km of the fix. It runs cold and dark${escorts ? `, with ${escorts === 1 ? 'another raider' : `${escorts} more raiders`} running with it` : ''}. ${sigKnown
+    description: `${g.label}. The ${ship.shipClass} "${ship.name}" is wanted for ${wanted.length > 1 ? `${wanted.slice(0, -1).join(', ')} and ${wanted.at(-1)}` : wanted[0]}. ${station.name} pays for it put out of action (destroyed, or its colours struck), and ${g.perHead.toLocaleString()} MCR a head for its crew brought back alive (its captain ${(g.perHead * CAPTAIN_HEADS).toLocaleString()}): board it, take them prisoner, and hand them over here. Last fixed ${fix.distKm.toLocaleString()} km off ${body}, ${Math.round(fixH)} hours before this posting (${fix.by}): search within ${rKm.toLocaleString()} km of the fix. It runs cold and dark${escorts ? `, with ${escorts === 1 ? 'another raider' : `${escorts} more raiders`} running with it` : ''}. ${sigKnown
       ? `Its drive signature is on file (${signature}): we will know it when it burns.`
       : `No drive signature on file. ${sigWhy} Only its transponder will name it: every dark hull out there is a maybe.`}`,
-    reward: { credits: Math.round(randInt(g.pay[0], g.pay[1]) / 100) * 100 }, aliveBonus: 0.5, deadline: randInt(g.days[0], g.days[1]) * DAY_MIN, expires: now + randInt(2, 4) * DAY_MIN };
+    reward: { credits: Math.round(randInt(g.pay[0], g.pay[1]) / 100) * 100 }, perHead: g.perHead, captainHead: g.perHead * CAPTAIN_HEADS, deadline: randInt(g.days[0], g.days[1]) * DAY_MIN, expires: now + randInt(2, 4) * DAY_MIN };
 }
 
 /** Conflict contracts this station can offer right now (or null). */
@@ -380,6 +399,13 @@ export function upgradeContracts(state) {
     c.sigKnown ??= !!c.signature;
     if (!c.sigKnown) c.sigWhy ??= 'It was not on file when the contract was posted.';
     if (c.type === ContractType.BOUNTY) { c.grade ??= 2; c.gradeLabel ??= 'WANTED'; }
+    // (before 1.3, a surrender paid half again: now its crew are paid for by the head, brought back)
+    if (c.type === ContractType.BOUNTY && c.aliveBonus != null && c.phase !== 'complete' && c.phase !== 'failed') {
+      if (c.outcome === 'captured') c.reward = { ...c.reward, credits: Math.round(c.reward.credits / (1 + c.aliveBonus)) };
+      c.perHead ??= (BOUNTY_GRADES.find(g => g.grade === c.grade) || BOUNTY_GRADES[1]).perHead;
+      c.captainHead ??= c.perHead * CAPTAIN_HEADS;
+      delete c.aliveBonus;
+    }
   }
   for (const c of state.contracts?.active || []) {
     if (c.type !== ContractType.ESCORT || c.phase !== 'active') continue;
@@ -457,9 +483,10 @@ function hotProgress(state, c, emit) {
         c.suspects = [];
         release(world, c.escortIds);
         c.phase = 'return';
-        if (c.outcome === 'captured') { c.reward = { ...c.reward, credits: Math.round(c.reward.credits * (1 + c.aliveBonus)) }; t.tags.despawnAt = now + DAY_MIN; }
+        // (struck, it waits a day for a boarding party: its crew are paid for only once they are in our brig)
+        if (c.outcome === 'captured') t.tags.despawnAt = now + DAY_MIN;
         retireMark(world, c, now);
-        emit('contract-progress', { contract: c, text: `${c.targetName} ${c.outcome === 'captured' ? 'has surrendered' : 'destroyed'} — return to ${c.stationName} for the bounty` });
+        emit('contract-progress', { contract: c, text: `${c.targetName} ${c.outcome === 'captured' ? 'has surrendered' : 'destroyed'} — return to ${c.stationName} for the bounty${c.perHead ? `, with any of its crew you take prisoner (${c.perHead.toLocaleString()} MCR a head)` : ''}` });
       }
       return;
     }
@@ -709,7 +736,9 @@ export function deliverable(state, station) {
 }
 
 /** Work that is turned in across the collar (goods, people, fuel), not over the radio. */
-export const needsBerth = (c) => !!(c.cargo || c.passengers || c.type === ContractType.FUEL || c.type === ContractType.SALVAGE || c.type === ContractType.MEDEVAC || c.type === ContractType.SMUGGLE);
+/** Does turning this in take a berth's collar (goods or people across it: a bounty's crew in our brig too)? */
+export const needsBerth = (c, state = null) => !!(c.cargo || c.passengers || c.type === ContractType.FUEL || c.type === ContractType.SALVAGE || c.type === ContractType.MEDEVAC || c.type === ContractType.SMUGGLE
+  || (state && bountyHeads(state, c).heads > 0));
 
 /** Are we in port at a station (docked there, or inside its port space), or alongside a command ship (within 10 km)? */
 export function inPort(state, st) {
@@ -723,7 +752,7 @@ export function completeContract(state, contractId, stationId = null) {
   const st = dockedPort(state) || (stationId ? getWorld(state).get(stationId) : null);
   if (!c || !st) return { ok: false, text: 'Dock at the right station first.' };
   if (!deliverable(state, st).includes(c)) return { ok: false, text: 'This contract is not complete here.' };
-  if (dockedPort(state)?.id !== st.id && (needsBerth(c) || !inPort(state, st))) return { ok: false, text: needsBerth(c) ? `Dock at ${st.name} to hand it over.` : `Come into ${st.name}'s port space to turn it in.` };
+  if (dockedPort(state)?.id !== st.id && (needsBerth(c, state) || !inPort(state, st))) return { ok: false, text: needsBerth(c, state) ? `Dock at ${st.name} to hand it over.` : `Come into ${st.name}'s port space to turn it in.` };
   if (c.type === ContractType.FUEL) {
     if (state.resources.fuel.current < c.fuelKg + 50) return { ok: false, text: `Need ${c.fuelKg} kg of reaction mass to spare.` };
     state.resources.fuel.current -= c.fuelKg;
@@ -732,11 +761,18 @@ export function completeContract(state, contractId, stationId = null) {
   state.passengers = state.passengers.filter(x => x.contract !== c.id);
   let bonus = 0;
   if (c.vip && state.clock.minute - c.acceptedAt < c.deadline * 0.5) bonus = Math.round(c.reward.credits * 0.25);
+  // a bounty's crew brought back alive: paid by the head, and handed over with it
+  const heads = bountyHeads(state, c);
+  if (heads.heads) {
+    bonus += heads.pay;
+    c.brought = { heads: heads.heads, captains: heads.captains, pay: heads.pay };
+    state.passengers = state.passengers.filter(p => !heads.groups.includes(p));
+  }
   grant(state, c.reward, bonus);
   c.phase = 'complete';
   c.completedAt = state.clock.minute;
   c.paid = { ...c.reward, credits: (c.reward.credits || 0) + bonus };
-  logContract(state, c, `Turned in at ${st.name}: ${(c.reward.credits + bonus).toLocaleString()} MCR paid${bonus ? ` (${bonus.toLocaleString()} of it a bonus)` : ''}`);
+  logContract(state, c, `Turned in at ${st.name}: ${(c.reward.credits + bonus).toLocaleString()} MCR paid${c.brought ? ` (${c.brought.pay.toLocaleString()} of it for ${c.brought.heads} of its crew brought back)` : bonus ? ` (${bonus.toLocaleString()} of it a bonus)` : ''}`);
   if (c.mil) creditMission(state, c, true);
   archive(state, c);
   return { ok: true, contract: c, bonus, text: completionText(c, bonus) };
@@ -793,9 +829,12 @@ function completionText(c, bonus) {
     case ContractType.SALVAGE: return `${c.salvage} delivered. Salvage rights honored — payment transferred.`;
     case ContractType.SURVEY: return `Survey data uploaded. Sector ${c.sector} mapped for ${c.target}. Payment transferred.`;
     case ContractType.MEDEVAC: return `Casualties rushed to ${c.stationName} medical. ${c.casualties} lives handed over. Supplies restocked as thanks.`;
-    case ContractType.BOUNTY: return c.outcome === 'captured'
-      ? `The ${c.targetName}'s crew are handed to station security. Bounty paid — with the bonus for bringing them in alive.`
-      : `Sensor logs of the ${c.targetName}'s destruction verified. Bounty paid.`;
+    case ContractType.BOUNTY: {
+      const b = c.brought;
+      const out = c.outcome === 'captured' ? `The ${c.targetName} struck its colours: the sensor logs show it.` : `Sensor logs of the ${c.targetName}'s destruction verified.`;
+      return b ? `${out} ${b.heads} of its crew${b.captains ? ', its captain among them,' : ''} handed to station security: ${b.pay.toLocaleString()} MCR for them. Bounty paid.`
+        : `${out} Bounty paid. (None of its crew brought back: nothing paid by the head.)`;
+    }
     case ContractType.ESCORT: return `The ${c.targetName}'s captain buys the first round. Escort fee paid in full.`;
     case ContractType.SMUGGLE: return `A crew with no names unloads the hold in twenty minutes flat. The fee lands in your account from nowhere in particular.`;
     case ContractType.RECON: return `Sensor take uploaded on a secure channel. Someone is very pleased. Payment transferred.`;

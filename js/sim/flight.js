@@ -43,6 +43,7 @@ export function createFlight(pos, vel, facing = 0) {
     turning: 0,                      // rad turned last minute (signed)
     maxG: DRIVE_MAX_G,               // drive limit right now (machinery permitting)
     hold: null,                      // station-keeping: { kind:'entity'|'body', id, ox, oy (m) }
+    leaving: null,                   // clearing off a station with no route: { station, ux, uy } (autopilot.js clearOutTick)
     manual: null,                    // dev helm: { throttleG }
   };
 }

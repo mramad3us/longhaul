@@ -754,7 +754,7 @@ const STANDOFFS = {
   dock: { label: 'DOCK', m: STANDOFF.GATE, desc: 'To the station\'s approach gate, then down to a berth (traffic control must clear us)' },
   gate: { label: 'GATE', m: STANDOFF.GATE, desc: 'Hold at the approach gate, outside the keep-out zone' },
   rendezvous: { label: 'DOCK', m: 20_000, desc: 'Rendezvous, then the docking computer takes us to a collar (they must agree, or be in no state to refuse)' },
-  formation: { label: 'FORMATION', m: STANDOFF.TACTICAL, desc: '2 km — boarding, tow, EVA' },
+  formation: { label: 'FORMATION', m: STANDOFF.TACTICAL, desc: `${(STANDOFF.TACTICAL / 1000).toFixed(1)} km — boarding, tow, EVA` },
   close: { label: 'CLOSE', m: STANDOFF.CLOSE, desc: '100,000 km — full sensor lock' },
   scanner: { label: 'SCANNER', m: STANDOFF.SCANNER, desc: '15M km — inside long-range sensors' },
   orbit: { label: 'ORBIT', m: null, desc: 'Parking orbit' },

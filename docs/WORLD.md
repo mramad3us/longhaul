@@ -237,19 +237,23 @@ Stations near hot zones (within 0.6 AU) also post conflict work, up to 40% of th
 
 | Contract | Work | Pay |
 |---|---|---|
-| BOUNTY | find a wanted pirate near its last fix, a mark where a ship left there would lie (off a moon, held off its planet: `world.restingOrbit`), somewhere inside the brief's search area round it (50,000–500,000 km, wider the older the fix); destroy it (a wreck, or a reactor's fireball, which leaves none), or disable it and accept its surrender (+50%); return. Graded (below). It runs cold and dark, and runs from a ship it can't fight that finds it | 2,000–32,000 by grade |
+| BOUNTY | find a wanted pirate near its last fix, a mark where a ship left there would lie (off a moon, held off its planet: `world.restingOrbit`), somewhere inside the brief's search area round it (50,000–500,000 km, wider the older the fix); put it out of action (destroyed: a wreck, or a reactor's fireball, which leaves none; or its colours struck: its surrender accepted); return. The fee is for the ship; on top, a fixed sum a head for its crew brought back alive (its captain worth four of them): board it (the wreck or the struck hull: a struck ship waits a day), take them prisoner, and hand them over with the contract, docked at the station that posted it (`bountyHeads`). A struck ship left adrift earns nothing more. Graded (below). It runs cold and dark, and runs from a ship it can't fight that finds it | 2,000–32,000 by grade, and by the head |
 | ESCORT | join a convoy ship within 10 km where it waits for us, 3 km out past its station's approach gate (inside the gate no ship comes uncleared; a route to the station ends at the gate). It departs at ≤ 0.5G for the destination's gate, raiders strike partway along the route, and it goes in to a berth there. Keep it alive; collect at the destination | 2,500–5,000 + distance, PDC rounds |
 | SMUGGLE | carry contraband through a blockade, or into inner-planet space. An inspection that finds it ends the job | 6,000–12,000 + distance |
 | RECON | get within 300,000 km of a navy picket and hold a sensor lock on it for 30–90 minutes. Identification by that navy blows the job (and costs standing) | 4,000–9,000 |
 
 **Bounties are graded** (`BOUNTY_GRADES`), the higher grades more often near the pirates' own hot zones:
 
-| Grade | Share | Ship | Runs with | Last fix (h before posting) | Pay | Days | No signature on file |
-|---|---|---|---|---|---|---|---|
-| PETTY | 35% | armed runner, torch raider | — | 3–16 | 2,000–4,000 | 5–10 | never |
-| WANTED | 40% | torch raider, gunship | — | 6–30 | 3,500–7,500 | 6–12 | never |
-| NOTORIOUS | 18% | gunship, stolen corvette | 0–1 raiders | 12–48 | 8,000–15,000 | 8–16 | never |
-| MOST WANTED | 7% | stolen corvette | 1–2 raiders | 24–96 | 18,000–32,000 | 10–20 | 40% |
+| Grade | Share | Ship | Runs with | Last fix (h before posting) | Pay | A head brought back (captain) | Days | No signature on file |
+|---|---|---|---|---|---|---|---|---|
+| PETTY | 35% | armed runner, torch raider | — | 3–16 | 2,000–4,000 | 900 (3,600) | 5–10 | never |
+| WANTED | 40% | torch raider, gunship | — | 6–30 | 3,500–7,500 | 1,000 (4,000) | 6–12 | never |
+| NOTORIOUS | 18% | gunship, stolen corvette | 0–1 raiders | 12–48 | 8,000–15,000 | 1,200 (4,800) | 8–16 | never |
+| MOST WANTED | 7% | stolen corvette | 1–2 raiders | 24–96 | 18,000–32,000 | 1,500 (6,000) | 10–20 | 40% |
+
+A head brought back is worth more than the 800 MCR (a captain 2,400) any pirate turned over earns. Ransomed to their friends instead, a bounty's captain fetches three quarters of what the contract pays for them (`RANSOM_SHARE`), and any other pirate captain three quarters of their turn-over bounty (1,800).
+
+A torpedo's warhead (70 DP) is more than a runner's or a torch raider's whole structure (60): one wrecks them wherever it lands, and only the wreck's survivors are left to bring back. A gunship or a stolen corvette (120) survives one, its drive out if DISABLE put it there, and strikes its colours. PDC fire on DISABLE, or a railgun slug (45 DP), wears a small raider's drive out before its hull goes.
 
 **The brief** says what the authorities know: what the pirate is wanted for, its hull, crew, guns and drive, the last fix (where, when, who saw it, the search area), and above all whether its **drive signature is on file** (`c.sigKnown`, always set). About two bounties in a hundred, all of them MOST WANTED, are posted with none, and the brief gives the reason (a drive swapped at a yard that keeps no books, a hull stolen and refitted off the record, a captain who never burned where a sensor that lived could see). A strike's outlaw target goes without one one time in five, with its reason; a navy's warship is always in the fleet catalogue.
 

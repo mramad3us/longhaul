@@ -30,7 +30,7 @@
 
 import { esc, fmtNum, fmtRewards } from './dom.js';
 import { formatStamp, formatDuration } from '../core/clock.js';
-import { CONTRACT_LABEL } from '../sim/contracts.js';
+import { CONTRACT_LABEL, bountyHeads } from '../sim/contracts.js';
 import { FACTIONS, SUBFACTIONS } from '../sim/factions.js';
 import { CLASSES } from '../sim/ship-classes.js';
 import { sigOnFile, namedBy, SEARCH_KM_DEFAULT } from '../sim/hunts.js';
@@ -39,10 +39,11 @@ const HUNT = new Set(['BOUNTY', 'STRIKE']);
 const HOW_NAMED = { transponder: 'its transponder', signature: 'its drive signature, read in its plume', logs: 'the sensor logs, after the fact' };
 
 /** Where a contract is turned in. */
-function turnIn(c) {
+function turnIn(state, c) {
   if (c.mil) return `any ${FACTIONS[c.faction]?.short || ''} port (a station or a command ship)`;
   if (c.type === 'ESCORT') return `${c.destName}, with the convoy berthed`;
   if (c.dest && c.type !== 'ESCORT') return `delivered at ${c.destName}, across a berth's collar`;
+  if (c.perHead) return bountyHeads(state, c).heads ? `${c.stationName}, docked: its crew cross at a berth's collar` : `${c.stationName}, from its port space (docked, with any of its crew)`;
   return `${c.stationName}, from its port space`;
 }
 
@@ -51,7 +52,11 @@ export function progressLine(state, c) {
   if (c.phase === 'offered') return 'On the board';
   if (c.phase === 'complete') return `Complete${c.completedAt != null ? ` · ${formatStamp(state.clock, c.completedAt)}` : ''}`;
   if (c.phase === 'failed') return `Failed: ${c.failReason}`;
-  if (c.phase === 'return') return c.mil ? `Report to ${c.stationName} (or any ${FACTIONS[c.faction].short} port)` : `Return to ${c.stationName}`;
+  if (c.phase === 'return') {
+    if (c.mil) return `Report to ${c.stationName} (or any ${FACTIONS[c.faction].short} port)`;
+    const h = c.perHead ? bountyHeads(state, c) : null;
+    return `Return to ${c.stationName}${h ? ` · ${h.heads ? `${h.heads} of its crew in our brig (${fmtNum(h.pay)} MCR)` : 'none of its crew aboard yet: board it to take them'}` : ''}`;
+  }
   const hunt = HUNT.has(c.type) ? (c.identified ? ' · target named' : c.suspects?.length ? ` · ${c.suspects.length} possible${c.suspects.length > 1 ? 's' : ''} on the board` : ' · not found yet') : '';
   switch (c.type) {
     case 'INTEL': return `Lock ${c.count} enemy ships for ${c.lockMin} min each — ${Object.values(c.tracked).filter(m => m >= c.lockMin).length} of ${c.count} logged`;
@@ -110,11 +115,15 @@ export function briefOf(state, c, { task = true } = {}) {
     con.push(['DUE', at(c.dueAt)]);
   }
   if (c.rankMin && c.mil) con.push(['RANK', `rank ${c.rankMin} and up`]);
-  con.push(['TURN IN', turnIn(c)]);
+  con.push(['TURN IN', turnIn(state, c)]);
   S.push({ head: 'CONTRACT', rows: con });
   // ---- the pay
   const pay = [['FEE', fmtRewards(c.reward) || '—']];
-  if (c.aliveBonus) pay.push(['ALIVE', c.outcome === 'captured' ? `the fee includes +${Math.round(c.aliveBonus * 100)}% for the crew's surrender` : `+${Math.round(c.aliveBonus * 100)}% if it is disabled and its crew surrenders (${fmtNum(Math.round((c.reward.credits || 0) * (1 + c.aliveBonus)))} MCR)`]);
+  if (c.perHead) {
+    pay.push(['PER HEAD', `${fmtNum(c.perHead)} MCR for each of its crew brought back alive, ${fmtNum(c.captainHead || c.perHead * 4)} for its captain: board it, take them prisoner, hand them over with the contract`]);
+    const h = c.phase === 'return' || c.phase === 'active' ? bountyHeads(state, c) : null;
+    if (h?.heads) pay.push(['IN OUR BRIG', `${h.heads} of its crew${h.captains ? ', its captain among them' : ''}: ${fmtNum(h.pay)} MCR at turn-in`, 'ok']);
+  } else if (c.aliveBonus) pay.push(['ALIVE', c.outcome === 'captured' ? `the fee includes +${Math.round(c.aliveBonus * 100)}% for the crew's surrender` : `+${Math.round(c.aliveBonus * 100)}% if it is disabled and its crew surrenders`]);
   if (c.vip) pay.push(['VIP', '+25% for a transit in half the time given']);
   if (c.mil && c.rep) pay.push(['REPUTATION', `+${c.rep} with ${FACTIONS[c.faction]?.navy || 'command'}`]);
   if (c.paid) pay.push(['PAID', fmtRewards(c.paid), 'ok']);
@@ -150,7 +159,8 @@ export function briefOf(state, c, { task = true } = {}) {
       const out = Object.keys(c.ruledOut || {}).length;
       if (out) st.push(['RULED OUT', `${out} contact${out > 1 ? 's' : ''}`]);
     }
-    if (c.outcome) st.push(['OUTCOME', c.outcome]);
+    if (c.outcome) st.push(['OUTCOME', c.outcome === 'captured' ? 'struck its colours' : c.outcome]);
+    if (c.brought) st.push(['BROUGHT BACK', `${c.brought.heads} of its crew${c.brought.captains ? ', its captain among them' : ''}: ${fmtNum(c.brought.pay)} MCR`, 'ok']);
     if (c.completedAt != null) st.push(['TURNED IN', at(c.completedAt), 'ok']);
     if (c.failedAt != null) st.push(['FAILED', `${at(c.failedAt)} · ${c.failReason}`, 'warn']);
     S.push({ head: 'STATUS', rows: st });

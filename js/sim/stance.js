@@ -298,7 +298,7 @@ export function stanceRanges(state, target, rangeNowM) {
   const km = (m) => `${Math.round(m / 1000).toLocaleString()} km`;
   const inGuns = (m) => theirGuns != null && theirGuns >= m ? 'Their guns reach us here too.' : '';
 
-  add('board', 'FORMATION', 2_000, 'Alongside: boarding, tow, EVA.', inGuns(2_000));
+  add('board', 'FORMATION', RANGE.FORMATION_M, 'Alongside: boarding, tow, EVA.', inGuns(RANGE.FORMATION_M));
   if (p.cls.pdc > 0) {
     const m = Math.round(0.6 * p.pdc.strafeM / 100) * 100;
     add('guns', 'GUNS', m, `Inside our PDC reach (${km(p.pdc.strafeM)}): on ENGAGE they rake the hull.`, inGuns(m));

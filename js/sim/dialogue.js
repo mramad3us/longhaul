@@ -40,7 +40,7 @@ import { leaseSummary, extendLease } from './leases.js';
 import { requestApproach, requestHolding, requestDocking, requestDeparture, cancelClearance, clearanceFor, stationTraffic, voice as stationVoice } from './traffic-control.js';
 import { isDocked, dockedTo } from './docking.js';
 import { crewAboard, passengersAboard, declaredSouls, learn, freeBerths } from './manifest.js';
-import { heldGroups, ransomOffer, ransom, turnOver } from './prisoners.js';
+import { heldGroups, heldFor, ransomOffer, ransom, turnOver } from './prisoners.js';
 import { finesOwed, payFines, recordOffense, adjustStanding, wantedBy, WANTED_LABEL } from './law.js';
 import { wake, makeHostile, respondToRequest } from './agents.js';
 import { STATIONS } from './stations.js';
@@ -173,9 +173,17 @@ export function topics(state, conv = channel(state)) {
     const held = heldGroups(state);
     if (held.length) {
       // turned over to the authority here; their officers ransomed to their own side, through the brokers
-      const sub = [{ id: 'turn', label: `Turn them over to ${FACTIONS[e.faction]?.police || 'station security'}` }];
-      held.forEach((g, i) => { const o = ransomOffer(state, e, i); if (o.ok) sub.push({ id: `ransom:${i}`, label: `Ransom the ${o.notables === 1 ? 'captain' : `${o.notables} officers`} of the ${g.name} to ${o.who} (${o.amount.toLocaleString()} MCR)` }); });
-      out.push(T('prisoners', `Prisoners aboard (${held.reduce((s, g) => s + g.count, 0)})`, { group: 'station', sub, why: docked ? null : 'dock first' }));
+      // (a bounty's own crew go in with its contract, paid by the head there: turning over leaves them aboard)
+      const kept = held.filter(g => heldFor(state, g));
+      const sub = [];
+      if (kept.length < held.length) sub.push({ id: 'turn', label: `Turn them over to ${FACTIONS[e.faction]?.police || 'station security'}${kept.length ? ` (the ${kept.map(g => g.name).join(', ')}'s crew stay for the bounty)` : ''}` });
+      held.forEach((g, i) => {
+        const o = ransomOffer(state, e, i);
+        if (!o.ok) return;
+        const k = heldFor(state, g);
+        sub.push({ id: `ransom:${i}`, label: `Ransom the ${o.notables === 1 ? 'captain' : `${o.notables} officers`} of the ${g.name} to ${o.who} (${o.amount.toLocaleString()} MCR${k ? `; the bounty pays ${(o.notables * (k.captainHead || k.perHead * 4)).toLocaleString()} brought in` : ''})` });
+      });
+      if (sub.length) out.push(T('prisoners', `Prisoners aboard (${held.reduce((s, g) => s + g.count, 0)})`, { group: 'station', sub, why: docked ? null : 'dock first' }));
     }
     // Military licenses are a power's business, at any of its stations
     if (POWERS.includes(e.faction) && licenseOf(state) !== e.faction) out.push(T('license-apply', `Apply for a ${FACTIONS[e.faction].navy} contractor's license`, { group: 'service', why: inPort(state, e) ? null : 'come into port' }));

@@ -22,7 +22,10 @@ import { openChannel, topics, say, closeChannel } from '../js/sim/dialogue.js';
 import { startBoarding, boardingActions, orderAboard } from '../js/sim/boarding.js';
 import { applyHit, wreckNpc } from '../js/sim/damage.js';
 import { serialize, deserialize } from '../js/sim/save.js';
-import { releaseHold } from '../js/sim/autopilot.js';
+import { releaseHold, engageRoute } from '../js/sim/autopilot.js';
+import { planRoutes, DEPART_OUT } from '../js/sim/nav.js';
+import { predictEntity } from '../js/sim/world.js';
+import { getBody as bodyOf, bodyPos } from '../js/sim/ephemeris.js';
 import { hire, hiringHall, shoreLeave } from '../js/sim/crew-services.js';
 import { leaseFor, extendLease, leaseRate, FREE_LEASE_MIN } from '../js/sim/leases.js';
 
@@ -220,6 +223,67 @@ export default [
       assert(bad.s.dock.bumps > 0, 'a 1.2 m/s contact bounces');
       assert(bad.s.hull.integrity < bad.hull0 && (bad.ev.citation || []).length, `and damages the hull, and earns a citation (contacts at ${bad.contacts} m/s)`);
       console.log(`      careful: ${good.s.dock.phase}, ${good.s.dock.bumps} bumps, ${fmt(good.s.dock.fuel, 3)} kg · careless: ${bad.s.dock.bumps} bumps, hull ${fmt(bad.hull0)} → ${fmt(bad.s.hull.integrity)}%`);
+    },
+  },
+  {
+    name: 'CLEAR OFF with no route: on out of the approach on the RCS without stopping at the gate, the torch free past it, then the way taken off and held; a route from there lights at once',
+    fn: () => {
+      // (Phobos sits in Mars' tide, more than the RCS can hold against out there: the way comes off on the drive)
+      const rows = [];
+      for (const [home, planet] of [['ceres-station', 'Ceres'], ['ganymede-station', 'Jupiter'], ['phobos-yard', 'Mars']]) {
+        const s = game(31, { home });
+        const ev = events();
+        const st = getWorld(s).get(home);
+        const off = () => { const p = predictEntity(st, s.clock.minute, getWorld(s)); return { r: Math.hypot(s.flight.pos.x - p.pos.x, s.flight.pos.y - p.pos.y) * AU_M, v: Math.hypot(s.flight.vel.vx - p.vel.vx, s.flight.vel.vy - p.vel.vy) }; };
+        TC.requestDeparture(s, home);
+        D.undock(s, emit);
+        run(s, st => st.dock?.phase === 'holding', 30);
+        D.clearOff(s, emit);
+        run(s, st => !st.dock, 120);
+        assert(!s.dock && s.flight.leaving && !s.flight.hold, `${home}: through the gate and on, not held there`);
+        const atGate = off();
+        const t0 = s.clock.minute;
+        const out = run(s, st => st.flight.leaving?.out, 400);
+        const free = off();
+        assert(s.flight.leaving?.out && free.r > TC.APPROACH_M && TC.zoneAt(st, free.r) === 'control', `${home}: out of the approach (${fmt(free.r / 1000, 0)} km)`);
+        assert((ev['nav-callout'] || []).some(c => /torch is free/.test(c.text)), 'the torch is called free');
+        // then at rest off the station, held (on the drive, by a route to rest, where the RCS can't)
+        let lowest = Infinity;
+        const B = bodyOf(planet);
+        const rest = run(s, st => { const c = bodyPos(B, st.clock.minute / DAY_MIN); lowest = Math.min(lowest, Math.hypot(st.flight.pos.x - c.x, st.flight.pos.y - c.y) * AU_M / 1000 - B.radius); return !st.flight.leaving && !st.autopilot && st.flight.hold; }, 400);
+        const held = off();
+        const drive = (ev['nav-callout'] || []).some(c => /on the drive/.test(c.text));
+        assert(s.flight.hold?.id === home && held.v < 1 && held.r > TC.APPROACH_M, `${home}: held off it, at rest, clear of the approach (${fmt(held.r / 1000, 0)} km, ${fmt(held.v, 1)} m/s)`);
+        assert(lowest > 1000, `${home}: never near the ground (${fmt(lowest, 0)} km over ${planet} at the lowest)`);
+        // a route from there: no departure leg, the torch lit once the crew are in
+        const opt = planRoutes(s, { kind: 'entity', id: home === 'ceres-station' ? 'vesta-depot' : 'ceres-station' }).find(o => o.plan.accelG >= 0.3);
+        engageRoute(s, opt.plan);
+        assert(!s.autopilot.depart, `${home}: no departure leg from out here`);
+        const lit = run(s, st => st.flight.thrustG > 0.2, 60);
+        assert(s.flight.thrustG > 0.2, `${home}: the torch lit (${lit} min, the crew strapping in)`);
+        rows.push(`${home}: gate ${fmt(atGate.v, 0)} m/s · torch free ${out} min on, ${fmt(free.r / 1000, 0)} km · held ${rest} min later at ${fmt(held.r / 1000, 0)} km${drive ? ' (on the drive)' : ''} · a route lit in ${lit} min`);
+      }
+      console.log(rows.map(r => `      ${r}`).join('\n'));
+    },
+  },
+  {
+    name: 'a route plotted while clearing off takes over where we are: its own departure leg, the clear-out ended',
+    fn: () => {
+      const s = game(32);
+      TC.requestDeparture(s, 'ceres-station');
+      D.undock(s, emit);
+      run(s, st => st.dock?.phase === 'holding', 30);
+      D.clearOff(s, emit);
+      run(s, st => !st.dock, 120);
+      advance(s, 20);
+      assert(s.flight.leaving && !s.flight.leaving.out, 'clearing off, still in the approach');
+      const opt = planRoutes(s, { kind: 'entity', id: 'vesta-depot' }).find(o => o.plan.accelG >= 0.3);
+      engageRoute(s, opt.plan);
+      assert(!s.flight.leaving && s.autopilot.depart?.station === 'ceres-station', 'the route has it, with its departure leg');
+      run(s, st => !st.autopilot?.depart, 300);
+      const st = getWorld(s).get('ceres-station');
+      const r = Math.hypot(s.flight.pos.x - st.pos.x, s.flight.pos.y - st.pos.y) * AU_M;
+      assert(!s.autopilot.depart && r > TC.APPROACH_M, `out of the approach on its leg (${fmt(r / 1000, 0)} km)`);
     },
   },
   {

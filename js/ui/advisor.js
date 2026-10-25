@@ -16,7 +16,8 @@
 // LEVELS (LEVELS):
 //   warning (3)  the ship or someone aboard is in danger now: ordnance
 //                inbound, a fire, a breach, containment failing, someone
-//                dying, a navy gone weapons-free on us, falling onto a rock
+//                dying, a navy gone weapons-free on us, falling onto a
+//                rock, a hull we scuttled about to go with us too close
 //   caution (2)  something wants an answer or will cost us soon: a hail
 //                with a deadline, a lease running out, a flip held for the
 //                crew, a distress call, orders from command, the law
@@ -88,6 +89,7 @@ import { fmtMeters, fmtG, fmtNum } from './dom.js';
 import { getWorld } from '../sim/world.js';
 import { PLAYER } from '../sim/combatants.js';
 import { threats } from '../sim/combat.js';
+import { blastClearM } from '../sim/damage.js';
 import { hostilesOfPlayer } from '../sim/agents.js';
 import { isIdentified } from '../sim/sensors.js';
 import { CLASSES, playerClass } from '../sim/ship-classes.js';
@@ -102,10 +104,10 @@ import { needsMedical } from '../sim/crew.js';
 import { FUEL_PER_G_MIN } from '../sim/flight.js';
 import { nearestSurface } from '../sim/gravity.js';
 import { timeToImpact } from '../sim/terrain.js';
-import { targetName, PREP_MINUTES } from '../sim/nav.js';
-import { maxSpeed } from '../sim/autopilot.js';
+import { targetName, PREP_MINUTES, DEPART_OUT } from '../sim/nav.js';
+import { maxSpeed, possessive } from '../sim/autopilot.js';
 import { STATIONS, berthOf } from '../sim/stations.js';
-import { clearanceFor, refusal } from '../sim/traffic-control.js';
+import { clearanceFor, refusal, APPROACH_M } from '../sim/traffic-control.js';
 import { FREE_LEASE_MIN, LEASE_RATE } from '../sim/leases.js';
 import { dockedStationEntity, dockedTo } from '../sim/docking.js';
 import { contractor, hullLegal, navyOf, openCallups } from '../sim/service.js';
@@ -954,7 +956,7 @@ function ruleContracts(state, c, add) {
   const where = c.port || (c.tcSt && inPort(state, c.tcSt) ? c.tcSt : null);
   const ready = where ? deliverable(state, where) : [];
   if (ready.length) {
-    const byRadio = c.port ? ready : ready.filter(x => !needsBerth(x));
+    const byRadio = c.port ? ready : ready.filter(x => !needsBerth(x, state));
     const label = (x) => CONTRACT_LABEL[x.type]?.toLowerCase() || 'contract';
     if (byRadio.length) {
       add({
@@ -981,7 +983,7 @@ function ruleContracts(state, c, add) {
   const label = CONTRACT_LABEL[next.type]?.toLowerCase() || 'contract';
   if (!t?.id || !c.world.get(t.id) || headingFor(state, c, t.id)) return;
   const tgt = c.world.get(t.id);
-  const dock = tgt.type === 'station' && needsBerth(next);          // (goods and people cross a berth's collar; reports go by radio)
+  const dock = tgt.type === 'station' && needsBerth(next, state);   // (goods and people cross a berth's collar, a bounty's crew too; reports go by radio)
   const text = next.phase === 'return'
     ? `The ${label} is done: report to ${next.mil ? `any ${short(next.faction)} port` : t.name}, due in ${dur(due)}.`
     : `Next: the ${label} ${next.dest ? 'to' : 'at'} ${t.name || 'its target'}, due in ${dur(due)}.`;
@@ -999,6 +1001,33 @@ function ruleBoarding(state, c, add) {
     add({ key: 'boarding', level: CAUTION, rank: 82, sig: 'fight', text: `Our boarding party is fighting aboard the ${b.name}: ${plural(b.defenders, 'defender')} left.`, actions: [A.boarding()] });
   } else if (b.phase === 'secured' && !b.action) {
     add({ key: 'boarding', level: ADVICE, rank: 64, sig: 'secured', text: `The ${b.name} is secured: the boarding party awaits orders.`, actions: [A.boarding()] });
+  }
+}
+
+/**
+ * Charges we set on a hull's reactor (boarding.js SCUTTLE): its time left,
+ * the party's way home, and how far we must be to be clear of it. Said
+ * while the party is still across or we are inside its blast; a warning
+ * once it is near going with us still inside.
+ */
+function ruleScuttle(state, c, add) {
+  for (const id of state.combat.fuses || []) {
+    const e = c.world.get(id);
+    if (!e?.tags?.scuttled || e.combat?.containment == null) continue;
+    const left = e.combat.containment;
+    const d = Math.hypot(e.pos.x - c.f.pos.x, e.pos.y - c.f.pos.y) * AU_M;
+    const clear = blastClearM(e);
+    const b = state.boarding;
+    const out = !!b && b.phase !== 'done' && b.target === e.id;
+    if (!out && d > clear) continue;
+    const close = left <= (out ? 30 : 15);
+    add({
+      key: `scuttle:${id}`, level: close ? WARNING : CAUTION, rank: close ? 98 : 84, sig: `${out ? 'out' : 'home'}${close ? '-close' : ''}`,
+      text: out ? `${dur(left)} on the scuttling charges: the party is coming back, then get ${fmtMeters(clear)} clear.`
+        : `${dur(left)} on the scuttling charges: get ${fmtMeters(clear)} clear of it (${fmtMeters(d)} now).`,
+      detail: `Charges set on the ${e.name}'s reactor: it loses containment when they go, and anything within ${fmtMeters(clear)} is hit by the blast. The route waits for the party, and for the crew to strap in.`,
+      actions: [out && A.boarding()],
+    });
   }
 }
 
@@ -1163,15 +1192,15 @@ function ruleSituation(state, c, add) {
       }
     }
   }
-  // Adrift: no course, nothing holding us, the drive cold (not said over an emergency)
-  if (!c.loud && !ap && !c.dock && !c.f.hold && !(c.f.manual?.throttleG > 0) && !(state.$terrain?.k > 0)) {
+  // Adrift: no course, nothing holding us (nor clearing off a port: autopilot.js clearOutTick), the drive cold (not said over an emergency)
+  if (!c.loud && !ap && !c.dock && !c.f.hold && !c.f.leaving && !(c.f.manual?.throttleG > 0) && !(state.$terrain?.k > 0)) {
     add({ key: 'idle', level: ADVICE, rank: 30, text: 'We are drifting with no course set.', actions: [A.map()] });
   }
 }
 
 const RULES = [
   ruleReactor, ruleOrdnance, ruleDecks, ruleCrew, ruleHostiles, rulePort, ruleFlight,
-  ruleRequests, ruleBoarding, ruleDistress, ruleOrders, ruleContracts, ruleLaw,
+  ruleRequests, ruleBoarding, ruleScuttle, ruleDistress, ruleOrders, ruleContracts, ruleLaw,
   ruleStores, ruleMachinery, rulePortCall, ruleSituation,
 ];
 
@@ -1181,8 +1210,8 @@ const DOCK_WORDS = {
   approach: (n) => `On the final approach to ${n}.`, prox: (n) => `Docking with ${n}: proximity operations.`,
   capture: (n) => `Soft capture at ${n}: latching.`, seal: (n) => `Hard dock at ${n}: equalizing the lock.`,
   undock: (n) => `Undocking from ${n}: venting the lock.`, separate: (n) => `Backing off ${n} on the RCS.`,
-  holding: (n) => `Holding off ${n}.`, outbound: (n) => `Climbing out of ${n}'s gate on the RCS.`,
-  awaiting: (n) => `Holding at ${n}'s gate.`,
+  holding: (n) => `Holding off ${n}.`, outbound: (n) => `Climbing out of ${possessive(n)} gate on the RCS.`,
+  awaiting: (n) => `Holding at ${possessive(n)} gate.`,
 };
 
 function status(state, c) {
@@ -1220,6 +1249,15 @@ function status(state, c) {
     }
     const warp = ap.phase === 'active' && state.speed > 0 && state.speed < 3 && maxSpeed(state) >= 3;
     return { ...base, sig: ap.display, text, actions: [A.select(target), warp && A.speed(3, 'WARP ×3')] };
+  }
+  if (f.leaving) {
+    // (CLEAR OFF with no route: out of the approach on the RCS, then the way taken off: autopilot.js clearOutTick)
+    const e = c.world.get(f.leaving.station);
+    if (!e) return null;
+    const rM = Math.hypot(f.pos.x - e.pos.x, f.pos.y - e.pos.y) * AU_M;
+    const text = f.leaving.out ? `Clear of ${possessive(e.name)} approach, the torch free: taking the way off on the RCS.`
+      : `Clearing ${possessive(e.name)} approach on the RCS: the torch is free in ${Math.round(Math.max(0, APPROACH_M * DEPART_OUT - rM) / 1000).toLocaleString()} km.`;
+    return { ...base, sig: f.leaving.out ? 'cleared' : 'clearing', text, actions: [A.map()] };
   }
   if (f.hold) {
     const name = targetName(state, f.hold);

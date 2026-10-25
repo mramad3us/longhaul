@@ -17,7 +17,13 @@
 //   RANSOMED, the high-profile ones: their own side pays to have them
 //     back, through the station's brokers. The local power doesn't like
 //     seeing its criminals or its enemies bought free (standing), and the
-//     rank and file stay aboard to be turned over or let go.
+//     rank and file stay aboard to be turned over or let go. A criminal's
+//     friends never pay what the law does (RANSOM_SHARE of it): a bounty's
+//     captain fetches that share of what its contract pays to bring them
+//     in, any other pirate captain that share of their turn-over bounty.
+//   BROUGHT IN on a bounty: the crew of a bounty's own ship are held for
+//     its contract while it is open (contracts.js bountyHeads): handed over
+//     when it is turned in, paid by the head there, not turned over here.
 // ============================================================
 
 import { classOf } from './ship-classes.js';
@@ -28,13 +34,19 @@ import { licenseOf, addRep } from './service.js';
 import { crewAboard } from './manifest.js';
 
 export const PIRATE_BOUNTY = 800;          // MCR a head, from any power, for a pirate turned over
-const NOTABLE_BOUNTY = 3;                  // …times that for its captain
+export const NOTABLE_BOUNTY = 3;           // …times that for its captain
+export const RANSOM_SHARE = 0.75;          // a criminal's friends pay this share of what the law pays for them
 const STANDING_PER_HEAD = 0.5;             // what turning over a criminal or an enemy earns (an officer counts 3)
 const STANDING_CAP = 15;                   // most a single handover moves it
 const RELEASED_COST = 2;                   // standing a power loses with us for each of its people we held
 
-/** What one high-profile prisoner is worth to its own side (MCR), by the kind of ship it came off. */
-export const RANSOM = { military: 6000, authority: 3000, irregular: 2500, hunted: 8000, commander: 25000 };
+/**
+ * What one high-profile prisoner is worth to its own side (MCR), by the kind
+ * of ship it came off; a pirate's (irregular) is held under what turning
+ * them over pays (RANSOM_SHARE of it), a bounty's captain under what its
+ * contract pays (ransomOffer).
+ */
+export const RANSOM = { military: 6000, authority: 3000, irregular: Math.round(RANSOM_SHARE * PIRATE_BOUNTY * NOTABLE_BOUNTY), commander: 25000 };
 
 /** The high-profile people aboard a ship: its captain and its officers (none on a civilian's: kidnapping is piracy). */
 export function officersOf(e) {
@@ -54,8 +66,8 @@ export function prisonerGroup(state, e, n) {
   const c = classOf(e);
   const notables = Math.min(n, officersOf(e));
   e.tags.officersTaken = (e.tags.officersTaken || 0) + notables;
-  const hunted = !!e.tags?.contract && !!e.tags?.wanted;
-  const each = e.tags?.hvt ? RANSOM.commander : hunted ? RANSOM.hunted : RANSOM[c?.category] || 0;
+  // (a wanted ship's people are criminals: the pirate's price, or, a bounty's, its contract's: ransomOffer)
+  const each = e.tags?.hvt ? RANSOM.commander : e.tags?.wanted ? RANSOM.irregular : RANSOM[c?.category] || 0;
   return {
     kind: 'prisoners', count: n, faction: e.faction, from: e.id, name: e.name,
     pirate: e.faction === 'pirate' || c?.category === 'irregular' || !!e.tags?.wanted,
@@ -64,6 +76,9 @@ export function prisonerGroup(state, e, n) {
 }
 
 export const heldGroups = (state) => state.passengers.filter(p => p.kind === 'prisoners');
+
+/** The open bounty a group is held for (its crew go in with the contract), or null: a failed one's are ordinary prisoners. */
+export const heldFor = (state, g) => (state.contracts?.active || []).find(c => c.type === 'BOUNTY' && c.perHead && c.targetId === g.from && (c.phase === 'active' || c.phase === 'return')) || null;
 
 /** How the station's power sees a group: 'criminal' | 'enemy' | 'other'. */
 function standingOf(state, g, power) {
@@ -81,7 +96,9 @@ function standingOf(state, g, power) {
  */
 export function turnOver(state, station, emit = () => {}) {
   const power = station.faction;
-  const held = heldGroups(state);
+  // (a bounty's own crew wait for its contract: handed over, and paid by the head, when it is turned in)
+  const kept = heldGroups(state).filter(g => heldFor(state, g));
+  const held = heldGroups(state).filter(g => !kept.includes(g));
   let n = 0, pay = 0, gain = 0, released = 0, ours = 0;
   for (const g of held) {
     n += g.count;
@@ -100,12 +117,14 @@ export function turnOver(state, station, emit = () => {}) {
       if (g.faction in state.law.standing) adjustStanding(state, g.faction, -RELEASED_COST * g.count);
     }
   }
-  state.passengers = state.passengers.filter(p => p.kind !== 'prisoners');
+  state.passengers = state.passengers.filter(p => p.kind !== 'prisoners' || kept.includes(p));
   state.resources.credits.current += pay;
   const standing = Math.min(STANDING_CAP, gain);
   if (standing > 0 && power in state.law.standing) adjustStanding(state, power, standing);
   if (ours) addRep(state, ours, `${ours} enemy prisoners turned over`, emit);
-  const text = `Security will take them at the lock. ${n} prisoner${n > 1 ? 's' : ''} logged${released ? `; ${released === n ? 'all' : released} released, we have no charges against them` : ''}.${pay ? ` Bounty: ${pay.toLocaleString()} MCR.` : ''}`;
+  const k = kept.reduce((a, g) => a + g.count, 0);
+  const keptText = k ? ` ${k} of the ${kept.map(g => g.name).join(', ')}'s crew stay${k > 1 ? '' : 's'} aboard for the bounty: hand them in with the contract at ${heldFor(state, kept[0]).stationName}.` : '';
+  const text = n ? `Security will take them at the lock. ${n} prisoner${n > 1 ? 's' : ''} logged${released ? `; ${released === n ? 'all' : released} released, we have no charges against them` : ''}.${pay ? ` Bounty: ${pay.toLocaleString()} MCR.` : ''}${keptText}` : keptText.trim() || 'Nobody to turn over.';
   emit('prisoners-turned-over', { station: station.id, n, pay, standing, released });
   return { n, pay, standing, released, text };
 }
@@ -117,7 +136,11 @@ export function ransomOffer(state, station, i) {
   const who = POWERS.includes(g.faction) ? FACTIONS[g.faction].short : g.pirate ? 'their clan' : 'their people';
   const kind = standingOf(state, g, station.faction);
   const cost = kind === 'other' ? 0 : 3 * g.notables;
-  return { ok: true, amount: g.notables * g.ransomEach, who, cost, notables: g.notables, name: g.name };
+  // (their friends pay less than the law would: a bounty's captain, against its contract's price for them)
+  const bounty = heldFor(state, g);
+  const each = bounty ? Math.round(RANSOM_SHARE * (bounty.captainHead || bounty.perHead * 4) / 10) * 10
+    : g.pirate ? Math.min(g.ransomEach, RANSOM.irregular) : g.ransomEach;
+  return { ok: true, amount: g.notables * each, who, cost, notables: g.notables, name: g.name, forBounty: !!bounty };
 }
 
 /** Ransom group `i`'s high-profile prisoners to their own side, through the brokers at `station`. */

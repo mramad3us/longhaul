@@ -14,7 +14,7 @@ import { formatDuration } from '../core/clock.js';
 import { getWorld } from '../sim/world.js';
 import { hailDialogue, signalBars } from '../sim/comms.js';
 import { acceptMission, declineMission, activeMissions } from '../sim/missions.js';
-import { contractsAt, acceptContract, completeContract, deliverable, needsBerth, inPort, dockedStation, dockedPort, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, torpedoPrice, buyDrones, droneQuote, dronePrice, priceOf, CONTRACT_LABEL } from '../sim/contracts.js';
+import { contractsAt, acceptContract, completeContract, deliverable, needsBerth, inPort, dockedStation, dockedPort, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, torpedoPrice, buyDrones, droneQuote, dronePrice, priceOf, CONTRACT_LABEL, bountyHeads } from '../sim/contracts.js';
 import { milRefusal } from '../sim/military.js';
 import { FACTIONS, SUBFACTIONS, factionColor } from '../sim/factions.js';
 import { rankName, supplyPriceFactor, openCallups } from '../sim/service.js';
@@ -360,9 +360,9 @@ function renderStation() {
     }).join('') : `<div class="station-mission-empty">${command ? 'Nothing on the board for you right now. Stand by.' : 'No contracts posted. Check back in a few hours.'}</div>`;
   } else if (stationTab === 'deliver') {
     content = !deliver.length ? `<div class="station-mission-empty">${docked ? 'Nothing to deliver here.' : 'Nothing to turn in from here. Cargo, passengers and fuel go across a berth\'s collar; reports are turned in from port.'}</div>`
-      : deliver.map(c => `<div class="station-mission-card"><div class="station-mission-top"><span class="station-mission-type">${CONTRACT_LABEL[c.type]}</span></div>
-        <div class="station-mission-desc">${esc(c.title)}</div><div class="station-mission-bottom"><span class="station-mission-reward">${rewardLine(c.reward)}</span>
-        <button class="station-mission-accept" data-act="complete" data-id="${c.id}" ${!docked && needsBerth(c) ? 'disabled title="Dock to hand it over"' : ''}>${!docked && needsBerth(c) ? 'DOCK TO DELIVER' : 'TURN IN'}</button></div></div>`).join('');
+      : deliver.map(c => { const h = bountyHeads(s, c); return `<div class="station-mission-card"><div class="station-mission-top"><span class="station-mission-type">${CONTRACT_LABEL[c.type]}</span></div>
+        <div class="station-mission-desc">${esc(c.title)}</div>${c.perHead ? `<div class="station-mission-meta">${h.heads ? `${h.heads} of its crew in our brig${h.captains ? ', its captain among them' : ''}: ${fmtNum(h.pay)} MCR more, handed over with it` : `None of its crew aboard: nothing paid by the head (${fmtNum(c.perHead)} MCR each, board it and take them)`}</div>` : ''}<div class="station-mission-bottom"><span class="station-mission-reward">${rewardLine(c.reward)}${h.heads ? ` + ${fmtNum(h.pay)} MCR` : ''}</span>
+        <button class="station-mission-accept" data-act="complete" data-id="${c.id}" ${!docked && needsBerth(c, s) ? 'disabled title="Dock to hand it over"' : ''}>${!docked && needsBerth(c, s) ? 'DOCK TO DELIVER' : 'TURN IN'}</button></div></div>`; }).join('');
   } else if (stationTab === 'hire') {
     content = !docked ? '<div class="station-mission-empty">Dock to sign crew on or pay them off.</div>' : hireHTML(s, st);
   } else if (stationTab === 'leave') {

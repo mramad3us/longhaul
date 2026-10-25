@@ -19,7 +19,7 @@ import { crewTick, placeCrew, helmsman, crewSecureStatus } from './crew-ai.js';
 import { createJobs } from './jobs.js';
 import { needsTick, efficiency } from './needs.js';
 import { createFlight, flightStep, fuelUsed, angleDiff, SLEW_RATE, RCS_MAX_G, FLIP_TURN } from './flight.js';
-import { autopilotTick, autopilotAfterStep, holdStep, holdStation, crewPolicy, maxSpeed, flipInterlock } from './autopilot.js';
+import { autopilotTick, autopilotAfterStep, holdStep, holdStation, crewPolicy, maxSpeed, flipInterlock, clearOutTick } from './autopilot.js';
 import { createLifeSupport, lifeSupportTick, breachJobs } from './life-support.js';
 import { createReactor, reactorTick, isReactorOnline, triggerContainmentFailure } from './reactor.js';
 import {
@@ -248,7 +248,9 @@ export function minuteTick(state, { lite = false } = {}) {
   let held = dockingTick(state, emit);
 
   // ---- Flight (a route plotted at a berth undocks first: autopilot.js)
-  let cmd = autopilotTick(state, emit);
+  // (taking the stick ends a clear-out: autopilot.js clearOutTick)
+  if (f.leaving && (f.manual?.throttleG > 0 || f.manual?.flipTo != null)) f.leaving = null;
+  let cmd = autopilotTick(state, emit) || clearOutTick(state, emit);
   // (a route leaving the hold point lets the dock go: this minute is flown, or we'd fall a minute behind the world)
   if (held && !dockHolds(state)) held = false;
   if (held) cmd = null;

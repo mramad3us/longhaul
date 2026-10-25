@@ -12,6 +12,9 @@
 //   depart  — leaving a port, the route's first leg: on the RCS out of
 //             the station's approach before the drive lights (no
 //             fines for a burn across the port).
+//             CLEAR OFF with no route flies the same leg on its own
+//             (flight.leaving: clearOutTick), straight out, and holds past
+//             the approach's edge: a route plotted there lights at once.
 //   active  — guidance flies the plan (burn / flip / brake / coast /
 //             RCS approach), re-planning every minute.
 //   arrive  — co-moving within the standoff: hold station on target.
@@ -40,7 +43,7 @@ import { rcsAvailable } from './systems.js';
 import { terrainGuard, hoverCmd, timeToImpact } from './terrain.js';
 import { AU_M, G0, DAY_MIN, MIN_S } from '../core/constants.js';
 import { getWorld, predictEntity } from './world.js';
-import { targetStateAt, targetName, guidanceStep, portOfTarget, departingFrom, DEPART_OUT } from './nav.js';
+import { targetStateAt, targetName, guidanceStep, portOfTarget, departingFrom, DEPART_OUT, createPlan } from './nav.js';
 import { turnAhead, FLIP_TURN, SLEW_RATE, RCS_MAX_G } from './flight.js';
 import { KEEPOUT_SPEED_MS, APPROACH_SPEED_MS, APPROACH_M, keepOutM } from './traffic-control.js';
 import { crewSecureStatus } from './crew-ai.js';
@@ -52,6 +55,7 @@ import { undock, clearOff, releaseDock, dockHolds, proxActive, CLEAR_M } from '.
 export function engageRoute(state, plan, opts = {}) {
   if (plan.port === undefined && plan.kind !== 'stance') plan.port = portOfTarget(state, plan.target);
   const f = state.flight;
+  f.leaving = null;                       // (a route takes over a clear-out where it is: its own departure leg)
   state.autopilot = {
     plan: { ...plan, target: { ...plan.target } },
     phase: 'prepare',
@@ -162,6 +166,7 @@ export function holdStation(state, target) {
   const tgt = targetStateAt(state, target, state.clock.minute, true);
   if (!tgt) return false;
   const f = state.flight;
+  f.leaving = null;
   const ox = (f.pos.x - tgt.pos.x) * AU_M, oy = (f.pos.y - tgt.pos.y) * AU_M;
   state.flight.hold = { ...target, ox, oy };
   // something going round a body (a station, its gate, a slot) turns: the offset is kept in its frame
@@ -195,6 +200,7 @@ export function holdOffset(state, h, minute) {
 /** Let go of whatever holds us: station-keeping, or a dock's hold point. (Dev tools also tear a hard dock loose.) */
 export function releaseHold(state) {
   state.flight.hold = null;
+  state.flight.leaving = null;
   if (state.dock) releaseDock(state);
 }
 
@@ -353,9 +359,9 @@ function departLeg(state, ap, now, emit) {
   const s0 = st && predictEntity(st, now, world);
   const rM = s0 ? Math.hypot(f.pos.x - s0.pos.x, f.pos.y - s0.pos.y) * AU_M : Infinity;
   // Out of the approach: done, unless the route would burn straight back across it (then on, a little further)
-  if (rM > APPROACH_M * DEPART_OUT && (rM > APPROACH_M * DEPART_FAR || !burnsBack(state, ap, now, s0))) {
+  if (rM > APPROACH_M * DEPART_OUT && (rM > APPROACH_M * DEPART_FAR || !ap.plan || !burnsBack(state, ap, now, s0))) {
     ap.depart = null;
-    if (st) emit('route-departed', { station: st.name, target: targetName(state, ap.plan.target) });
+    if (st && ap.plan) emit('route-departed', { station: st.name, target: targetName(state, ap.plan.target) });
     return null;
   }
   // no RCS (out, or dry tanks): the leg can't be flown; the route goes on the drive
@@ -374,20 +380,83 @@ function departLeg(state, ap, now, emit) {
     if (up < DEPART_UP) { ux += (DEPART_UP - up) * sf.ux; uy += (DEPART_UP - up) * sf.uy; const n = Math.hypot(ux, uy); ux /= n; uy /= n; }
   }
   const want = 0.9 * (rM < keepOutM(st.id) ? KEEPOUT_SPEED_MS : APPROACH_SPEED_MS);
-  // what holds us against the pull, in the station's frame (a surface port turns with its rock)…
-  const s1 = predictEntity(st, now + 1, world);
+  return rcsInFrame(state, st, s0, now, want * ux, want * uy);
+}
+
+/**
+ * The RCS command toward velocity (wx, wy) relative to station `st` (s0: its
+ * state now): what holds us against the pull in the station's frame (a
+ * surface port turns with its rock) first, then what the RCS has left after
+ * it toward the velocity wanted. Under the RCS's authority: flown on it,
+ * the ship never turned (flight.js).
+ */
+function rcsInFrame(state, st, s0, now, wx, wy) {
+  const f = state.flight;
+  const s1 = predictEntity(st, now + 1, getWorld(state));
   const pull = gravityAt(f.pos.x, f.pos.y, now, _pull);
   const hx = (s1.vel.vx - s0.vel.vx) / MIN_S - pull.ax, hy = (s1.vel.vy - s0.vel.vy) / MIN_S - pull.ay;
-  // …and the push out, what the RCS has left after it
-  const cx = (want * ux - (f.vel.vx - s0.vel.vx)) / MIN_S, cy = (want * uy - (f.vel.vy - s0.vel.vy)) / MIN_S;
+  const cx = (wx - (f.vel.vx - s0.vel.vx)) / MIN_S, cy = (wy - (f.vel.vy - s0.vel.vy)) / MIN_S;
   const rcs = RCS_MAX_G * G0 * 0.999;
   const h2 = hx * hx + hy * hy;
-  if (h2 >= rcs * rcs) { const h = Math.sqrt(h2); return { ax: hx * rcs / h, ay: hy * rcs / h, depart: true }; }
+  // (sat: the frame's pull takes most of the RCS, as guidance's HOLD_PULL has it: holding here takes the drive)
+  const sat = h2 >= (0.8 * rcs) ** 2;
+  if (h2 >= rcs * rcs) { const h = Math.sqrt(h2); return { ax: hx * rcs / h, ay: hy * rcs / h, depart: true, sat }; }
   const c2 = cx * cx + cy * cy, hc = hx * cx + hy * cy;
   const k = c2 > 0 ? Math.min(1, (-hc + Math.sqrt(hc * hc - c2 * (h2 - rcs * rcs))) / c2) : 0;
-  return { ax: hx + k * cx, ay: hy + k * cy, depart: true };
+  return { ax: hx + k * cx, ay: hy + k * cy, depart: true, sat };
 }
 const _pull = { ax: 0, ay: 0 };
+
+/**
+ * CLEAR OFF with no route (docking.js clearGate): the departure leg on its
+ * own, straight out of the approach on the RCS, as fast as it will push
+ * (the speed limit is more than the RCS can reach in it). Past the edge
+ * the torch is free: a route plotted from then on lights at once. Then
+ * the RCS takes the way off (the ship is never turned: nobody's thrown)
+ * and we hold where it stops, not falling back in, as a ship let coast
+ * off a big moon's station would. Where the pull in the station's frame
+ * is more than the RCS can hold against (Phobos, in Mars' tide), the way
+ * is taken off on the drive instead: a route to rest off the station,
+ * the crew to the couches and the flip held for them, as any route.
+ * The command this minute, or null (not leaving, or stopped and holding,
+ * or handed to that route).
+ */
+const STOPPED_MS = 0.5;               // the way off at this: held where we are
+
+export function clearOutTick(state, emit = () => {}) {
+  const f = state.flight, L = f.leaving;
+  if (!L || state.autopilot || state.dock) return null;
+  const world = getWorld(state);
+  const st = world.get(L.station);
+  if (!st) { f.leaving = null; return null; }
+  const now = state.clock.minute;
+  const hold = (text, level = 'info') => {
+    holdStation(state, { kind: 'entity', id: st.id });
+    if (text) emit('nav-callout', { level, key: 'leaving', text });
+    return null;
+  };
+  if (!rcsAvailable(state) || state.resources.fuel.current <= 0) return hold(`RCS out: holding off ${st.name}. A route from here leaves on the drive.`, 'warn');
+  if (!L.out) {
+    const cmd = departLeg(state, { depart: L, plan: null }, now, emit);
+    if (cmd) return cmd;
+    L.out = now;
+    emit('nav-callout', { level: 'info', key: 'leaving', text: `Out of ${possessive(st.name)} approach: the torch is free, a route lights at once. Taking the way off on the RCS meanwhile.` });
+  }
+  const s0 = predictEntity(st, now, world);
+  const v = Math.hypot(f.vel.vx - s0.vel.vx, f.vel.vy - s0.vel.vy);
+  const rM = Math.hypot(f.pos.x - s0.pos.x, f.pos.y - s0.pos.y) * AU_M;
+  if (v < STOPPED_MS) return hold(`Holding ${fmtKm(rM / 1000)} off ${st.name}, clear of its approach.`);
+  const cmd = rcsInFrame(state, st, s0, now, 0, 0);
+  if (!cmd.sat) return cmd;
+  f.leaving = null;
+  const plan = createPlan('closing', { kind: 'entity', id: st.id }, { accelG: Math.min(0.3, f.maxG), standoff: rM, name: 'HOLD OFF', label: `${fmtKm(rM / 1000)} off ${st.name}` });
+  plan.port = null;                       // (to rest off it, not in to its gate)
+  engageRoute(state, plan);
+  emit('nav-callout', { level: 'warn', key: 'leaving', text: `The pull out here is more than the RCS can hold against: taking the way off on the drive. Crew to the couches.` });
+  return null;
+}
+const fmtKm = (km) => `${Math.round(km).toLocaleString()} km`;
+export const possessive = (n) => n.endsWith('s') ? `${n}'` : `${n}'s`;
 
 /** Would the route's burn from here cross back through the station's approach (s0: its place now)? */
 function burnsBack(state, ap, now, s0) {
@@ -419,9 +488,10 @@ function routeDirection(state, ap, now) {
  */
 function departDirection(state, ap, now, s0) {
   const f = state.flight;
-  const { ux: rx, uy: ry } = routeDirection(state, ap, now);
   const ox = f.pos.x - s0.pos.x, oy = f.pos.y - s0.pos.y, o = Math.hypot(ox, oy) || 1;
   const ex = ox / o, ey = oy / o;                  // out from the station
+  if (!ap.plan) return { ux: ex, uy: ey };          // (clearing off, bound nowhere yet: straight out, from its gate up)
+  const { ux: rx, uy: ry } = routeDirection(state, ap, now);
   let ux = rx, uy = ry;
   const along = rx * ex + ry * ey;
   if (along < 0.2) {

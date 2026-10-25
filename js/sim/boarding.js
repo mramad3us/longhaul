@@ -65,6 +65,7 @@ const BREACH_COLLAR_MIN = 6;
 const MUSTER_LIMIT_MIN = 25;           // past this the party goes with whoever is at the lock, unless someone is still on the way
 const MUSTER_CAP_MIN = 90;             // and past this, whatever
 const SEARCH_MIN = 20, STRIP_MIN = 40, PRISONERS_MIN = 15, SCUTTLE_MIN = 10, SALVAGE_MIN = 45, ACCOUNTS_MIN = 30;
+export const SCUTTLE_FUSE_MIN = 120;         // charges set on a reactor: time enough to get the party home and the ship well clear
 const SALVAGE_DECAY = 0.55;           // what a wreck still holds after a run, of what it held
 
 /** How hard a crew resists boarders (share that fights · quality of each). */
@@ -306,7 +307,7 @@ export const BOARDING_ACTIONS = {
   strip: { label: 'TAKE STORES', min: STRIP_MIN, desc: 'Carry over reaction mass, spares, food, water, medical supplies and ammunition, as much as we hold.' },
   cargo: { label: 'TAKE CARGO', min: STRIP_MIN, desc: 'Move their hold into ours (docked only: nobody carries tonnes by EVA).' },
   prisoners: { label: 'TAKE PRISONERS', min: PRISONERS_MIN, desc: 'Bring their crew aboard as prisoners: into the brig\'s cells (a warship has them), then any empty berths.' },
-  scuttle: { label: 'SCUTTLE', min: SCUTTLE_MIN, desc: 'Set their reactor to lose containment in half an hour, and get off.' },
+  scuttle: { label: 'SCUTTLE', min: SCUTTLE_MIN, desc: 'Set their reactor to lose containment in two hours, and get off.' },
   salvage: { label: 'SALVAGE', min: SALVAGE_MIN, repeat: true, desc: 'Cut what is still good out of the wreck: scrap for the machine shop, spare parts, stores from tanks that held. Each run gives less. Wrecks shift: someone can get hurt.' },
   accounts: { label: 'CRACK ITS ACCOUNTS', min: ACCOUNTS_MIN, desc: 'Into the computer core for its credit store: a good engineer gets in more often, and a core can wipe itself. Theft, unless it was a pirate.' },
 };
@@ -438,12 +439,12 @@ function actionMinute(state, b, e, party, emit) {
     }
     case 'scuttle': {
       const h = ensureHull(e);
-      h.containment = 30;
+      h.containment = SCUTTLE_FUSE_MIN;
       h.scrammed = false;
       h.lastHitBy = PLAYER;
       e.tags.scuttled = true;
       armFuse(state, e);
-      note(state, `Charges set on ${e.name}'s reactor: thirty minutes. Get clear.`, emit, 'danger');
+      note(state, `Charges set on ${e.name}'s reactor: two hours. Get clear.`, emit, 'danger');
       b.phase = 'return'; b.since = state.clock.minute;
       return;
     }

@@ -269,7 +269,7 @@ export default [
       const st = world.get('phobos-yard');
       const c = { id: 'c-m', type: ContractType.BOUNTY, station: st.id, stationName: st.name, phase: 'offered', zone: null,
         ship: { cls: 'pirate-corvette', name: 'Test Drift', faction: 'pirate', tl: 2, shipClass: 'Stolen corvette', mass: 3000 },
-        body: 'Phobos', distAU: 0.026, reward: { credits: 5000 }, aliveBonus: 0.5, deadline: 10 * DAY_MIN, expires: s.clock.minute + DAY_MIN, title: 'Bounty: Test Drift' };
+        body: 'Phobos', distAU: 0.026, reward: { credits: 5000 }, perHead: 1000, deadline: 10 * DAY_MIN, expires: s.clock.minute + DAY_MIN, title: 'Bounty: Test Drift' };
       st.board ??= { missions: [], lastRefresh: s.clock.minute };
       st.board.missions.push(c);
       st.board.lastRefresh = s.clock.minute;

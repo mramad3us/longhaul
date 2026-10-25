@@ -9,7 +9,7 @@
 // ship will actually fly.
 // ============================================================
 
-import { AU_M, G0, MIN_S, GM_SUN, DAY_MIN } from '../core/constants.js';
+import { AU_M, G0, MIN_S, GM_SUN, DAY_MIN, RANGE } from '../core/constants.js';
 import { getBody, bodyPos, bodyVel } from './ephemeris.js';
 import { getWorld, predictEntity, stepFree, propagateFree, orbitStateAt } from './world.js';
 import { slotOrbit } from './holding.js';
@@ -32,10 +32,10 @@ import { ourName } from './service.js';
 export const STANDOFF = {
   STATION: 3_000,        // a ship holding off a station (not a berth: that is docking.js)
   GATE: 1_000,           // a station's approach gate (where routes to a station end)
-  SHIP: 2_000,           // formation distance
+  SHIP: RANGE.FORMATION_M,      // formation distance (1.9 km: a boarding party's suits reach 2)
   SCANNER: 0.1 * AU_M,   // long sensor range
   CLOSE: 100_000_000,    // 100,000 km — full sensor lock, comms
-  TACTICAL: 2_000,       // formation: boarding, tow, EVA
+  TACTICAL: RANGE.FORMATION_M,  // formation: boarding, tow, EVA
   SLOT: 200,             // our slot in a port's holding pattern (holding.js)
 };
 

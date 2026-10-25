@@ -24,7 +24,7 @@ import { TileType, TILE_NAMES, TILE_DESCRIPTIONS } from '../sim/tiles.js';
 import { PDC, TORPEDO_MOTOR, WARHEADS, PROFILES, FAST_VC, SEEKER_SLACK, RAILGUN, RAIL_RANGE_M, MINING_GEAR, EVADE_G, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from '../sim/weapons.js';
 import { SUSTAIN_G, SPRINT_LOSS } from '../sim/agents.js';
 import { INSPECTED_MIN } from '../sim/law.js';
-import { PIRATE_BOUNTY, RANSOM } from '../sim/prisoners.js';
+import { PIRATE_BOUNTY, RANSOM, RANSOM_SHARE } from '../sim/prisoners.js';
 import { AIM } from '../sim/damage.js';
 import { ROUTE_PROFILES } from '../sim/nav.js';
 import { STANCE_MODES } from '../sim/stance.js';
@@ -337,8 +337,10 @@ function navigation(add) {
   add({ id: 'nav:prisoners', cat: 'nav', group: 'Stations', title: 'Prisoners',
     text: ['A beaten crew taken aboard rides in the brig (a warship has one), then in any free berth. In port they are turned over to the local authority, or their officers ransomed.',
       `Turned over: pirates and a wanted ship\'s crew earn the bounty (${PIRATE_BOUNTY.toLocaleString()} MCR a head) and standing with the station\'s power; its enemies earn standing with it, and with our command if it is ours; anyone else is let go, and their power remembers we held them.`,
-      'Ransomed: a captain and officers are worth paying for to their own side, through the station\'s brokers. The local power doesn\'t like to see its criminals or its enemies bought free.'],
-    specs: Object.entries({ military: 'Navy officer', authority: 'Police officer', irregular: 'Pirate captain', hunted: 'A captain with a bounty on it', commander: 'A strike target\'s commander' }).map(([k, label]) => [label, `${RANSOM[k].toLocaleString()} MCR`]) });
+      'Ransomed: a captain and officers are worth paying for to their own side, through the station\'s brokers. The local power doesn\'t like to see its criminals or its enemies bought free. A criminal\'s friends never pay what the law does: a pirate captain fetches three quarters of their turn-over bounty, and the captain of a ship we hold a bounty on three quarters of what the contract pays to bring them in.',
+      'A bounty\'s own crew are held for its contract: handed over with it, paid by the head (its captain worth four of them), not turned over.'],
+    specs: [...Object.entries({ military: 'Navy officer', authority: 'Police officer', irregular: 'Pirate captain', commander: 'A strike target\'s commander' }).map(([k, label]) => [label, `${RANSOM[k].toLocaleString()} MCR`]),
+      ['A bounty\'s captain', `${Math.round(RANSOM_SHARE * 100)}% of the contract\'s price for them`]] });
   add({ id: 'nav:police', cat: 'nav', group: 'Stations', title: 'Police stops',
     text: ['A patrol stops ships only inside its jurisdiction: the space its power holds or contests, or the zone it was sent to enforce. It won\'t order a stop to a ship whose course takes it out before the cutter could be alongside, and it withdraws the order if we leave.',
       `One stop at a time: no order while another is open or another cutter is coming alongside or searching us, none in port or in the middle of a fight. After a search the power\'s patrols wave us through for ${INSPECTED_MIN / 1440} days, unless we give them new cause. A licensed captain in one of its own navy\'s hulls, under its banner, is never stopped by that power\'s security, short of a warrant.`],

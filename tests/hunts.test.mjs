@@ -20,7 +20,10 @@ import { sensorsTick, setSensorRange, contactById, REVEAL } from '../js/sim/sens
 import { recordContacts } from '../js/sim/intel.js';
 import { spawnAgent } from '../js/sim/agents.js';
 import { missionTargets, missionSuspects } from '../js/sim/flags.js';
-import { bountyOffer, BOUNTY_GRADES, acceptContract, completeContract, contractsTick, upgradeContracts } from '../js/sim/contracts.js';
+import { bountyOffer, BOUNTY_GRADES, CAPTAIN_HEADS, acceptContract, completeContract, contractsTick, upgradeContracts, bountyHeads, deliverable } from '../js/sim/contracts.js';
+import { prisonerGroup, turnOver, ransomOffer, ransom, RANSOM, PIRATE_BOUNTY, NOTABLE_BOUNTY } from '../js/sim/prisoners.js';
+import { surrender } from '../js/sim/agents.js';
+import { dockedTo } from '../js/sim/docking.js';
 import { wreckNpc } from '../js/sim/damage.js';
 import { huntStatus, searchAU, unconfirmed } from '../js/sim/hunts.js';
 import { briefOf } from '../js/ui/brief.js';
@@ -68,6 +71,86 @@ function signed(s, { sigKnown = true } = {}) {
 const darkShip = (s, at, dx, opts = {}) => spawnAgent(s, { role: 'civilian', faction: 'independent', cls: 'rockhopper', transponder: false, pos: { x: at.pos.x + dx, y: at.pos.y + 0.00004 }, vel: { ...at.vel }, ...opts });
 
 export default [
+  {
+    name: 'a bounty pays for the ship put out of action, and by the head for its crew brought back alive (its captain four times more); a struck ship left adrift earns nothing more; its captain ransomed fetches less than the contract',
+    fn: () => {
+      // docked at Ceres, where the bounty is posted and turned in
+      const play = (seed, how, take) => {
+        seedRandom(seed);
+        bus.clear();
+        const s = createGame({ crewCount: 6, traffic: 0, forces: false, classId: 'mcrn-corvette', license: 'MCR' });
+        s.politics.quietUntil = Infinity; s.missions.cooldown = 1e9;
+        const st = dockedTo(s);
+        const c = bountyOffer(s, st, ZONE);
+        st.board.missions.push(c);
+        assert(acceptContract(s, st.id, c.id).ok, 'signed');
+        assert(c.perHead === BOUNTY_GRADES.find(g => g.grade === c.grade).perHead && c.captainHead === c.perHead * CAPTAIN_HEADS && c.aliveBonus == null, 'paid by the head, no surrender bonus');
+        const t = getWorld(s).get(c.targetId);
+        const fee = c.reward.credits;
+        if (how === 'wreck') wreckNpc(s, t, 'player'); else { t.agent.hostile = []; surrender(s, t); }
+        contractsTick(s);
+        assert(c.phase === 'return' && c.reward.credits === fee, `${how}: the job is done, the fee as posted (${c.reward.credits})`);
+        if (take) s.passengers.push(prisonerGroup(s, t, take));
+        return { s, st, c, fee };
+      };
+      // struck and left adrift: the fee, nothing more
+      {
+        const { s, st, c, fee } = play(41, 'surrender', 0);
+        const cr = s.resources.credits.current;
+        const r = completeContract(s, c.id, st.id);
+        assert(r.ok && s.resources.credits.current - cr === fee && !c.brought, `nobody brought back: ${s.resources.credits.current - cr} (fee ${fee})`);
+      }
+      // wrecked, its captain and three of its crew taken off the hulk
+      {
+        const { s, st, c, fee } = play(42, 'wreck', 4);
+        const h = bountyHeads(s, c);
+        assert(h.heads === 4 && h.captains === 1 && h.pay === 3 * c.perHead + c.captainHead, `four, the captain among them: ${JSON.stringify(h)}`);
+        // turned over as ordinary prisoners: they stay aboard for the contract
+        const crT = s.resources.credits.current;
+        const tr = turnOver(s, st);
+        assert(s.resources.credits.current === crT && bountyHeads(s, c).heads === 4 && /stay aboard for the bounty/.test(tr.text), `held for the contract: ${tr.text}`);
+        // undocked, in port: the contract wants a berth to hand them over
+        const dock = s.dock;
+        s.dock = null;
+        const no = completeContract(s, c.id, st.id);
+        assert(!no.ok && /Dock/.test(no.text), `their crew cross at a collar: ${no.text}`);
+        s.dock = dock;
+        const cr = s.resources.credits.current;
+        const r = completeContract(s, c.id, st.id);
+        const got = s.resources.credits.current - cr;
+        console.log(`      ${c.gradeLabel}: fee ${fee.toLocaleString()} MCR · its crew ${c.perHead} a head, its captain ${c.captainHead} · four brought back: ${got.toLocaleString()} MCR · "${r.text}"`);
+        assert(r.ok && got === fee + h.pay && c.brought?.heads === 4, 'the fee and the heads');
+        assert(!s.passengers.some(p => p.kind === 'prisoners'), 'handed over with it');
+      }
+      // or its captain ransomed to their friends: still on offer, for less than the contract pays to bring them in
+      {
+        const { s, st, c, fee } = play(44, 'wreck', 4);
+        const gi = s.passengers.filter(p => p.kind === 'prisoners').findIndex(g => g.from === c.targetId);
+        const o = ransomOffer(s, st, gi);
+        console.log(`      its captain ransomed to their clan: ${o.amount.toLocaleString()} MCR, against ${c.captainHead.toLocaleString()} brought in · any pirate captain: ${RANSOM.irregular.toLocaleString()} against ${(PIRATE_BOUNTY * NOTABLE_BOUNTY).toLocaleString()} turned over`);
+        assert(o.ok && o.forBounty && o.amount > 0 && o.amount < c.captainHead, `less than the contract: ${o.amount} vs ${c.captainHead}`);
+        assert(RANSOM.irregular < PIRATE_BOUNTY * NOTABLE_BOUNTY, 'a pirate captain\'s friends pay less than the law');
+        assert(BOUNTY_GRADES.every(g => g.perHead > PIRATE_BOUNTY && g.perHead * CAPTAIN_HEADS > PIRATE_BOUNTY * NOTABLE_BOUNTY), 'a bounty\'s crew are worth more brought in than any pirate turned over');
+        const cr = s.resources.credits.current;
+        ransom(s, st, gi);
+        assert(s.resources.credits.current - cr === o.amount, 'paid');
+        const h = bountyHeads(s, c);
+        assert(h.heads === 3 && h.captains === 0 && h.pay === 3 * c.perHead, `the rest still go in with the contract: ${JSON.stringify(h)}`);
+        const r = completeContract(s, c.id, st.id);
+        assert(r.ok && c.brought.heads === 3, 'three brought back');
+      }
+    },
+  },
+  {
+    name: 'a save from before 1.3: a bounty taken by surrender loses the half-again it was credited, and is paid by the head instead',
+    fn: () => {
+      const s = game(43);
+      s.contracts.active.push({ id: 'c-old3', type: 'BOUNTY', phase: 'return', outcome: 'captured', grade: 3, reward: { credits: 15000 }, aliveBonus: 0.5, signature: 'X', targetId: 'z' });
+      upgradeContracts(s);
+      const c = s.contracts.active.at(-1);
+      assert(c.reward.credits === 10000 && c.perHead === 1200 && c.captainHead === 4800 && c.aliveBonus == null, JSON.stringify(c));
+    },
+  },
   {
     name: 'bounties are graded, and whether the drive signature is on file is always said: only the most wanted go without, about 2 in 100, each with its reason',
     fn: () => {

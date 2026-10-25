@@ -19,10 +19,12 @@ import { applyHit, wreckNpc, SCARS_MAX } from '../js/sim/damage.js';
 import { ensureHull, PLAYER } from '../js/sim/combatants.js';
 import { getWorld } from '../js/sim/world.js';
 import { releaseHold } from '../js/sim/autopilot.js';
-import { startBoarding, orderAboard } from '../js/sim/boarding.js';
+import { startBoarding, orderAboard, SCUTTLE_FUSE_MIN } from '../js/sim/boarding.js';
 import { hullOf } from '../js/sim/hulls.js';
 import { damageLook, pieces } from '../js/ui/gl/damage.js';
 import { fuseAboutToGo, FUSE_WATCH_MIN } from '../js/sim/combat.js';
+import { advise } from '../js/ui/advisor.js';
+import { blastClearM } from '../js/sim/damage.js';
 
 function game(seed = 21, opts = {}) {
   seedRandom(seed);
@@ -128,19 +130,30 @@ export default [
       assert(o.ok, o.text);
       const t0 = s.clock.minute;
       run(s, st => ensureHull(w).containment != null, 60);
+      const setAt = s.clock.minute - t0;
+      // the computer keeps the count: the party across, then how far to be clear
+      const said = () => advise(s, {}).find(a => a.key === `scuttle:${w.id}`);
+      const a1 = said();
+      assert(a1 && /party is coming back/.test(a1.text) && /^(2h|1h 5\d)/.test(a1.text) && !a1.text.endsWith('…'), `while the party is across: ${a1?.text}`);
       assert(s.combat.fuses.includes(w.id), 'the wreck is on a fuse');
       // home, and well clear of it
       run(s, st => !st.boarding || st.boarding.phase === 'done', 120);
+      const a2 = said();
+      assert(a2 && /km clear of it/.test(a2.text) && !a2.text.endsWith('…'), `home, still inside its blast (${fmt(blastClearM(w), 0)} m): ${a2?.text}`);
+      console.log(`      VIGIL: "${a1.text}" · then "${a2.text}"`);
       s.flight.pos.x += 0.004;
+      assert(!said(), 'clear of it: nothing more to say');
       // its last minutes, watched: time at 1×, the telescope's to come up on it (ui/stage.js)
       let watched = false, warp = [];
       const t = run(s, st => {
         const live = getWorld(st).get(w.id);
         if (live && fuseAboutToGo(st) === live) { watched = true; warp.push(st.$combatWarp); }
         return !live;
-      }, 90);
+      }, SCUTTLE_FUSE_MIN + 30);
       assert(watched && warp.length >= FUSE_WATCH_MIN - 1 && warp.every(x => x === 1), `its last minutes at 1× (${warp.join(',')})`);
       assert(!getWorld(s).get(w.id), `the wreck went up (${s.clock.minute - t0} min after the order)`);
+      const upAt = s.clock.minute - t0;
+      assert(upAt - setAt === SCUTTLE_FUSE_MIN, `on its two hours: charges set at ${setAt} min, up at ${upAt}`);
       assert(det.some(d => d.sourceId === w.id), 'a reactor detonation where it was');
       assert(s.service.kills === kills, `not counted twice (${kills} → ${s.service.kills})`);
       assert(!s.combat.fuses.includes(w.id), 'the fuse gone with it');
@@ -153,7 +166,7 @@ export default [
       assert(h2.containment != null && s.combat.fuses.includes(w2.id), 'a blast set its core failing');
       run(s, st => !getWorld(st).get(w2.id), 40);
       assert(!getWorld(s).get(w2.id), 'and it went up');
-      console.log(`      scuttled: up ${s.clock.minute - t0 - t} + ${t} min after the order · kills ${kills} → ${s.service.kills} · the blasted wreck up within 30 min`);
+      console.log(`      scuttled: charges set ${setAt} min after the order, up ${upAt - setAt} min later (the last ${t} with the party home) · kills ${kills} → ${s.service.kills} · the blasted wreck up within 30 min`);
     },
   },
 ];

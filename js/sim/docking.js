@@ -35,7 +35,9 @@
 //   outbound  leaving a station: up the corridor to just past the gate
 //             (OUT_PAST), on RCS alone, still in the berth's frame, where
 //             the dock lets us go (no torch inside the gate: traffic-
-//             control.js). A hold point by a surface port is a hundred
+//             control.js). With no route, the nav computer flies on out of
+//             the approach on the RCS and holds past it (autopilot.js
+//             clearOutTick), so a route plotted there lights at once. A hold point by a surface port is a hundred
 //             metres over the rock, and the RCS can't hold a ship up
 //             against even Ceres' pull: let go there, it falls.
 //
@@ -513,7 +515,8 @@ function clearGate(state, e, emit) {
   if (e) markOutbound(state, e.id);
   emit('dock-phase', { phase: 'clear', station: e?.name });
   if (next) { beginDocking(state, next.target, { mode: next.mode, route: next.route }, emit); return; }
-  if (!state.autopilot && e) holdStation(state, { kind: 'entity', id: gateId(e.id) });
+  // bound nowhere yet: on out of the approach on the RCS, to hold past it, the torch free (autopilot.js clearOutTick)
+  if (!state.autopilot && e) { state.flight.hold = null; state.flight.leaving = { station: e.id, ux: null, uy: null }; }
 }
 
 // ---- PER MINUTE ----

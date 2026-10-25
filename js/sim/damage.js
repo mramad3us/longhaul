@@ -345,13 +345,21 @@ export function explodeNpc(state, e, by, emit = () => {}) {
   detonate(state, pos, blast, e.id, emit);
 }
 
+const BLAST_REACH = 7;                // a blast is looked for out to this many scale lengths (e^-7: nothing left)
+
+/** How far from a hull its reactor's blast can still hurt us (m): beyond it, it does nothing (detonate's floor of 2 DP). */
+export function blastClearM(e) {
+  const blast = SIZES[classOf(e)?.size || sizeForMass(e.mass)].reactor;
+  return Math.ceil(blast.scaleM * Math.min(BLAST_REACH, Math.log(blast.dp / 2)) / 100) * 100;
+}
+
 /**
  * A fusion or nuclear detonation at `pos`: every hull within reach
  * takes blast.dp · e^(−d / blast.scaleM). Emits 'detonation'.
  */
 export function detonate(state, pos, blast, sourceId, emit = () => {}, { kind = 'fusion', by = sourceId } = {}) {
   const world = getWorld(state);
-  const reachM = blast.scaleM * 7;
+  const reachM = blast.scaleM * BLAST_REACH;
   emit('detonation', { x: pos.x, y: pos.y, scaleM: blast.scaleM, kind, sourceId });
   for (const e of world.query(pos, reachM / AU_M)) {
     if (e.id === sourceId || (e.type !== 'ship' && e.type !== 'station')) continue;

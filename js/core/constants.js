@@ -23,7 +23,7 @@ export const RANGE = {
   RADIO: 0.1,            // ~15M km — high-gain comms
   SOS: 0.3,              // distress beacons are loud
   DOCK_M: 50_000,        // within 50 km of a station = in its traffic control zone
-  FORMATION_M: 2_000,    // within 2 km and co-moving = formation
+  FORMATION_M: 1_900,    // within this and co-moving = formation (inside a suit's 2 km reach, boarding.js EVA_RANGE_M, with room for the hold to wander)
 };
 
 export const km = (v) => v * 1000 / AU_M;        // km → AU

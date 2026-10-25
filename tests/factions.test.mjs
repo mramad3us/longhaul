@@ -90,7 +90,7 @@ export default [
       const st = world.get('ceres-station');
       const c = { id: 'c-t', type: ContractType.BOUNTY, station: st.id, stationName: st.name, phase: 'offered', zone: null,
         ship: { cls: 'pirate-raider', name: 'Test Raider', faction: 'pirate', tl: 1, shipClass: 'Pirate raider', mass: 700 },
-        body: 'Ceres', distAU: 0.01, reward: { credits: 5000 }, aliveBonus: 0.5, deadline: 10 * DAY_MIN, expires: s.clock.minute + DAY_MIN, title: 'Bounty: Test Raider' };
+        body: 'Ceres', distAU: 0.01, reward: { credits: 5000 }, perHead: 1000, deadline: 10 * DAY_MIN, expires: s.clock.minute + DAY_MIN, title: 'Bounty: Test Raider' };
       st.board.missions.push(c);
       st.board.lastRefresh = s.clock.minute;
       const r = acceptContract(s, st.id, c.id);
@@ -149,7 +149,7 @@ export default [
       const st = world.get('ceres-station');
       const c = { id: 'c-r', type: ContractType.BOUNTY, station: st.id, stationName: st.name, phase: 'offered', zone: null,
         ship: { cls: 'pirate-raider', name: 'Wolfish Ferret', faction: 'pirate', tl: 1, shipClass: 'Pirate raider', mass: 700 },
-        body: 'Ceres', distAU: 0.01, reward: { credits: 5000 }, aliveBonus: 0.5, deadline: 10 * DAY_MIN, expires: s.clock.minute + DAY_MIN, title: 'Bounty: Wolfish Ferret' };
+        body: 'Ceres', distAU: 0.01, reward: { credits: 5000 }, perHead: 1000, deadline: 10 * DAY_MIN, expires: s.clock.minute + DAY_MIN, title: 'Bounty: Wolfish Ferret' };
       st.board.missions.push(c);
       st.board.lastRefresh = s.clock.minute;
       assert(acceptContract(s, st.id, c.id).ok, 'accepted');
