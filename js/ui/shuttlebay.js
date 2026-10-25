@@ -25,7 +25,7 @@ import { formatDuration } from '../core/clock.js';
 import { CLASSES } from '../sim/ship-classes.js';
 import { airspacesOf, worldOfs } from '../sim/worlds.js';
 import { runRefusal, planRun, launchRun, runReadout, activeRuns, landingClearance, cargoFor, defaultPilot, abortRun, tradeRoom } from '../sim/shuttles.js';
-import { marketOfWorld, priceAt, quote, tradeRefusal, holdRoom, SPREAD } from '../sim/market.js';
+import { marketOfWorld, priceAt, quote, tradeRefusal, holdRoom, SPREAD, MARKETS } from '../sim/market.js';
 import { GOODS, GOOD_IDS, tonnes } from '../sim/goods.js';
 
 const emit = (t, p) => bus.emit(t, p);
@@ -118,9 +118,14 @@ function tradeHTML(s, w, sh) {
   if (!id || !s.market) return '';
   const { freeDownT, room } = tradeRoom(s, sh.cls, chosen.airspace);
   const ours = GOOD_IDS.map(g => ({ g, t: s.cargo.filter(x => x.good === g && !x.contract).reduce((a, x) => a + x.mass, 0) / 1000 })).filter(x => x.t > 0.004);
+  // (a choice made at another world, of goods this one won't buy, is let go)
+  for (const g of [...chosen.sell]) if (!ours.some(x => x.g === g) || tradeRefusal(s, id, g, 'sell')) chosen.sell.delete(g);
+  if (!s.cargo.length) chosen.sell.clear();
   let down = 0;
   const sells = ours.map(({ g, t }) => {
-    const no = tradeRefusal(s, id, g, 'sell');
+    // (refused here: not on its market, or all we hold of it stolen from this world's own power)
+    const items = s.cargo.filter(x => x.good === g && !x.contract);
+    const no = tradeRefusal(s, id, g, 'sell') || (items.every(x => x.stolen === MARKETS[id].faction) ? `stolen from ${MARKETS[id].faction} hulls: not here` : null);
     const on = chosen.sell.has(g) && !no;
     const take = on ? Math.min(t, Math.max(0, freeDownT - down)) : 0;
     down += take;

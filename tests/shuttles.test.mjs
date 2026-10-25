@@ -26,6 +26,7 @@ import { CLASSES, CLASS_IDS, bayOf } from '../js/sim/ship-classes.js';
 import { worldOf, airspacesOf, airspaceById } from '../js/sim/worlds.js';
 import { entryProfile, ascentProfile, craftOf, flightPathAt, HEAT_LIMIT, runMinutes } from '../js/sim/planetary.js';
 import { planRun, launchRun, activeRuns, runReadout, landingClearance, runRefusal, abortRun } from '../js/sim/shuttles.js';
+import { holdLoad as MK_holdLoad } from '../js/sim/market.js';
 import { ContractType, deliverPlanetside } from '../js/sim/contracts.js';
 
 /** A game with our ship held on a world's parking orbit (no traffic unless asked). */
@@ -196,6 +197,42 @@ export default [
       assert(run.phase === 'done' && run.log.some(l => /Chasing/.test(l.text)) && !s.ship.crew.some(m => m.away), 'it chases us down and comes aboard');
       rows.push(`we left: it held its orbit, then came after us (${run.log.filter(l => /Chasing/.test(l.text)).length} chase)`);
       console.log(`      ${rows.join(' · ')}`);
+    },
+  },
+  {
+    name: 'the review\'s cases: a run called back on its drop pays for what it flew; a contract failed with its freight in a shuttle leaves nothing aboard; a trade never fills our hold past its room; a shuttle in its bay is part of us; it leaves us, and comes alongside, going round as we do',
+    fn: () => {
+      const s = inOrbit('Mars');
+      const w = worldOf('Mars'), a = airspacesOf(w)[1], world = getWorld(s);
+      // (1) called back 3 min into its drop
+      let run = launchRun(s, planRun(s, s.shuttles.bay[0].id, a.id).plan).run;
+      while (run.phase !== 'drop' || s.clock.minute < run.legs[1].t0 + 3) advance(s, 1);
+      const whole = run.summary.fuelKg;
+      abortRun(s, run.id);
+      assert(run.summary.fuelKg < whole * 0.8, `called back: ${fmt(run.summary.fuelKg, 2)} kg, not the whole run's ${fmt(whole, 2)}`);
+      // (in its bay, it isn't a contact of ours)
+      flyRun(s, run);
+      // (2) a contract failed with its freight aboard the shuttle
+      const c = { id: 'test-f', type: 'PLANETSIDE', title: 'f', world: 'Mars', airspace: a.id, destName: 'x', cargo: { name: 'seed stock', mass: 2000 }, reward: { credits: 1 }, phase: 'active', dueAt: s.clock.minute + 20, log: [] };
+      s.contracts.active.push(c); s.cargo.push({ contract: c.id, name: 'seed stock', mass: 2000 });
+      run = launchRun(s, planRun(s, s.shuttles.bay[0].id, a.id).plan).run;
+      advance(s, 2);
+      const inBay = world.get(run.entity);
+      assert(inBay?.$inBay && !s.sensors.contacts.some(x => x.id === run.entity), 'in its bay: no contact of ours');
+      flyRun(s, run);
+      assert(c.phase === 'failed' && !s.cargo.some(x => x.contract === c.id), `its contract failed: the freight is gone, nothing left in our hold (${fmt(MK_holdLoad(s) / 1000, 1)} t)`);
+      // (3) a full hold: goods it can't sell come back, and what it buys fits the room there was
+      s.cargo = [{ good: 'ore', name: 'Nickel-iron ore', mass: s.cargoCapacity - 4000, cost: 0 }, { good: 'electronics', name: 'Electronics', mass: 4000, cost: 0, seized: true, stolen: 'MCR', contraband: true, illegalIn: ['MCR'] }];
+      run = launchRun(s, planRun(s, s.shuttles.bay[0].id, a.id).plan, () => {}, { trade: { sell: ['electronics'], buy: { good: 'water', t: Infinity } } }).run;
+      flyRun(s, run);
+      assert(MK_holdLoad(s) <= s.cargoCapacity + 1, `our hold ${fmt(MK_holdLoad(s) / 1000, 1)} t of ${fmt(s.cargoCapacity / 1000, 1)}`);
+      // (4) going round as we do, as it leaves the bay and as it comes alongside
+      run = launchRun(s, planRun(s, s.shuttles.bay[0].id, a.id).plan).run;
+      const path = { world: 'Mars', cls: run.cls, carrier: 'player', legs: run.legs };
+      const jump = (t) => { const A = flightPathAt(world, path, t - 0.02), B = flightPathAt(world, path, t + 0.02); return Math.hypot(A.vel.vx - B.vel.vx, A.vel.vy - B.vel.vy); };
+      const out = jump(run.legs[1].t0), home = jump(run.legs.at(-1).t0);
+      assert(out < 80 && home < 80, `leaving the bay ${fmt(out, 0)} m/s, alongside ${fmt(home, 0)} m/s from our own speed`);
+      console.log(`      called back on its drop: ${fmt(run.summary ? whole : 0, 2)} → charged what it flew; failed freight gone; a full hold kept full, not over; out of the bay ${fmt(out, 0)} m/s off our speed, alongside ${fmt(home, 0)}`);
     },
   },
   {

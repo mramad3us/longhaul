@@ -37,15 +37,21 @@
 //                  wants munitions, medical supplies and food more, and
 //                  trades less with everyone else.
 // The market draws its shocks from a generator of its own (rng.js nextOf),
-// so the main stream, and every test seeded on it, is left alone.
+// so the main stream, and every test seeded on it, is left alone; it is
+// seeded from what the game's own dice made (its first traffic's names, our
+// ship's), so every game has its own shocks and a seeded test the same.
+// Goods change hands across a berth's collar (docked at its station), or
+// on a world's pad by shuttle (shuttleTrade); elsewhere a board is read.
 //
 // WHAT WE KNOW of a market far off is its prices as they were a light-time
 // ago (knownPrices: the snapshot every step keeps, the last few).
 //
 // A SHIP'S HOLD. Every hull carries what its trade carries (holdOf): an ice
 // hauler ice, a tanker volatiles, a miner ore, a freighter what its last
-// port makes, a pirate loot; worked from its id, kept on it once looked
-// at (e.tags.hold), and what we take from it is gone from it. A lawful
+// port makes, a pirate loot; worked from its id (and its last port, so it
+// changes as the ship trades), and kept on it once anything is taken
+// (holdToTake: e.tags.hold), what is taken gone from it. A shuttle carries
+// its run's load, nothing of its own. A lawful
 // ship with its transponder on has filed its manifest (declaredHold:
 // never the contraband); a boarding party's search reads the real one.
 // ============================================================
@@ -125,7 +131,9 @@ const _warm = new Map();
  */
 export function createMarket(state) {
   const t0 = state.clock.minute;
-  const M = { rng: seedOf(`market:${state.ship?.name || ''}:${t0}`), at: t0, nodes: {}, history: {}, news: [] };
+  // (seeded from what the game's own dice made of it: its first traffic's names, different every game, the same under a test's seed)
+  const names = state.entities.filter(e => e.tags?.traffic).slice(0, 12).map(e => e.name).join('|');
+  const M = { rng: seedOf(`market:${state.ship?.name || ''}:${names}:${t0}`), at: t0, nodes: {}, history: {}, news: [] };
   state.market = M;
   let warm = _warm.get(t0);
   if (!warm) {
@@ -301,6 +309,8 @@ export function quote(state, id, g, t, side) {
 export function knownPrices(state, id) {
   const h = state.market?.history[id];
   if (!h?.length) return null;
+  // (where we are, the board is live: docked at its station, or in its world's space)
+  if (marketHere(state) === id || (MARKETS[id].world && state.flight.world?.name === MARKETS[id].world)) return { at: state.clock.minute, p: Object.fromEntries(GOOD_IDS.map(g => [g, Math.round(priceAt(state, id, g))])), live: true };
   const p = placeOf(state, id, state.clock.minute), f = state.flight.pos;
   const lagMin = Math.hypot(p.x - f.x, p.y - f.y) * AU_M / C_MS / 60;
   for (let i = h.length - 1; i >= 0; i--) if (h[i].at <= state.clock.minute - lagMin) return h[i];
@@ -324,7 +334,21 @@ export function marketHere(state) {
 
 /** Our hold: what is aboard, and the room. */
 export const holdLoad = (state) => state.cargo.reduce((s, x) => s + x.mass, 0);
-export const holdRoom = (state) => Math.max(0, state.cargoCapacity - holdLoad(state));
+export const holdRoom = (state) => Math.max(0, state.cargoCapacity - holdLoad(state) - heldForShuttles(state));
+/**
+ * Room held in our hold for what our shuttles out may bring back: the
+ * freight not yet landed, the goods not yet sold, what they bought, and the
+ * purchase still to be made (shuttles.js).
+ */
+export function heldForShuttles(state) {
+  let kg = 0;
+  for (const r of state.shuttles?.runs || []) {
+    if (r.phase === 'done' || r.phase === 'lost') continue;
+    for (const x of [...(r.cargo || []), ...(r.sell || []), ...(r.up || [])]) kg += x.mass;
+    if (r.buy && !r.bought) kg += r.buy.t * 1000;
+  }
+  return kg;
+}
 /** Tonnes aboard of a good (what we may sell: not a contract's). */
 export const heldOf = (state, g, filter = () => true) => state.cargo.filter(x => x.good === g && !x.contract && filter(x)).reduce((s, x) => s + x.mass, 0) / 1000;
 
@@ -333,12 +357,13 @@ export function tradeRefusal(state, id, g, side) {
   const m = MARKETS[id], G = GOODS[g];
   if (!isOpen(id)) return `${marketName(state, id)} doesn't trade with passing ships.`;
   if (G.illegalIn?.includes(m.faction)) return `${G.name} are contraband in ${m.faction} space: not on this market.`;
-  if (G.restricted && side === 'buy' && (m.faction === 'UN' || m.faction === 'MCR') && licenseOf(state) !== m.faction) return `${G.name} are sold here only to the ${m.faction === 'UN' ? 'UNN' : 'MCRN'}'s contractors.`;
+  if (G.restricted && (m.faction === 'UN' || m.faction === 'MCR') && licenseOf(state) !== m.faction) return side === 'buy' ? `${G.name} are sold here only to the ${m.faction === 'UN' ? 'UNN' : 'MCRN'}'s contractors.` : `${G.name} are contraband here without the ${m.faction === 'UN' ? 'UNN' : 'MCRN'}'s license: no buyer would touch them.`;
   return null;
 }
 
 /** Buy `t` tonnes of a good at a market (as much as we can, short of it). { ok, text, t, total }. */
-export function buyGood(state, id, g, t, { via = 'dock' } = {}) {
+export function buyGood(state, id, g, t) {
+  if (marketHere(state) !== id) return { ok: false, text: `Dock at ${marketName(state, id)} to trade: goods cross a berth's collar.` };
   const no = tradeRefusal(state, id, g, 'buy');
   if (no) return { ok: false, text: no };
   const room = holdRoom(state) / 1000;
@@ -366,6 +391,7 @@ export function buyGood(state, id, g, t, { via = 'dock' } = {}) {
  * goods: refused at their owner's ports, a fence's price elsewhere.
  */
 export function sellGood(state, id, g, t) {
+  if (marketHere(state) !== id) return { ok: false, text: `Dock at ${marketName(state, id)} to trade: goods cross a berth's collar.` };
   const no = tradeRefusal(state, id, g, 'sell');
   if (no) return { ok: false, text: no };
   const m = MARKETS[id];
@@ -468,7 +494,8 @@ const CARRIES_CLASS = {
 export function holdOf(state, e) {
   if (e.tags?.hold) return e.tags.hold;
   const c = CLASSES[e.cls];
-  const cap = c?.cargoT || 0;
+  // (a shuttle's load is its run's: shuttles.js)
+  const cap = e.tags?.shuttle ? 0 : c?.cargoT || 0;
   let hold = [];
   if (cap > 0) {
     const fill = 0.2 + 0.7 * h01(e.id, 1);
@@ -499,13 +526,18 @@ export function holdOf(state, e) {
       left -= lot;
     });
   }
-  (e.tags ||= {}).hold = hold;
   return hold;
+}
+
+/** Its hold, to take from: worked out once and kept on it from now on (what is taken is gone). */
+export function holdToTake(state, e) {
+  if (!e.tags?.hold) (e.tags ||= {}).hold = holdOf(state, e);
+  return e.tags.hold;
 }
 
 /** The manifest a lawful ship has filed (with its transponder on): its hold, less the contraband. Null if none is filed. */
 export function declaredHold(state, e) {
-  if (!e.transponder || e.faction === 'pirate' || e.tags?.wreck) return null;
+  if (!e.transponder || e.faction === 'pirate' || e.tags?.wreck || e.tags?.shuttle) return null;
   return holdOf(state, e).filter(x => !GOODS[x.good].illegalIn);
 }
 

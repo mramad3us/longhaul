@@ -16,8 +16,10 @@
 // license, else seized in Earth's and Mars's space as nuclear warheads are,
 // and sold at a UN or MCR port only to that navy's contractors. Cargo
 // taken from a lawful ship we had no right to board is STOLEN (its owner's
-// power on the item): its ports won't buy it, and others pay a fence's
-// price for it (market.js FENCE).
+// power on the item; an independent's, the power whose space it was in):
+// its ports won't buy it, and others pay a fence's price for it (market.js
+// FENCE). Only contraband seized off a hull is turned over for credit
+// (law.js turnOverContraband): not what we bought, nor what we stole.
 //
 // What a ship's stores cost in port follows the market too (contracts.js
 // priceOf): reaction mass and water by ice, rations by foodstuffs, air by

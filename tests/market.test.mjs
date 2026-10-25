@@ -64,6 +64,9 @@ export default [
       assert(lo >= MK.PRICE_MIN - 1e-9 && hi <= MK.PRICE_MAX + 1e-9, `prices ${fmt(lo, 2)}–${fmt(hi, 2)} of base`);
       assert(shocks > 10, `shocks in the news (${shocks} kept)`);
       console.log(`      a year: stocks ${fmt(Math.min(...drift), 2)}–${fmt(Math.max(...drift), 2)} of where they began, prices ${fmt(lo, 2)}–${fmt(hi, 2)} of base; e.g. "${s.market.news.at(-1).text}"`);
+      // another game (another seed: other traffic) has its own: its market's dice seeded from what its own made
+      const s2 = game(5), s3 = game(4);
+      assert(s2.market.rng !== s3.market.rng && s3.market.rng === game(4).market.rng, 'each game its own shocks; the same seed, the same');
     },
   },
   {
@@ -109,10 +112,14 @@ export default [
       s.resources.credits.current = 100;
       const poor = MK.buyGood(s, id, 'pgm', 1);
       assert(!poor.ok || poor.total <= 100, `no more than we can pay for (${poor.text})`);
+      s.resources.credits.current = 10_000;
+      const d = s.dock; s.dock = null;
+      assert(!MK.buyGood(s, id, 'water', 1).ok && !MK.sellGood(s, id, 'water', 1).ok, 'undocked: no trade, the goods cross a berth\'s collar');
+      s.dock = d;
     },
   },
   {
-    name: 'the law on goods: narcotics only at independent ports and seized by any power; munitions restricted; stolen goods refused by their owners and fenced elsewhere; a licensed captain turns contraband over for reputation',
+    name: 'the law on goods: narcotics only at independent ports and seized by any power; munitions restricted; stolen goods refused by their owners and fenced elsewhere; a licensed captain turns over contraband taken off a hull for reputation (not what it bought, not what it stole, not a token amount)',
     fn: () => {
       const s = game(4);
       assert(MK.tradeRefusal(s, 'ceres-station', 'narcotics', 'buy') && !MK.tradeRefusal(s, 'vesta-depot', 'narcotics', 'buy'), 'narcotics at Vesta, not at Ceres');
@@ -126,15 +133,23 @@ export default [
       const fence = MK.quote(s, 'ceres-station', 'electronics', 1, 'sell').total * MK.FENCE;
       const sold = MK.sellGood(s, 'ceres-station', 'electronics', 1);
       assert(sold.ok && Math.abs(sold.total - fence) < 1, `fenced at Ceres: ${fmt(sold.total, 0)} MCR (a ${MK.FENCE} share)`);
-      // licensed with the OPA, docked at Ceres (an OPA port): its own inspectors take the narcotics as evidence; turned over for reputation
+      // licensed with the OPA, docked at Ceres (an OPA port): narcotics we bought are no seizure, and a token amount no case
       s.service = createService('OPA', s.clock.minute);
-      assert(!contrabandFor(s, 'OPA').cargo.some(c => c.good === 'narcotics') && contrabandFor(s, 'UN').cargo.some(c => c.good === 'narcotics'), 'carried for our own power, still seized by another');
+      assert(!turnOverHere(s), 'bought narcotics: nothing to turn over');
+      assert(contrabandFor(s, 'OPA').cargo.some(c => c.good === 'narcotics'), 'and our own power\'s inspectors seize what we bought');
+      MK.stow(s, { good: 'narcotics', mass: 20, seized: true, from: 'some-wreck' });
+      assert(!turnOverHere(s), 'twenty kilos taken off a hull: not worth the paperwork');
+      // taken off a hull: evidence to our own power's inspectors, seized by another's; turned over for reputation
+      MK.stow(s, { good: 'narcotics', mass: 400, seized: true, from: 'some-wreck' });
+      const taken = (f) => contrabandFor(s, f).cargo.filter(c => c.good === 'narcotics' && c.seized);
+      assert(!taken('OPA').length && taken('UN').length, 'carried for our own power, still seized by another');
       s.cargo.push({ contract: 'c-smuggle', name: 'crates', mass: 300, contraband: true, illegalIn: ['OPA'] });
+      MK.stow(s, { good: 'pharma', mass: 500, seized: true, stolen: 'UN', from: 'x' });
       const here = turnOverHere(s);
-      assert(here && here.items.every(c => c.good) && !here.items.some(c => c.contract), `turnable here: ${here?.items.map(c => c.good).join(', ')} (not a contract's cargo)`);
+      assert(here && here.items.every(c => c.good === 'narcotics' && c.seized) && !here.items.some(c => c.contract || c.stolen), `turnable here: ${here?.items.map(c => `${c.mass / 1000} t ${c.good}`).join(', ')} (not bought, not stolen, not a contract's)`);
       const rep0 = s.service.rep.OPA || 0, st0 = s.law.standing.OPA;
       const r = turnOverContraband(s, (t, p) => {});
-      assert(r.ok && r.rep > 0 && s.law.standing.OPA > st0 && (s.service.rep.OPA || 0) > rep0 && !s.cargo.some(c => c.good === 'narcotics'), r.text);
+      assert(r.ok && r.rep > 0 && s.law.standing.OPA >= st0 && (s.service.rep.OPA || 0) > rep0 && !s.cargo.some(c => c.good === 'narcotics' && c.seized), r.text);
       assert(s.cargo.some(c => c.contract === 'c-smuggle'), 'the contract\'s crates stay');
       console.log(`      ${r.text}`);
     },
@@ -160,7 +175,7 @@ export default [
       assert(MK.holdOf(s, hauler).every(x => x.good === 'water') && MK.holdOf(s, miner).some(x => x.good === 'ore'), `hauler: ${MK.holdWords(MK.holdOf(s, hauler))}; miner: ${MK.holdWords(MK.holdOf(s, miner))}`);
       const fr = mk('freighter', 'UN', { from: 'pallas-station' });
       assert(MK.holdOf(s, fr).every(x => MK.MARKETS['pallas-station'].make[x.good]), `a freighter out of Pallas: ${MK.holdWords(MK.holdOf(s, fr))}`);
-      assert(JSON.stringify(MK.holdOf(s, fr)) === JSON.stringify(fr.tags.hold), 'worked once, kept');
+      assert(!fr.tags.hold && JSON.stringify(MK.holdOf(s, fr)) === JSON.stringify(MK.holdOf(s, fr)), 'worked out the same each look, kept only once something is taken');
       // a wreck: salvage, its hold read by a search, taken good by good
       const w = mk('freighter', 'UN', { from: 'ganymede-station' });
       w.tags.hold = [{ good: 'food', t: 30 }, { good: 'delicacies', t: 2 }, { good: 'narcotics', t: 0.5 }];

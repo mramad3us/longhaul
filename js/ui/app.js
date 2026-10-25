@@ -24,7 +24,7 @@ import { toggleTransponder } from '../sim/comms.js';
 import { orderShutdown } from '../sim/reactor.js';
 import { acceptMission } from '../sim/missions.js';
 import { initSelection, selectCrew, selectTile, clearSelection, renderSelection, showDeckMenu } from './selection.js';
-import { initDialogs, openDialog, closeDialog, closeTopDialog, openMissions, openJobs, openStation, answerRequestById } from './dialogs.js';
+import { initDialogs, openDialog, closeDialog, closeTopDialog, openMissions, openJobs, openStation, answerRequestById, updateStation } from './dialogs.js';
 import { initPresenter, resourceAlert } from './presenter.js';
 import { openSystems, openRoster } from './shipboard.js';
 import { initSettings, renderSettings } from './settings.js';
@@ -399,6 +399,7 @@ function frame(state, alpha) {
   updateBoarding();
   updateShuttleBay();
   updateMarkets();
+  updateStation();
   renderSelection();
   renderLog();
 

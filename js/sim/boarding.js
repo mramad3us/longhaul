@@ -64,7 +64,8 @@ import { lawfulTarget, recordOffense } from './law.js';
 import { isDocked, dockedTo } from './docking.js';
 import { shipGeometry, airlockFor } from './ship-layout.js';
 import { ourName } from './service.js';
-import { holdOf, holdWords, stow, holdRoom } from './market.js';
+import { holdOf, holdToTake, holdWords, stow, holdRoom } from './market.js';
+import { controlAt, POWERS } from './factions.js';
 import { GOODS, tonnes } from './goods.js';
 
 export const EVA_RANGE_M = 2_000;
@@ -350,7 +351,9 @@ const ONCE_PER_HULL = new Set(['strip', 'accounts']);
  */
 function stolenFrom(state, e) {
   if (ensureHull(e).status === 'wreck' || !lawfulTarget(e) || e.agent?.aggressor) return null;
-  return e.faction;
+  // (an independent hull's goods: the power whose space it was in keeps the record)
+  if (POWERS.includes(e.faction)) return e.faction;
+  return controlAt(e.pos.x, e.pos.y, state.clock.minute).faction || e.faction;
 }
 
 /** How long moving goods across a mated collar takes the party (min): thirty tonnes an hour, ten minutes at the least. */
@@ -393,7 +396,7 @@ function actionMinute(state, b, e, party, emit) {
     case 'search': {
       // (the hold as it is: market.js holdOf, its goods labelled)
       const crew = crewAboard(e), pax = passengersAboard(e);
-      const hold = holdOf(state, e).filter(x => x.t > 0.01);
+      const hold = holdToTake(state, e).filter(x => x.t > 0.01);
       const contraband = hold.some(x => GOODS[x.good].illegalIn);
       b.found = { crew, pax, holdT: Math.round(hold.reduce((s, x) => s + x.t, 0) * 10) / 10, contraband };
       learn(state, e, { crew, pax, hold, note: `Searched: ${holdWords(hold)}${contraband ? ' (contraband among it)' : ''}` }, 'boarded');
@@ -419,7 +422,7 @@ function actionMinute(state, b, e, party, emit) {
     }
     case 'cargo': {
       // its hold into ours, good by good (one asked for, or the dearest a tonne first), as much as fits
-      const hold = holdOf(state, e);
+      const hold = holdToTake(state, e);
       const goods = a.good ? hold.filter(x => x.good === a.good) : [...hold].sort((p, q) => GOODS[q.good].base - GOODS[p.good].base);
       const stolen = stolenFrom(state, e);
       const moved = [];
@@ -433,7 +436,8 @@ function actionMinute(state, b, e, party, emit) {
       e.tags.hold = hold.filter(x => x.t > 0.005);
       if (!moved.length) { note(state, holdRoom(state) <= 0 ? 'No room in our hold.' : 'Nothing left in its hold.', emit, 'warn'); return; }
       note(state, `Into our hold: ${moved.map(m => `${tonnes(m.t)} ${GOODS[m.good].name.toLowerCase()}`).join(', ')}${stolen ? '. Stolen goods: its owners\' ports won\'t touch them' : ''}.`, emit, 'ok');
-      if (stolen && stolen in state.law.standing) recordOffense(state, stolen, 'theft', 1, emit, `took ${e.name}'s cargo`);
+      // (theft once a hull, however many loads are carried off it)
+      if (stolen && stolen in state.law.standing && !e.tags.robbed) { e.tags.robbed = true; recordOffense(state, stolen, 'theft', 1, emit, `took ${e.name}'s cargo`); }
       return;
     }
     case 'prisoners': {

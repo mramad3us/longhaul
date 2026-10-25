@@ -494,7 +494,7 @@ export function surroundings(state, alpha, lookM) {
   world.query(f.pos, lookM / AU_M, _q);
   const objects = [];
   for (const e of _q) {
-    if (e.type === 'nav' || e.type === 'ordnance') continue;
+    if (e.type === 'nav' || e.type === 'ordnance' || e.$inBay) continue;
     if (!liveKnowledge(state, e) && e.type !== 'station') continue;
     const ep = at(e);
     const dx = (ep.x - us.x) * AU_M, dy = (ep.y - us.y) * AU_M;

@@ -108,24 +108,36 @@ function angleAt(body, days) {
   return body.initAngle + TWO_PI * days / body.period;
 }
 
-/** Heliocentric position in AU. Writes into `out` if given. */
+/**
+ * Heliocentric position in AU. Writes into `out` if given. (The last answer
+ * is kept on the body: a minute asks where Mars is for every ship round it,
+ * at the same moment, thousands of times at a crowded port.)
+ */
 export function bodyPos(body, days, out = { x: 0, y: 0 }) {
+  if (body.$pd === days) { out.x = body.$px; out.y = body.$py; return out; }
   if (!body.parent) {
     if (body.a === 0) { out.x = 0; out.y = 0; return out; }
     const th = angleAt(body, days);
     out.x = body.a * Math.cos(th);
     out.y = body.a * Math.sin(th);
-    return out;
+  } else {
+    bodyPos(body.parent, days, out);
+    const th = angleAt(body, days);
+    out.x += body.a * Math.cos(th);
+    out.y += body.a * Math.sin(th);
   }
-  bodyPos(body.parent, days, out);
-  const th = angleAt(body, days);
-  out.x += body.a * Math.cos(th);
-  out.y += body.a * Math.sin(th);
+  body.$pd = days; body.$px = out.x; body.$py = out.y;
   return out;
 }
 
-/** Heliocentric velocity in m/s. Writes into `out` if given. */
+/** Heliocentric velocity in m/s. Writes into `out` if given. (Kept as bodyPos keeps its answer.) */
 export function bodyVel(body, days, out = { vx: 0, vy: 0 }) {
+  if (body.$vd === days) { out.vx = body.$vx; out.vy = body.$vy; return out; }
+  bodyVelOf(body, days, out);
+  body.$vd = days; body.$vx = out.vx; body.$vy = out.vy;
+  return out;
+}
+function bodyVelOf(body, days, out) {
   if (body.a === 0) { out.vx = 0; out.vy = 0; return out; }
   if (body.parent) bodyVel(body.parent, days, out);
   else { out.vx = 0; out.vy = 0; }

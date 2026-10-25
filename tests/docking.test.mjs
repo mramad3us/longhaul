@@ -523,14 +523,18 @@ export default [
       D.beginDocking(s, { kind: 'ship', id: w2.id }, { mode: 'auto' });
       run(s, st => st.dock?.phase === 'spin', 120);
       assert(s.dock?.phase === 'spin' && w2.tags.spinHeld, `matching (${s.dock?.phase})`);
-      advance(s, 1);
       const at = tumbleAngle(w2, s.clock.minute);
+      // (called off as the docking display does it: holding off, the match let go)
       D.abortDocking(s, emit, 'test');
-      D.releaseDock(s);
-      advance(s, 1);
-      assert(!w2.tags.spinHeld && w2.tags.tumble0 && tumbling(w2), 'let go: it tumbles on');
+      assert(s.dock?.phase === 'holding' && !w2.tags.spinHeld && w2.tags.tumble0 && tumbling(w2), 'let go: it tumbles on, with us holding off');
       const later = tumbleAngle(w2, s.clock.minute + 10);
       assert(later - at > 10 && Math.abs(tumbleAngle(w2, s.clock.minute) - at) < tumbleOf(w2).rate * 1.5, `from where it stood (${fmt(at, 1)}° → ${fmt(later, 1)}° in ten minutes)`);
+      // docking again from the hold: the spin matched again (a short match begins and ends inside a minute: the dock's own word for it)
+      const seen = [];
+      bus.on('dock-phase', (p) => seen.push(p.phase));
+      D.beginDocking(s, { kind: 'ship', id: w2.id }, { mode: 'auto' });
+      run(s, st => st.dock?.phase === 'docked', 240);
+      assert(seen.includes('spin') && s.dock?.phase === 'docked', `matched again (${seen.join(' → ')})`);
     },
   },
   {

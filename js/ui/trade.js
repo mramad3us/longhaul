@@ -47,9 +47,11 @@ function ourLot(s, g) {
   const items = s.cargo.filter(x => x.good === g && !x.contract);
   const t = items.reduce((a, x) => a + x.mass, 0) / 1000;
   if (t <= 0.004) return null;
-  const cost = items.reduce((a, x) => a + (x.cost || 0), 0);
+  // (what it cost us a tonne: over what we bought, not what we took)
+  const bought = items.filter(x => x.cost > 0), bt = bought.reduce((a, x) => a + x.mass, 0) / 1000;
+  const cost = bought.reduce((a, x) => a + x.cost, 0);
   const stolen = items.some(x => x.stolen), seized = items.some(x => x.seized);
-  return { t, per: cost > 0 ? cost / t : null, stolen, seized };
+  return { t, per: bt > 0.004 ? cost / bt : null, stolen, seized, stolenFrom: new Set(items.filter(x => x.stolen).map(x => x.stolen)), allStolen: items.every(x => x.stolen) };
 }
 
 /** The MARKET tab of a station's window. */
@@ -62,7 +64,9 @@ export function marketHTML(s, st) {
   const rows = GOOD_IDS.filter(g => !tradeRefusal(s, id, g, 'sell') || ourLot(s, g)).map(g => {
     const G = GOODS[g], p = priceAt(s, id, g), f = s.market.nodes[id].stock[g] / targetOf(id, g);
     const lot = ourLot(s, g);
-    const noBuy = tradeRefusal(s, id, g, 'buy'), noSell = tradeRefusal(s, id, g, 'sell');
+    const noBuy = tradeRefusal(s, id, g, 'buy');
+    // (all we hold of it stolen from this port's power: it won't take it)
+    const noSell = tradeRefusal(s, id, g, 'sell') || (ourLot(s, g)?.allStolen && ourLot(s, g).stolenFrom.size === 1 && ourLot(s, g).stolenFrom.has(m.faction) ? `The registry has it as stolen from ${m.faction} hulls: not here.` : null);
     const tag = m.make[g] ? '<span class="mkt-tag made">MADE HERE</span>' : m.want[g] ? '<span class="mkt-tag wanted">WANTED</span>' : '';
     const stock = s.market.nodes[id].stock[g];
     const btn = (act, t, label, no) => `<button class="mkt-btn" data-act="${act}" data-good="${g}" data-t="${t}" ${no || !here ? `disabled title="${esc(no || 'Dock to trade: goods cross a berth\'s collar')}"` : ''}>${label}</button>`;
@@ -162,6 +166,7 @@ function newsHTML(s) {
 /** While open, follow the market (a step is every six hours: redraw on one). */
 export function updateMarkets() {
   if (!marketsShown() || !ui.state?.market) return;
-  const at = ui.state.market.at;
+  // (on a market step, and when where we are changes: a board read live, or as heard)
+  const s = ui.state, at = `${s.market.at}|${marketHere(s) || ''}|${s.flight.world?.name || ''}|${Math.round(s.resources.credits.current)}|${s.cargo.length}`;
   if (at !== updateMarkets.at) { updateMarkets.at = at; renderMarkets(); }
 }

@@ -103,6 +103,7 @@ export function playerSensorQuality(state) {
 export const canSee = (distAU, sigAU, quality) => distAU <= sigAU * quality;
 
 const _q = [];
+const SCAN_CAP = 120;
 
 export function sensorsTick(state) {
   const s = state.sensors;
@@ -117,17 +118,25 @@ export function sensorsTick(state) {
   const contacts = [];
   const seen = new Set();
   for (const e of _q) {
+    // (a shuttle in its carrier's bay is part of its carrier: planetary.js)
+    if (e.$inBay) continue;
     const dx = e.pos.x - pos.x, dy = e.pos.y - pos.y;
     const dist = Math.hypot(dx, dy);
     if (!canSee(dist, signatureRange(e), quality) && !(e.type === 'ordnance' && e.ord?.owner === 'player')) continue;
     seen.add(e.id);
-    s.scan[e.id] = (s.scan[e.id] || 0) + (s.locked === e.id ? 3 : 1) * rate;
-    contacts.push(describe(e, dist, Math.atan2(dy, dx), s.scan[e.id], isIdentified(state, e, s.scan[e.id], hunts)));
+    // (a track long enough for every look there is (manifest.js counts at 90) stops growing: a crowded port's board isn't rewritten each minute)
+    const cur = s.scan[e.id] || 0;
+    const sc = cur >= SCAN_CAP ? cur : (s.scan[e.id] = Math.min(SCAN_CAP, cur + (s.locked === e.id ? 3 : 1) * rate));
+    contacts.push(describe(e, dist, Math.atan2(dy, dx), sc, isIdentified(state, e, sc, hunts)));
   }
-  for (const id of Object.keys(s.scan)) {
-    if (seen.has(id)) continue;
+  // what we no longer see fades: those just off the board, and those fading already (not every key, every minute: a
+  // crowded port has tens of thousands on the board; after a load, the first minute walks them once)
+  const fade = s.$fade || (s.$fade = new Set(Object.keys(s.scan)));
+  for (const c of s.contacts) if (!seen.has(c.id)) fade.add(c.id);
+  for (const id of fade) {
+    if (seen.has(id) || s.scan[id] == null) { fade.delete(id); continue; }
     s.scan[id] -= 2;
-    if (s.scan[id] <= 0) delete s.scan[id];
+    if (s.scan[id] <= 0) { delete s.scan[id]; fade.delete(id); }
   }
   // Contacts that just dropped off the board (intel.js keeps their last fix)
   const lost = [];
@@ -235,6 +244,15 @@ export function toggleLock(state, id) {
   return true;
 }
 
+/**
+ * A contact on the board by id: through an index of the board, made again
+ * when the board is (once a minute; a crowded port's holds thousands, and
+ * the displays ask for many every frame).
+ */
+const _byId = new WeakMap();
 export function contactById(state, id) {
-  return state.sensors.contacts.find(c => c.id === id) || null;
+  const list = state.sensors.contacts;
+  let m = _byId.get(list);
+  if (!m) { m = new Map(); for (const c of list) m.set(c.id, c); _byId.set(list, m); }
+  return m.get(id) || null;
 }

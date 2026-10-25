@@ -292,7 +292,10 @@ button.ann:hover { border-color: var(--c-sel); color: var(--c-text2); }
 .mv-screens { flex: 1 1 auto; position: relative; min-height: 0; overflow: hidden; }
 .mv-screen { position: absolute; inset: 0; }
 .mv-screen > canvas { display: block; }
-.mv-info { position: absolute; left: 10px; bottom: 8px; display: flex; gap: 6px; font-family: var(--f-data); font-size: 11px; color: var(--c-text3); pointer-events: none; z-index: 3; }
+.mv-info { position: absolute; left: 10px; bottom: 8px; display: flex; gap: 6px; font-family: var(--f-data); font-size: 11px; color: var(--c-text3); pointer-events: none; z-index: 3; max-width: calc(100% - 150px); white-space: nowrap; }
+/* (short of room, the last of it gives way first, clipped: the scale bar keeps its corner) */
+.mv-info > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; }
+.mv-info > span:last-child { flex: 0 1 auto; }
 .mv-info .tac-info-sep { color: var(--c-line2); }
 .mv-exterior { background: #000; }
 /* The cameras and their bar, one block: in the main view, or in the window when floated */

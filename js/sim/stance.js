@@ -60,7 +60,7 @@ import { relativeState, pointFrom, closingLaw, keepLaw, flipSeconds, minutesToFl
 import { CLASSES, TECH } from './ship-classes.js';
 import { PLAYER, profile } from './combatants.js';
 import { inboundTo, timeToGo } from './ordnance.js';
-import { isTracked, signatureRange, playerSensorQuality } from './sensors.js';
+import { isTracked, signatureRange, playerSensorQuality, contactById } from './sensors.js';
 import { PDC, MINING_GEAR, RAIL_RANGE_M, FAST_VC, TORPEDO_MOTOR, COUNTER_BURN_S, UNDER_FIRE_CLOSE_MS } from './weapons.js';
 
 export const STANCE_MODES = {
@@ -289,7 +289,7 @@ export function stanceRanges(state, target, rangeNowM) {
   const p = profile(state, PLAYER);
   const tl = p.tl;
   // What it carries, if we know its class
-  const contact = state.sensors.contacts.find(c => c.id === e.id);
+  const contact = contactById(state, e.id);
   const known = !!contact?.name || (!contact && e.transponder);
   const c = known ? CLASSES[e.cls] : null;
   const theirTL = c ? c.tl : null;

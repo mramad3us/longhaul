@@ -297,7 +297,8 @@ export function beginDocking(state, target, { mode = 'auto', route = null } = {}
   if (was && !keep && was.target.kind === 'station' && was.berth) { const h = world.get(was.target.id); if (h) releaseBerth(h, was.berth, 'player'); }
   state.dock = {
     target: { kind: target.kind, id: e.id }, berth, port, mode,
-    phase: keep && cleared ? 'prox' : near ? (cleared ? 'approach' : 'awaiting') : 'inbound',
+    // (a tumbling wreck held off and come back to: the final approach again, and its spin matched)
+    phase: keep && cleared && !(target.kind === 'ship' && tumbling(e)) ? 'prox' : near ? (cleared ? 'approach' : 'awaiting') : 'inbound',
     rel: keep ? was.rel : zeroRel(), t: 0, since: state.clock.minute, timer: 0, bumps: 0, fuel: 0, rate: mode === 'manual' ? 1 : 3,
     ...(keep && was.lease ? { lease: was.lease } : {}),
   };
@@ -962,7 +963,11 @@ export function abortDocking(state, emit = () => {}, why = 'aborted') {
   const d = state.dock;
   if (!d) return false;
   if (d.phase === 'inbound' || d.phase === 'awaiting') { abortRoute(state, emit); state.dock = null; emit('dock-aborted', { why }); return true; }
-  if (d.phase === 'approach' || d.phase === 'spin') { d.phase = 'holding'; d.rel.vx = d.rel.vy = d.rel.vz = 0; emit('dock-aborted', { why, holding: true }); return true; }
+  if (d.phase === 'approach' || d.phase === 'spin') {
+    // (a match called off: we stop turning with the wreck, and it tumbles on, to us)
+    if (d.phase === 'spin') { const e = getWorld(state).get(d.target.id); if (e) releaseSpin(e, state.clock.minute + (d.t || 0) / MIN_S); state.flight.spinWith = null; }
+    d.phase = 'holding'; d.rel.vx = d.rel.vy = d.rel.vz = 0; emit('dock-aborted', { why, holding: true }); return true;
+  }
   if (d.phase === 'prox') { d.backingOut = true; emit('dock-aborted', { why, backingOut: true }); return true; }
   if (d.phase === 'capture' || d.phase === 'seal') { d.phase = 'separate'; d.rel.vx = 0.1; d.since = state.clock.minute; emit('dock-aborted', { why, backingOut: true }); return true; }
   return false;

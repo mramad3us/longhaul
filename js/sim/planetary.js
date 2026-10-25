@@ -8,9 +8,12 @@
 // one shuttle or a hundred NPC ones cost the same:
 //
 //   DROP     from its carrier's high orbit down to the top of the air, on
-//            the drive: a powered spiral round the world (radius eased in
-//            so it arrives level), accelerating, then braking to the speed
-//            it will enter at, along the path's length (pathLeg)
+//            the drive: a powered spiral round the world (pathLeg: a cubic
+//            in the log of its radius, leaving level as the carrier goes
+//            round and meeting the air at the entry's own angle), speeding
+//            up, then braking to the speed it will enter at (in the frame
+//            that doesn't turn: the ground's speed under it added), along
+//            the path's length (measured in ARC_N steps)
 //   ENTRY    from the entry interface down, integrated second by second in
 //            the world's turning frame (its air at rest in it, the
 //            centrifugal and Coriolis terms with it): its pull, drag
@@ -27,7 +30,8 @@
 //   ASCENT   off the pad on the drive, straight up, then pitching over
 //            downrange (never faster along the ground than an orbit there),
 //            through the air to its top (drag against it), and a powered
-//            spiral back up to the carrier (pathLeg again)
+//            spiral back up to the carrier (pathLeg again: leaving at the
+//            climb's speed and angle, alongside going round as it goes)
 //
 // The profiles depend only on the world and the craft (entryProfile,
 // ascentProfile, cached): where a run lands, it starts upstream of the pad
@@ -84,7 +88,7 @@ function flyDown(w, craft, start) {
   let x = R + start.h, y = 0;
   let vx = start.v * Math.sin(start.gamma), vy = start.v * Math.cos(start.gamma);
   let t = 0, thPrev = 0, th = 0, nextS = 0;
-  let peakHeat = 0, peakG = 0, peakQ = 0, powered = start.v === 0;
+  let peakHeat = 0, peakG = 0, peakQ = 0, powered = start.v === 0, driveGs = 0;
   const samples = [];
   while (t < MAX_S) {
     const r = Math.hypot(x, y), h = r - R, rx = x / r, ry = y / r;
@@ -119,6 +123,7 @@ function flyDown(w, craft, start) {
       const tm = Math.hypot(tx, ty);
       if (tm > craft.aMax) { tx *= craft.aMax / tm; ty *= craft.aMax / tm; }
       fx += tx; fy += ty;
+      driveGs += Math.min(tm, craft.aMax) / G0 * DT;
     }
     peakG = Math.max(peakG, Math.hypot(fx, fy) / G0);
     vx += (ax + fx) * DT; vy += (ay + fy) * DT;
@@ -132,9 +137,9 @@ function flyDown(w, craft, start) {
       samples.push({ t, th, h: Math.max(0, hNow), v: Math.hypot(vx, vy), q: rho > 0 ? entryHeat(rho, v, NOSE_M) : 0, g: Math.hypot(fx, fy) / G0 });
       nextS = t + SAMPLE_S;
     }
-    if (hNow <= 0) return { ok: Math.hypot(vx, vy) < 12, samples, t, th, peakHeat, peakG, peakQ, landV: Math.hypot(vx, vy), entryV: start.v };
+    if (hNow <= 0) return { ok: Math.hypot(vx, vy) < 12, samples, t, th, peakHeat, peakG, peakQ, landV: Math.hypot(vx, vy), entryV: start.v, driveGmin: driveGs / 60 };
   }
-  return { ok: false, samples, t, th, peakHeat, peakG, peakQ, landV: Infinity, entryV: start.v };
+  return { ok: false, samples, t, th, peakHeat, peakG, peakQ, landV: Infinity, entryV: start.v, driveGmin: driveGs / 60 };
 }
 
 /**
@@ -144,7 +149,7 @@ function flyDown(w, craft, start) {
  */
 function flyUp(w, craft, topM) {
   const GM = w.GM, R = w.R, om = 2 * Math.PI / w.rotS;
-  let x = R + 1, y = 0, vx = 0, vy = 0, t = 0, th = 0, thPrev = 0, nextS = 0, peakG = 0, peakQ = 0;
+  let x = R + 1, y = 0, vx = 0, vy = 0, t = 0, th = 0, thPrev = 0, nextS = 0, peakG = 0, peakQ = 0, driveGs = 0;
   const samples = [{ t: 0, th: 0, h: 0, v: 0, q: 0, g: 0 }];
   const a = ASCENT_THRUST * craft.aMax;
   while (t < MAX_S) {
@@ -164,6 +169,7 @@ function flyUp(w, craft, topM) {
     const hold = GM / (r * r) - om * om * r;
     const upA = vr > Math.max(300, 0.5 * vCirc) ? Math.min(a * up, Math.max(0, hold)) : a * up;
     fx += upA * rx - a * along * ry; fy += upA * ry + a * along * rx;
+    driveGs += Math.hypot(upA, a * along) / G0 * DT;
     peakG = Math.max(peakG, Math.hypot(fx, fy) / G0);
     vx += (ax + fx) * DT; vy += (ay + fy) * DT;
     x += vx * DT; y += vy * DT;
@@ -173,9 +179,10 @@ function flyUp(w, craft, topM) {
     th += d; thPrev = an;
     const hNow = Math.hypot(x, y) - R;
     if (t >= nextS || hNow >= topM) { samples.push({ t, th, h: Math.max(0, hNow), v: Math.hypot(vx, vy), q: 0, g: Math.hypot(fx, fy) / G0 }); nextS = t + SAMPLE_S; }
-    if (hNow >= topM) return { samples, t, th, v: Math.hypot(vx, vy), peakG, peakQ };
+    // (at the top: its speed round the world in the frame that doesn't turn, for the leg that carries on from it)
+    if (hNow >= topM) { const r2 = Math.hypot(x, y); return { samples, t, th, v: Math.hypot(vx, vy), peakG, peakQ, driveGmin: driveGs / 60, vRound: (-vx * y / r2 + vy * x / r2) + om * r2, vRadial: (vx * x + vy * y) / r2 }; }
   }
-  return { samples, t, th, v: Math.hypot(vx, vy), peakG, peakQ };
+  return { samples, t, th, v: Math.hypot(vx, vy), peakG, peakQ, driveGmin: driveGs / 60, vRound: Math.hypot(vx, vy), vRadial: 0 };
 }
 
 const _down = new Map(), _up = new Map();
@@ -192,12 +199,14 @@ export function entryProfile(worldName, cls) {
   const w = worldOf(worldName), craft = craftOf(cls);
   let p = null;
   if (w && !w.atmo?.giant && craft.aMax > 1.1 * w.g) {
-    if (!w.atmo) p = { ...flyDown(w, craft, { h: HOVER_M, v: 0, gamma: 0 }), topM: HOVER_M };
+    const om = 2 * Math.PI / w.rotS;
+    // (vRound: its speed round the world, in the frame that doesn't turn, where the drive's legs are flown: the leg down ends at it)
+    if (!w.atmo) p = { ...flyDown(w, craft, { h: HOVER_M, v: 0, gamma: 0 }), topM: HOVER_M, vRound: om * (w.R + HOVER_M), vRadial: 0 };
     else if (craft.rated) {
       const hE = w.atmo.interfaceM, rE = w.R + hE;
       let vE = Math.min(V_ENTRY_MAX, 0.95 * (Math.sqrt(w.GM / rE) - Math.abs(2 * Math.PI / w.rotS) * rE));
       for (let i = 0; i < 12; i++) {
-        p = { ...flyDown(w, craft, { h: hE, v: vE, gamma: ENTRY_GAMMA }), topM: hE };
+        p = { ...flyDown(w, craft, { h: hE, v: vE, gamma: ENTRY_GAMMA }), topM: hE, vRound: vE * Math.cos(ENTRY_GAMMA) + om * rE, vRadial: vE * Math.sin(ENTRY_GAMMA) };
         if (p.ok && p.peakHeat <= craft.heatMax) break;
         vE *= 0.85;
       }
@@ -223,26 +232,60 @@ export function ascentProfile(worldName, cls) {
 /**
  * A powered leg round a world, in its plane (Θ eastward, round its centre):
  * from radius rA at ΘA to rB, `span` rad further on; the radius eased in so
- * the end is level (`flat: 'end'`, a drop) or the start (`'start'`, a climb
- * back up); its speed along the path from vA to vB under acceleration `a`,
- * accelerating then braking. Returns the leg's numbers, its length and time.
+ * the end is level (`flat: 'end'`), or the start (`'start'`), or both
+ * (`'both'`), or at given angles ({ t0, t1, span }: a leg that leaves a
+ * carrier going round with it and meets the air coming down into it, or
+ * leaves the air climbing and comes alongside level); its speed along the
+ * path from vA to vB under acceleration `a` (more, if the change of speed
+ * wants more in the length), accelerating then braking. Returns the leg's
+ * numbers, its length and time.
  */
 export function pathLeg(rA, thA, rB, span, flat, vA, vB, a) {
   const L = spiralLength(rA, rB, span, flat);
+  if (L > 1) a = Math.max(a, Math.abs(vA * vA - vB * vB) / (2 * L) * 1.02);
   const vm = Math.max(vA, vB, Math.sqrt((2 * a * L + vA * vA + vB * vB) / 2));
   const T = (vm - vA) / a + (vm - vB) / a;
   return { rA, thA, rB, span, flat, vA, vB, a, L, vm, T };
 }
-const radiusAt = (rA, rB, u, flat) => flat === 'end' ? rB + (rA - rB) * (1 - u) * (1 - u) : rA + (rB - rA) * u * u;
-function spiralLength(rA, rB, span, flat, n = 48) {
-  let L = 0, r0 = rA;
-  for (let i = 1; i <= n; i++) {
-    const u = i / n, r1 = radiusAt(rA, rB, u, flat);
-    L += Math.hypot(r1 - r0, 0.5 * (r0 + r1) * span / n);
+/**
+ * The radius `u` of the way along a leg. `flat` names the shape: 'end'
+ * (level at its end), 'start', 'both', or { t0, t1, span }: leaving at a
+ * flight-path angle whose tangent is t0 and arriving at t1's (climbing out
+ * of the air, coming down into it). 'both' and the angled shapes are a
+ * cubic in the radius' logarithm (a spiral eased at both ends): a leg that
+ * climbs from a world's air to ten times as far out within a radian round
+ * bends gently all the way, not hard at its start.
+ */
+function radiusAt(rA, rB, u, flat) {
+  if (flat === 'end') return rB + (rA - rB) * (1 - u) * (1 - u);
+  if (flat === 'start') return rA + (rB - rA) * u * u;
+  const a = Math.log(rA), b = Math.log(rB);
+  if (flat === 'both') return Math.exp(a + (b - a) * u * u * (3 - 2 * u));
+  // (d ln r / du = span · tan γ at each end)
+  const u2 = u * u, u3 = u2 * u, m0 = flat.span * flat.t0, m1 = flat.span * flat.t1;
+  return Math.exp((2 * u3 - 3 * u2 + 1) * a + (u3 - 2 * u2 + u) * m0 + (3 * u2 - 2 * u3) * b + (u3 - u2) * m1);
+}
+/**
+ * A leg's length along its curve, sample by sample (ARC_N of them: a curve
+ * that climbs steeply out of the air changes fast at its start, and too
+ * few samples there place the craft too slowly along it): the cumulative
+ * length at each sample. Kept beside the leg, not in it (the save carries
+ * the leg's numbers only; a loaded leg works it out again).
+ */
+const ARC_N = 400;
+const _arcs = new WeakMap();
+function arcTable(rA, rB, span, flat) {
+  const Ls = new Float64Array(ARC_N + 1);
+  let r0 = rA;
+  for (let i = 1; i <= ARC_N; i++) {
+    const u = i / ARC_N, r1 = radiusAt(rA, rB, u, flat);
+    Ls[i] = Ls[i - 1] + Math.hypot(r1 - r0, 0.5 * (r0 + r1) * span / ARC_N);
     r0 = r1;
   }
-  return L;
+  return Ls;
 }
+const arcOf = (g) => { let t = _arcs.get(g); if (!t) { t = arcTable(g.rA, g.rB, g.span, g.flat); _arcs.set(g, t); } return t; };
+function spiralLength(rA, rB, span, flat) { return arcTable(rA, rB, span, flat)[ARC_N]; }
 /**
  * How far along a leg (m) it is `s` seconds in. (A leg cut from another, a
  * shuttle braking along the way it was flying, starts `d0` along it.)
@@ -259,15 +302,14 @@ export function speedAt(g, s) {
   return s <= t1 ? g.vA + g.a * s : Math.max(g.vB, g.vm - g.a * (s - t1));
 }
 /** The place on a leg `dist` metres along it: { r, th }. */
-export function placeAlong(g, dist, n = 48) {
-  let L = 0, r0 = g.rA;
-  for (let i = 1; i <= n; i++) {
-    const u = i / n, r1 = radiusAt(g.rA, g.rB, u, g.flat);
-    const dl = Math.hypot(r1 - r0, 0.5 * (r0 + r1) * g.span / n);
-    if (L + dl >= dist) { const k = dl > 0 ? (dist - L) / dl : 0, uu = (i - 1 + k) / n; return { r: radiusAt(g.rA, g.rB, uu, g.flat), th: g.thA + g.span * uu }; }
-    L += dl; r0 = r1;
-  }
-  return { r: g.rB, th: g.thA + g.span };
+export function placeAlong(g, dist) {
+  const Ls = arcOf(g);
+  if (dist <= 0) return { r: g.rA, th: g.thA };
+  if (dist >= Ls[ARC_N]) return { r: g.rB, th: g.thA + g.span };
+  let lo = 0, hi = ARC_N;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (Ls[mid] <= dist) lo = mid; else hi = mid; }
+  const dl = Ls[hi] - Ls[lo], uu = (lo + (dl > 0 ? (dist - Ls[lo]) / dl : 0)) / ARC_N;
+  return { r: radiusAt(g.rA, g.rB, uu, g.flat), th: g.thA + g.span * uu };
 }
 
 // ---- RAILS: a flight path's place at any moment ----
@@ -331,12 +373,22 @@ export function placeOnLeg(path, leg, minute) {
  * ground from its parking orbit, by trips (min): the traffic's outcome when
  * nobody is near to see it (traffic.js).
  */
+const _trips = new Map();
 export function runMinutes(worldName, cls, tonnes, shuttles = 1) {
-  const w = worldOf(worldName), down = entryProfile(worldName, cls), up = ascentProfile(worldName, cls);
-  if (!w || !down || !up) return null;
-  const acc = craftOf(cls).aCruise;
-  const leg = (rA, rB, vA, vB) => pathLeg(rA, 0, rB, 1, 'end', vA, vB, acc).T / 60;
-  const trip = LAUNCH_MIN + leg(w.parkM, w.R + down.topM, 0, w.atmo ? down.entryV : 0) + down.t / 60 + GROUND_MIN + up.t / 60 + leg(w.R + up.topM, w.parkM, up.v, 0) + RECOVER_MIN;
+  const key = `${worldName}|${cls}`;
+  let trip = _trips.get(key);
+  if (trip === undefined) {
+    // (one trip, as ours are flown: from the parking orbit going round with it, into the air at the entry's speed, and back; worked out once)
+    const w = worldOf(worldName), down = entryProfile(worldName, cls), up = ascentProfile(worldName, cls);
+    if (!w || !down || !up) trip = null;
+    else {
+      const acc = craftOf(cls).aCruise, vPark = Math.sqrt(w.GM / w.parkM);
+      const leg = (rA, rB, vA, vB) => pathLeg(rA, 0, rB, 1, 'both', vA, vB, acc).T / 60;
+      trip = LAUNCH_MIN + leg(w.parkM, w.R + down.topM, vPark, down.vRound) + down.t / 60 + GROUND_MIN + up.t / 60 + leg(w.R + up.topM, w.parkM, up.vRound, vPark) + RECOVER_MIN;
+    }
+    _trips.set(key, trip);
+  }
+  if (trip == null) return null;
   const trips = Math.max(1, Math.ceil(tonnes / Math.max(1, CLASSES[cls].cargoT) / shuttles));
   return trip * trips;
 }
@@ -363,4 +415,6 @@ export function carrierPlace(world, id, minute) {
 FLIGHT_PATH.at = (world, e, minute, pos, vel) => {
   const p = flightPathAt(world, e.flightPath, minute);
   pos.x = p.pos.x; pos.y = p.pos.y; vel.vx = p.vel.vx; vel.vy = p.vel.vy;
+  // (in its carrier's bay it is part of the carrier: the sensors and the pictures pass it by)
+  e.$inBay = p.leg === 'dock';
 };

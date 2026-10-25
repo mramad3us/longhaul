@@ -1094,7 +1094,7 @@ function ruleMarket(state, c, add) {
       key: 'turn-over', level: ADVICE, rank: 52, sig: turn.items.map(x => x.good).join(','),
       text: `Contraband aboard: turn it over to ${turn.port.name} for reputation.`,
       detail: 'A licensed captain hands contraband goods to its own power: reputation toward the next rank, and standing. Carried in anyone else\'s space, it is seized and fined.',
-      actions: [A.station(turn.port.id, turn.port.tags?.command ? 'services' : 'market', 'TURN IT OVER')],
+      actions: [A.station(turn.port.id, !turn.port.tags?.command && STATIONS[turn.port.id]?.services.includes('market') ? 'market' : 'services', 'TURN IT OVER')],
     });
   }
   const id = marketHere(state);
@@ -1102,7 +1102,7 @@ function ruleMarket(state, c, add) {
   let best = null;
   for (const g of new Set(state.cargo.filter(x => x.good && !x.contract && x.cost > 0).map(x => x.good))) {
     if (tradeRefusal(state, id, g, 'sell')) continue;
-    const items = state.cargo.filter(x => x.good === g && !x.contract && !x.stolen);
+    const items = state.cargo.filter(x => x.good === g && !x.contract && !x.stolen && x.cost > 0);
     const t = items.reduce((s, x) => s + x.mass, 0) / 1000, paid = items.reduce((s, x) => s + (x.cost || 0), 0);
     if (t < 0.05) continue;
     const gain = quote(state, id, g, t, 'sell').total - paid;

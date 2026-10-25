@@ -841,6 +841,8 @@ function failContract(state, c, reason, emit) {
   c.failedAt = state.clock.minute;
   logContract(state, c, `Failed: ${reason}`);
   state.cargo = state.cargo.filter(x => x.contract !== c.id);
+  // (and any of it in a shuttle out: its shipper's, gone with the contract)
+  for (const r of state.shuttles?.runs || []) if (r.cargo?.length) r.cargo = r.cargo.filter(x => x.contract !== c.id);
   state.passengers = state.passengers.filter(x => x.contract !== c.id);
   const world = getWorld(state);
   retireTarget(world, c, state.clock.minute);

@@ -332,6 +332,23 @@ export function openStation(station = dockedPort(ui.state), tab = null) {
   logEntry(`Channel open: ${station.name}`, 'comms');
 }
 
+/**
+ * While a station's window is open, draw it again when what it shows
+ * changes under it: docked or not (the buttons that need a berth), our
+ * credits and hold, the market's step, its board.
+ */
+export function updateStation() {
+  const ov = $('#dialog-station');
+  if (!currentStation || !ov || ov.style.display === 'none' || !ui.state) return;
+  const s = ui.state, st = currentStation;
+  const sig = `${dockedPort(s)?.id || ''}|${inPort(s, st)}|${Math.round(s.resources.credits.current)}|${s.cargo.length}|${Math.round(s.cargo.reduce((a, x) => a + x.mass, 0))}|${s.market?.at}|${st.board?.missions.length}|${s.contracts.active.length}`;
+  if (sig === updateStation.sig) return;
+  updateStation.sig = sig;
+  // (not while a field in it is being typed into)
+  if (ov.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  renderStation();
+}
+
 function renderStation() {
   const s = ui.state, st = currentStation;
   const command = !!st.tags?.command;

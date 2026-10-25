@@ -58,7 +58,7 @@ import { FUEL_PER_G_MIN } from './flight.js';
 import { isAble } from './crew.js';
 import { shipGeometry, airlockFor } from './ship-layout.js';
 import { deliverPlanetside } from './contracts.js';
-import { marketOfWorld, shuttleTrade, stow, holdRoom } from './market.js';
+import { marketOfWorld, shuttleTrade, stow, holdRoom, tradeRefusal, MARKETS } from './market.js';
 import { GOODS } from './goods.js';
 
 const SPAN_MIN = 0.4;                        // a leg round a world goes at least this far round (rad): a gentle spiral, never a plunge
@@ -154,15 +154,19 @@ export function planLegs(worldName, cls, airspaceId, t0, carrierPlace, { groundM
   const craft = craftOf(cls), acc = craft.aCruise;
   const air = !!w.atmo;
   const tA = t0 + LAUNCH_MIN;
-  const C = polarOf(w, carrierPlace(tA).pos, tA);
+  const cA = carrierPlace(tA);
+  const C = polarOf(w, cA.pos, tA);
+  // (it leaves the bay going round with us: our speed round the world)
+  const vCarrier = roundSpeed(w, cA, tA);
   // the drop: aimed at the entry point (upstream of the pad by the glide's own way over the ground), for when it gets there
   const phiE = air ? a.port.ang - down.th : a.port.ang;
-  const rE = w.R + down.topM, vB = air ? down.entryV : 0;
+  const rE = w.R + down.topM, vB = Math.hypot(down.vRound, down.vRadial);
   let g = null, T = 3600, span = null;
   for (let k = 0; k < 12; k++) {
     const thE = worldAngle(w, phiE, tA + T / 60);
     span = keepSpan(span, thE - C.th, wrapSpan);
-    g = pathLeg(C.r, C.th, rE, span, 'end', 0, vB, acc);
+    // (level as it leaves us; into the air at the entry's own angle: radiusAt)
+    g = pathLeg(C.r, C.th, rE, span, { t0: 0, t1: down.vRadial / down.vRound, span }, vCarrier, vB, acc);
     if (Math.abs(g.T - T) < 1) break;
     T = g.T;
   }
@@ -187,6 +191,12 @@ export function planLegs(worldName, cls, airspaceId, t0, carrierPlace, { groundM
 }
 
 const polarOf = (w, p, m) => { const c = bodyPos(w.body, m / DAY_MIN); const dx = (p.x - c.x) * AU_M, dy = (p.y - c.y) * AU_M; return { r: Math.hypot(dx, dy), th: Math.atan2(dy, dx) }; };
+/** A place's speed round a world (m/s, counterclockwise positive): its velocity less the world's, across the radius. */
+function roundSpeed(w, place, m) {
+  const c = bodyPos(w.body, m / DAY_MIN), u = bodyVel(w.body, m / DAY_MIN);
+  const dx = place.pos.x - c.x, dy = place.pos.y - c.y, r = Math.hypot(dx, dy) || 1;
+  return Math.max(0, (-(place.vel.vx - u.vx) * dy + (place.vel.vy - u.vy) * dx) / r);
+}
 
 /**
  * A leg from (r, th) round world `w`, at speed v0 at minute `t`, to where
@@ -194,13 +204,15 @@ const polarOf = (w, p, m) => { const c = bodyPos(w.body, m / DAY_MIN); const dx 
  * its orbit meanwhile). `span`: how the angle between is taken (wrapSpan
  * for a leg that spirals out from the air; the short way for a hop).
  */
-function chaseLeg(w, r, th, v0, t, carrierPlace, acc, flat, wrap = wrapSpan) {
+function chaseLeg(w, r, th, v0, t, carrierPlace, acc, flat, wrap = wrapSpan, t0 = 0) {
   let g = null, T = 3600, span = null;
   for (let k = 0; k < 12; k++) {
     const tArr = t + T / 60;
-    const P = polarOf(w, carrierPlace(tArr).pos, tArr);
+    const cp = carrierPlace(tArr);
+    const P = polarOf(w, cp.pos, tArr);
     span = keepSpan(span, P.th - th, wrap);
-    g = pathLeg(r, th, P.r, span, flat, v0, 0, acc);
+    // (it comes alongside going round as we do: our speed round the world then)
+    g = pathLeg(r, th, P.r, span, flat === 'both' && t0 ? { t0, t1: 0, span } : flat, v0, roundSpeed(w, cp, tArr), acc);
     if (Math.abs(g.T - T) < 1) break;
     T = g.T;
   }
@@ -219,7 +231,8 @@ const keepSpan = (last, d, wrap) => last == null ? wrap(d) : last + shortSpan(d 
 function backLegs(w, cls, a, tLift, carrierPlace) {
   const up = ascentProfile(w.name, cls);
   const tX = tLift + up.t / 60;
-  const g2 = chaseLeg(w, w.R + up.topM, worldAngle(w, a.port.ang + up.th, tX), up.v, tX, carrierPlace, craftOf(cls).aCruise, 'start');
+  // (out of the air at the climb's own angle, alongside level)
+  const g2 = chaseLeg(w, w.R + up.topM, worldAngle(w, a.port.ang + up.th, tX), Math.hypot(up.vRound, up.vRadial), tX, carrierPlace, craftOf(cls).aCruise, 'both', wrapSpan, up.vRadial / up.vRound);
   const tArr = tX + g2.T / 60;
   return [
     { phase: 'up', kind: 'up', t0: tLift, t1: tX, phi0: a.port.ang },
@@ -228,13 +241,18 @@ function backLegs(w, cls, a, tLift, carrierPlace) {
   ];
 }
 
-/** What a run's legs burn: the legs at their acceleration, the landing and the climb on the drive. { gMin, kg }. */
+/**
+ * What a run's legs burn: the drive's legs at their acceleration for as
+ * long as each is flown (one cut short by a call back, to the cut), the
+ * powered part of the landing (the glide is the air's) and the climb.
+ * { gMin, kg }.
+ */
 function legsFuel(worldName, cls, legs) {
   let gMin = 0;
   for (const l of legs) {
-    if (l.kind === 'path') gMin += (l.g.T / 60) * (l.g.a / G0);
-    else if (l.kind === 'down') gMin += (entryProfile(worldName, cls).t / 60) * 1.2;
-    else if (l.kind === 'up') gMin += (ascentProfile(worldName, cls).t / 60) * 1.2;
+    if (l.kind === 'path') gMin += Math.min(l.g.T / 60, Math.max(0, l.t1 - l.t0)) * (l.g.a / G0);
+    else if (l.kind === 'down') gMin += entryProfile(worldName, cls).driveGmin;
+    else if (l.kind === 'up') gMin += ascentProfile(worldName, cls).driveGmin;
   }
   return { gMin, kg: gMin * FUEL_PER_G_MIN * craftOf(cls).m / 1e5 };
 }
@@ -291,13 +309,14 @@ export function launchRun(state, plan, emit = () => {}, { crew = null, trade = n
   const id = `run-${S.nextId++}`;
   const a = airspaceById(plan.airspace);
   // the cargo bound for this pad goes into the shuttle (out of our hold until it lands, or comes back)
+  const freeBefore = holdRoom(state);
   const load = cargoFor(state, plan.airspace, sh.cls);
   for (const it of load.items) {
     const item = state.cargo.find(x => x.contract === it.contract);
     if (item) { item.mass -= it.mass; if (item.mass <= 0) state.cargo.splice(state.cargo.indexOf(item), 1); }
   }
   // goods to sell on the world's market go down with it too, in what room is left; a purchase comes up
-  const { sell, buy } = tradeLoad(state, sh.cls, load.mass, trade);
+  const { sell, buy } = tradeLoad(state, sh.cls, load.mass, trade, plan.summary.world, freeBefore);
   const run = {
     id, shuttle: sh.id, cls: sh.cls, name: sh.name, world: plan.summary.world, airspace: a.id, port: { id: a.port.id, name: a.port.name },
     carrier: 'player', phase: 'launch', legs: plan.legs, summary: plan.summary, crew: party, cargo: load.items, delivered: [], sell, buy, up: [],
@@ -372,7 +391,7 @@ export function abortRun(state, runId, emit = () => {}) {
     const stop = d + v * v / (2 * g.a);
     if (stop < g.L * 0.97) {
       const tB = now + v / g.a / 60, p = placeAlong(g, stop);
-      const back = chaseLeg(w, p.r, p.th, 0, tB, at, g.a, 'start', shortSpan);
+      const back = chaseLeg(w, p.r, p.th, 0, tB, at, g.a, 'both', shortSpan);
       const tArr = tB + back.T / 60;
       relay(state, run, i, [
         { ...leg, t1: now },
@@ -420,16 +439,20 @@ function rejoin(state, run, i, emit) {
   if (gap < RENDEZVOUS_M) return false;
   const at = (m) => carrierAt(state, m);
   const inside = worldAt(state.flight.pos.x, state.flight.pos.y, now)?.w.name === w.name;
+  // (from where it is, going round as it was: an orbit's speed waiting, or the speed it came home at)
+  const v0 = prev.kind === 'hold' ? Math.sqrt(w.GM / P.r) : prev.g?.vB || 0;
+  const from = prev.kind === 'hold' ? i - 1 : i;
   if (inside) {
-    const g = chaseLeg(w, P.r, P.th, 0, now, at, craftOf(run.cls).aCruise, 'start', shortSpan);
-    relay(state, run, i, [
+    const g = chaseLeg(w, P.r, P.th, v0, now, at, craftOf(run.cls).aCruise, 'both', shortSpan);
+    relay(state, run, from, [
       { phase: 'return', kind: 'path', t0: now, t1: now + g.T / 60, g },
       { phase: 'recover', kind: 'dock', t0: now + g.T / 60, t1: now + g.T / 60 + RECOVER_MIN },
     ]);
     log(run, state, `Chasing us: ${Math.round(gap / 1000).toLocaleString()} km`);
     emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} home, but we are ${Math.round(gap / 1000).toLocaleString()} km from where we said: it comes after us, alongside in ${Math.round(g.T / 60)} min.` });
   } else {
-    relay(state, run, i, [
+    // (still out of reach: the same wait, carried on, not another leg on the end)
+    relay(state, run, from, [
       { phase: 'hold', kind: 'hold', t0: now, t1: now + HOLD_MIN, r: P.r, th0: P.th },
       { phase: 'recover', kind: 'dock', t0: now + HOLD_MIN, t1: now + HOLD_MIN + RECOVER_MIN },
     ]);
@@ -448,11 +471,18 @@ export function shuttlesTick(state, emit = () => {}) {
     let i = legIndex(run, now);
     // (home, or done waiting: we must be where it comes to)
     if (run.legs[i].phase === 'recover' && run.phase !== 'recover' && rejoin(state, run, i, emit)) i = legIndex(run, now);
-    const leg = run.legs[i];
     const end = run.legs.at(-1).t1;
-    if (now >= end) { recover(state, run, emit); continue; }
-    if (leg.phase === run.phase) continue;
-    run.phase = leg.phase;
+    // every leg begun since the last minute, in order (a climb shorter than a minute is begun too)
+    run.entered ??= Math.max(0, run.legs.findIndex(l => l.phase === run.phase));
+    if (now >= end) { for (let k = run.entered + 1; k < run.legs.length; k++) enterLeg(state, run, run.legs[k], emit); recover(state, run, emit); continue; }
+    for (let k = run.entered + 1; k <= i; k++) enterLeg(state, run, run.legs[k], emit);
+    run.entered = Math.max(run.entered, i);
+    run.phase = run.legs[i].phase;
+  }
+}
+
+/** A run begins a leg: what it says, and (on the pad) its freight and its trade. */
+function enterLeg(state, run, leg, emit) {
     const s = run.summary, w0 = worldOf(run.world);
     switch (leg.phase) {
       case 'drop': emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} clear of the bay, on its drive for ${worldOfs(run.world)} air.` }); break;
@@ -466,7 +496,6 @@ export function shuttlesTick(state, emit = () => {}) {
       case 'abort': case 'hold': break;
       case 'recover': emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} alongside, into its bay.` }); break;
     }
-  }
 }
 
 /**
@@ -474,12 +503,16 @@ export function shuttlesTick(state, emit = () => {}) {
  * `trade.sell`, in the room the freight leaves) and what it is to buy for
  * the way up ({ good, t }, at most a shuttle's load).
  */
-function tradeLoad(state, cls, usedKg, trade) {
+function tradeLoad(state, cls, usedKg, trade, worldName, freeKg) {
   const room = CLASSES[cls].cargoT * 1000;
+  // (the purchase is held room in our hold: no more than was free before anything went down)
+  const freeT = freeKg / 1000;
   let left = room - usedKg;
   const sell = [];
+  const mid = marketOfWorld(worldName);
   for (const g of trade?.sell || []) {
-    for (const x of state.cargo.filter(c => c.good === g && !c.contract)) {
+    if (!mid || tradeRefusal(state, mid, g, 'sell')) continue;
+    for (const x of state.cargo.filter(c => c.good === g && !c.contract && c.stolen !== MARKETS[mid].faction)) {
       if (left <= 0.5) break;
       const kg = Math.min(x.mass, left);
       const share = kg / x.mass;
@@ -488,7 +521,8 @@ function tradeLoad(state, cls, usedKg, trade) {
     }
   }
   state.cargo = state.cargo.filter(x => x.mass > 0.5);
-  const buy = trade?.buy?.good && trade.buy.t > 0 ? { good: trade.buy.good, t: Math.min(trade.buy.t, CLASSES[cls].cargoT) } : null;
+  const t = trade?.buy?.good && mid && !tradeRefusal(state, mid, trade.buy.good, 'buy') ? Math.min(trade.buy.t, CLASSES[cls].cargoT, freeT) : 0;
+  const buy = t > 0.009 ? { good: trade.buy.good, t } : null;
   return { sell, buy };
 }
 
@@ -504,11 +538,12 @@ function landed(state, run, emit) {
   const groundLeg = run.legs.find(l => l.phase === 'ground');
   const mid = marketOfWorld(run.world);
   if (mid && (run.sell?.length || run.buy)) {
-    // (the purchase no more than will fit in our hold when it is home)
-    const buy = run.buy ? { ...run.buy, t: Math.min(run.buy.t, holdRoom(state) / 1000) } : null;
-    const r = shuttleTrade(state, mid, run.sell || [], buy);
+    // (the purchase into the room held for it in our hold since it went: market.js heldForShuttles)
+    const r = shuttleTrade(state, mid, run.sell || [], run.buy);
     run.sell = r.back;
     run.up = r.up;
+    run.bought = true;
+    if (r.back.length) log(run, state, `Not sold here: ${r.back.map(x => `${(x.mass / 1000).toFixed(1)} t ${x.name.toLowerCase()}`).join(', ')}`);
     if (r.text) {
       log(run, state, `Market: ${r.text}`);
       emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} at ${worldOfs(run.world)} market: ${r.text}.` });
@@ -574,7 +609,7 @@ export function npcShuttlesTick(state) {
   const world = getWorld(state), now = state.clock.minute;
   for (const id of [...S.npc]) {
     const e = world.get(id);
-    if (e && now < e.tags.until) continue;
+    if (e && now < e.tags.until && world.get(e.tags.carrier)) continue;
     if (e) { const c = world.get(e.tags.carrier); if (c?.tags?.shuttleOut === id) c.tags.shuttleOut = null; world.remove(e); }
     S.npc.splice(S.npc.indexOf(id), 1);
   }
@@ -585,13 +620,14 @@ export function npcShuttlesTick(state) {
   world.query(centre, w.wellM / AU_M, near);
   for (const carrier of near) {
     if (S.npc.length >= NPC_SHUTTLES_MAX) break;
-    if (!carrier.tags?.traffic || carrier.tags.call?.phase !== 'planet' || carrier.tags.planet !== w.name || carrier.tags.shuttleOut) continue;
+    if (!carrier.tags?.traffic || carrier.tags.call?.phase !== 'planet' || carrier.tags.planet !== w.name || carrier.tags.shuttleOut || now >= carrier.tags.until) continue;
     if (random() > NPC_LAUNCH_P) continue;
     const bay = bayOf(carrier.cls);
     if (!bay.length) continue;
     const cls = pick(bay).cls, a = pick(airspacesOf(w));
     const p = planLegs(w.name, cls, a.id, now, (m) => carrierPlace(world, carrier.id, m));
-    if (!p.ok) continue;
+    // (none that would keep it past the end of its call)
+    if (!p.ok || p.legs.at(-1).t1 > carrier.tags.until) continue;
     const id = `npcsh-${carrier.id}-${now}`;
     const e = createEntity({ id, name: `${carrier.name} · ${CLASSES[cls].name.toLowerCase()}`, type: 'ship', cls, faction: carrier.faction, transponder: true, t: now,
       pos: { ...carrier.pos }, vel: { ...carrier.vel }, tags: { shuttle: true, npc: true, carrier: carrier.id, until: p.legs.at(-1).t1, port: a.port.name } });

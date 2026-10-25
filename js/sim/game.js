@@ -56,7 +56,8 @@ import { setGravityEpoch } from './gravity.js';
 import { fireTick } from './fire.js';
 import { createDroneStores, dronesTick } from './drones.js';
 import { createShuttles, shuttlesTick, npcShuttlesTick } from './shuttles.js';
-import { createMarket, marketTick } from './market.js';
+import { createMarket, marketTick, holdOf } from './market.js';
+import { GOODS } from './goods.js';
 
 export const SAVE_SCHEMA = 7;
 
@@ -182,6 +183,16 @@ export function upgradeState(state) {
   if (state.drone === undefined) state.drone = null;
   state.shuttles ??= createShuttles(state.ship.classId);
   if (!state.market) createMarket(state);
+  // (a hold's 'seized cargo' from before the market: labelled now, as what the hull it came from carried)
+  for (const x of state.cargo) {
+    if (x.good || x.contract || !x.seized) continue;
+    const from = getWorld(state).get(x.from);
+    x.good = (from && holdOf(state, from)[0]?.good) || 'consumer';
+    x.name = GOODS[x.good].name;
+    x.cost = 0;
+    if (x.contraband) { x.stolen = from?.faction || 'independent'; x.illegalIn = [x.stolen]; }
+    delete x.value;
+  }
   if (state.dock === undefined) state.dock = null;
   if (state.boarding === undefined) state.boarding = null;
   state.combat.fuses ??= [];

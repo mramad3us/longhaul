@@ -32,7 +32,7 @@ import { factionColor, INFLUENCE_SOURCES, FACTIONS } from '../sim/factions.js';
 import { zonePos, ZONE_KINDS } from '../sim/conflict.js';
 import { getBody } from '../sim/ephemeris.js';
 import { estimate, liveKnowledge, LIGHT_SECOND_AU, LIGHT_MINUTE_AU } from '../sim/intel.js';
-import { isDark } from '../sim/sensors.js';
+import { isDark, contactById } from '../sim/sensors.js';
 import { aimPoint } from '../sim/ordnance.js';
 import { FitCanvas, fmtKm, pointAt } from './dom.js';
 import { Labels } from './labels.js';
@@ -45,11 +45,13 @@ const LIGHT_RINGS = [[LIGHT_SECOND_AU, '1 LIGHT-SEC'], [LIGHT_MINUTE_AU, '1 LIGH
 const REPORT_FADE_MIN = 3 * 1440;   // a report is drawn faintest at this age
 const _est = { x: 0, y: 0, sigmaAU: 0 };
 
-/** The name a contact goes by on our board (null until identified). */
-function contactName(state, id) {
-  for (const c of state.sensors.contacts) if (c.id === id) return c.name;
-  return null;
-}
+/**
+ * The name a contact goes by on our board (null until identified): looked
+ * up by id in an index of the board, made again when the board is (once a
+ * minute: a crowded port's board holds thousands, and the map asks for
+ * every label every frame).
+ */
+const contactName = (state, id) => contactById(state, id)?.name ?? null;
 
 const MIN_SCALE = 6;          // px per AU (whole system)
 const MAX_SCALE = 4e8;        // px per AU (~0.4 km per px)
