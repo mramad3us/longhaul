@@ -616,9 +616,14 @@ export function contractsTick(state, emitOut = () => {}) {
   const emit = (type, p) => { if (type === 'contract-progress' && p?.contract) logContract(state, p.contract, p.text); emitOut(type, p); };
 
   // Boards: refresh stations (and command ships) within long sensor range (where we are docked always)
+  // (from the few that keep boards, not a search of the space round us: a busy port's holds thousands)
   if (now % 10 === 0) {
     const docked = dockedPort(state);
-    const near = world.query(state.flight.pos, RANGE.LONG).filter(e => (e.type === 'station' || e.tags?.command) && e.board);
+    const f = state.flight.pos;
+    const near = [];
+    const keeps = (e) => e.board && Math.hypot(e.pos.x - f.x, e.pos.y - f.y) <= RANGE.LONG;
+    for (const e of world.stations) if (keeps(e)) near.push(e);
+    for (const e of world.forces) if (e.tags.command && keeps(e)) near.push(e);
     if (docked && !near.includes(docked)) near.push(docked);
     const allStations = world.stations.filter(e => e.board);
     for (const st of near) {

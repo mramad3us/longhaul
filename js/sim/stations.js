@@ -28,7 +28,11 @@
 //   its BERTHS: each a collar of a size class (with adaptors, a berth
 //     takes a smaller collar too). Traffic takes berths as it arrives and
 //     waits at the anchorage when they are full; traffic control keeps a
-//     share of berths free for arrivals it has cleared (RESERVE).
+//     share of berths free for arrivals it has cleared (RESERVE). A berth
+//     found free is held for the ship it is given to while it comes down
+//     (holdBerth), so one berth isn't sent every ship waiting; how many
+//     are taken is kept at runtime ($bh), counted again hourly. A berth
+//     let go calls down a ship from the port's queue (BERTH_FREED: traffic.js).
 //
 // Stations defend themselves (defense: PDC emplacements, torpedo silos,
 // railguns at the naval yards) and can be attacked: combatants.js gives
@@ -42,6 +46,7 @@ import { getWorld, orbitStateAt } from './world.js';
 import { CLASSES } from './ship-classes.js';
 import { hullOf } from './hulls.js';
 import { mateOffset } from './mating.js';
+import { releaseSlot } from './holding.js';
 
 /** Share of a station's berths traffic control keeps free for the arrivals it clears. */
 export const RESERVE = 0.25;
@@ -336,7 +341,23 @@ export function berthOccupant(world, st, berthId) {
   const o = world.get(id);
   if (o && o.tags?.berth === berthId && o.tags?.at === st.id) return id;
   delete t[berthId];
+  if (st.$bh) st.$bh.used--;
   return null;
+}
+
+// A busy port is asked for a berth by every ship waiting its turn, and is
+// full more often than not: how many of its berths are taken is kept at
+// runtime (st.$bh), counted as claims come and go, counted afresh (stale
+// claims cleared) once a game hour.
+const BERTH_CHECK_MIN = 60;
+function berthsUsed(world, st, m, now) {
+  let h = st.$bh;
+  if (!h || now - h.at >= BERTH_CHECK_MIN || now < h.at) {
+    let used = 0;
+    for (const b of m.berths) if (berthOccupant(world, st, b.id)) used++;
+    h = st.$bh = { used, at: now };
+  }
+  return h.used;
 }
 
 /** Does a berth take this collar size? */
@@ -351,22 +372,42 @@ export function freeBerth(state, st, sizes, { reserve = false } = {}) {
   const m = stationModel(st.id);
   if (!m || st.combat?.docks === 0) return null;
   const world = getWorld(state);
-  const fits = m.berths.filter(b => sizes.some(sz => berthFits(b, sz)));
   // (the reserve is a share of the whole port: a lone cargo cradle isn't held back from bulk traffic)
-  const used = m.berths.filter(b => berthOccupant(world, st, b.id)).length;
-  if (reserve && used >= Math.floor(m.berths.length * (1 - RESERVE))) return null;
+  if (reserve && berthsUsed(world, st, m, state.clock.minute) >= Math.floor(m.berths.length * (1 - RESERVE))) return null;
+  const fits = m.berths.filter(b => sizes.some(sz => berthFits(b, sz)));
   // the smallest berth that fits, so a cradle stays free for a bulk hull
   return fits.filter(b => !berthOccupant(world, st, b.id))
     .sort((a, b) => a.accepts.length - b.accepts.length || (a.accepts.includes('L') ? 1 : 0) - (b.accepts.includes('L') ? 1 : 0))[0] || null;
 }
 
 export function claimBerth(st, berthId, who) {
-  berthTable(st)[berthId] = who;
+  const t = berthTable(st);
+  if (!t[berthId] && st.$bh) st.$bh.used++;
+  t[berthId] = who;
 }
 
-export function releaseBerth(st, berthId, who = null) {
+/** A berth come free at a station: traffic.js calls down a ship waiting for one (set when it loads). */
+export const BERTH_FREED = { fn: null };
+
+/** Let a berth go (`world` given: the port calls down whoever is waiting for one). */
+export function releaseBerth(st, berthId, who = null, world = null) {
   const t = berthTable(st);
-  if (t[berthId] && (who == null || t[berthId] === who)) delete t[berthId];
+  if (t[berthId] && (who == null || t[berthId] === who)) {
+    delete t[berthId];
+    if (st.$bh) st.$bh.used--;
+    if (world) BERTH_FREED.fn?.(world, st);
+  }
+}
+
+/**
+ * Hold a berth for a hull coming down to it from the gate or the pattern
+ * (its claim, kept while it flies in: one free berth isn't sent every ship
+ * waiting for one, all but the first to turn back at its collar).
+ */
+export function holdBerth(st, berthId, e) {
+  claimBerth(st, berthId, e.id);
+  e.tags.berth = berthId;
+  e.tags.at = st.id;
 }
 
 /** How many berths are taken, of how many (for traffic control and the UI). */
@@ -440,12 +481,13 @@ export function parkHull(state, e, st, { reserve = true } = {}) {
   return null;
 }
 
-/** Into a free berth only (traffic leaves the reserve alone): the berth id, or null with nothing changed. */
+/** Into the berth held for it, or a free one (traffic leaves the reserve alone): the berth id, or null with nothing changed. */
 export function berthInto(state, e, st) {
-  const b = freeBerth(state, st, berthSizesFor(e.cls), { reserve: true });
+  const held = e.tags.berth && e.tags.at === st.id && berthTable(st)[e.tags.berth] === e.id ? berthOf(st.id, e.tags.berth) : null;
+  const b = held || freeBerth(state, st, berthSizesFor(e.cls), { reserve: true });
   const port = b && collarFor(e.cls, b);
   if (!port) return null;
-  releaseHull(getWorld(state), e);
+  if (!held) releaseHull(getWorld(state), e);      // (its own berth, held while it came down, is kept: nobody called down for it)
   e.transit = null;
   e.thrust = 0;
   e.tags.at = st.id;
@@ -459,9 +501,9 @@ export function berthInto(state, e, st) {
 /** A hull leaving: its berth (or holding slot) is free again. */
 export function releaseHull(world, e) {
   const st = e.tags?.at && world.get(e.tags.at);
-  if (st && e.tags.berth) releaseBerth(st, e.tags.berth, e.id);
+  if (st && e.tags.berth) releaseBerth(st, e.tags.berth, e.id, world);
   // …and a holding slot (holding.js) likewise
-  if (st && e.tags.slot && st.holding?.[e.tags.slot] === e.id) { delete st.holding[e.tags.slot]; st.$fullAt = null; }
+  if (st && e.tags.slot) releaseSlot(st, e.tags.slot, e.id);
   if (e.tags) { e.tags.berth = null; e.tags.slot = null; }
 }
 

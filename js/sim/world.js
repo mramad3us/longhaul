@@ -16,10 +16,17 @@
 //           only indexes it. Driven entities are few and bounded.
 //
 // Level of detail (scales to 200k+ entities):
-//   entities near the player update every game-minute; the far world is
-//   refreshed round-robin by a per-frame budgeted background pass (about
-//   hourly at normal speeds, staler under heavy time warp). Anything can
-//   be brought exactly up to date on demand (refresh).
+//   entities near the player (within HORIZON_AU, a little past the longest
+//   sensor and radio range) update every full game-minute. The far world
+//   keeps a CALENDAR: each entity is visited when something is next due to
+//   it (WORLD_DUE: a leg's end, a call's next step, a force's arrival, its
+//   retirement), and its position is brought up to date only before it
+//   could come within HORIZON_AU of us (the gap between us, closed at its
+//   speed and ours, ours growing at our drive's G, at most a day), so a
+//   frame touches what is due in it and nothing else, at any time warp. A
+//   slow round-robin pass (a sweep of the whole world a game day) is the
+//   net under anything that changed an entity's timing without saying so.
+//   Anything can be brought exactly up to date on demand (refresh).
 // ============================================================
 
 import { AU_M, AU_KM, G0, MIN_S, TWO_PI, DAY_MIN, GM_SUN } from '../core/constants.js';
@@ -27,7 +34,15 @@ import { getBody, bodyPos, bodyVel } from './ephemeris.js';
 import { gravityAt, gravityEpoch, nearestSurface } from './gravity.js';
 import { SpatialHash } from './spatial-hash.js';
 
-export const NEAR_RANGE_AU = 0.12;   // a bit past long sensor range
+export const HORIZON_AU = 0.105;     // nothing gets this close to us unseen (the calendar's bound): past the longest sensor and radio range (0.1)
+const TICK_PAD_AU = 0.015;           // …and the near pass looks this much farther (we move between full minutes)
+export const NEAR_RANGE_AU = HORIZON_AU + TICK_PAD_AU;   // the near pass's reach
+const LONGEST_REFRESH_MIN = 1440;    // a far entity's position at most a day old
+const SHORTEST_REFRESH_MIN = 5;
+const STATION_REFRESH_MIN = 60;      // stations and marks: few, and their places are asked after
+const SWEEP_MIN = 1440;              // the net: the whole world swept once a game day…
+const SWEEP_CAP = 1000;              // …at most this many a frame
+const STUCK_MIN = 10;                // something due that didn't move on is looked at again after this
 
 /** Hooks run on every entity the background pass visits: fn(e, minute, world). */
 export const WORLD_VISITORS = [
@@ -38,6 +53,12 @@ export const WORLD_VISITORS = [
     if (at != null && minute >= at && world.state.flight?.hold?.id !== e.id && world.state.dock?.target.id !== e.id) world.remove(e);
   },
 ];
+
+/** When each visitor next has business with an entity: fn(e) → minute (Infinity: none). Alongside WORLD_VISITORS. */
+export const WORLD_DUE = [
+  (e) => e.tags?.despawnAt ?? Infinity,
+];
+
 
 const _worlds = new WeakMap();
 
@@ -208,7 +229,9 @@ export class World {
     this.driven = new Set();        // NPC ships under a pilot, ordnance in flight — stepped every minute
     this.forces = new Set();        // police, navy and pirate hulls of the background population (forces.js)
     this._anchorMemo = new Map();   // id → { minute, pos, vel } for transit endpoints
-    this.cursor = 0;                // background round-robin position
+    this.cursor = 0;                // background round-robin position (the net)
+    this.cal = new Map();           // the calendar: minute → entities due then (e.$due: its live entry)
+    this.calAt = state.clock.minute;   // the next minute of it to be served
     this._near = [];
     const list = state.entities;
     for (let i = 0; i < list.length; i++) this._index(list[i], i);
@@ -224,6 +247,73 @@ export class World {
     if (e.tags?.force) this.forces.add(e);
     this.refresh(e, this.state.clock.minute);
     this.hash.insert(e);
+    this.plan(e, this.state.clock.minute);
+  }
+
+  // ---- THE CALENDAR ----
+
+  /** Put an entity on the calendar for `minute` (unless it is already due as soon). */
+  _wake(e, minute) {
+    const m = Math.max(minute, this.calAt);
+    if (e.$due != null && e.$due >= this.calAt && e.$due <= m) return;
+    e.$due = m;
+    let b = this.cal.get(m);
+    if (!b) this.cal.set(m, b = []);
+    b.push(e);
+  }
+
+  /**
+   * When an entity is next wanted: the soonest of its visitors' business
+   * and, unless the near pass keeps it up to date, the last minute its
+   * position can wait. Call after changing what an entity is doing outside
+   * a visit (a force sent, a hull back on rails).
+   */
+  plan(e, minute = this.state.clock.minute) {
+    let next = Infinity;
+    for (let v = 0; v < WORLD_DUE.length; v++) { const d = WORLD_DUE[v](e); if (d < next) next = d; }
+    if (next <= minute) next = minute + STUCK_MIN;           // (due, and not moved on: soon again, not every minute)
+    const r = this._refreshDue(e, minute);
+    if (r < next) next = r;
+    if (next < Infinity) this._wake(e, next);
+  }
+
+  /** The last minute an entity's position can wait before it might be within HORIZON_AU of us. */
+  _refreshDue(e, minute) {
+    if (e.driven) return Infinity;                          // (its controller moves it)
+    if (e.type === 'station' || e.type === 'nav') return minute + STATION_REFRESH_MIN;
+    const f = this.state.flight;
+    if (!f?.pos) return minute + LONGEST_REFRESH_MIN;
+    const gap = Math.hypot(e.pos.x - f.pos.x, e.pos.y - f.pos.y) - HORIZON_AU;
+    if (gap <= 0) return Infinity;                          // (inside: the near pass has it)
+    // the gap closed at the speed between us (AU/min), that growing at its drive's G and ours (a G at
+    // least, or what we burn at: AU/min²): the time it would take at worst
+    const b = Math.hypot(e.vel.vx - f.vel.vx, e.vel.vy - f.vel.vy) * 60 / AU_M;
+    const a = ((e.transit ? e.transit.g || 0 : e.thrust || 0) + Math.max(1, f.thrustG || 0)) * G0 * 3600 / AU_M;
+    const t = (Math.sqrt(b * b + 2 * a * gap) - b) / a;
+    return minute + Math.max(SHORTEST_REFRESH_MIN, Math.min(LONGEST_REFRESH_MIN, Math.floor(t)));
+  }
+
+  /** Serve the calendar up to `minute`: each entity due, brought up to date, its visitors, planned again. */
+  _serve(minute) {
+    let n = 0;
+    const visitors = WORLD_VISITORS;
+    for (let m = this.calAt; m <= minute; m++) {
+      const b = this.cal.get(m);
+      if (!b) continue;
+      this.cal.delete(m);
+      const list = this.state.entities;
+      for (let i = 0; i < b.length; i++) {
+        const e = b[i];
+        if (e.$due !== m || list[e.$i] !== e) continue;   // (planned again sooner, or gone)
+        e.$due = null;
+        if (e.t !== minute) { this.refresh(e, minute); this.hash.update(e); }
+        for (let v = 0; v < visitors.length && list[e.$i] === e; v++) visitors[v](e, minute, this);
+        if (list[e.$i] === e) this.plan(e, minute);
+        n++;
+      }
+    }
+    this.calAt = minute + 1;
+    return n;
   }
 
   get(id) {
@@ -249,6 +339,7 @@ export class World {
     const list = this.state.entities;
     const last = list.pop();
     if (last !== e) { list[e.$i] = last; last.$i = e.$i; }
+    e.$i = -1;                                    // (gone: the calendar and the net pass it by)
     if (e.type === 'station') this.stations = this.stations.filter(s => s !== e);
     this.beacons.delete(e);
     this.driven.delete(e);
@@ -265,7 +356,7 @@ export class World {
   /** Hand an entity to (or take it from) a controller (keeps the driven index in sync). */
   setDriven(e, on) {
     e.driven = !!on;
-    if (on) { e.orbit = null; e.transit = null; this.driven.add(e); } else this.driven.delete(e);
+    if (on) { e.orbit = null; e.transit = null; this.driven.add(e); } else { this.driven.delete(e); this.plan(e); }
   }
 
   /** Turn an entity's distress beacon on/off (keeps the beacon index in sync). */
@@ -274,15 +365,22 @@ export class World {
     if (on) this.beacons.add(e); else this.beacons.delete(e);
   }
 
-  /** Exact state of a rails entity, memoized per minute (transit endpoints are shared by many ships). */
-  anchorState(id, minute, out) {
+  /** A rails entity's memo of its state (null if it has none: gone, or not on rails). */
+  anchorMemo(id) {
     let m = this._anchorMemo.get(id);
     if (!m) {
       const e = this.byId.get(id);
-      if (!e?.orbit) return false;
+      if (!e?.orbit) return null;
       m = { minute: NaN, orbit: e.orbit, pos: { x: 0, y: 0 }, vel: { vx: 0, vy: 0 } };
       this._anchorMemo.set(id, m);
     }
+    return m;
+  }
+
+  /** Exact state of a rails entity, memoized per minute (transit endpoints are shared by many ships). */
+  anchorState(id, minute, out) {
+    const m = this.anchorMemo(id);
+    if (!m) return false;
     if (m.minute !== minute) { orbitStateAt(m.orbit, minute, m.pos, m.vel); m.minute = minute; }
     out.pos.x = m.pos.x; out.pos.y = m.pos.y; out.vel.vx = m.vel.vx; out.vel.vy = m.vel.vy;
     return true;
@@ -312,10 +410,15 @@ export class World {
     e.t = minute;
   }
 
-  /** Per-minute: everything near the ship is brought exactly up to date. */
+  /**
+   * Per full minute: everything near the ship is brought exactly up to
+   * date (out to HORIZON_AU, and a little past it: we have moved since it
+   * was filed). One found beyond the horizon is handed to the calendar.
+   */
   tick(minute, focus) {
     const hash = this.hash;
     const near = this._near;
+    const h2 = HORIZON_AU * HORIZON_AU;
     near.length = 0;
     hash.query(focus.x, focus.y, NEAR_RANGE_AU, near);
     for (let i = 0; i < near.length; i++) {
@@ -323,6 +426,8 @@ export class World {
       if (e.t === minute) continue;
       this.refresh(e, minute);
       hash.update(e);
+      const dx = e.pos.x - focus.x, dy = e.pos.y - focus.y;
+      if (dx * dx + dy * dy > h2) this.plan(e, minute);
     }
   }
 
@@ -333,9 +438,11 @@ export class World {
    * matter how big the population is (far positions just get staler).
    */
   background(minute, budget) {
+    const served = this._serve(minute);
     const list = this.state.entities;
     const n = list.length;
-    if (!n) return 0;
+    if (!n) return served;
+    // the net: round-robin, refreshed, visited, planned again
     const count = Math.min(budget, n);
     const visitors = WORLD_VISITORS;
     let c = this.cursor % n;
@@ -343,11 +450,11 @@ export class World {
       if (c >= list.length) c = 0;               // a visitor removed entities
       const e = list[c];
       if (e.t !== minute) { this.refresh(e, minute); this.hash.update(e); }
-      for (let v = 0; v < visitors.length; v++) visitors[v](e, minute, this);
-      if (++c >= list.length) c = 0;
+      for (let v = 0; v < visitors.length && list[c] === e; v++) visitors[v](e, minute, this);
+      if (list[c] === e) { this.plan(e, minute); if (++c >= list.length) c = 0; }
     }
     this.cursor = c;
-    return count;
+    return served + count;
   }
 
   /** Entities within radius (AU) of a point. Far entities may be slightly stale. */
@@ -368,7 +475,7 @@ export class World {
   }
 }
 
-/** Background budget for a stretch of game time: every entity at least hourly, bounded per frame. */
-export function backgroundBudget(entityCount, minutes, cap = 20_000) {
-  return Math.min(cap, Math.ceil(entityCount * minutes / 60) + 1);
+/** The net's budget for a stretch of game time: every entity at least daily, bounded per frame (the calendar does the rest). */
+export function backgroundBudget(entityCount, minutes, cap = SWEEP_CAP) {
+  return Math.min(cap, Math.ceil(entityCount * minutes / SWEEP_MIN) + 1);
 }

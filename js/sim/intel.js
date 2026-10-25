@@ -28,8 +28,11 @@
 // their positions are charted, not observed.
 //
 // Nothing here is per-entity per-minute: the plot is bounded
-// (INTEL_MAX records, the stalest dropped first), each digest is capped,
-// and the inbox holds a few dozen items in flight.
+// (INTEL_MAX records, the stalest dropped first: a fifth of it at a time,
+// so the sort is rare), each digest is capped, and the inbox holds a
+// few dozen items in flight. The plot's size and its filed plans by port
+// are kept alongside it at runtime (I.$size, I.$plans: plansTo), so a
+// station's traffic asks for its own inbound, not the whole plot.
 // ============================================================
 
 import { AU_M, MIN_S, DAY_MIN, G0 } from '../core/constants.js';
@@ -150,6 +153,7 @@ export function recordContacts(state) {
     const e = world.get(c.id);
     if (!e || e.type === 'nav') continue;
     const old = I.tracks[c.id];
+    if (!old) grew(I);
     // Identity is learned, and kept once learned
     const known = c.name ? c : old?.name ? old : null;
     I.tracks[c.id] = {
@@ -204,9 +208,10 @@ function receiveDigest(state, item, emit) {
     if (old && old.at >= item.sent) continue;          // we know better already (our own eyes, a newer digest)
     const r = { id: s.id, name: s.name, faction: s.faction, shipClass: s.shipClass, src, at: item.sent, rx: now };
     if (s.pob) r.pob = s.pob;
-    if (s.plan) { r.kind = 'plan'; r.plan = s.plan; }
+    if (s.plan) { r.kind = 'plan'; r.plan = s.plan; filed(I, r); }
     else if (s.berth) { r.kind = 'berth'; r.berth = s.berth; }
     else { r.kind = 'fix'; Object.assign(r, s.fix); }
+    if (!old) grew(I);
     I.tracks[s.id] = r;
   }
   I.digests[item.station] = { name: item.name, issued: item.sent, rx: now, count: item.ships.length };
@@ -219,14 +224,63 @@ export function chart(state, id, at = state.clock.minute, src = 'CHARTED') {
   const e = getWorld(state).get(id);
   if (!e) return;
   const I = ensureIntel(state);
+  if (!I.tracks[id]) grew(I);
   I.tracks[id] = { id, name: e.name, faction: e.faction, shipClass: e.shipClass, kind: 'chart', src, at, rx: state.clock.minute, wreck: !!e.tags?.wreck };
 }
 
+/** A record new to the plot (its count kept, not counted: a key count of thousands every digest adds up). */
+function grew(I) { if (I.$size != null) I.$size++; }
+
+/** Over its bound, the plot loses its stalest fifth. */
 function trim(I) {
+  if ((I.$size ??= Object.keys(I.tracks).length) <= INTEL_MAX) return;
   const ids = Object.keys(I.tracks);
+  I.$size = ids.length;
   if (ids.length <= INTEL_MAX) return;
   ids.sort((a, b) => I.tracks[a].at - I.tracks[b].at);
-  for (let i = 0; i < ids.length - INTEL_MAX; i++) delete I.tracks[ids[i]];
+  const keep = Math.floor(INTEL_MAX * 0.8);
+  for (let i = 0; i < ids.length - keep; i++) delete I.tracks[ids[i]];
+  I.$size = Math.min(ids.length, keep);
+}
+
+/**
+ * A filed plan on the plot, indexed by the port it is bound for (its
+ * destination, gate or port). An entry outlives its plan until it is met;
+ * a port's entries are weeded when they have doubled since the last
+ * weeding, so a port nobody asks about keeps no more than twice its own.
+ */
+function filed(I, r) {
+  if (!I.$plans) return;           // (made whole on first asking)
+  for (const k of [r.plan.to, r.plan.port]) {
+    if (!k) continue;
+    let x = I.$plans.get(k);
+    if (!x) I.$plans.set(k, x = { ids: new Set(), n: 0 });
+    x.ids.add(r.id);
+    if (x.ids.size > 2 * x.n + 200) { for (const id of x.ids) if (!planFor(I.tracks[id], k)) x.ids.delete(id); x.n = x.ids.size; }
+  }
+}
+const planFor = (r, k) => r?.kind === 'plan' && (r.plan.to === k || r.plan.port === k);
+
+/**
+ * The plot's filed plans bound for a station (to it, its gate, or its port),
+ * from the index (made on first asking from the whole plot, then kept as
+ * digests file plans; one no longer a plan there drops out as it is met).
+ */
+export function plansTo(state, stId, gate) {
+  const I = ensureIntel(state);
+  if (!I.$plans) { I.$plans = new Map(); for (const id in I.tracks) if (I.tracks[id].kind === 'plan') filed(I, I.tracks[id]); }
+  const out = [];
+  for (const k of [stId, gate]) {
+    const x = I.$plans.get(k);
+    if (!x) continue;
+    for (const id of x.ids) {
+      const r = I.tracks[id];
+      if (!planFor(r, k)) { x.ids.delete(id); continue; }
+      if (k === stId || !planFor(r, stId)) out.push(r);      // (once, bound for both)
+    }
+    x.n = x.ids.size;
+  }
+  return out;
 }
 
 /** Daily: drop what is too old to mean anything. */
@@ -243,6 +297,7 @@ function forget(state) {
       : !world.get(id);
     if (stale) delete I.tracks[id];
   }
+  I.$size = null;
 }
 
 // ---- READING THE PLOT ----

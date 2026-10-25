@@ -166,11 +166,23 @@ function describe(k, now) {
 export function dossierTick(state, emit = () => {}) {
   const s = state.sensors;
   if (!s?.contacts?.length || state.clock.minute % 5 !== 0) return;
+  // (a board looked over once: in a time-warp frame the minutes between its full ones see the same board)
+  if (s.$dossierOf === s.contacts) return;
+  s.$dossierOf = s.contacts;
   const world = getWorld(state);
   const ops = state.$watch?.ops != null;
   // the locked contact and the nearest few: a long look is a sensor operator's attention
-  const looked = s.contacts.filter(c => !c.ordnance && !c.station && c.dist * AU_M <= SCAN_RANGE_M && c.scan >= SCAN_MIN)
-    .sort((a, b) => (b.id === s.locked) - (a.id === s.locked) || a.dist - b.dist).slice(0, SCAN_AT_ONCE);
+  // (picked in one pass: a crowded port's board holds thousands)
+  const looked = [];
+  for (const c of s.contacts) {
+    if (c.ordnance || c.station || c.dist * AU_M > SCAN_RANGE_M || c.scan < SCAN_MIN) continue;
+    const k = c.id === s.locked ? -1 : c.dist;
+    if (looked.length === SCAN_AT_ONCE && k >= looked[SCAN_AT_ONCE - 1].$k) continue;
+    c.$k = k;
+    let i = looked.length < SCAN_AT_ONCE ? looked.length : SCAN_AT_ONCE - 1;
+    while (i > 0 && looked[i - 1].$k > k) { looked[i] = looked[i - 1]; i--; }
+    looked[i] = c;
+  }
   for (const c of looked) {
     const e = world.get(c.id);
     if (!e || e.type !== 'ship') continue;

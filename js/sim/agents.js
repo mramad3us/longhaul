@@ -42,7 +42,8 @@
 // business is done or we are far away), so per-minute work here never
 // scales with the world. A hull of the background population (forces.js)
 // or traffic woken for a fight doesn't leave the world: it goes back on
-// rails. A woken police cutter on ROUTINE leaves law-abiding ships alone;
+// rails (woken traffic as soon as it has calmed, CALM_MIN + RESUME_MIN
+// unthreatened, near us or not). A woken police cutter on ROUTINE leaves law-abiding ships alone;
 // the director's patrol encounter is the one that comes to look at us.
 //
 // A captain flying a power's flag (service.js) is a combatant to the
@@ -103,6 +104,7 @@ const SEARCH_MIN = 45;                // an inspection takes this long alongside
 const LOOT_MIN = 60;
 const REQUEST_MIN = 15;               // minutes to answer a request
 const CALM_MIN = 360;                 // a fleeing civilian calms down after this long unthreatened
+const RESUME_MIN = 60;                // …and, woken off the lanes, goes back to its business this long after (near us or not)
 const PANIC_S = 2 * 3600;             // civilians run from torpedoes arriving within this
 const PLAYER_THREAT_AU = 0.01;        // a civilian we fired on stays scared while we are this close
 const PIRATE_NERVE = 0.5;             // pirates stalk ships up to twice their strength: a demand is a bluff
@@ -405,7 +407,13 @@ function leaves(state, e) {
   const a = e.agent;
   if (a.contract && a.mode !== 'leave') return false;
   const d = distAU(e.pos, state.flight.pos);
-  return (a.ambient && d > DESPAWN_AU) || (a.mode === 'leave' && d > LEAVE_AU);
+  if ((a.ambient && d > DESPAWN_AU) || (a.mode === 'leave' && d > LEAVE_AU)) return true;
+  // Traffic woken by a fight, with nothing left to fear, sound, no beacon lit: back on its route from
+  // where it is (forces.js putToSleep: a transit from its fix, so it moves on as it was moving), though
+  // we are near. (A captain parked at a port for years would otherwise collect every calmed hull round it.)
+  const h = e.combat;
+  return a.ambient && e.tags?.woke === 'traffic' && a.mode === 'drift' && !e.sos && !(h && (h.status !== 'ok' || h.drive < 0.3))
+    && state.clock.minute - (a.calmSince ?? a.since) > CALM_MIN + RESUME_MIN;
 }
 
 const distAU = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);

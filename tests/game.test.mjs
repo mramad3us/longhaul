@@ -5,7 +5,7 @@ import { AU_M, DAY_MIN } from '../js/core/constants.js';
 import { seedRandom } from '../js/core/rng.js';
 import { bus } from '../js/core/events.js';
 import { createGame, minuteTick, advance } from '../js/sim/game.js';
-import { getWorld } from '../js/sim/world.js';
+import { getWorld, backgroundBudget } from '../js/sim/world.js';
 import { planRoutes, STANDOFF } from '../js/sim/nav.js';
 import { engageRoute, overrideSecure } from '../js/sim/autopilot.js';
 import { crewSecureStatus } from '../js/sim/crew-ai.js';
@@ -229,6 +229,7 @@ export default [
       for (let i = 0; i < 200_000; i++) {
         const e = spawnTrafficShip(s);
         e.tags.until = s.clock.minute + (i % 997);     // staggered departures
+        world.plan(e);                                  // (its timing changed outside a visit: the calendar is told)
       }
       const tSpawn = performance.now() - t0;
       run(s, 24 * 60);                                 // one day: most of the fleet departs
@@ -238,7 +239,7 @@ export default [
       for (let i = 0; i < 120; i++) minuteTick(s);
       const perMinute = (performance.now() - t1) / 120;
       t1 = performance.now();
-      for (let f = 0; f < 10; f++) { for (let i = 0; i < 24; i++) minuteTick(s, { lite: i < 23 }); world.background(s.clock.minute, 20_000); }
+      for (let f = 0; f < 10; f++) { for (let i = 0; i < 24; i++) minuteTick(s, { lite: i < 23 }); world.background(s.clock.minute, backgroundBudget(world.count, 24)); }
       const per3xFrame = (performance.now() - t1) / 10;
       console.log(`      ${s.entities.length.toLocaleString()} entities (${inTransit.toLocaleString()} in transit): spawn ${fmt(tSpawn)} ms · ${fmt(perMinute, 2)} ms/game-minute · ${fmt(per3xFrame, 1)} ms per 1-day/s frame`);
       checkFinite(s);

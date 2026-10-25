@@ -93,7 +93,7 @@ export function holdingPattern(stationId) {
   }
   // (inner slots first, alternating sides: the pattern fills from the middle out)
   const order = [...slots].sort((a, b) => Math.abs(a.sKm) - Math.abs(b.sKm));
-  p = { kind, body, rKm, period, phase0, slots, order, byId: new Map(slots.map(s => [s.id, s])) };
+  p = { kind, body, rKm, period, phase0, slots, order, byId: new Map(slots.map(s => [s.id, s])), rank: new Map(order.map((s, i) => [s.id, i])) };
   _patterns.set(stationId, p);
   return p;
 }
@@ -125,8 +125,23 @@ export function slotDescription(stationId, slotId) {
 }
 
 // ---- WHO HOLDS WHICH ----
+//
+// A busy port is asked for a free slot hundreds of times a game hour (every
+// ship that comes in, comes off its berth, or waits its turn), and with a
+// crowd its pattern is full more often than not. So the claims carry a
+// runtime index (st.$hold): the first slot, in the pattern's order, that may
+// be free (past the last when full), lowered when a slot is let go. A claim
+// gone stale (its ship gone, or elsewhere) isn't seen by it: the pattern is
+// walked for those once a game hour (HOLD_CHECK_MIN).
 
+const HOLD_CHECK_MIN = 60;
 const table = (st) => (st.holding ||= {});
+
+/** A slot let go: the index looks from it again. */
+function freed(st, slotId) {
+  const h = st.$hold, r = h && holdingPattern(st.id)?.rank.get(slotId);
+  if (r != null && r < h.lo) h.lo = r;
+}
 
 /** Who is in a slot (null if free; a stale claim is cleared). */
 export function slotOccupant(world, st, slotId) {
@@ -137,7 +152,18 @@ export function slotOccupant(world, st, slotId) {
   const o = world.get(id);
   if (o && o.tags?.slot === slotId && o.tags?.at === st.id) return id;
   delete t[slotId];
+  freed(st, slotId);
   return null;
+}
+
+/** The station's index of its claims, its stale claims cleared if an hour has passed. */
+function holdIndex(world, st, p, now) {
+  let h = st.$hold;
+  if (!h || now - h.at >= HOLD_CHECK_MIN || now < h.at) {
+    h = st.$hold = { lo: 0, at: now };
+    for (const s of p.slots) slotOccupant(world, st, s.id);
+  }
+  return h;
 }
 
 /**
@@ -147,16 +173,18 @@ export function slotOccupant(world, st, slotId) {
 export function freeSlot(state, st, near = null) {
   const p = holdingPattern(st.id);
   if (!p) return null;
-  const world = getWorld(state);
-  // a full pattern answers at once (a busy port asks often; found full, it stays so for the minute)
-  if (st.$fullAt === state.clock.minute) return null;
-  if (Object.keys(table(st)).length >= p.slots.length && p.slots.every(s => slotOccupant(world, st, s.id))) { st.$fullAt = state.clock.minute; return null; }
-  if (!near) return p.order.find(s => !slotOccupant(world, st, s.id)) || null;
+  const t = table(st), h = holdIndex(getWorld(state), st, p, state.clock.minute);
+  if (!near) {
+    for (let i = h.lo; i < p.order.length; i++) if (!t[p.order[i].id]) { h.lo = i; return p.order[i]; }
+    h.lo = p.order.length;
+    return null;
+  }
+  if (h.lo >= p.order.length) return null;
   const minute = state.clock.minute;
   let best = null, bd = Infinity;
   const pos = { x: 0, y: 0 }, vel = { vx: 0, vy: 0 };
   for (const s of p.slots) {
-    if (slotOccupant(world, st, s.id)) continue;
+    if (t[s.id]) continue;
     orbitStateAt(slotOrbit(st.id, s.id), minute, pos, vel);
     const d = Math.hypot(pos.x - near.x, pos.y - near.y);
     if (d < bd) { bd = d; best = s; }
@@ -167,8 +195,7 @@ export function freeSlot(state, st, near = null) {
 export function claimSlot(st, slotId, who) { table(st)[slotId] = who; }
 export function releaseSlot(st, slotId, who = null) {
   const t = table(st);
-  st.$fullAt = null;
-  if (t[slotId] && (who == null || t[slotId] === who)) delete t[slotId];
+  if (t[slotId] && (who == null || t[slotId] === who)) { delete t[slotId]; freed(st, slotId); }
 }
 
 /** How full a station's pattern is. */
@@ -176,7 +203,9 @@ export function slotCounts(state, st) {
   const p = holdingPattern(st.id);
   if (!p) return { used: 0, total: 0 };
   const world = getWorld(state);
-  return { used: p.slots.filter(s => slotOccupant(world, st, s.id)).length, total: p.slots.length };
+  let used = 0;
+  for (const s of p.slots) if (slotOccupant(world, st, s.id)) used++;
+  return { used, total: p.slots.length };
 }
 
 /** Is a point inside a station's port space? */

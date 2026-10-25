@@ -72,7 +72,7 @@ const ZONE_COL = { front: COL.warn, skirmish: COL.warn, blockade: COL.caution, s
 export class SolarMap {
   constructor(container, { onSelect, onHover, onPickList } = {}) {
     this.fc = new FitCanvas(container, { className: 'map-canvas' });
-    this.labels = new Labels();
+    this.labels = new Labels({ halo: 'rgba(5,7,10,0.8)', haloW: 3 });
     this.cx = 0; this.cy = 0;           // view center, AU
     this.scale = 60;                    // px per AU
     this.follow = 'ship';               // 'ship' | 'target' | null
@@ -404,8 +404,14 @@ export class SolarMap {
       if (b.type === 'moon' && b.parent && b.a * S < 6) continue;          // hidden inside the planet's dot
       const trueR = (b.radius || 0) / AU_KM * S;
       const r = Math.max(b.type === 'planet' ? 3.5 : b.type === 'moon' ? 2 : 1.6, trueR);
+      // a dot in its colour; a disc big enough to write over, as a chart draws land: a dark tint of
+      // its colour and its limb in it (names, tracks and the airspaces read over it)
+      const disc = Math.min(1, Math.max(0, (r - 18) / 60));
       ctx.fillStyle = b.color;
+      ctx.globalAlpha = 1 - 0.76 * disc;
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+      if (disc > 0) { ctx.strokeStyle = b.color; ctx.globalAlpha = 0.5 + 0.4 * disc; ctx.lineWidth = 1.5; ctx.stroke(); ctx.globalAlpha = 1; }
       if (b.rings && r > 2) { ctx.strokeStyle = 'rgba(212,196,154,0.45)'; ctx.beginPath(); ctx.ellipse(x, y, r * 2.2, r * 0.6, 0, 0, Math.PI * 2); ctx.stroke(); }
       pick.push({ kind: 'body', id: b.name, sx: x, sy: y });
       if (r < 16) L.block(x - r, y - r, x + r, y + r);

@@ -340,10 +340,25 @@ function zoneLoss(state, z, rate) {
   return { e: lane, text: `${lane.shipClass} ${lane.name} ${how} near ${z.body}.` };
 }
 
-/** A traffic ship in transit through the zone (of one power, for a proxy's raiders), if any. */
+/**
+ * A traffic ship in transit through the zone (of one power, for a proxy's
+ * raiders), if any. Far from us a ship's place on the world's hash may be
+ * up to a day old (world.js): those filed within half an AU are looked at,
+ * each placed exactly before it counts (in a random order, at most
+ * LANE_LOOKS of them: a lane's loss is rare, the crowd round a hub large).
+ */
+const LANE_PAD_AU = 0.5, LANE_LOOKS = 500;
 function traffickedNear(state, z, faction = null) {
-  const p = zonePos(z, state.clock.minute);
-  const pool = getWorld(state).query(p, z.radius).filter(e => e.tags?.traffic && e.transit && !e.agent && !e.tags.wreck && (!faction || e.faction === faction));
+  const world = getWorld(state), now = state.clock.minute;
+  const p = zonePos(z, now);
+  const cands = world.query(p, z.radius + LANE_PAD_AU).filter(e => e.tags?.traffic && e.transit && !e.agent && !e.tags.wreck && (!faction || e.faction === faction));
+  const pool = [];
+  for (let k = 0; k < cands.length && k < LANE_LOOKS; k++) {
+    const j = k + Math.floor(random() * (cands.length - k));
+    const e = cands[j]; cands[j] = cands[k];
+    world.refresh(e, now); world.hash.update(e);
+    if (Math.hypot(e.pos.x - p.x, e.pos.y - p.y) <= z.radius) pool.push(e);
+  }
   return pool.length ? pick(pool) : null;
 }
 

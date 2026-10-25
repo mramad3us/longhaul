@@ -109,7 +109,8 @@ export function drawWorldZones(ctx, w, x, y, pxM, W, H, L, minute, pass) {
       const grd = ctx.createRadialGradient(x, y, R, x, y, Math.max(R + 1.5, top));
       grd.addColorStop(0, `rgba(${tint},0.55)`); grd.addColorStop(0.35, `rgba(${tint},0.18)`); grd.addColorStop(1, `rgba(${tint},0)`);
       ctx.fillStyle = grd;
-      ctx.beginPath(); ctx.arc(x, y, Math.max(R + 1.5, top), 0, Math.PI * 2); ctx.fill();
+      // (a ring from the ground up: the disc itself is the body's, drawn dark to be written over)
+      ctx.beginPath(); ctx.arc(x, y, Math.max(R + 1.5, top), 0, Math.PI * 2); ctx.arc(x, y, Math.max(0, R - 1), 0, Math.PI * 2, true); ctx.fill('evenodd');
       if (top - R > 8) label(`ATMOSPHERE · ${Math.round(w.atmo.interfaceM / 1000)} km`, w.R + w.atmo.interfaceM, `rgba(${tint},0.9)`, 2, Math.PI * 0.25);
     }
     return;
@@ -133,7 +134,10 @@ export function drawWorldZones(ctx, w, x, y, pxM, W, H, L, minute, pass) {
     if (R > 40) {
       const tm = worldAngle(w, (a.a0 + a.a1) / 2, minute);
       const lx = x + Math.cos(tm) * R * 1.14, ly = y - Math.sin(tm) * R * 1.14;
-      if (lx > -30 && lx < W + 30 && ly > -10 && ly < H + 10) L.add(a.name.toUpperCase(), lx, ly, { off: 2, font: FONT, color: col, alpha: 0.8, pri: 2 });
+      // (written outward from the limb, off the disc)
+      const cs = Math.cos(tm), sn = Math.sin(tm);
+      const side = cs > 0.38 ? 'right' : cs < -0.38 ? 'left' : sn > 0 ? 'up' : 'down';
+      if (lx > -30 && lx < W + 30 && ly > -10 && ly < H + 10) L.add(a.name.toUpperCase(), lx, ly, { off: 2, font: FONT, color: col, alpha: 0.9, pri: 2, side });
     }
   }
   ctx.restore();

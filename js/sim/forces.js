@@ -59,7 +59,7 @@
 import { AU_M, G0, MIN_S, DAY_MIN, TWO_PI } from '../core/constants.js';
 import { random, randRange, randInt, pick } from '../core/rng.js';
 import { BODIES, bodyPos, getBody } from './ephemeris.js';
-import { getWorld, WORLD_VISITORS } from './world.js';
+import { getWorld, WORLD_VISITORS, WORLD_DUE } from './world.js';
 import { createEntity } from './entities.js';
 import { rollIdentity } from './ship-classes.js';
 import { FACTIONS, POWERS, SUBFACTIONS, controlAt, subsOf } from './factions.js';
@@ -197,6 +197,7 @@ function sendTo(state, e, dest) {
   f.until = now + T;
   world.refresh(e, now);
   world.hash.update(e);
+  world.plan(e, now);
 }
 
 /** Background visitor: a hull arriving at the end of its course takes up its berth, beat or post. */
@@ -211,6 +212,7 @@ function serviceForce(e, minute, world) {
   world.hash.update(e);
 }
 WORLD_VISITORS.push(serviceForce);
+WORLD_DUE.push((e) => { const f = e.tags?.force; return f && !e.agent && !e.driven && f.state === 'transit' ? f.until : Infinity; });
 
 // ---- RAISING THE FORCES ----
 
@@ -553,6 +555,7 @@ export function putToSleep(state, e) {
   }
   world.refresh(e, now);
   world.hash.update(e);
+  world.plan(e, now);
   return true;
 }
 

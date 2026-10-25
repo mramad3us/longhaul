@@ -26,7 +26,7 @@
 //
 //   arrive at the gate ─┬─ work needs a berth, one free ── BERTH (work) ─┬─ layover ── SLOT ── depart
 //                       │                                                └─ depart
-//                       ├─ no berth free ── SLOT (waiting; asks again) ── berth, or the work by tender
+//                       ├─ no berth free ── SLOT (waiting, queued: called down) ── berth, or the work by tender
 //                       └─ nothing to do in a berth ── SLOT (layover) ── depart
 //
 // A ship too big for any berth (the ice haulers) works by tender from its
@@ -46,10 +46,10 @@
 
 import { AU_M, G0, MIN_S } from '../core/constants.js';
 import { random, randInt, pick, weightedPick } from '../core/rng.js';
-import { getWorld, WORLD_VISITORS, orbitStateAt } from './world.js';
+import { getWorld, WORLD_VISITORS, WORLD_DUE, orbitStateAt } from './world.js';
 import { createEntity } from './entities.js';
 import { rollIdentity, CLASSES } from './ship-classes.js';
-import { berthInto, releaseHull, gateId, berthSizesFor, freeBerth, anchorageOrbit } from './stations.js';
+import { berthInto, releaseHull, gateId, berthSizesFor, freeBerth, holdBerth, anchorageOrbit, BERTH_FREED } from './stations.js';
 import { freeSlot, claimSlot, slotOrbit } from './holding.js';
 import { bayOf } from './ship-classes.js';
 import { WORLDS, airspacesOf, orbitPeriodS } from './worlds.js';
@@ -77,8 +77,8 @@ export const CALLS = {
   hauler: { work: null, tender: [12 * H, 36 * H], p: 1, lay: [0, 6 * H] },// too big for any berth: ice by tender from the slot
   default: { work: [1 * H, 4 * H], p: 0.5, lay: [2 * H, 24 * H] },
 };
-const RETRY_MIN = [30, 90];          // a ship waiting for a berth asks again
-const GIVE_UP_MIN = 4 * H;           // …and after this does the work by tender, slowly
+const GIVE_UP_MIN = 4 * H;           // a ship waiting for a berth, not called down by then, does the work by tender, slowly
+const CALL_LOOK = 12;                // a berth come free: this many of the queue looked at for one it fits
 const TENDER_SLOWER = 1.6;
 const IN_FLIGHT = 0.9;               // share of a new game's traffic under way (about the steady state)
 
@@ -220,8 +220,8 @@ function leavePort(world, e) {
 function arrive(world, e, st, minute) {
   const call = e.tags.call = { ...planCall(e), since: minute, port: st.id };
   if (call.work > 0) {
-    const sizes = berthSizesFor(e.cls);
-    if (freeBerth(world.state, st, sizes, { reserve: true })) { e.tags.ends = 'berth'; return flyLeg(world, e, minute, gateId(st.id), st.id, LOCAL_G, st.id); }
+    const b = freeBerth(world.state, st, berthSizesFor(e.cls), { reserve: true });
+    if (b) { holdBerth(st, b.id, e); e.tags.ends = 'berth'; return flyLeg(world, e, minute, gateId(st.id), st.id, LOCAL_G, st.id); }
     call.giveUp = minute + GIVE_UP_MIN;
     return toSlot(world, e, st, minute, 'wait');
   }
@@ -252,10 +252,12 @@ function landed(world, e, minute) {
     if (takeBerth(world, e, st, minute, call.work)) return;
     // the berth went while we came down: wait in the pattern
     call.giveUp = minute + GIVE_UP_MIN;
-    takeSlot(world, e, st, minute, 'wait', minute + span(RETRY_MIN));
+    takeSlot(world, e, st, minute, 'wait', call.giveUp);
+    queueFor(st, e);
     return;
   }
-  const until = ends === 'wait' ? minute + span(RETRY_MIN) : ends === 'tender' ? minute + call.tender + call.lay : minute + call.lay;
+  const until = ends === 'wait' ? call.giveUp ?? minute + GIVE_UP_MIN : ends === 'tender' ? minute + call.tender + call.lay : minute + call.lay;
+  if (ends === 'wait') queueFor(st, e);
   const slotId = e.tags.slot;
   if (slotId && slotOrbit(st.id, slotId)) {
     // into the slot held for it on the way in
@@ -320,12 +322,12 @@ function nextInPort(world, e, minute) {
     return;
   }
   if (call.phase === 'wait') {
-    const sizes = berthSizesFor(e.cls);
-    if (freeBerth(world.state, st, sizes, { reserve: true })) {
-      // a berth: out of the slot to the gate, down to it
+    const b = freeBerth(world.state, st, berthSizesFor(e.cls), { reserve: true });
+    if (b) {
+      // a berth: out of the slot to the gate, down to it (held for it on the way)
       const slot = { orbit: e.orbit };
       leavePort(world, e);
-      e.tags.at = st.id;
+      holdBerth(st, b.id, e);
       e.tags.ends = 'berth';
       flyLeg(world, e, minute, slot, world.get(gateId(st.id)) ? gateId(st.id) : st.id, LOCAL_G, st.id);
       e.tags.legs = [[gateId(st.id), st.id, LOCAL_G]];
@@ -337,11 +339,46 @@ function nextInPort(world, e, minute) {
       e.tags.until = minute + Math.round(call.work * TENDER_SLOWER) + call.lay;
       return;
     }
-    e.tags.until = minute + span(RETRY_MIN);
+    // called down, and the berth gone to another first: back in the queue
+    e.tags.until = call.giveUp;
+    queueFor(st, e);
     return;
   }
   depart(world, e, minute);
 }
+
+// ---- WAITING FOR A BERTH ----
+// A ship that finds no berth free waits in the pattern and joins the port's
+// queue (st.waiting: ids, first come, first served). It doesn't ask again
+// and again (a crowded port has thousands waiting): when a berth comes free
+// (stations.js BERTH_FREED), traffic control calls down the first in the
+// queue that the free berths take; one not called down by its give-up time
+// does its work by tender. The queue is walked from its head ($wh), the
+// called and the gone left as holes, closed up when they are most of it.
+
+function queueFor(st, e) { (st.waiting ||= []).push(e.id); }
+
+function callDown(world, st) {
+  const q = st.waiting;
+  if (!q?.length) return;
+  const state = world.state, now = state.clock.minute;
+  let h = Math.min(st.$wh || 0, q.length);
+  for (let k = h, looked = 0; k < q.length && looked < CALL_LOOK; k++) {
+    if (q[k] == null) continue;
+    const e = world.get(q[k]);
+    if (!e?.tags?.traffic || e.tags.at !== st.id || e.tags.call?.phase !== 'wait' || e.transit) { q[k] = null; continue; }
+    looked++;
+    if (!freeBerth(state, st, berthSizesFor(e.cls), { reserve: true })) continue;
+    q[k] = null;
+    e.tags.until = now + 1;                  // (it asks for the berth itself next minute: nextInPort)
+    world.plan(e, now);
+    break;
+  }
+  while (h < q.length && q[h] == null) h++;
+  if (h > 64 && h * 2 > q.length) { q.splice(0, h); h = 0; }
+  st.$wh = h;
+}
+BERTH_FREED.fn = callDown;
 
 /** Background visitor: the next step of a ship's passage or its port call. */
 function serviceShip(e, minute, world) {
@@ -359,6 +396,7 @@ function serviceShip(e, minute, world) {
   world.hash.update(e);
 }
 WORLD_VISITORS.push(serviceShip);
+WORLD_DUE.push((e) => e.tags?.traffic && !e.driven && (e.transit || e.orbit) ? (e.tags.until ?? 0) : Infinity);
 
 /** Create one NPC ship in port (at a random station, or `home`), somewhere in a call. */
 export function spawnTrafficShip(state, minute = state.clock.minute, home = null) {
@@ -382,6 +420,7 @@ export function spawnTrafficShip(state, minute = state.clock.minute, home = null
   else takeSlot(world, e, home, minute, 'lay', minute + left(Math.max(60, call.lay)));
   world.refresh(e, minute);
   world.hash.update(e);
+  world.plan(e, minute);
   if (state.traffic) state.traffic.spawned++;
   return e;
 }

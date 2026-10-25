@@ -51,6 +51,7 @@ import { hullOf } from './hulls.js';
 import { STATIONS, stationModel, freeBerth, berthFits, berthCounts, berthOccupant, gateId } from './stations.js';
 import { cite, recordOffense } from './law.js';
 import { holdingPattern, freeSlot, claimSlot, releaseSlot, slotOccupant, slotDescription, slotCounts, PORT_M } from './holding.js';
+import { plansTo } from './intel.js';
 
 export const CONTROL_M = 30_000_000;
 export const APPROACH_M = 2_000_000;
@@ -431,16 +432,15 @@ function chatter(state, st) {
   // Departures from the berth table, arrivals from the filed plans on the plot:
   // both small, where a spatial query round a busy port is not
   const departing = [], arriving = [];
-  for (const id of [...Object.values(st.berths || {}), ...Object.values(st.holding || {})]) {
+  const due = (id) => {
     const e = id !== 'player' && world.get(id);
     if (e?.transponder && e.tags?.until - now < 40 && e.tags.until - now > 0 && e.tags.call?.phase !== 'wait') departing.push(e);
-    if (departing.length > 12) break;
-  }
-  const tracks = state.intel?.tracks || {};
-  for (const id in tracks) {
-    const r = tracks[id];
-    if (r.kind !== 'plan' || (r.plan.to !== st.id && r.plan.to !== gateId(st.id)) || r.plan.t1 - now > 90 || r.plan.t1 < now) continue;
-    const e = world.get(id);
+  };
+  for (const k in st.berths || {}) { if (departing.length > 12) break; due(st.berths[k]); }
+  for (const k in st.holding || {}) { if (departing.length > 12) break; due(st.holding[k]); }
+  for (const r of plansTo(state, st.id, gateId(st.id))) {
+    if ((r.plan.to !== st.id && r.plan.to !== gateId(st.id)) || r.plan.t1 - now > 90 || r.plan.t1 < now) continue;
+    const e = world.get(r.id);
     if (e?.transit) arriving.push(e);
     if (arriving.length > 6) break;
   }
@@ -497,11 +497,7 @@ export function stationTraffic(state, st) {
   const b = berthCounts(state, st), h = slotCounts(state, st);
   const now = state.clock.minute;
   let inbound = 0;
-  const tracks = state.intel?.tracks || {};
-  for (const id in tracks) {
-    const r = tracks[id];
-    if (r.kind === 'plan' && (r.plan.to === st.id || r.plan.to === gateId(st.id) || r.plan.port === st.id) && r.plan.t1 > now) inbound++;
-  }
+  for (const r of plansTo(state, st.id, gateId(st.id))) if ((r.plan.to === st.id || r.plan.to === gateId(st.id) || r.plan.port === st.id) && r.plan.t1 > now) inbound++;
   // the anchorage: what overflowed the pattern (a short query: few ships, far out)
   _q.length = 0;
   world.query(st.pos, STATIONS[st.id] ? (STATIONS[st.id].anchorKm + 200) * 1000 / AU_M : 0.001, _q);

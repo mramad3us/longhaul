@@ -11,6 +11,9 @@
 // to hover and click; our ship and the selection go first, so they keep
 // theirs). Names stay inside the display. A name can carry tags after it
 // in their own colours (DARK, a mission's job: marks.js), placed with it.
+// A display drawn over pictures as well as the dark (the map, with a
+// world's disc and its air under the names) gives its names a halo of its
+// own background colour, so a name in any colour reads over anything.
 //
 // Cost: what is placed goes into a coarse grid of cells, so a name is
 // only tested against what is near it: a map with thousands of marks
@@ -22,7 +25,8 @@ const CELL = 48;
 const GAP = 5;            // px between a name and its tags
 
 export class Labels {
-  constructor() { this.list = []; this.grid = new Map(); }
+  /** `halo`: a colour drawn round each name (the display's background), or none. */
+  constructor({ halo = null, haloW = 3.5 } = {}) { this.list = []; this.grid = new Map(); this.halo = halo; this.haloW = haloW; }
 
   /** Start a frame. */
   reset() { this.list.length = 0; this.grid.clear(); }
@@ -35,10 +39,12 @@ export class Labels {
    * to the text, or [across, up and down] for a long mark (a hull seen side
    * on). `above` tries above and below first. `fixed` names have one place
    * only (a ring's label, a zone's corner): (x + off, y) as the text's left
-   * and middle. `tags`: [{ text, color }] written after the name.
+   * and middle. `tags`: [{ text, color }] written after the name. `side`
+   * ('right', 'left', 'up', 'down') is tried first (a name round a disc,
+   * kept off it: outward).
    */
-  add(text, x, y, { off = 8, font, color, alpha = 1, pri = 1, fixed = false, above = false, tags = null } = {}) {
-    if (text) this.list.push({ text, x, y, off, font, color, alpha, pri, fixed, above, tags });
+  add(text, x, y, { off = 8, font, color, alpha = 1, pri = 1, fixed = false, above = false, side = null, tags = null } = {}) {
+    if (text) this.list.push({ text, x, y, off, font, color, alpha, pri, fixed, above, side, tags });
   }
 
   /** Visit the grid cells a box touches; stop when `fn` says false. */
@@ -75,11 +81,17 @@ export class Labels {
       const ox = Array.isArray(l.off) ? l.off[0] : l.off, oy = Array.isArray(l.off) ? l.off[1] : l.off;
       const right = box(l.x + ox, l.y), left = box(l.x - ox - w, l.y);
       const up = box(l.x - w / 2, l.y - oy - h * 0.5), down = box(l.x - w / 2, l.y + oy + h * 0.5);
-      const tries = l.fixed ? [right] : l.above ? [up, down, right, left] : [right, left, up, down];
+      const tries = l.fixed ? [right] : l.side ? [{ right, left, up, down }[l.side], ...(l.side === 'left' || l.side === 'right' ? [up, down] : [right, left]), l.side === 'left' ? right : l.side === 'right' ? left : l.side === 'up' ? down : up]
+        : l.above ? [up, down, right, left] : [right, left, up, down];
       const at = tries.find(b => b.x0 >= 0 && b.x1 <= W && b.y0 >= 0 && b.y1 <= H && this._free(b));
       if (!at) continue;
       this._put(at);
       ctx.globalAlpha = l.alpha;
+      if (this.halo) {
+        ctx.strokeStyle = this.halo; ctx.lineWidth = this.haloW; ctx.lineJoin = 'round';
+        ctx.strokeText(l.text, at.tx, at.ty);
+        if (l.tags) { let x = at.tx + tw; for (const t of l.tags) { ctx.strokeText(t.text, x += GAP, at.ty); x += t.w; } }
+      }
       ctx.fillStyle = l.color;
       ctx.fillText(l.text, at.tx, at.ty);
       if (l.tags) {
