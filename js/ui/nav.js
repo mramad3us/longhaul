@@ -49,6 +49,9 @@ import { droneStatus } from '../sim/drones.js';
 import { clearanceFor, requestDeparture } from '../sim/traffic-control.js';
 import { knownCrew } from '../sim/manifest.js';
 import { knownHold, holdWords } from '../sim/market.js';
+import { flagOf as flagOfService } from '../sim/service.js';
+import { commandOnStation } from '../sim/forces.js';
+import { ZONE_KINDS } from '../sim/conflict.js';
 import { hullOf, portSummary } from '../sim/hulls.js';
 import { CLASSES } from '../sim/ship-classes.js';
 import { drawHullPortrait } from './hull-art.js';
@@ -528,8 +531,10 @@ function renderSelection() {
       <span>REL V <b>${rel ? fmtSpeed(rel.speed) : '—'}</b></span>
     </div>
     ${t.kind === 'body' ? `<div class="ms-sheet">${bodySheet(s, t.id)}</div>` : ''}
+    ${d.entity?.tags?.command ? `<div class="ms-sheet"><div class="scanner-detail-row"><span class="scanner-detail-key">ROLE</span><span class="scanner-detail-val scanner-val-wrap">${fobWords(s, d.entity)}</span></div></div>` : ''}
     <div class="panel-actions">
       ${routing ? '<button class="route-abort-btn" data-act="abort">ABORT ROUTE</button>' : t.id === 'Sol' ? '' : '<button class="route-plot-btn" data-act="plot">PLOT ROUTE</button>'}
+      ${d.entity?.tags?.command && shipDockable(s, d.entity).ok && !(isDocked(s) && dockedTo(s)?.id === d.entity.id) ? '<button class="route-zoom-btn" data-act="dock" title="Alongside its collar: its missions, supplies at a tenth">DOCK</button>' : ''}
       ${t.id === 'Sol' ? '' : '<button class="route-zoom-btn" data-act="stance">STANCE</button>'}
       <button class="route-zoom-btn" data-act="focus">FOCUS</button>
       ${canHail ? '<button class="route-zoom-btn" data-act="hail">HAIL</button>' : ''}
@@ -738,12 +743,21 @@ function shipRows(s, e, c, row) {
   const crew = knownCrew(s, e, { identified: known });
   const hull = known ? `<canvas class="scanner-detail-hull" width="260" height="60" data-hull="${e.id}"></canvas>` : '';
   // (a command ship says what it is: the forward command of its navy's fight)
-  const cmd = known && e.tags?.command ? row('ROLE', `${esc(FACTIONS[e.faction]?.navy || '')} forward command · ${esc(e.tags.command.body)}`) : '';
+  const cmd = known && e.tags?.command ? row('ROLE', fobWords(s, e), 'scanner-val-wrap') : '';
   const hold = CLASSES[e.cls]?.cargoT > 0 ? knownHold(s, e, known) : null;
   return `${hull}${cmd}${row('ABOARD', crew ? `${esc(crew.text)} <span class="scanner-val-dim">${esc(crew.src)}</span>` : 'unknown', crew ? '' : 'scanner-val-dim')}
     ${CLASSES[e.cls]?.cargoT > 0 ? row('HOLD', hold ? `${esc(holdWords(hold.items))} <span class="scanner-val-dim">${esc(hold.src)}</span>` : known ? 'no manifest filed' : 'unknown', hold ? 'scanner-val-wrap' : 'scanner-val-dim') : ''}
     ${row('COLLARS', known ? esc(portSummary(e.cls)) : '—')}
     ${known && CLASSES[e.cls]?.atmo ? row('ATMOSPHERE', 'rated for entry') : ''}`;
+}
+
+/** A forward command (FOB) in words: whose, which fight, where it stands, what it is to us. */
+function fobWords(s, e) {
+  const z = s.politics.zones.find(x => x.id === e.tags.command.zone);
+  const fight = z ? `the ${(ZONE_KINDS[z.kind]?.label || z.kind).toLowerCase()} at ${z.body}` : e.tags.command.body;
+  const post = commandOnStation(e) ? 'on its post at the rear' : 'on its way out';
+  const ours = flagOfService(s) === e.faction ? ': takes us alongside, military work, supplies at a tenth' : '';
+  return `${esc(FACTIONS[e.faction]?.navy || '')} forward command (FOB) for ${esc(fight)} · ${post}${ours}`;
 }
 
 /** DOCK on the contact panel: a station (traffic control must clear us), a ship that will hold for us. */

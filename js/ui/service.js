@@ -8,7 +8,9 @@
 // relation with theirs), the state of the powers (cold war, crisis,
 // war), who has the say inside each, the orders we have been given, the
 // hot zones we have heard of (by faction, those needing guns first, one
-// click to the map or a route), and the political news that has reached us.
+// click to the map or a route, and each fight's forward commands, the FOBs:
+// the navies' command ships at its rear, where they stand and how far, one
+// click to them, alongside ours), and the political news that has reached us.
 // ============================================================
 
 import { ui } from './context.js';
@@ -27,6 +29,7 @@ import { WANTED_LABEL } from '../sim/law.js';
 import { CLASSES } from '../sim/ship-classes.js';
 import { ZONE_KINDS, zonePos } from '../sim/conflict.js';
 import { getWorld } from '../sim/world.js';
+import { fobsOf } from '../sim/forces.js';
 import { AU_KM } from '../core/constants.js';
 
 let hooks = {};
@@ -49,12 +52,12 @@ function zoneRows(s) {
   const filter = zoneFilter || (flag ? 'flag' : 'all');
   const want = filter === 'flag' ? flag : filter === 'all' ? null : filter;
   const f = s.flight.pos;
-  const calls = new Set(openCallups(s).map(cu => cu.body));
+  const calls = new Set(openCallups(s).map(cu => cu.zoneId));
   const list = Object.entries(s.intel?.zones || {}).map(([id, z]) => {
     const sides = zoneSides(z);
     const ours = !!flag && sides.includes(flag);
     const p = zonePos({ ...z, id }, now);
-    return { id, z, sides, ours, call: calls.has(z.body), dist: Math.hypot(p.x - f.x, p.y - f.y), need: (NEED[z.kind] || 0) * (ours ? 2 : 1) };
+    return { id, z, sides, ours, call: calls.has(id), dist: Math.hypot(p.x - f.x, p.y - f.y), need: (NEED[z.kind] || 0) * (ours ? 2 : 1) };
   }).filter(r => !want || r.sides.includes(want))
     .sort((a, b) => b.need - a.need || a.dist - b.dist);
   const btn = (k) => `<button class="svc-zf ${filter === k ? 'active' : ''}" data-act="zone-filter" data-k="${k}" ${k === 'flag' ? `title="Where the ${esc(FACTIONS[flag].navy)} is in it"` : ''}>${k === 'flag' ? 'OUR FLAG' : k === 'all' ? 'ALL' : k === 'pirate' ? 'PIRATES' : esc(FACTIONS[k].short)}</button>`;
@@ -68,9 +71,33 @@ function zoneRows(s) {
       <span class="svc-zone-where">${esc(r.z.body)}${sides ? ` · ${sides}` : ''}${tags}</span>
       <span class="svc-meta">${fmtKm(r.dist * AU_KM)} · heard ${formatDuration(now - r.z.heard)} ago</span>
       <span class="svc-zone-acts"><button class="btn btn-secondary btn-small" data-act="zone-map" data-id="${esc(r.id)}">MAP</button><button class="btn btn-primary btn-small" data-act="zone-plot" data-id="${esc(r.id)}"${anchor ? '' : ' title="No fleet anchor charted there: a route to the body"'}>PLOT</button></span>
+      ${fobRows(s, r.id, flag)}
     </div>`;
   }).join('');
   return `<div class="svc-zf-row">${filters}</div><p class="svc-meta">Where guns are wanted first: war fronts, shots fired, raiders on a power's shipping, pirates on the lanes${flag ? '; our own power\'s fights before others\'' : ''}.</p>${rows || `<p class="missions-empty">— no hot zone we have heard of${want ? ` for ${want === 'pirate' ? 'pirates' : esc(FACTIONS[want].short)}` : ''} —</p>`}`;
+}
+
+/**
+ * A fight's forward commands (FOBs): each navy's command ship at its rear.
+ * On its post it is charted (named, where it holds); on its way out only
+ * our own navy tells us where; none in port, it says so. Ours takes us
+ * alongside: missions, and supplies at a tenth.
+ */
+function fobRows(s, id, flag) {
+  const z = s.politics.zones.find(x => x.id === id);
+  const fobs = fobsOf(s, z);
+  if (!fobs.length) return '';
+  const f = s.flight.pos;
+  return `<div class="svc-fobs">${fobs.map(({ faction, ship, status }) => {
+    const ours = faction === flag;
+    const who = `<span class="svc-fob-k" style="color:${factionColor(faction)}">${esc(FACTIONS[faction].short)} FOB</span>`;
+    if (status === 'none') return `<div class="svc-fob">${who}<span class="svc-fob-meta">none in port yet: one goes out as soon as a yard has one</span></div>`;
+    if (status === 'transit' && !ours) return `<div class="svc-fob">${who}<span class="svc-fob-meta">on its way out to the rear</span></div>`;
+    const d = Math.hypot(ship.pos.x - f.x, ship.pos.y - f.y) * AU_KM;
+    const what = status === 'post' ? (ours ? 'on its post, takes us alongside: missions, supplies at a tenth' : 'on its post at the rear') : 'on its way out to the rear';
+    return `<div class="svc-fob">${who}<span class="svc-fob-name">${esc(ship.name)}</span><span class="svc-fob-meta">${fmtKm(d)} · ${what}</span>
+      <span class="svc-fob-acts"><button class="btn btn-secondary btn-small" data-act="fob-map" data-id="${esc(ship.id)}">MAP</button>${ours ? `<button class="btn btn-primary btn-small" data-act="fob-plot" data-id="${esc(ship.id)}" title="A route alongside it, to dock">ALONGSIDE</button>` : ''}</span></div>`;
+  }).join('')}</div>`;
 }
 
 /** Where to go for a zone: its fleets' anchor, if one is charted, else the body it is round. */
@@ -157,7 +184,8 @@ export function openService() {
     title: 'Service & Relations', cls: 'dialog-service', html: render(),
     buttons: [...(L ? [{ label: 'Resign license…', act: 'resign', cls: 'btn-secondary' }] : []), { label: 'Close', act: 'close', cls: 'btn-primary' }],
     onAction: (act, b) => {
-      if (act === 'plot-cmd') { hooks.closeDialog(); hooks.plotRoute({ kind: 'entity', id: b.dataset.id }, { dock: true }); return; }
+      if (act === 'plot-cmd' || act === 'fob-plot') { hooks.closeDialog(); hooks.plotRoute({ kind: 'entity', id: b.dataset.id }, { dock: true }); return; }
+      if (act === 'fob-map') { hooks.closeDialog(); hooks.showOnMap({ kind: 'entity', id: b.dataset.id }); return; }
       if (act === 'zone-filter') { zoneFilter = b.dataset.k; body.querySelector('.dialog-content').innerHTML = render(); return; }
       if (act === 'zone-map' || act === 'zone-plot') {
         const t = zoneTarget(s, b.dataset.id);

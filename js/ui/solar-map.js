@@ -28,7 +28,7 @@
 import { AU_KM, AU_M, DAY_MIN } from '../core/constants.js';
 import { BODIES, bodyPos } from '../sim/ephemeris.js';
 import { getWorld } from '../sim/world.js';
-import { factionColor, INFLUENCE_SOURCES } from '../sim/factions.js';
+import { factionColor, INFLUENCE_SOURCES, FACTIONS } from '../sim/factions.js';
 import { zonePos, ZONE_KINDS } from '../sim/conflict.js';
 import { getBody } from '../sim/ephemeris.js';
 import { estimate, liveKnowledge, LIGHT_SECOND_AU, LIGHT_MINUTE_AU } from '../sim/intel.js';
@@ -434,6 +434,7 @@ export class SolarMap {
     for (const e of world.driven) if (e.type === 'ordnance' && e.ord.owner === 'player') add(e);
     const tracks = state.intel?.tracks || {};
     for (const id in tracks) if (tracks[id].kind === 'chart') add(world.get(id));    // wrecks in the news: charted
+    for (const e of world.forces) if (e.tags?.command && liveKnowledge(state, e)) add(e);   // the navies' forward commands (FOBs) on their posts: charted
     if (this.showIntel && this.filter.ships) this._drawReports(ctx, state, view, sp, drawn, opts, fm);
 
     // stations drawn last, over the traffic crowding them; filtered layers left out (but never what is picked)
@@ -444,7 +445,9 @@ export class SolarMap {
       if (e.type === 'nav' && !m.mission && e.id !== opts.targetId) continue;      // (a nav mark is drawn for the work it is for, or picked)
       const keep = e.id === opts.targetId || e.id === this.selected?.id || m.flag || m.mission || m.maybe;
       if (!keep && e.type === 'station' && !this.filter.stations) continue;
-      if (!keep && e.type === 'ship' && !this.filter.ships) continue;
+      const fob = e.type === 'ship' && !!e.tags?.command;
+      if (!keep && e.type === 'ship' && !fob && !this.filter.ships) continue;
+      if (!keep && fob && !this.filter.stations && !this.filter.ships) continue;
       const [x, y] = sp(e.pos.x, e.pos.y);
       const color = e.sos ? COL.warn : e.tags?.wreck ? '#5E6D7C' : factionColor(e.faction);
       if (e.type === 'ordnance') {
@@ -463,6 +466,12 @@ export class SolarMap {
         ctx.fillStyle = COL.void; ctx.fillRect(x - 5, y - 5, 10, 10);
         ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.strokeRect(x - 4, y - 4, 8, 8); ctx.lineWidth = 1;
         ctx.fillStyle = color; ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+      } else if (fob) {
+        // a forward command (FOB): a station of circumstance, drawn as a base (a diamond round a dot) in its navy's colour
+        ctx.fillStyle = COL.void;
+        ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x + 7, y); ctx.lineTo(x, y + 7); ctx.lineTo(x - 7, y); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke(); ctx.lineWidth = 1;
+        ctx.fillStyle = color; ctx.fillRect(x - 2, y - 2, 4, 4);
       } else if (e.type === 'nav') {
         ctx.strokeStyle = COL.caution; ctx.setLineDash([2, 2]);
         ctx.beginPath(); ctx.arc(x, y, Math.max(6, 0.001 * S), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
@@ -492,10 +501,10 @@ export class SolarMap {
       pick.push({ kind: 'entity', id: e.id, sx: x, sy: y, station: e.type === 'station' });
       L.block(x - 4, y - 4, x + 4, y + 4);
       // (named as we know it: a station, a mark, what our work points at, a contact once identified)
-      const label = e.type === 'station' || e.sos || e.tags?.missionId || m.mission || m.maybe || m.flag || S > 3e4 || e.id === opts.targetId;
-      const named = e.type === 'station' || e.type === 'nav' || !!m.mission || contactName(state, e.id);
+      const label = e.type === 'station' || fob || e.sos || e.tags?.missionId || m.mission || m.maybe || m.flag || S > 3e4 || e.id === opts.targetId;
+      const named = fob ? `${FACTIONS[e.faction]?.short || e.faction} FOB · ${contactName(state, e.id) || e.name}` : e.type === 'station' || e.type === 'nav' || !!m.mission || contactName(state, e.id);
       if (label) {
-        const pri = (e.id === opts.targetId ? 9 : e.sos || e.tags?.missionId ? 7 : e.type === 'station' ? 6 : 2) + markPri(m);
+        const pri = (e.id === opts.targetId ? 9 : e.sos || e.tags?.missionId ? 7 : e.type === 'station' || fob ? 6 : 2) + markPri(m);
         const font = UI(11, e.type === 'station' ? 600 : 500);
         // (a ship we can't name yet is called what it is to us: DARK, or a WRECK)
         if (named) L.add(named === true ? e.name : named, x, y, { off: 9, font, color: e.type === 'station' ? COL.text : color, alpha: e.type === 'station' ? 0.9 : 0.85, pri, tags: labelTags(m) });

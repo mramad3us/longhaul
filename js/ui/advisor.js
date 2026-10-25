@@ -110,7 +110,8 @@ import { STATIONS, berthOf } from '../sim/stations.js';
 import { clearanceFor, refusal, APPROACH_M } from '../sim/traffic-control.js';
 import { FREE_LEASE_MIN, LEASE_RATE } from '../sim/leases.js';
 import { dockedStationEntity, dockedTo } from '../sim/docking.js';
-import { contractor, hullLegal, navyOf, openCallups } from '../sim/service.js';
+import { contractor, hullLegal, navyOf, openCallups, flagOf } from '../sim/service.js';
+import { commandOnStation } from '../sim/forces.js';
 import { milRefusal } from '../sim/military.js';
 import { dockedPort, deliverable, inPort, needsBerth, contractsAt, CONTRACT_LABEL } from '../sim/contracts.js';
 import { activeRuns, runReadout, runRefusal } from '../sim/shuttles.js';
@@ -945,6 +946,30 @@ function ruleOrders(state, c, add) {
   }
 }
 
+/**
+ * Our own navy's forward command (a FOB) on its post within half an AU,
+ * with no call-up to it in hand: that it is there, and what it is good for.
+ */
+const FOB_NEAR_M = 0.5 * AU_M;
+function ruleFob(state, c, add) {
+  const L = flagOf(state);
+  if (!L || state.dock?.phase === 'docked') return;
+  const called = new Set(openCallups(state).filter(cu => !cu.reported).map(cu => cu.ship));
+  let best = null;
+  for (const e of c.world.forces) {
+    if (e.faction !== L || !commandOnStation(e) || called.has(e.id)) continue;
+    const d = distM(c, e);
+    if (d < FOB_NEAR_M && (!best || d < best.d)) best = { e, d };
+  }
+  if (!best || headingFor(state, c, best.e.id)) return;
+  add({
+    key: `fob:${best.e.id}`, level: ADVICE, rank: 36, sig: best.e.id,
+    text: `Our FOB, the ${best.e.name}, ${fmtMeters(best.d)} off: military work, supplies at a tenth.`,
+    detail: `The ${FACTIONS[L].navy}'s forward command at ${best.e.tags.command.body}: it takes its contractors alongside, posts their missions, and supplies them at a tenth of the price while its fight lasts.`,
+    actions: [A.plot(best.e.id, 'ALONGSIDE', true)],
+  });
+}
+
 /** Where a contract's next leg goes (as the mission log plots it). */
 function contractTarget(c) {
   if (c.phase === 'return') return { id: c.station, name: c.stationName };
@@ -1282,7 +1307,7 @@ function ruleSituation(state, c, add) {
 
 const RULES = [
   ruleReactor, ruleOrdnance, ruleDecks, ruleCrew, ruleHostiles, rulePort, ruleFlight,
-  ruleRequests, ruleBoarding, ruleScuttle, ruleShuttles, ruleMarket, ruleDistress, ruleOrders, ruleContracts, ruleLaw,
+  ruleRequests, ruleBoarding, ruleScuttle, ruleShuttles, ruleMarket, ruleDistress, ruleOrders, ruleFob, ruleContracts, ruleLaw,
   ruleStores, ruleMachinery, rulePortCall, ruleSituation,
 ];
 

@@ -78,7 +78,7 @@ function enemySide(z, L) {
 /** Our power's fights a port can post work for. */
 function zonesFor(state, port, L) {
   const zones = state.politics.zones;
-  if (port.tags?.command) return zones.filter(z => z.id === port.tags.command.zone);
+  if (port.tags?.command) return port.faction === L ? zones.filter(z => z.id === port.tags.command.zone) : [];
   if (port.faction !== L && port.faction !== 'independent') return [];
   const now = state.clock.minute;
   return zones.filter(z => z.factions.includes(L) && z.kind !== 'pirates' && distAU(zonePos(z, now), port.pos) <= MIL_REACH_AU);

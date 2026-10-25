@@ -311,6 +311,8 @@ export function liveKnowledge(state, e) {
   if (e.type === 'station') return 'charted';
   if (e.type === 'ordnance' && e.ord?.owner === 'player') return 'live';
   if (e.type === 'nav') return 'charted';
+  // (a navy's forward command on its post publishes where it is, as a station's orbit is: forces.js)
+  if (e.tags?.command && e.tags.force?.state === 'post' && !e.agent) return 'charted';
   if (e.orbit && e.tags?.contract && !e.agent) return 'charted';
   return null;
 }

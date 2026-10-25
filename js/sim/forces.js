@@ -19,9 +19,14 @@
 //     Every zone a power fights in gets one: it flies out to the rear of
 //     the zone and holds there for as long as the zone lasts, as the
 //     forward command its licensed captains report to (service.js): it
-//     takes them alongside, posts their missions and supplies them.
-//     It doesn't come alive by our coming near (it is at anchor, like a
-//     station): only when it is attacked.
+//     takes them alongside, posts their missions and supplies them: a
+//     forward operating base (FOB), a station of circumstance. On its post
+//     it publishes where it is, as a station's orbit is charted (intel.js
+//     liveKnowledge): everyone's displays have it, named, where it holds.
+//     A zone whose power had none in port when it began gets one as soon
+//     as a yard has one (hourly: fobsWanted). It doesn't come alive by our
+//     coming near (it is at anchor, like a station): only when it is
+//     attacked.
 //   PROXIES: a power paying for a proxy war (politics.js) gets raiders
 //     at the proxy's raiding ground, of the proxy's own kind: the
 //     mercenaries' refit warships, a clan's raiders, a Belter cell's
@@ -341,6 +346,8 @@ function sendCommand(state, z, fac, side) {
     if (f.role === 'command' && e.faction === fac && f.state === 'berth' && !e.agent) { ship = e; break; }
   }
   if (!ship) return null;
+  // (a command ship lost here leaves its post: its replacement takes it over)
+  world.remove(`command-${z.id}-${fac}`);
   const sgn = side === 0 ? -1 : 1;
   const post = world.add(createEntity({
     id: `command-${z.id}-${fac}`, name: `${FACTIONS[fac].navy} command · ${z.body}`, type: 'nav', transponder: false,
@@ -440,7 +447,30 @@ export function forcesTick(state, { lite = false } = {}) {
   if (!forcesOn(state)) return;
   const now = state.clock.minute;
   if (!lite && !state.lost) wakeNear(state);
+  if (now % 60 === 41) fobsWanted(state);
   if (now % DAY_MIN === 420) census(state);
+}
+
+/** Hourly: a fight that went without a power's command ship (none was in port) gets one once a yard has one. */
+function fobsWanted(state) {
+  for (const z of state.politics.zones) {
+    if (z.kind === 'pirates') continue;
+    z.factions.forEach((fac, i) => { if (COMMAND_CLASS[fac] && !commandShipFor(state, z.id, fac)) sendCommand(state, z, fac, i); });
+  }
+}
+
+/**
+ * The forward commands (FOBs) of a zone, as the displays tell them: for
+ * each power in the fight that sends one, its ship and where it stands
+ * ('post': holding the rear, taking its contractors alongside; 'transit':
+ * on its way out; 'none': none in port yet). [{ faction, ship, status }].
+ */
+export function fobsOf(state, z) {
+  if (!z || z.kind === 'pirates') return [];
+  return (z.factions || []).filter(fac => COMMAND_CLASS[fac]).map(fac => {
+    const ship = commandShipFor(state, z.id, fac);
+    return { faction: fac, ship, status: !ship ? 'none' : commandOnStation(ship) ? 'post' : 'transit' };
+  });
 }
 
 function wakeNear(state) {

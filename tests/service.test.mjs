@@ -13,7 +13,9 @@ import { spawnZone, zonePos } from '../js/sim/conflict.js';
 import { spawnAgent } from '../js/sim/agents.js';
 import { wreckNpc } from '../js/sim/damage.js';
 import { contrabandFor, settleInspection, recordAttack } from '../js/sim/law.js';
-import { commandShipFor, forcesSummary, NAVY_STRENGTH } from '../js/sim/forces.js';
+import { commandShipFor, forcesSummary, NAVY_STRENGTH, fobsOf, commandOnStation } from '../js/sim/forces.js';
+import { liveKnowledge } from '../js/sim/intel.js';
+import { knownName } from '../js/sim/flags.js';
 import { shipDockable } from '../js/sim/docking.js';
 import { priceOf, acceptContract, completeContract, contractsTick, torpedoRefusal, PRICES } from '../js/sim/contracts.js';
 import { generateMil } from '../js/sim/military.js';
@@ -191,6 +193,34 @@ export default [
       const board = un.board.missions;
       console.log(`      ${un.name} near Ganymede: board ${board.map(c => c.type).join(', ')}`);
       assert(board.length > 0 && board.every(c => c.mil), 'all military work');
+    },
+  },
+  {
+    name: 'FOBs: a forward command on its post is charted for everyone, named; a fight that began with none in port gets one when a yard has one; another navy\'s posts no work for us',
+    fn: () => {
+      const s = game(5, { traffic: 40, license: 'UN', classId: 'unn-corvette' });
+      s.politics.frozen = true;
+      setPhase(s, 'UN', 'MCR', 'war');
+      const world = getWorld(s);
+      // every MCR command ship busy elsewhere: the fight begins without one
+      const mcrs = [...world.forces].filter(e => e.tags.force.role === 'command' && e.faction === 'MCR');
+      for (const e of mcrs) e.tags.force.state = 'post';
+      const z = spawnZone(s, { body: 'Ganymede', kind: 'front', factions: ['UN', 'MCR'], w: 1 });
+      let fobs = fobsOf(s, z);
+      assert(fobs.find(f => f.faction === 'UN').status === 'transit' && fobs.find(f => f.faction === 'MCR').status === 'none', `UN under way, MCR none in port (${fobs.map(f => `${f.faction} ${f.status}`).join(', ')})`);
+      const un = fobs.find(f => f.faction === 'UN').ship;
+      assert(!liveKnowledge(s, un), 'on its way out, not charted');
+      for (const e of mcrs) e.tags.force.state = 'berth';
+      for (let i = 0; i < 61 && !commandShipFor(s, z.id, 'MCR'); i++) minuteTick(s);
+      assert(commandShipFor(s, z.id, 'MCR'), 'within the hour a yard sends one out');
+      for (let d = 0; d < 14 && !commandOnStation(un); d++) advance(s, DAY_MIN);
+      fobs = fobsOf(s, z);
+      assert(commandOnStation(un) && liveKnowledge(s, un) === 'charted' && knownName(s, un.id) === un.name, `on its post, charted and named: ${knownName(s, un.id)}`);
+      // the MCR's FOB, alongside: no work for a UN contractor
+      const mcr = commandShipFor(s, z.id, 'MCR');
+      const c = generateMil(s, mcr, 'c-x');
+      assert(!c, 'another navy\'s forward command posts no work for us');
+      console.log(`      ${fobs.map(f => `${f.faction} FOB ${f.ship?.name || '—'}: ${f.status}`).join(' · ')}`);
     },
   },
   {
