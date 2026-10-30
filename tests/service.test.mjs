@@ -12,13 +12,13 @@ import { createPolitics, dailyRelations, setPhase, PAIRS, relation } from '../js
 import { spawnZone, zonePos } from '../js/sim/conflict.js';
 import { spawnAgent } from '../js/sim/agents.js';
 import { wreckNpc } from '../js/sim/damage.js';
-import { contrabandFor, settleInspection, recordAttack } from '../js/sim/law.js';
+import { contrabandFor, settleInspection, recordAttack, lawfulTarget } from '../js/sim/law.js';
 import { commandShipFor, forcesSummary, NAVY_STRENGTH, fobsOf, commandOnStation } from '../js/sim/forces.js';
 import { liveKnowledge } from '../js/sim/intel.js';
 import { knownName } from '../js/sim/flags.js';
 import { shipDockable } from '../js/sim/docking.js';
 import { priceOf, acceptContract, completeContract, contractsTick, torpedoRefusal, PRICES } from '../js/sim/contracts.js';
-import { generateMil } from '../js/sim/military.js';
+import { generateMil, milRefusal } from '../js/sim/military.js';
 import {
   contractor, flagOf, effectiveRelation, enemyOf, applyForLicense, resignLicense, hullLegal, rankOf, rankName,
   serviceTick, RANK_REP, supplyPriceFactor, COMMAND_PRICE, ourName,
@@ -255,6 +255,54 @@ export default [
       assert(done.ok, done.text);
       console.log(`      ${c.title}: ${fmt(s.resources.credits.current - cr, 0)} MCR, +${s.service.rep.MCR - rep} reputation`);
       assert(s.resources.credits.current > cr && s.service.rep.MCR > rep && s.service.missions === 1, 'paid, and noted');
+    },
+  },
+  {
+    name: 'an insurgency has work for an ensign: intelligence on the cells, whose ships lie up dark round an area, found, locked and reported; fair game if it comes to a fight, let go after',
+    fn: () => {
+      const s = game(9, { license: 'MCR', classId: 'mcrn-corvette' });
+      s.politics.frozen = true;
+      const z = spawnZone(s, { body: 'Ganymede', kind: 'insurgency', factions: ['MCR'], sub: 'opa-ceres', w: 1 });
+      const world = getWorld(s), st = world.get('phobos-yard');
+      const port = { ...st, tags: { command: { zone: z.id } }, faction: 'MCR', id: 'phobos-yard', name: st.name, pos: st.pos };
+      assert(s.service.rank === 0, 'an ensign');
+      const offers = [];
+      for (let i = 0; i < 40; i++) { const c = generateMil(s, port, `c-i${i}`); if (c) offers.push(c); }
+      const ours = offers.filter(c => !milRefusal(s, c));
+      assert(ours.length && ours.every(c => c.type === 'INTEL' && c.enemy === '$cells'), `work an ensign can sign for (${offers.map(c => c.type).join(' ')})`);
+      const c = ours[0];
+      st.board.missions.push(c);
+      placeAt(s, st.pos);
+      const r = acceptContract(s, st.id, c.id);
+      assert(r.ok, r.text);
+      const mark = world.get(c.markId), cells = c.spawned.map(id => world.get(id));
+      assert(mark && cells.length === c.count + 1, `${cells.length} cell hulls out, for ${c.count} locks`);
+      for (const e of cells) {
+        const d = Math.hypot(e.pos.x - mark.pos.x, e.pos.y - mark.pos.y) * AU_M / 1000;
+        assert(e.sub === 'opa-ceres' && !e.transponder && e.tags.wanted && !lawfulTarget(e) && d >= 59_000 && d <= 271_000, `a cell hull lying up dark ${fmt(d, 0)} km out, fair game (${e.cls})`);
+      }
+      for (const e of cells.slice(0, c.count)) {
+        placeAt(s, { x: e.pos.x + 0.0005, y: e.pos.y });
+        s.sensors.locked = e.id;
+        for (let m = 0; m < c.lockMin; m++) { s.clock.minute++; contractsTick(s); }
+      }
+      assert(c.phase === 'return', `the cells' ships logged: ${c.phase} ${JSON.stringify(c.tracked)}`);
+      assert(cells.every(e => !e.agent || e.agent.contract == null), 'the cell hulls go back to their own business');
+      placeAt(s, st.pos);
+      const cr = s.resources.credits.current;
+      const done = completeContract(s, c.id, st.id);
+      assert(done.ok, done.text);
+      console.log(`      ${c.title}: ${cells.map(e => e.cls).join(', ')} lying up round ${mark.name}; ${fmt(s.resources.credits.current - cr, 0)} MCR`);
+      // a command ship keeps work for the rank of the captain reporting to it: a board of strikes only gets some
+      st.tags.command = { zone: z.id };
+      const strikes = [];
+      for (let i = 0; strikes.length < st.board.maxMissions && i < 200; i++) { const x = generateMil(s, port, `c-s${i}`); if (x?.type === 'STRIKE') strikes.push(x); }
+      st.board.missions = strikes; st.board.lastRefresh = -Infinity;
+      s.clock.minute = Math.ceil((s.clock.minute + 1) / 10) * 10;
+      contractsTick(s);
+      const board = st.board.missions;
+      assert(board.length <= st.board.maxMissions && board.some(m => !milRefusal(s, m)), `work for an ensign on the board (${board.map(m => m.type).join(' ')})`);
+      delete st.tags.command;
     },
   },
   {

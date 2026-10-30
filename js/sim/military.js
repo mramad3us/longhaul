@@ -10,7 +10,12 @@
 //
 //   INTEL    gather intelligence on the enemy's dispositions: a sensor
 //            lock inside 300,000 km on COUNT different enemy warships (or
-//            a proxy's raiders), held LOCK minutes each. Any rank.
+//            a proxy's raiders), held LOCK minutes each. An insurgency's
+//            cells have no squadron on station to watch: their militia
+//            hulls lie up dark round an area fleet intelligence has from
+//            drone passes (CELLS_SPREAD_AU round its mark, one more than
+//            the job asks), to be found and locked; they fight if pressed,
+//            and are fair game. Any rank.
 //   HOLD     defend a control point at a war front (conflict.js keeps
 //            who holds each): stay within 75,000 km of it for hours while
 //            enemy squadrons come at it in waves, with a few of our own
@@ -30,7 +35,9 @@
 //            they make us, it never happened, and our reputation pays.
 //            Rank 1.
 // Every one is reported back at a port of our power (any of its stations
-// or command ships). Pay rises with rank; reputation comes with it.
+// or command ships). Pay rises with rank; reputation comes with it. A
+// command ship keeps work for the rank of the captain reporting to it,
+// where its fight has any (contracts.js, its board's refresh).
 // ============================================================
 
 import { DAY_MIN } from '../core/constants.js';
@@ -65,6 +72,7 @@ export const LOCK_RANGE_AU = 0.002;      // 300,000 km: intelligence and covert 
 const HOLD_AWAY_MAX = 120;               // minutes off the point (after reaching it) before it is given up
 const HOLD_WAVES = 4;
 const NAVAL = new Set(['standoff', 'blockade', 'skirmish', 'front']);
+const CELLS_SPREAD_AU = [0.0004, 0.0018];  // an insurgency's cell hulls lie up 60,000–270,000 km round the area's mark
 
 const distAU = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -111,7 +119,7 @@ export function generateMil(state, port, id) {
   for (const z of zones) {
     const E = enemySide(z, L);
     if (!E) continue;
-    if (E !== '$cells') options.push({ type: 'INTEL', z, E, w: 3 });     // (an insurgency's cells have no squadron to watch)
+    options.push({ type: 'INTEL', z, E, w: 3 });
     if ((NAVAL.has(z.kind) && atWar(state, L, E)) || E === '$proxy' || E === '$cells') options.push({ type: 'STRIKE', z, E, w: 2 });
     if (z.kind === 'front' && z.points?.some(p => p.held === L)) options.push({ type: 'HOLD', z, E, w: 2.5 });
   }
@@ -130,6 +138,10 @@ export function generateMil(state, port, id) {
       const count = randInt(2, 3), lockMin = randInt(10, 20);
       const who = o.E === '$proxy' ? `the ${subName(o.z.sub) || 'proxy'} raiders` : o.E === '$cells' ? `the ${subName(o.z.sub) || 'Belter'} cells' ships` : `${FACTIONS[o.E].navy} warships`;
       const issuer = pick([`${L === 'UN' ? 'un' : L === 'MCR' ? 'mcr' : 'opa'}-intel`, fleetOf(L)].filter(x => SUBFACTIONS[x]));
+      if (o.E === '$cells') return { ...base, enemy: o.E, sub: o.z.sub || null, count, lockMin, tracked: {}, issuer, rankMin: 0, rep: 25, body: o.z.body, zoneR: o.z.r, zonePhase: o.z.phase,
+        title: `Intelligence: ${who} near ${o.z.body}`,
+        description: `${subName(issuer) || navy} wants to know what the cells have out round ${o.z.body}. Fleet intelligence has the area they lie up in from drone passes, not the hulls: they run dark. Find ${count} of them there, put a sensor lock on each inside 300,000 km and hold it ${lockMin} minutes. They fight if pressed, and are fair game. Then report to any ${FACTIONS[L].short} port.`,
+        reward: { credits: Math.round(randInt(5000, 12000) * pay) }, deadline: randInt(2, 5) * DAY_MIN, expires: now + randInt(12, 36) * 60 };
       return { ...base, enemy: o.E, sub: o.z.sub || null, count, lockMin, tracked: {}, issuer, rankMin: 0, rep: 25,
         title: `Intelligence: ${who} near ${o.z.body}`,
         description: `${subName(issuer) || navy} wants the enemy's dispositions near ${o.z.body}. Put a sensor lock on ${count} different ${who} inside 300,000 km and hold each for ${lockMin} minutes. Then report to any ${FACTIONS[L].short} port.`,
@@ -187,6 +199,20 @@ export function spawnMil(state, c) {
   const now = state.clock.minute;
   const z = state.politics.zones.find(x => x.id === c.zone);
   c.acceptedAt = now;
+  if (c.type === 'INTEL' && c.enemy === '$cells') {
+    // the area fleet intelligence has them in, and the cells' hulls lying up dark round it (one more than the job asks)
+    const mark = world.add(createEntity({ id: world.newId('mark'), name: `Cell activity · ${c.body}`, type: 'nav', transponder: false,
+      orbit: restingOrbit(c.body, Math.max(0.003, c.zoneR + randRange(0.004, 0.012)), c.zonePhase + randRange(-0.6, 0.6), now), tags: { contract: c.id } }));
+    c.spawned = [];
+    for (let i = 0; i <= c.count; i++) {
+      const a = random() * Math.PI * 2, r = randRange(...CELLS_SPREAD_AU);
+      const t = spawnAgent(state, { role: 'navy', ...proxyIdentity('opa-ceres'), sub: 'opa-ceres', pos: { x: mark.pos.x + Math.cos(a) * r, y: mark.pos.y + Math.sin(a) * r }, vel: { ...mark.vel },
+        home: { kind: 'entity', id: mark.id }, zone: c.zone, enemies: [c.faction], contract: c.id, transponder: false, tags: { contract: c.id, wanted: true } });
+      c.spawned.push(t.id);
+    }
+    c.markId = mark.id; c.targetId = mark.id; c.targetName = mark.name;
+    return;
+  }
   if (c.type === 'INTEL') {
     // The enemy's anchor at the zone, for plotting (the squadron holds there)
     const anchor = z && world.get(`anchor-${z.id}`);

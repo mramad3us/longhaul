@@ -87,7 +87,7 @@ import { storeFactor } from './market.js';
 import { STORE_GOOD } from './goods.js';
 import { bodyPos } from './ephemeris.js';
 import { entryProfile, ascentProfile } from './planetary.js';
-import { licenseOf, ourCommandShip, supplyPriceFactor, creditMission, rankOf, RANK_FOR } from './service.js';
+import { licenseOf, ourCommandShip, supplyPriceFactor, creditMission, rankOf, RANK_FOR, flagOf } from './service.js';
 
 export const ContractType = {
   CARGO: 'CARGO', PASSENGERS: 'PASSENGERS', FUEL: 'FUEL', PLANETSIDE: 'PLANETSIDE',
@@ -459,6 +459,12 @@ export function upgradeContracts(state) {
       delete c.aliveBonus;
     }
   }
+  // (a command ship's board drawn before 1.12.10, when an insurgency's posted only strikes and none kept work for our
+  // rank: with nothing on it we can sign for, it looks again at once, and keeps such work from then on)
+  for (const e of world.forces) {
+    const b = e.tags?.command && e.board;
+    if (b && flagOf(state) === e.faction && b.missions.length && !b.missions.some(m => !milRefusal(state, m))) b.lastRefresh = -Infinity;
+  }
   // (an investigation's ship from before 1.12.7: debris was drawn as a whole hull, a derelict answered as if crewed;
   // when it was lost, from its brief)
   for (const c of [...(state.contracts?.active || []), ...(state.contracts?.history || []), ...world.stations.flatMap(st => st.board?.missions || [])]) {
@@ -645,6 +651,17 @@ export function contractsTick(state, emitOut = () => {}) {
         const others = allStations.filter(s => s.id !== st.id);
         const n = randInt(Math.min(2, b.maxMissions - b.missions.length), b.maxMissions - b.missions.length);
         for (let i = 0; i < n; i++) { const c = generate(state, st, others); if (c) b.missions.push(c); }
+        // (a command ship keeps work for the rank of the captain who reports to it, if its fight has any: in place
+        // of the oldest it can't take, when the board is full)
+        if (st.tags?.command && flagOf(state) === st.faction && !b.missions.some(m => !milRefusal(state, m))) {
+          for (let i = 0; i < 8; i++) {
+            const c = generate(state, st, others);
+            if (!c || milRefusal(state, c)) continue;
+            if (b.missions.length >= b.maxMissions) b.missions.shift();
+            b.missions.push(c);
+            break;
+          }
+        }
         b.lastRefresh = now;
       }
     }
@@ -659,7 +676,8 @@ export function contractsTick(state, emitOut = () => {}) {
         done: (text) => {
           c.phase = 'return';
           retireMark(world, c, now);
-          for (const id of c.allies || []) { const a = world.get(id)?.agent; if (a) { a.contract = null; a.ambient = true; } }
+          release(world, c.allies);
+          release(world, c.spawned);
           emit('contract-progress', { contract: c, text });
         },
       });
@@ -881,6 +899,7 @@ function failContract(state, c, reason, emit) {
   // (the warships a mission brought out, a pirate's raiders, go back to their business: they leave when we are gone)
   release(world, c.allies);
   release(world, c.escortIds);
+  release(world, c.spawned);
   state.combat.protect = state.combat.protect.filter(id => id !== c.targetId);
   if (c.mil) creditMission(state, c, false, emit);
   archive(state, c);
