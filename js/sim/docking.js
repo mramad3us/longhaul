@@ -225,6 +225,7 @@ const zeroRel = () => ({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0
 /** Is a ship willing (or unable to refuse) to be docked with? */
 export function shipDockable(state, e) {
   if (!e || e.type !== 'ship') return { ok: false, text: 'Nothing to dock with.' };
+  if (e.tags?.blown) return { ok: false, text: 'Nothing left to dock with: it is in pieces.' };
   const h = e.combat;
   if (e.agent?.mode === 'dock-hold') return { ok: true };
   // A command ship at its post takes its own contractors alongside, and nobody else

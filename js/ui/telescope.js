@@ -10,7 +10,10 @@
 //   left it, lit by the Sun at its true phase (or its night side, nearly
 //   black but for its lit limb), blurred to what the camera resolves; a
 //   few elements, a smudge; under one, a point of light as bright as its
-//   magnitude against what the frame reaches
+//   magnitude against what the frame reaches; a ship blown apart, its
+//   pieces spread round where it was and the ice among them glinting, the
+//   frame taking in its core, the dozen pieces nearest where it was
+//   (sim/damage.js blownCloud)
 //   a lit drive is a star at the stern, the mirror's diffraction spikes on
 //   it; the hull is lost in its glare unless the plume filter takes the
 //   drive's lines out (FILTER on the bar: PLUME, DEEP), and looking aft
@@ -68,7 +71,8 @@ import { frameMarks, marksOf, markWords } from './marks.js';
 import { ScopeFx } from './scope-fx.js';
 import { SkyPainter, drawStars, hash } from './scope-sky.js';
 import { has3D, renderScene, orthoCamera, hullMatrix, stationMatrix } from './gl/ships3d.js';
-import { damageLook, pieces, debrisMatrix, drawVents, mul4 } from './gl/damage.js';
+import { damageLook, pieces, debrisMatrix, drawVents, drawPiecesFlat, mul4 } from './gl/damage.js';
+import { blownCloud } from '../sim/damage.js';
 
 const C_MS = 299_792_458;
 const NIGHT = 2.3;               // rad of phase: past this we see the night side
@@ -501,6 +505,13 @@ export class ScopeView {
       const b = this.solidShape(ctx, e, s, x, y, pxPerM, blurPx, alpha, t, hull, model);
       if (b) return b;
     }
+    if (e.tags?.blown) {
+      // (flat: its pieces as specks, the ice glinting among them)
+      const look = damageLook(e, hull, this.tm), proj = (p) => [x + p[0] * pxPerM, y - p[2] * pxPerM], r = blownCloud(e, this.tm).r * pxPerM;
+      drawPiecesFlat(ctx, look, proj, pxPerM, alpha);
+      drawVents(ctx, look, proj, pxPerM, t, alpha);
+      return { x0: x - r, y0: y - r, x1: x + r, y1: y + r };
+    }
     const L = hull ? hull.L : model.sizeM, Hm = heightOf(e);
     const wPx = L * s.foreshorten * pxPerM, hPx = Hm * pxPerM;
     const m = Math.ceil(blurPx * 3 + 6);
@@ -562,27 +573,42 @@ export class ScopeView {
       const rr = w[0] * right[0] + w[1] * right[1];
       r0 = Math.min(r0, rr); r1 = Math.max(r1, rr); u0 = Math.min(u0, w[2]); u1 = Math.max(u1, w[2]);
     }
-    const box = { x0: x + r0 * pxPerM, x1: x + r1 * pxPerM, y0: y - u1 * pxPerM, y1: y - u0 * pxPerM };
-    // (rendered only as far as the frame, and a margin for the blur, and for a wreck its cloud of fragments)
-    const cloud = look?.debris ? Math.min(3 * bb.x1, Math.max(...look.debris.map(d => d.d0 + d.v * look.debris.sinceS))) * pxPerM : 0;
-    const pad = Math.ceil(blurPx * 3 + 4 + cloud);
-    const cx0 = Math.max(-pad, Math.floor(box.x0 - pad)), cx1 = Math.min(W + pad, Math.ceil(box.x1 + pad));
-    const cy0 = Math.max(-pad, Math.floor(box.y0 - pad)), cy1 = Math.min(H + pad, Math.ceil(box.y1 + pad));
+    // (blown apart: its core, the dozen pieces nearest where it was)
+    const core = look?.blown ? blownCloud(e, this.tm).r : 0;
+    const box = core ? { x0: x - core * pxPerM, x1: x + core * pxPerM, y0: y - core * pxPerM, y1: y + core * pxPerM }
+      : { x0: x + r0 * pxPerM, x1: x + r1 * pxPerM, y0: y - u1 * pxPerM, y1: y - u0 * pxPerM };
+    // (rendered only as far as the frame, and a margin for the blur, and for a wreck its cloud of fragments; a blown
+    // ship's pieces may lie anywhere in it)
+    const cloud = look?.blown ? Infinity : look?.debris ? Math.min(3 * bb.x1, Math.max(...look.debris.map(d => d.d0 + d.v * look.debris.sinceS))) * pxPerM : 0;
+    const pad = Math.ceil(blurPx * 3 + 4 + (cloud < Infinity ? cloud : 0));
+    const ext = cloud === Infinity ? { x0: -Infinity, x1: Infinity, y0: -Infinity, y1: Infinity } : box;
+    const cx0 = Math.max(-pad, Math.floor(ext.x0 - pad)), cx1 = Math.min(W + pad, Math.ceil(ext.x1 + pad));
+    const cy0 = Math.max(-pad, Math.floor(ext.y0 - pad)), cy1 = Math.min(H + pad, Math.ceil(ext.y1 + pad));
     if (cx1 <= cx0 || cy1 <= cy0) return { ...box, solid: null };
     const wD = Math.min(4096, Math.ceil((cx1 - cx0) * dpr)), hD = Math.min(4096, Math.ceil((cy1 - cy0) * dpr));
     const k = wD / (cx1 - cx0);
     const mx = ((cx0 + cx1) / 2 - x) / pxPerM, my = (y - (cy0 + cy1) / 2) / pxPerM;
     const L = hull ? hull.L : model.sizeM;
-    const cam = orthoCamera([right[0] * mx, right[1] * mx, my], f, [0, 0, 1], wD, hD, pxPerM * k, L * 2 + 200);
+    // a blown ship's pieces: those in the frame, and none closer to us than a third of the way (this camera has no
+    // perspective: one near us would be drawn too small)
+    const frags = (look?.debris || []).map((d, i) => ({ d, i, r: d.d0 + d.v * look.debris.sinceS })).filter(({ d, r }) => {
+      if (!look.blown) return true;
+      if (r > s.distM / 3) return false;
+      const w = [m[0] * d.dir[0] + m[4] * d.dir[1] + m[8] * d.dir[2], m[1] * d.dir[0] + m[5] * d.dir[1] + m[9] * d.dir[2], m[2] * d.dir[0] + m[6] * d.dir[1] + m[10] * d.dir[2]];
+      const px = x + (w[0] * right[0] + w[1] * right[1]) * r * pxPerM, py = y - w[2] * r * pxPerM, sz = d.s * pxPerM;
+      return px > cx0 - sz && px < cx1 + sz && py > cy0 - sz && py < cy1 + sz;
+    });
+    const deep = look?.blown ? Math.max(L, ...frags.map(q => q.r)) : L;
+    const cam = orthoCamera([right[0] * mx, right[1] * mx, my], f, [0, 0, 1], wD, hD, pxPerM * k, deep * 2 + 200);
     // the Sun, at the phase we see it at: on the side the sight says
     const ph = s.phase, side = s.sunRight ? 1 : -1;
     const sun = [-f[0] * Math.cos(ph) + right[0] * side * Math.sin(ph), -f[1] * Math.cos(ph) + right[1] * side * Math.sin(ph), 0.04];
     const out = renderScene({
       w: wD, h: hD, ...cam, sun, sunI: 3.4, exposure: 1.15, t, pxPerM: pxPerM * k,
       objects: [
-        ...parts.map(pc => ({ kind: hull ? 'hull' : 'station', key: hull ? e.cls : e.id, model: hull || model, tl: e.tl ?? 2, m: pc.m, clip: pc.clip, damage: look, clipHeat: look?.debris ? Math.max(0, 1 - look.debris.sinceS / 1200) : 0,
+        ...(look?.blown ? [] : parts).map(pc => ({ kind: hull ? 'hull' : 'station', key: hull ? e.cls : e.id, model: hull || model, tl: e.tl ?? 2, m: pc.m, clip: pc.clip, damage: look, clipHeat: look?.debris ? Math.max(0, 1 - look.debris.sinceS / 1200) : 0,
           tint: factionColor(e.faction), plume: 0, heat: Math.min(1, (e.thrust || 0) * 0.35), lights: !e.tags?.wreck && !isDark(e) })),
-        ...(look?.debris || []).map((d, i) => ({ kind: 'debris', key: String(d.shape), m: mul4(m, debrisMatrix(look, d, i)), tint: factionColor(e.faction), tl: 1, lights: false })),
+        ...frags.map(({ d, i }) => ({ kind: 'debris', key: String(d.shape), m: mul4(m, debrisMatrix(look, d, i)), tint: factionColor(e.faction), tl: 1, lights: false })),
       ],
       shadowBox: { cx: 0, cy: 0, cz: 0, half: L * 0.7, depth: L * 0.7 }, fill: { dir: [0, 0, 1], col: [0.012, 0.012, 0.015] },
     });

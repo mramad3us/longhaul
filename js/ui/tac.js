@@ -469,6 +469,16 @@ function drawSilhouette(ctx, e, x, y, heading, color, seed, t, big) {
     ctx.restore();
     return;
   }
+  if (e.tags?.blown) {
+    // (a ship blown apart: a scatter of its pieces, no hull)
+    ctx.globalAlpha = 0.8;
+    for (let i = 0; i < 11; i++) {
+      const a = rand(i * 2 + 1) * Math.PI * 2, r = 9 * scale * Math.sqrt(rand(i * 2 + 2)), w = i < 3 ? 2.5 : 1.5;
+      ctx.fillRect(Math.cos(a) * r - w / 2, Math.sin(a) * r - w / 2, w, w);
+    }
+    ctx.restore();
+    return;
+  }
   // On-screen length grows with the log of the real hull length (30 m skiff … 1.4 km hauler),
   // drawn from the class's hull model
   const c = CLASSES[e.cls];

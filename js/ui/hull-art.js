@@ -14,7 +14,9 @@
 // Parts are filled by role in hard, unpainted tones (bare alloy, ceramic,
 // radiator black, ice) with a faction's colour on the edges, drawn deepest
 // first. Close in, the larger parts get panel seams and lit ports; the
-// collars are marked, and the one we dock by can be picked out.
+// collars are marked, and the one we dock by can be picked out. A ship
+// blown apart has its portrait in pieces: its parts flung out from its
+// middle and turned, dimmed.
 // ============================================================
 
 const ROLE = {
@@ -282,17 +284,33 @@ export function stationProjector(o) {
 
 /**
  * A small static picture of a hull, nose right, sized to the box (the ship
- * picker, the library, the contact panel). view: 'top' | 'side'.
+ * picker, the library, the contact panel). view: 'top' | 'side'; blown: the
+ * ship blown apart, in pieces.
  */
-export function drawHullPortrait(canvas, hull, { view = 'top', tint = '#7EC8E3', ports = true } = {}) {
+export function drawHullPortrait(canvas, hull, { view = 'top', tint = '#7EC8E3', ports = true, blown = false } = {}) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
   if (!hull) return;
   const b = hull.bounds;
   const len = b.x1 - b.x0, wid = view === 'side' ? b.z1 - b.z0 : b.y1 - b.y0;
-  const scale = Math.min((W - 16) / len, (H - 12) / wid);
+  const scale = Math.min((W - 16) / len, (H - 12) / wid) * (blown ? 0.62 : 1);
   const cx = W / 2 - (b.x0 + b.x1) / 2 * scale;
   const cy = H / 2 + ((view === 'side' ? (b.z0 + b.z1) : (b.y0 + b.y1)) / 2) * scale;
-  drawHull(ctx, hull, { x: cx, y: cy, facing: 0, scale, view, tint, detail: 2, ports, lights: false });
+  if (!blown) { drawHull(ctx, hull, { x: cx, y: cy, facing: 0, scale, view, tint, detail: 2, ports, lights: false }); return; }
+  // its parts, each flung out from the middle along where it was (and a little round), turned about its own centre
+  const side = view === 'side', ml = side ? (b.z0 + b.z1) / 2 : (b.y0 + b.y1) / 2, mx = (b.x0 + b.x1) / 2;
+  const h = (i, k) => { const v = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return v - Math.floor(v); };
+  hull.parts.forEach((p, i) => {
+    const e = planeOf(p, side);
+    const px = (e[0] + e[1]) / 2, pl = (e[2] + e[3]) / 2;
+    const a = Math.atan2((pl - ml) * 2.5, px - mx) + (h(i, 1) - 0.5) * 1.4;
+    const r = (0.25 * Math.abs(px - mx) + len * (0.04 + 0.12 * h(i, 2))) * scale;
+    const [sx, sy] = [cx + px * scale + Math.cos(a) * r, cy - pl * scale - Math.sin(a) * r];
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate((h(i, 3) - 0.5) * 2.2);
+    drawHull(ctx, { ...hull, parts: [p], ports: [] }, { x: -px * scale, y: pl * scale, facing: 0, scale, view, tint, detail: 2, ports: false, lights: false, alpha: 0.7 });
+    ctx.restore();
+  });
 }

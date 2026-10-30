@@ -53,7 +53,7 @@ import { licenseOf, flagOf, applyForLicense, resignLicense, rankName, openCallup
 /** What kind of counterpart a hail reaches. */
 export function persona(e) {
   if (e.type === 'station') return e.combat?.status === 'wreck' ? 'dead' : 'station';
-  if (e.tags?.wreck || e.tags?.blown) return 'dead';
+  if (e.tags?.wreck || e.tags?.blown || e.tags?.derelict) return 'dead';
   if (e.combat?.status === 'surrendered') return 'struck';
   const c = classOf(e);
   if (e.faction === 'pirate' || c?.category === 'irregular') return 'pirate';
@@ -106,7 +106,7 @@ function greeting(state, e, p) {
   const v = voiceOf(e);
   const tag = e.name.split(' ')[0];
   const att = attitude(state, e);
-  if (p === 'dead') return e.type === 'station' ? 'Nothing on any channel. Carrier wave only.' : 'Dead air. If anyone is aboard, they are not answering.';
+  if (p === 'dead') return e.type === 'station' ? 'Nothing on any channel. Carrier wave only.' : e.tags?.blown ? 'Nothing on any band: no carrier, no beacon.' : 'Dead air. If anyone is aboard, they are not answering.';
   if (!e.transponder && p !== 'pirate' && p !== 'struck') return 'Silence, then a click: someone is listening and not talking.';
   if (p === 'station') {
     if (isDocked(state) && dockedTo(state)?.id === e.id) return flavour(v, `${tag} Dock. Go ahead.`);

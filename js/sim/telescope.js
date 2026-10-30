@@ -11,8 +11,9 @@
 //   adds to that. A hull many resolution elements long is a shape; a few,
 //   a smudge; under one, a point.
 // LIGHT  A hull shines by the sunlight it throws back: its area across the
-//   line of sight, its paint (HULL_ALBEDO, darker on stealthy hulls), the
-//   sun's distance, and the phase (the sun behind us lights the side we
+//   line of sight (a ship blown apart: its pieces round where it was,
+//   damage.js blownCloud), its paint (HULL_ALBEDO, darker on stealthy
+//   hulls), the sun's distance, and the phase (the sun behind us lights the side we
 //   see; behind it, we see its night side). A drive plume is a star: a
 //   fraction of the jet's power comes out as light (PLUME_W_PER_N of
 //   thrust). Flashes: a nuclear or fusion detonation outshines everything
@@ -58,6 +59,7 @@ import { TECH } from './ship-classes.js';
 import { hullOf } from './hulls.js';
 import { stationModel } from './stations.js';
 import { facingOf } from './docking.js';
+import { blownCloud } from './damage.js';
 import { BODIES, getBody, bodyPos } from './ephemeris.js';
 
 export const WAVELENGTH_M = 550e-9;
@@ -129,9 +131,10 @@ export const pointMag = (watts, distM) => watts > 0 ? SUN_MAG - 2.5 * Math.log10
 /** A flash of `kind` (FLASH_W) at distM: its magnitude. */
 export const flashMag = (kind, distM) => pointMag(FLASH_W[kind] || 0, distM);
 
-/** The shape the telescope sees of an entity: { L, W (m), station } (stations by their size). */
-function bodyOf(e) {
+/** The shape the telescope sees of an entity at minute `tm`: { L, W (m), station, area (m², if not L by W) } (stations by their size; a ship blown apart, the core of its cloud and the pieces in it). */
+function bodyOf(e, tm) {
   if (e.type === 'ordnance') return { L: TORPEDO.L, W: TORPEDO.W };
+  if (e.tags?.blown) { const c = blownCloud(e, tm); return { L: 2 * c.r, W: 2 * c.r, area: c.area }; }
   if (e.type === 'station') { const s = stationModel(e.id)?.sizeM || 1000; return { L: s, W: s * 0.6, station: true }; }
   const h = hullOf(e.cls);
   return h ? { L: h.L, W: h.W } : { L: 60, W: 12 };
@@ -166,13 +169,13 @@ export function sightOf(state, e, pos = e.pos, from = state.flight.pos, sc = sco
   const dx = (pos.x - from.x) * AU_M, dy = (pos.y - from.y) * AU_M;
   const distM = Math.max(1, Math.hypot(dx, dy));
   const bearing = Math.atan2(dy, dx);
-  const body = bodyOf(e);
+  const body = bodyOf(e, state.clock.minute);
   // the hull's axis against the line of sight: its length shows as L·|sin|, never less than its girth
   const facing = e.type === 'station' ? bearing + Math.PI / 2 : facingOf(e);
   const sinA = Math.abs(Math.sin(facing - bearing));
   const foreshorten = Math.max(sinA, body.W / body.L);
   const angRad = body.L * foreshorten / distM;
-  const area = body.L * body.W * sinA + Math.PI / 4 * body.W * body.W * (1 - sinA);
+  const area = body.area ?? body.L * body.W * sinA + Math.PI / 4 * body.W * body.W * (1 - sinA);
   // phase: at the target, the angle between the Sun and us
   const sunAU = Math.max(0.05, Math.hypot(pos.x, pos.y));
   const toSun = Math.atan2(-pos.y, -pos.x);

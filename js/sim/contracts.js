@@ -7,6 +7,9 @@
 //   PLANETSIDE                 — take freight to a high orbit round a
 //                                settled world, land it by shuttle
 //   INVESTIGATE / MEDEVAC      — rendezvous with a ship, hail it, return
+//                                (an investigation finds its crew alive, a
+//                                dead hull, or debris: the ship blown apart
+//                                when it dropped off comms, damage.js)
 //   SALVAGE                    — hold formation with a derelict while the
 //                                crew strips it (2h), return
 //   SURVEY                     — loiter within 150k km of a survey mark
@@ -78,6 +81,7 @@ import { dockedStationEntity, dockedTo } from './docking.js';
 import { gateOrbit } from './stations.js';
 import { freeBerths } from './manifest.js';
 import { MIL_TYPES, MIL_LABEL, milShare, milRefusal, generateMil, spawnMil, milProgress, milTurnIn } from './military.js';
+import { blowApart } from './damage.js';
 import { WORLDS, airspacesOf, worldOf } from './worlds.js';
 import { storeFactor } from './market.js';
 import { STORE_GOOD } from './goods.js';
@@ -225,10 +229,10 @@ function generate(state, station, others) {
     }
     case ContractType.INVESTIGATE: {
       const ship = rollIdentity({ category: 'civilian', near: station.faction, state }); const outcome = pick(['derelict', 'debris', 'alive']);
-      const dist = randRange(0.004, 0.04);
-      return { ...base, distAU: dist, ship, outcome,
+      const dist = randRange(0.004, 0.04), hours = randInt(2, 48);
+      return { ...base, distAU: dist, ship, outcome, lostAt: now - hours * 60,
         title: `Investigate: ${ship.name} — contact lost`,
-        description: `The ${ship.shipClass} "${ship.name}" dropped off comms ${randInt(2, 48)} hours ago, ${Math.round(dist * AU_KM).toLocaleString()} km out. Find it, report what you see.`,
+        description: `The ${ship.shipClass} "${ship.name}" dropped off comms ${hours} hours ago, ${Math.round(dist * AU_KM).toLocaleString()} km out. Find it, report what you see.`,
         reward: { credits: randInt(2000, 5000) }, deadline: randInt(4, 10) * DAY_MIN, expires: now + randInt(2, 4) * DAY_MIN };
     }
     case ContractType.SALVAGE: {
@@ -454,6 +458,14 @@ export function upgradeContracts(state) {
       c.captainHead ??= c.perHead * CAPTAIN_HEADS;
       delete c.aliveBonus;
     }
+  }
+  // (an investigation's ship from before 1.12.7: debris was drawn as a whole hull, a derelict answered as if crewed;
+  // when it was lost, from its brief)
+  for (const c of [...(state.contracts?.active || []), ...(state.contracts?.history || []), ...world.stations.flatMap(st => st.board?.missions || [])]) {
+    if (c.type !== ContractType.INVESTIGATE || c.lostAt != null) continue;
+    c.lostAt = c.offeredAt - 60 * Number(/comms (\d+) hours ago/.exec(c.description || '')?.[1] ?? 24);
+    const e = c.targetId && world.get(c.targetId);
+    if (e && !e.tags?.blown && !e.tags?.derelict) lostShip(e, c);
   }
   for (const c of state.contracts?.active || []) {
     if (c.type !== ContractType.ESCORT || c.phase !== 'active') continue;
@@ -742,10 +754,22 @@ function spawnTarget(state, station, c) {
     const alive = c.type === ContractType.MEDEVAC || c.outcome === 'alive';
     const name = c.outcome === 'debris' ? `Debris — ${c.ship.name}` : c.ship.name;
     e = createEntity({ id: world.newId('ship'), name, type: 'ship', faction: c.ship.faction, cls: c.ship.cls, tl: c.ship.tl, shipClass: c.ship.shipClass, mass: c.ship.mass, orbit, transponder: alive, sos: alive, tags: { contract: c.id } });
+    lostShip(e, c);
   }
   world.add(e);
   c.targetId = e.id;
   c.targetName = e.name;
+}
+
+/**
+ * An investigation's ship as it was found: debris, blown apart when it
+ * dropped off comms (damage.js: no hull, its pieces spreading since); a
+ * derelict, a dead hull, dark and cold, nobody aboard to answer.
+ */
+function lostShip(e, c) {
+  if (c.type !== ContractType.INVESTIGATE) return;
+  if (c.outcome === 'debris') blowApart(e, c.lostAt ?? c.offeredAt - DAY_MIN);
+  else if (c.outcome === 'derelict') { e.tags.derelict = true; e.crewAboard = 0; }
 }
 
 function retireTarget(world, c, now) {

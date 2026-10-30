@@ -142,7 +142,7 @@ function render() {
   const cv = body.querySelector('canvas[data-hull]');
   if (cv) {
     const e = getWorld(s).get(cv.dataset.hull);
-    if (e?.type === 'ship') drawHullPortrait(cv, hullOf(e.cls), { tint: factionColor(e.faction) });
+    if (e?.type === 'ship') drawHullPortrait(cv, hullOf(e.cls), { tint: factionColor(e.faction), blown: !!e.tags?.blown });
   }
 }
 
@@ -178,10 +178,10 @@ function cardHTML(s, e) {
     ${k('FLAG', known ? esc(fac?.name || e.faction) : '—')}
     ${k('RANGE', fmtMeters(dM))}
     ${k('ABOARD', crew ? `${esc(crew.text)}<br><span class="cm-k">${esc(crew.src.toUpperCase())}${crew.by ? ` · ${esc(crew.by)}` : ''}${crew.ageMin > 1 ? ` · ${Math.round(crew.ageMin / 60)} h old` : ''}</span>` : 'unknown')}
-    ${k('COLLARS', known ? esc(portSummary(e.cls)) : '—')}
+    ${k('COLLARS', e.tags?.blown ? 'none: blown apart' : known ? esc(portSummary(e.cls)) : '—')}
     ${known ? k('ATMOSPHERE', esc(landsBy(e.cls))) : ''}
-    ${k('STATE', p === 'struck' ? 'struck its colours' : p === 'crippled' ? 'dead in space' : e.agent?.mode === 'dock-hold' ? 'holding for us' : e.thrust > 0 ? `under thrust, ${e.thrust.toFixed(1)} G` : 'coasting')}
-    ${k('TONE', mood)}
+    ${k('STATE', e.tags?.blown ? 'blown apart: its pieces spreading' : p === 'dead' ? 'a dead hull, cold' : p === 'struck' ? 'struck its colours' : p === 'crippled' ? 'dead in space' : e.agent?.mode === 'dock-hold' ? 'holding for us' : e.thrust > 0 ? `under thrust, ${e.thrust.toFixed(1)} G` : 'coasting')}
+    ${k('TONE', p === 'dead' ? '—' : mood)}
     ${isDocked(s) && dockedTo(s)?.id === e.id ? k('DOCKED', 'collar to collar') : ''}`;
 }
 

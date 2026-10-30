@@ -532,7 +532,7 @@ function renderSelection() {
       </div>`;
     if (setHTML(scanPanel, html)) {
       const cv = scanPanel.querySelector('canvas[data-hull]');
-      if (cv) drawHullPortrait(cv, hullOf(d.entity.cls), { tint: factionColor(d.entity.faction) });
+      if (cv) drawHullPortrait(cv, hullOf(d.entity.cls), { tint: factionColor(d.entity.faction), blown: !!d.entity.tags?.blown });
     }
     show(scanPanel, true);
     return;
@@ -764,7 +764,7 @@ function shipRows(s, e, c, row) {
   const hold = CLASSES[e.cls]?.cargoT > 0 ? knownHold(s, e, known) : null;
   return `${hull}${cmd}${row('ABOARD', crew ? `${esc(crew.text)} <span class="scanner-val-dim">${esc(crew.src)}</span>` : 'unknown', crew ? '' : 'scanner-val-dim')}
     ${CLASSES[e.cls]?.cargoT > 0 ? row('HOLD', hold ? `${esc(holdWords(hold.items))} <span class="scanner-val-dim">${esc(hold.src)}</span>` : known ? 'no manifest filed' : 'unknown', hold ? 'scanner-val-wrap' : 'scanner-val-dim') : ''}
-    ${row('COLLARS', known ? esc(portSummary(e.cls)) : '—')}
+    ${row('COLLARS', e.tags?.blown ? 'none: blown apart' : known ? esc(portSummary(e.cls)) : '—', e.tags?.blown ? 'scanner-val-dim' : '')}
     ${known && CLASSES[e.cls] ? row('ATMOSPHERE', esc(landsBy(e.cls)), 'scanner-val-wrap') : ''}`;
 }
 

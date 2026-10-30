@@ -23,8 +23,10 @@
 // through at a module joint near its worst wound, the after part bent
 // away about the spine, both open to space at the break, and a field of
 // fragments drifting off it (most nearly with it, a few faster, so a
-// wreck days old still has its cloud). A ship with its reactor hurt
-// shows fewer lights, flickering. Places come from hashes of the ship's
+// wreck days old still has its cloud). A ship blown apart (sim/damage.js
+// blownPieces) has no hull at all: only its pieces spreading from where
+// it was, and the ice among them glinting as it tumbles (drawVents). A
+// ship with its reactor hurt shows fewer lights, flickering. Places come from hashes of the ship's
 // id, never the dice, so a ship looks the same every time it is seen.
 //
 // damageLook() answers for an entity (or our ship) at a moment; nothing
@@ -33,7 +35,7 @@
 // ============================================================
 
 import { ensureHull } from '../../sim/combatants.js';
-import { tumbleOf, tumbleAngle } from '../../sim/damage.js';
+import { tumbleOf, tumbleAngle, blownPieces, blownSinceS } from '../../sim/damage.js';
 
 const MAX_SCARS = 16;            // the most a hull's shader takes (the worst)
 const VENT_MIN = 25;             // a hole in a pressure hull vents this long (sim minutes): the air runs out
@@ -152,10 +154,13 @@ const _synth = new Map();
  * untouched, else { scars: [{ p, n, r, kind, hole, heat, seed, vent, age }],
  * wreck, worn (0–1: soot over the whole hull), lights (0–1), flicker,
  * tumble: { axis, deg } | null, broken: { xc, hinge: [x, y, z], bend, twist,
- * gap } | null, debris: [{ dir, d0, v, axis, spin, shape, s }] | null }.
+ * gap } | null, debris: [{ dir, d0, v, axis, spin, shape, s }] | null }; a
+ * ship blown apart, blown: true (no hull to draw, only its debris) and its
+ * ice: [{ dir, d0, v, s, tw, ph }].
  */
 export function damageLook(src, hull, tm) {
   if (!hull) return null;
+  if (src.tags?.blown) return blownLook(src, tm);
   const id = src.id;
   let list, wreck = false, worn = 0, lights = 1, flicker = false, since = null;
   if (id === 'player') {
@@ -234,6 +239,14 @@ export function damageLook(src, hull, tm) {
   return { scars, wreck, worn, lights, flicker, tumble, broken, debris };
 }
 
+/** A ship blown apart: no hull, its pieces where they have drifted to by `tm`, the ice among them. */
+function blownLook(e, tm) {
+  const b = blownPieces(e);
+  const debris = b.pieces.slice();
+  debris.sinceS = blownSinceS(e, tm);
+  return { scars: [], wreck: true, blown: true, worn: 0.7, lights: 0, flicker: false, tumble: null, broken: null, debris, ice: b.ice };
+}
+
 // ---- MATRICES FOR A LOOK ----
 
 /** Rotation (3×3 columns) of `deg` about unit `axis`. */
@@ -303,11 +316,12 @@ function sprite(rgb) {
 /**
  * The air going out of fresh holes (a white jet along the hole's normal,
  * puffs thinning as they spread) and the glow of a hot edge, drawn over a
- * picture. proj(p) → [x, y] screen px of a point in the hull's frame; rot(n)
- * → the normal turned into the screen's (x right, y down); pxPerM; t (s).
+ * picture; a ship blown apart, the ice among its pieces. proj(p) → [x, y]
+ * screen px of a point in the hull's frame; pxPerM; t (s).
  */
 export function drawVents(ctx, look, proj, pxPerM, t, alpha = 1) {
   if (!look) return;
+  if (look.ice) drawIce(ctx, look, proj, pxPerM, t, alpha);
   ctx.save();
   for (const s of look.scars) {
     if (s.vent <= 0 && s.heat <= 0.02) continue;
@@ -348,6 +362,44 @@ export function drawVents(ctx, look, proj, pxPerM, t, alpha = 1) {
         ctx.fillRect(px - 0.75, py - 0.75, 1.5, 1.5);
       }
     }
+  }
+  ctx.restore();
+}
+
+/**
+ * The ice among a blown ship's pieces: flakes and chunks drifting off with
+ * them, each a faint point in the sunlight that flashes as it tumbles and a
+ * face of it turns the Sun's light our way (on the wall clock, as the vents).
+ */
+function drawIce(ctx, look, proj, pxPerM, t, alpha) {
+  const ts = look.debris.sinceS;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const img = sprite('225,238,255');
+  for (const c of look.ice) {
+    const r = c.d0 + c.v * ts;
+    const [x, y] = proj([c.dir[0] * r, c.dir[1] * r, c.dir[2] * r]);
+    const g = Math.pow(Math.max(0, Math.sin(t * c.tw + c.ph)), 8);
+    const w = Math.max(1.5, c.s * pxPerM) * (1 + 1.5 * g);
+    ctx.globalAlpha = alpha * Math.min(1, 0.4 + 0.9 * g);
+    ctx.drawImage(img, x - w * 2, y - w * 2, w * 4, w * 4);
+  }
+  ctx.restore();
+}
+
+/**
+ * A blown ship's pieces drawn flat (no WebGL2): each a speck its size, or
+ * a pixel, at proj of where it has drifted to.
+ */
+export function drawPiecesFlat(ctx, look, proj, pxPerM, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha * 0.85;
+  ctx.fillStyle = '#8C939B';
+  for (const d of look.debris) {
+    const r = d.d0 + d.v * look.debris.sinceS;
+    const [x, y] = proj([d.dir[0] * r, d.dir[1] * r, d.dir[2] * r]);
+    const w = Math.max(1, d.s * 0.7 * pxPerM);
+    ctx.fillRect(x - w / 2, y - w / 2, w, w);
   }
   ctx.restore();
 }

@@ -27,7 +27,8 @@
 // its rock's night side is floodlit. Without WebGL2 everything is drawn
 // flat from hull-art.js instead. Damage shows as the sim left it (gl/
 // damage.js): holes, scorching, venting; a wreck tumbling, in pieces, its
-// fragments round it.
+// fragments round it; a ship blown apart, only its pieces and the ice
+// among them, spread round where it was.
 //
 // Overlays for docking: the corridor down the berth's axis with its
 // marks, the berth's collar, ours. Names go beside the hulls, never on
@@ -75,7 +76,7 @@ import { FitCanvas, pointAt } from './dom.js';
 import { drawHull, drawHullMarks, drawStation } from './hull-art.js';
 import { has3D, renderScene, obliqueCamera, hullMatrix, stationMatrix } from './gl/ships3d.js';
 import { mat4 } from './gl/gl.js';
-import { damageLook, pieces, debrisMatrix, drawVents, mul4 } from './gl/damage.js';
+import { damageLook, pieces, debrisMatrix, drawVents, drawPiecesFlat, mul4 } from './gl/damage.js';
 import { Labels } from './labels.js';
 import { frameMarks, marksOf, markPri, labelTags, drawMissionMark, drawFlagMark, MARK_COL } from './marks.js';
 
@@ -298,7 +299,8 @@ export class ExteriorView {
       const e = o.e, hull = o.hull, pose = o.pose;
       if (e.type !== 'ship' || !hull) continue;
       const [sx, sy] = toS3(pose.mx, pose.my, pose.mz);
-      if (!solid) drawHull(ctx, hull, { x: sx, y: sy, facing: screenAngle(pose.facing), scale: sc, view: pose.view, tint: factionColor(e.faction), plume: e.thrust || 0, t, ports: true });
+      if (!solid && e.tags?.blown) drawPiecesFlat(ctx, damageLook(e, hull, tm), (p) => toS3(pose.mx + p[0], pose.my + p[1], pose.mz + p[2]), sc);
+      else if (!solid) drawHull(ctx, hull, { x: sx, y: sy, facing: screenAngle(pose.facing), scale: sc, view: pose.view, tint: factionColor(e.faction), plume: e.thrust || 0, t, ports: true });
       // (kilometres out a hull is a few pixels: a mark in its colour, as ours has; hollow if it runs dark)
       const mk = marksOf(fm, e.id, isDark(e), e.tags?.wreck);
       if (hull.L * sc < 8) {
@@ -417,14 +419,15 @@ export function smoothStep(memo, objects, tm, us) {
 
 /**
  * A hull for the GPU with its damage (gl/damage.js): tumbling and in pieces
- * if it is a wreck, its fragments round it; untouched, as it is.
+ * if it is a wreck, its fragments round it; blown apart, only its pieces;
+ * untouched, as it is.
  */
 function hulk(objs, looks, look, o) {
   if (!look) { objs.push(o); return; }
   const parts = pieces(o.m, look);
   // (a fresh break still glows along the tear)
   const fresh = look.debris ? Math.max(0, 1 - look.debris.sinceS / 60 / 20) : 0;
-  for (const pc of parts) objs.push({ ...o, m: pc.m, clip: pc.clip, clipHeat: fresh, damage: look, plume: look.wreck ? 0 : o.plume });
+  if (!look.blown) for (const pc of parts) objs.push({ ...o, m: pc.m, clip: pc.clip, clipHeat: fresh, damage: look, plume: look.wreck ? 0 : o.plume });
   if (look.debris) look.debris.forEach((d, i) => objs.push({ kind: 'debris', key: String(d.shape), m: mul4(o.m, debrisMatrix(look, d, i)), tint: o.tint, tl: 1, lights: false }));
   looks.push({ look, parts });
 }

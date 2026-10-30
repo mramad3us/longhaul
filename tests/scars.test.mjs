@@ -7,7 +7,10 @@
 // off, a ship hurt before scars were kept still marked. And scuttling: a
 // boarded wreck's reactor set to blow goes up at its time (it has no pilot
 // to count it down: the fuses), as does a wreck whose core a blast set
-// failing; a hulk counted when it broke up is not counted again.
+// failing; a hulk counted when it broke up is not counted again. A ship
+// blown apart (an investigation's debris): only its pieces, spreading
+// since it was lost, the telescope's sense of it the cloud's, nothing to
+// dock with, board or hear; a derelict answers as the dead do.
 import { assert, fmt } from './helpers.mjs';
 import { seedRandom } from '../js/core/rng.js';
 import { bus } from '../js/core/events.js';
@@ -24,7 +27,13 @@ import { hullOf } from '../js/sim/hulls.js';
 import { damageLook, pieces } from '../js/ui/gl/damage.js';
 import { fuseAboutToGo, FUSE_WATCH_MIN } from '../js/sim/combat.js';
 import { advise } from '../js/ui/advisor.js';
-import { blastClearM } from '../js/sim/damage.js';
+import { blastClearM, blownCloud } from '../js/sim/damage.js';
+import { acceptContract, dockedStation } from '../js/sim/contracts.js';
+import { sightOf, scopeOf } from '../js/sim/telescope.js';
+import { shipDockable } from '../js/sim/docking.js';
+import { boardable } from '../js/sim/boarding.js';
+import { crewAboard } from '../js/sim/manifest.js';
+import { openChannel } from '../js/sim/dialogue.js';
 
 function game(seed = 21, opts = {}) {
   seedRandom(seed);
@@ -167,6 +176,62 @@ export default [
       run(s, st => !getWorld(st).get(w2.id), 40);
       assert(!getWorld(s).get(w2.id), 'and it went up');
       console.log(`      scuttled: charges set ${setAt} min after the order, up ${upAt - setAt} min later (the last ${t} with the party home) · kills ${kills} → ${s.service.kills} · the blasted wreck up within 30 min`);
+    },
+  },
+  {
+    name: 'a ship blown apart: its pieces spreading, no hull, nobody there',
+    fn: () => {
+      seedRandom(5);
+      bus.clear();
+      const s = createGame({ crewCount: 6, traffic: 0, forces: false });
+      s.politics.quietUntil = Infinity;
+      s.missions.cooldown = 1e9;
+      const st = dockedStation(s);
+      const find = () => {
+        for (let i = 0; i < 80; i++) { st.board.lastRefresh = -Infinity; st.board.missions = []; advance(s, 10); const c = st.board.missions.find(x => x.type === 'INVESTIGATE'); if (c) return c; }
+        return null;
+      };
+      const c = find();
+      assert(c, 'no investigation posted');
+      c.outcome = 'debris';
+      // (lost as long before it was posted as its brief says)
+      assert(c.offeredAt - c.lostAt === 60 * Number(/comms (\d+) hours ago/.exec(c.description)[1]), 'lost when the brief says');
+      assert(acceptContract(s, st.id, c.id).ok, 'accept');
+      const e = getWorld(s).get(c.targetId);
+      assert(e.tags.blown && e.tags.wreck && e.combat.status === 'wreck' && e.combat.wreckedAt === c.lostAt, 'spawned blown apart, when it was lost');
+      // what the cameras draw: no hull, only its pieces and the ice, the same every look
+      const hull = hullOf(e.cls), tm = c.lostAt + 3 * 1440;
+      const look = damageLook(e, hull, tm);
+      assert(look.blown && !look.scars.length && look.lights === 0 && look.debris.length >= 80 && look.ice.length > 20, 'its pieces, no hull');
+      assert(JSON.stringify(damageLook(e, hull, tm).debris) === JSON.stringify(look.debris), 'the same cloud every look');
+      // spreading: the core grows as its heavy pieces creep apart, the small stuff long gone past it
+      const early = blownCloud(e, c.lostAt + 360), late = blownCloud(e, tm);
+      const out = look.debris.filter(d => d.d0 + d.v * look.debris.sinceS > late.r).length;
+      assert(late.r > early.r && out > look.debris.length / 2, 'spreading');
+      // the telescope: its size is the core's, its light the pieces' (dimmer than the whole hull)
+      const at = { ...s, clock: { minute: tm } }, from = { x: e.pos.x, y: e.pos.y + 2000 / AU_M }, sc = scopeOf(s);
+      const seen = sightOf(at, e, e.pos, from, sc), whole = sightOf(at, { ...e, tags: {} }, e.pos, from, sc);
+      assert(Math.abs(seen.angRad * seen.distM - 2 * late.r) < 1, 'framed on the core');
+      assert(seen.hullMag > whole.hullMag, 'its pieces throw back less light than its hull would');
+      console.log(`      ${e.shipClass}, ${fmt(hull.L, 0)} m: core ${fmt(early.r, 0)} m after 6 h, ${fmt(late.r, 0)} m after 3 days (${look.debris.length - out} of ${look.debris.length} pieces in it); mag ${fmt(seen.hullMag)} at 2 km, its hull ${fmt(whole.hullMag)}`);
+      // nothing to dock with, board, or hear
+      assert(!shipDockable(s, e).ok && !boardable(s, e).ok && crewAboard(e) === 0, 'nothing aboard');
+      assert(/Nothing on any band/.test(openChannel(s, e.id).lines[0].text), 'no one answers');
+      // a derelict: a dead hull, uninvited alongside, nobody answering
+      const d = find();
+      d.outcome = 'derelict';
+      assert(acceptContract(s, st.id, d.id).ok, 'accept the derelict');
+      const h = getWorld(s).get(d.targetId);
+      assert(!h.tags.blown && h.tags.derelict && crewAboard(h) === 0 && shipDockable(s, h).uninvited, 'a dead hull');
+      assert(/Dead air/.test(openChannel(s, h.id).lines[0].text), 'dead air');
+      // a save from before: the debris spawned whole, the derelict crewed; blown and dead on load, lost when its brief says
+      for (const x of [e, h]) { delete x.tags.blown; delete x.tags.wreck; delete x.tags.derelict; delete x.combat; delete x.crewAboard; }
+      delete c.lostAt; delete d.lostAt;
+      const back = deserialize(serialize(s)).state;
+      const e2 = getWorld(back).get(e.id), h2 = getWorld(back).get(h.id);
+      const c2 = back.contracts.active.find(x => x.id === c.id);
+      assert(e2.tags.blown && e2.combat.wreckedAt === c2.lostAt && c2.offeredAt - c2.lostAt === 60 * Number(/comms (\d+) hours ago/.exec(c2.description)[1]), 'an old debris target blown on load');
+      assert(h2.tags.derelict && !h2.tags.blown && crewAboard(h2) === 0, 'an old derelict dead on load');
     },
   },
 ];

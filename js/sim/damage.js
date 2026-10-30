@@ -28,6 +28,9 @@
 // damage.js): holes, scorching, a wreck broken-backed. NPC hulls keep
 // theirs on e.combat.scars, our ship on state.hull.scars (with the deck
 // hit); the worst SCARS_MAX are kept.
+//
+// A ship that broke up all at once leaves no hull, only its pieces
+// spreading from where it was (tags.blown: A SHIP BLOWN APART, below).
 // ============================================================
 
 import { AU_M } from '../core/constants.js';
@@ -44,6 +47,7 @@ import { PLAYER, ensureHull, profile, DISABLED_BELOW } from './combatants.js';
 import { recordAttack } from './law.js';
 import { creditKill } from './service.js';
 import { sizeForMass, huntsOf } from './sensors.js';
+import { hullOf } from './hulls.js';
 
 export const AIM = {
   disable: { id: 'disable', label: 'DISABLE', desc: 'Aim for the drive — cripple the ship, leave the crew alive to surrender.', weights: { drive: 0.6, weapons: 0.1, hull: 0.25, reactor: 0.05 } },
@@ -478,4 +482,105 @@ export function despin(e, minute) {
   const deg = tumbleAngle(e, minute);
   delete e.tags.spinHeld; delete e.tags.tumble0;
   e.tags.despun = { deg, at: minute };
+}
+
+// ---- A SHIP BLOWN APART ----
+//
+// What a contract finds of a lost ship that broke up all at once (an
+// INVESTIGATE whose ship is debris: contracts.js): no hull, nothing to
+// board, hail or dock with, its pieces drifting apart from where it was
+// (tags.blown, and a wreck in every other way). The entity is their
+// centre of mass, flying on as the ship would have; each piece flies off
+// it at the speed the break gave it, the same ever since (nothing out
+// here slows it). The break shared out its momentum, so a piece's speed
+// goes as one over its mass, a plate's mass as its area: speed as one
+// over its size squared, and most of them took little of the push, a few
+// a lot. The heavy pieces (the drive, a module's end, a tank, a tenth of
+// the hull or more across) creep apart at a fraction of a millimetre a
+// second and lie within a hundred metres or so of where it was after
+// days, a score of smaller ones among them; the rest of the plating,
+// spars and fins, at millimetres a second and more, are kilometres out by
+// then, going. Among them is ice: the water
+// and air of its tanks and decks froze as they went out, and the flakes
+// and chunks of it that went slowly glint in the sunlight as they tumble.
+// Every piece's size, way and speed come from hashes of the ship's id
+// (as a wreck's tumble does), so every look at it sees the same cloud:
+// the cameras draw its pieces (ui/gl/damage.js), the telescope frames its
+// core, the dozen pieces nearest where it was (blownCloud), and its
+// brightness is theirs.
+
+const BLOWN_PIECES = 80;          // the pieces of a small hull (a big one breaks into more: + L/5, to BLOWN_PIECES_MAX)
+const BLOWN_PIECES_MAX = 150;
+const BLOWN_CHUNKS = 5;           // of them, the heaviest: 10–20% of the hull's length across
+const BLOWN_ICE = 48;             // flakes and chunks of ice among them
+const BLOWN_V = 0.002;            // m/s: a piece a twentieth of the hull's length across flies off at up to about this (the rest as size⁻²)
+const BLOWN_V_MAX = 2;            // m/s: the fastest of the small stuff
+const BLOWN_CORE = 12;            // the core: this many pieces, the nearest where it was
+const BLOWN_FACE = 0.3;           // a piece's cross-section to the light, as a share of its size squared (thin, turned every way)
+
+/** Make `e` what is left of a ship blown apart at `minute`: a wreck with no hull, no one aboard, its pieces spreading. */
+export function blowApart(e, minute) {
+  e.combat = { hp: 0, hpMax: 1, drive: 0, reactor: 0, weapons: 0, sensors: 0, crew: 0, status: 'wreck', containment: null, scrammed: true, rounds: 0, magazine: { he: 0, nuke: 0 }, tubes: [], rail: [], wreckedAt: minute };
+  e.thrust = 0;
+  e.tags ||= {};
+  e.tags.wreck = true;
+  e.tags.blown = true;
+}
+
+const _blown = new Map();
+
+/**
+ * The pieces of a ship blown apart (from its id and its hull's length L, m):
+ * { L, pieces: [{ dir (unit), d0 (m: where it started), v (m/s), s (m:
+ * across), axis, spin (°/min), shape (gl/hullmesh.js debris) }],
+ * ice: [{ dir, d0, v, s, tw (rad/s: its glint), ph }] }.
+ */
+export function blownPieces(e) {
+  let b = _blown.get(e.id);
+  if (b) return b;
+  const id = e.id, L = hullOf(e.cls)?.L || 40;
+  const way = (i, k) => {
+    const th = stable01(id, i, k) * Math.PI * 2, ph = Math.acos(2 * stable01(id, i, k + 1) - 1);
+    return [Math.sin(ph) * Math.cos(th), Math.sin(ph) * Math.sin(th), Math.cos(ph)];
+  };
+  const n = Math.min(BLOWN_PIECES_MAX, BLOWN_PIECES + Math.round(L / 5));
+  const pieces = [];
+  for (let i = 0; i < n; i++) {
+    const chunk = i < BLOWN_CHUNKS;
+    const rel = chunk ? 0.1 + 0.1 * stable01(id, i, 61) : 0.008 + 0.08 * stable01(id, i, 61) ** 3;
+    pieces.push({
+      dir: way(i, 62), d0: L * 0.5 * stable01(id, i, 64),
+      // (most took little of the push, a few a lot)
+      v: Math.min(BLOWN_V_MAX, BLOWN_V * (0.05 / rel) ** 2 * (0.03 + 1.5 * stable01(id, i, 65) ** 3)),
+      s: L * rel, axis: way(i, 66), spin: 2 + 40 * stable01(id, i, 68),
+      // (the heaviest are machinery, a tank's shell, a plate bent double; the rest anything)
+      shape: chunk ? [4, 3, 0][Math.floor(stable01(id, i, 69) * 3)] : Math.floor(stable01(id, i, 69) * 6),
+    });
+  }
+  const ice = [];
+  for (let i = 0; i < BLOWN_ICE; i++) {
+    ice.push({ dir: way(i, 71), d0: L * 0.3 * stable01(id, i, 73), v: BLOWN_V * (0.01 + 0.5 * stable01(id, i, 74) ** 3),
+      s: 0.05 + 0.4 * stable01(id, i, 75) ** 2, tw: 0.4 + 2.6 * stable01(id, i, 76), ph: stable01(id, i, 77) * 6.283 });
+  }
+  b = { L, pieces, ice };
+  if (_blown.size > 64) _blown.clear();
+  _blown.set(id, b);
+  return b;
+}
+
+/** Seconds since a ship blew apart, at minute `tm`. */
+export const blownSinceS = (e, tm) => Math.max(0, tm - (e.combat?.wreckedAt ?? tm)) * 60;
+
+/**
+ * The core of a blown ship's cloud at minute `tm`: { r (m: out to the far
+ * edge of the dozen pieces nearest where it was), area (m²: what the
+ * pieces inside it show the Sun) }. What the telescope frames.
+ */
+export function blownCloud(e, tm) {
+  const b = blownPieces(e), t = blownSinceS(e, tm);
+  const near = b.pieces.map(p => [p.d0 + p.v * t, p.s]).sort((x, y) => x[0] - y[0]).slice(0, BLOWN_CORE);
+  const r = Math.max(...near.map(([d, s]) => d + s / 2));
+  let area = 0;
+  for (const p of b.pieces) if (p.d0 + p.v * t <= r) area += BLOWN_FACE * p.s * p.s;
+  return { r, area };
 }
