@@ -369,6 +369,30 @@ export default [
     },
   },
   {
+    name: 'its drive is lit for every view as it burns (its entity\'s thrust and heading: the drone, the hull cameras, the telescope, the sensors, its sheet), cold as it coasts',
+    fn: () => {
+      const s = inOrbit('Mars');
+      const w = worldOf('Mars'), run = launchRun(s, planRun(s, s.shuttles.bay[0].id, airspacesOf(w)[0].id).plan).run, e = getWorld(s).get(run.entity);
+      const seen = {}, rows = [];
+      let off = 0;
+      flyRun(s, run, 2 * DAY_MIN, () => {
+        const now = s.clock.minute, leg = [...run.legs].reverse().find(l => now >= l.t0);
+        if (!leg || !activeRuns(s).includes(run)) return;
+        const k = `${leg.phase}:${e.thrust > 0 ? 'lit' : 'cold'}`;
+        seen[k] = (seen[k] || 0) + 1;
+        if (leg.kind === 'xfer') {
+          const q = xferAt(w.GM, leg.x, (now - leg.t0) * 60), a = Math.hypot(q.ax, q.ay);
+          assert((a > 0.05) === (e.thrust > 0), `${leg.phase}: lit as it burns (${fmt(a, 2)} m/s², thrust ${fmt(e.thrust, 2)} G)`);
+          if (a > 0.05) off = Math.max(off, Math.abs(Math.atan2(Math.sin(Math.atan2(q.ay, q.ax) - e.heading), Math.cos(Math.atan2(q.ay, q.ax) - e.heading))));
+        }
+        if (leg.kind === 'ground' || leg.kind === 'dock') assert(!(e.thrust > 0), `${leg.phase}: cold`);
+      });
+      assert(seen['up:lit'] > 0 && Object.keys(seen).some(k => /^(drop|deorbit|return|orbit):lit$/.test(k)) && Object.keys(seen).some(k => /:cold$/.test(k) && !/ground|launch|recover/.test(k)), `lit on its burns and its climb, cold coasting (${JSON.stringify(seen)})`);
+      assert(off < 0.01, `its nose along its push (${fmt(off * 180 / Math.PI, 2)}° off)`);
+      console.log(`      minutes lit/cold by stretch: ${Object.entries(seen).map(([k, n]) => `${k} ${n}`).join(' · ')}`);
+    },
+  },
+  {
     name: 'a save from before 1.12.8: a run on the old spiral legs is planned again on load from where the craft is (on its way down, or coming back up), and flies home',
     fn: () => {
       const s = inOrbit('Mars');

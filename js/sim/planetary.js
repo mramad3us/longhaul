@@ -40,7 +40,10 @@
 // plane angles round its centre for orbit.
 //
 // What the drive does on a transfer (xferAt: the shuttle's cameras turn the
-// craft by it) is its burns' own push, nothing between them.
+// craft by it) is its burns' own push, nothing between them. The craft's
+// entity carries its drive as any hull's does (driveOn: thrust and heading,
+// set as the world moves it), so the other views and the sensors see it lit
+// on a burn and cold on a coast.
 //
 // Cost: an entry is a few thousand steps of a few dozen flops, once per
 // world and craft; a transfer is flown once (its burns a step a second);
@@ -637,4 +640,42 @@ FLIGHT_PATH.at = (world, e, minute, pos, vel) => {
   if (pos !== e.pos) return;
   e.$inBay = p.leg === 'dock';
   e.$landed = p.leg === 'ground';
+  // (and its drive, as every view and the sensors see a hull's: lit along its push on a burn, cold coasting)
+  const d = driveOn(e.flightPath, minute);
+  e.thrust = d.g;
+  if (d.heading != null) e.heading = d.heading;
 };
+
+/**
+ * A craft's drive on its flight path at `minute`: { g (G), heading (rad, the
+ * way its nose points in the frame that doesn't turn; null: as it was) }.
+ * On a transfer's burn, along the burn's push; coasting, held as the last
+ * burn left it, turned for the next in the last minute before it (or, at
+ * the top of the air coming down, the way it goes); climbing, along its
+ * way at the climb's thrust; landing, up, at what the drive gives once the
+ * glide is done (all of it, airless).
+ */
+export function driveOn(path, minute) {
+  const legs = path.legs;
+  let leg = legs[0];
+  for (const l of legs) { if (minute >= l.t0) leg = l; else break; }
+  const w = worldOf(path.world), s = Math.max(0, (minute - leg.t0) * MIN_S);
+  if (leg.kind === 'xfer') {
+    const q = xferAt(w.GM, leg.x, s), a = Math.hypot(q.ax, q.ay);
+    if (a > 0.05) return { g: a / G0, heading: Math.atan2(q.ay, q.ax) };
+    const B = xferBurns(w.GM, leg.x), d = s < B.t2 - 60 && B.t1 > B.t0 ? B.d1 : s < B.t3 ? B.d2 : null;
+    return { g: 0, heading: d ? Math.atan2(d[1], d[0]) : Math.atan2(q.vy, q.vx) };
+  }
+  if (leg.kind === 'up' || leg.kind === 'down' || leg.kind === 'hold') {
+    const c = bodyPos(w.body, minute / DAY_MIN), u = bodyVel(w.body, minute / DAY_MIN), p = placeOnLeg(path, leg, minute);
+    const x = (p.pos.x - c.x) * AU_M, y = (p.pos.y - c.y) * AU_M;
+    if (leg.kind === 'hold') return { g: 0, heading: Math.atan2(x, -y) };
+    if (leg.kind === 'up') {
+      const on = placeOnLeg(path, leg, minute + 1 / 60);
+      return { g: ASCENT_THRUST * craftOf(path.cls).aMax / G0, heading: Math.atan2((on.pos.y - p.pos.y) * AU_M - u.vy, (on.pos.x - p.pos.x) * AU_M - u.vx) };
+    }
+    const powered = !w.atmo || p.h < POWERED_H || p.v < POWERED_MS;
+    return { g: powered ? p.g : 0, heading: Math.atan2(y, x) };
+  }
+  return { g: 0, heading: null };
+}
