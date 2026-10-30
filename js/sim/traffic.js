@@ -39,7 +39,7 @@
 // sometimes goes from a port to a settled world near it (worlds.js) instead
 // of the next port (PLANET_CALL_P), into the world's parking orbit (a rails
 // orbit, at a place of its own on it), and holds there while its shuttles
-// work its freight or its passengers down and up (planetary.js runMinutes:
+// work its freight or its passengers down and up (shuttles.js runMinutes:
 // the same runs ours fly, timed, not flown, unless we are there to see:
 // shuttles.js npcShuttlesTick), then goes on to a port.
 // ============================================================
@@ -53,7 +53,7 @@ import { berthInto, releaseHull, gateId, berthSizesFor, freeBerth, holdBerth, an
 import { freeSlot, claimSlot, slotOrbit } from './holding.js';
 import { bayOf } from './ship-classes.js';
 import { WORLDS, airspacesOf, orbitPeriodS } from './worlds.js';
-import { runMinutes } from './planetary.js';
+import { runMinutes } from './shuttles.js';
 import { bodyPos } from './ephemeris.js';
 import { DAY_MIN } from '../core/constants.js';
 

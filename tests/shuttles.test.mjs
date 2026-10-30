@@ -6,7 +6,10 @@
 // to a world's ground: an entry flown as physics (planetary.js: the heat
 // inside its shield, the G inside its crew's, at rest on the pad at the
 // end), a run planned whole from a high orbit (shuttles.js: each stretch
-// meeting the next, the way back ending at us), flown with its pilot away
+// meeting the next, the way back ending at us; every stretch on the drive
+// a burn, a coast, a burn, flown as physics at the drive's cruise, never
+// through the air, by a low orbit or after a wait for a window where that
+// is quicker), flown with its pilot away
 // and its fuel charged when it is home, the freight of a PLANETSIDE
 // contract landed and paid; a landing refused by a controller; a run
 // called back; a shuttle that comes home to find us gone; NPC carriers on
@@ -25,10 +28,10 @@ import { getWorld } from '../js/sim/world.js';
 import { serialize, deserialize } from '../js/sim/save.js';
 import { CLASSES, CLASS_IDS, bayOf, landsBy } from '../js/sim/ship-classes.js';
 import { worldOf, airspacesOf, airspaceById } from '../js/sim/worlds.js';
-import { entryProfile, ascentProfile, craftOf, flightPathAt, placeOnLeg, pushOnLeg, HEAT_LIMIT, runMinutes } from '../js/sim/planetary.js';
+import { entryProfile, ascentProfile, craftOf, flightPathAt, placeOnLeg, xferAt, xferBurns, airState, HEAT_LIMIT } from '../js/sim/planetary.js';
 import { shuttleAttitude } from '../js/ui/shuttlecam.js';
 import { estimate, liveKnowledge } from '../js/sim/intel.js';
-import { planRun, launchRun, activeRuns, runReadout, landingClearance, runRefusal, abortRun, shuttleCrew, seatsOf } from '../js/sim/shuttles.js';
+import { planRun, planLegs, launchRun, activeRuns, runReadout, landingClearance, runRefusal, abortRun, shuttleCrew, seatsOf, runMinutes } from '../js/sim/shuttles.js';
 import { WORLDS } from '../js/sim/worlds.js';
 import { LEAVE_MIN, LEAVE_COST } from '../js/sim/crew-services.js';
 import { upgradeState } from '../js/sim/game.js';
@@ -192,6 +195,41 @@ export default [
     },
   },
   {
+    name: 'the way down and back is flown as a real craft flies it: burns at its drive\'s cruise, coasts between, never through the air, arriving at the entry as it must; the quickest way within twice the cheapest, by a low orbit or a window where that is quicker',
+    fn: () => {
+      const rows = [];
+      for (const [name, cls] of [['Earth', 'lander'], ['Mars', 'pinnace'], ['Luna', 'gig'], ['Titan', 'lander'], ['Ganymede', 'pinnace']]) {
+        const w = worldOf(name), n = Math.sqrt(w.GM / w.parkM ** 3), as = airspacesOf(w), cruise = craftOf(cls).aCruise, air = w.atmo ? w.atmo.interfaceM : 10_000;
+        let peak = 0, lowest = Infinity, miss = 0;
+        const totals = [], downs = [], ways = { direct: 0, phased: 0, window: 0 };
+        for (let k = 0; k < 6; k++) {
+          const ph = k * 1.05, t0 = 1000 + 41 * k;
+          const at = (m) => { const c = bodyPos(w.body, m / DAY_MIN), u = bodyVel(w.body, m / DAY_MIN), th = ph + n * m * 60, v = n * w.parkM;
+            return { pos: { x: c.x + w.parkM * Math.cos(th) / AU_M, y: c.y + w.parkM * Math.sin(th) / AU_M }, vel: { vx: u.vx - v * Math.sin(th), vy: u.vy + v * Math.cos(th) } }; };
+          const a = as[k % as.length], p = planLegs(name, cls, a.id, t0, at);
+          assert(p.ok, `${name} ${cls}: ${p.why}`);
+          for (const l of p.legs.filter(l => l.kind === 'xfer')) for (let s = 0; s <= (l.t1 - l.t0) * 60; s += 3) {
+            const q = xferAt(w.GM, l.x, s);
+            peak = Math.max(peak, Math.hypot(q.ax, q.ay)); lowest = Math.min(lowest, Math.hypot(q.x, q.y) - w.R);
+          }
+          // into the air exactly as the entry begins (where, and how fast and steep)
+          const i = p.legs.findIndex(l => l.kind === 'down'), last = p.legs[i - 1], down = entryProfile(name, cls);
+          const end = xferAt(w.GM, last.x, (last.t1 - last.t0) * 60), want = airState(w, down, p.legs[i].phi0, p.legs[i].t0);
+          miss = Math.max(miss, Math.hypot(end.x - want.x, end.y - want.y) + 100 * Math.hypot(end.vx - want.vx, end.vy - want.vy));
+          totals.push(p.summary.totalMin); downs.push(p.summary.windowMin + 6 + p.summary.dropMin);
+          if (p.summary.phasedDown || p.summary.phasedUp) ways.phased++; else ways.direct++;
+          if (p.summary.windowMin || p.summary.padWaitMin) ways.window++;
+        }
+        assert(peak <= 1.1 * cruise, `${name}: the push ${fmt(peak / G0, 2)} G, its cruise ${fmt(cruise / G0, 2)}`);
+        assert(lowest >= 0.85 * air, `${name}: never into the air on the drive (${fmt(lowest / 1000, 0)} km, the air's top ${fmt(air / 1000, 0)})`);
+        assert(miss < 1, `${name}: into the air where and as the entry begins (${fmt(miss, 3)} m, and m per 0.01 m/s)`);
+        const h = (m) => `${fmt(m / 60, 1)} h`;
+        rows.push(`${name} ${cls}: down ${h(Math.min(...downs))}–${h(Math.max(...downs))}, the whole run ${h(Math.min(...totals))}–${h(Math.max(...totals))} (${ways.direct} straight, ${ways.phased} by a low orbit, ${ways.window} waiting for a window); the push at most ${fmt(peak / G0, 2)} G of its ${fmt(cruise / G0, 1)}, never under ${fmt(lowest / 1000, 0)} km`);
+      }
+      console.log(`      ${rows.join('\n      ')}`);
+    },
+  },
+  {
     name: 'a run flown: the pilot away until it is home, its freight landed and the PLANETSIDE contract paid by radio, its fuel out of our tanks, the shuttle gone from the displays',
     fn: () => {
       const s = inOrbit('Mars');
@@ -236,7 +274,7 @@ export default [
     },
   },
   {
-    name: 'a run called back: braking short of the air while it can, or landing and lifting at once; and one that comes home to find us gone waits, then chases us',
+    name: 'a run called back: back up to us from its way down while it can, or landing and lifting at once; and one that comes home to find us gone waits, then chases us',
     fn: () => {
       const s = inOrbit('Mars');
       const w = worldOf('Mars'), a = airspacesOf(w)[2];
@@ -245,7 +283,7 @@ export default [
       // early on its drop
       let run = go();
       flyRun(s, run, 0);
-      while (run.phase !== 'drop' || s.clock.minute < run.legs[1].t0 + 5) advance(s, 1);
+      while (run.phase !== 'drop' || s.clock.minute < run.legs.find(l => l.phase === 'drop').t0 + 5) advance(s, 1);
       let r = abortRun(s, run.id);
       let phases = new Set();
       flyRun(s, run, DAY_MIN, () => phases.add(run.phase));
@@ -284,7 +322,7 @@ export default [
       const w = worldOf('Mars'), a = airspacesOf(w)[1], world = getWorld(s);
       // (1) called back 3 min into its drop
       let run = launchRun(s, planRun(s, s.shuttles.bay[0].id, a.id).plan).run;
-      while (run.phase !== 'drop' || s.clock.minute < run.legs[1].t0 + 3) advance(s, 1);
+      while (run.phase !== 'drop' || s.clock.minute < run.legs.find(l => l.phase === 'drop').t0 + 3) advance(s, 1);
       const whole = run.summary.fuelKg;
       abortRun(s, run.id);
       assert(run.summary.fuelKg < whole * 0.8, `called back: ${fmt(run.summary.fuelKg, 2)} kg, not the whole run's ${fmt(whole, 2)}`);
@@ -308,7 +346,7 @@ export default [
       run = launchRun(s, planRun(s, s.shuttles.bay[0].id, a.id).plan).run;
       const path = { world: 'Mars', cls: run.cls, carrier: 'player', legs: run.legs };
       const jump = (t) => { const A = flightPathAt(world, path, t - 0.02), B = flightPathAt(world, path, t + 0.02); return Math.hypot(A.vel.vx - B.vel.vx, A.vel.vy - B.vel.vy); };
-      const out = jump(run.legs[1].t0), home = jump(run.legs.at(-1).t0);
+      const out = jump(run.legs.find(l => l.kind === 'xfer').t0), home = jump(run.legs.at(-1).t0);
       assert(out < 80 && home < 80, `leaving the bay ${fmt(out, 0)} m/s, alongside ${fmt(home, 0)} m/s from our own speed`);
       console.log(`      called back on its drop: ${fmt(run.summary ? whole : 0, 2)} → charged what it flew; failed freight gone; a full hold kept full, not over; out of the bay ${fmt(out, 0)} m/s off our speed, alongside ${fmt(home, 0)}`);
     },
@@ -328,6 +366,36 @@ export default [
       assert(Math.abs(after.h - before.h) < 1 && getWorld(t).get(run2.entity)?.flightPath, `the same place after loading (${fmt(before.h / 1000, 1)} km up)`);
       flyRun(t, run2);
       assert(run2.phase === 'done' && !t.ship.crew.some(m => m.away), 'and home');
+    },
+  },
+  {
+    name: 'a save from before 1.12.8: a run on the old spiral legs is planned again on load from where the craft is (on its way down, or coming back up), and flies home',
+    fn: () => {
+      const s = inOrbit('Mars');
+      const w = worldOf('Mars'), a = airspacesOf(w)[1], rows = [];
+      for (const when of ['drop', 'return']) {
+        const run = launchRun(s, planRun(s, s.shuttles.bay[0].id, a.id).plan).run;
+        // (the leg it is on made over as an old one: a spiral from where it began to where it ends, flown at 1 G)
+        const i = run.legs.findIndex(l => l.phase === when || (when === 'return' && l.phase === 'orbit')), leg = run.legs[i];
+        const end = run.legs[i + (run.legs[i + 1]?.phase === 'phasing' ? 2 : 0)];
+        const P = (l, m) => { const q = placeOnLeg({ world: 'Mars', cls: run.cls }, l, m).pos, c = bodyPos(w.body, m / DAY_MIN); const x = (q.x - c.x) * AU_M, y = (q.y - c.y) * AU_M; return { r: Math.hypot(x, y), th: Math.atan2(y, x) }; };
+        const A = P(leg, leg.t0), B = P(end, end.t1), T = (end.t1 - leg.t0) * 60, span = ((B.th - A.th) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI;
+        const old = { phase: when, kind: 'path', t0: leg.t0, t1: end.t1, g: { rA: A.r, thA: A.th, rB: B.r, span, flat: 'both', vA: 0, vB: 0, a: 4 * (A.r * span) / T / T * 4, vm: 2 * (A.r * span) / T, T } };
+        old.g.a = 2 * old.g.vm / T;
+        run.legs.splice(i, run.legs.indexOf(end) - i + 1, old);
+        getWorld(s).get(run.entity).flightPath.legs = run.legs;
+        while (s.clock.minute < old.t0 + (old.t1 - old.t0) / 3) advance(s, 1);
+        const { state: t } = deserialize(serialize(s));
+        const r2 = t.shuttles.runs.find(x => x.id === run.id);
+        assert(!r2.legs.some(l => l.kind === 'path' && l.t1 > t.clock.minute + 1e-6), `${when}: no old leg ahead after loading (${r2.legs.map(l => l.phase).join(' ')})`);
+        const before = runReadout(s, run), after = runReadout(t, r2), loaded = t.clock.minute;
+        flyRun(t, r2);
+        assert(r2.phase === 'done' && !t.ship.crew.some(m => m.away), `${when}: home (${r2.phase})`);
+        rows.push(`caught on its ${when}: planned again from ${fmt(before.h / 1000, 0)} km up (${fmt(after.h / 1000, 0)} after loading), home ${fmt(r2.doneAt - loaded, 0)} min later`);
+        // (and the next run, on the game going on)
+        flyRun(s, run);
+      }
+      console.log(`      ${rows.join(' · ')}`);
     },
   },
   {
@@ -366,7 +434,7 @@ export default [
     },
   },
   {
-    name: 'the shuttle\'s cameras ride a craft that turns, never one that jumps: on the drive its nose along its push (the curve\'s own, as its motion has it), its back through the push passing straight up or down, end for end to brake; falling or climbing straight, its heading kept',
+    name: 'the shuttle\'s cameras ride a craft that turns, never one that jumps: on the drive its nose along its push (its motion\'s own), its back through the push passing straight up or down, end for end between burns, belly first before the air; falling or climbing straight, its heading kept',
     fn: () => {
       const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
       const rows = [];
@@ -377,19 +445,19 @@ export default [
         const r = launchRun(s, p.plan, () => {}, { crew: { pilot: shuttleCrew(s)[0].id } });
         assert(r.ok, `${world}: ${r.text}`);
         const run = r.run, path = { world, cls: run.cls };
-        // the push against the motion's own second difference, wide enough that the arc table's steps average out
+        // the push against the motion's own second difference (less the pull), away from a burn's ends
         let off = 0;
-        for (const leg of run.legs.filter(l => l.kind === 'path')) {
-          const h = 40, T = (leg.t1 - leg.t0) * 60, flip = (leg.g.vm - leg.g.vA) / leg.g.a;
+        for (const leg of run.legs.filter(l => l.kind === 'xfer')) {
+          const h = 2, T = (leg.t1 - leg.t0) * 60, B = xferBurns(w.GM, leg.x), ends = [B.t0, B.t1, B.t2, B.t3];
           const rel = (sec) => { const m = leg.t0 + sec / 60, q = placeOnLeg(path, leg, m).pos, c = bodyPos(w.body, m / DAY_MIN); return [(q.x - c.x) * AU_M, (q.y - c.y) * AU_M]; };
-          for (let t = h; t < T - h; t += 31) {
-            if (Math.abs(t - flip) < h + 1) continue;
-            const A = rel(t - h), B = rel(t), C = rel(t + h), rr = Math.hypot(...B), q = pushOnLeg(w, leg.g, t);
-            const ax = (A[0] - 2 * B[0] + C[0]) / h / h + w.GM / rr ** 3 * B[0], ay = (A[1] - 2 * B[1] + C[1]) / h / h + w.GM / rr ** 3 * B[1];
-            off = Math.max(off, Math.hypot(ax - q.ax, ay - q.ay) / Math.max(1, Math.hypot(q.ax, q.ay)));
+          for (let t = h; t < T - h; t += 17) {
+            if (ends.some(e => Math.abs(t - e) < h + 5)) continue;
+            const A = rel(t - h), P = rel(t), C = rel(t + h), rr = Math.hypot(...P), q = xferAt(w.GM, leg.x, t);
+            const ax = (A[0] - 2 * P[0] + C[0]) / h / h + w.GM / rr ** 3 * P[0], ay = (A[1] - 2 * P[1] + C[1]) / h / h + w.GM / rr ** 3 * P[1];
+            off = Math.max(off, Math.hypot(ax - q.ax, ay - q.ay));
           }
         }
-        assert(off < 0.05, `${world}: the push is the motion's (${fmt(100 * off, 1)}% off at worst)`);
+        assert(off < 0.05, `${world}: the push is the motion's (${fmt(off, 3)} m/s² off at worst)`);
         // a frame every game second, the whole way: the nose and the back never far from the last frame's
         let worst = 1, at = '';
         for (const leg of run.legs) {
@@ -402,7 +470,7 @@ export default [
           }
         }
         assert(worst > 0.9, `${world}: the craft turns ${fmt(Math.acos(Math.min(1, worst)) * 180 / Math.PI, 0)}° in a second on its ${at}`);
-        rows.push(`${world} ${run.cls}: the push ${fmt(100 * off, 1)}% from the motion, at most ${fmt(Math.acos(Math.min(1, worst)) * 180 / Math.PI, 1)}° a second (${at})`);
+        rows.push(`${world} ${run.cls}: the push ${fmt(off, 3)} m/s² from the motion, at most ${fmt(Math.acos(Math.min(1, worst)) * 180 / Math.PI, 1)}° a second (${at})`);
       }
       console.log(`      ${rows.join('\n      ')}`);
     },

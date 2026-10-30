@@ -1,8 +1,10 @@
 // ============================================================
 // LONGHAUL — Lambert's problem (universal variables, 2D)
-// Given two heliocentric positions and a time of flight, find the
+// Given two positions round a body and a time of flight, find the
 // ballistic (zero-thrust) orbit connecting them. Used for fuel-cheap
-// transfers and mid-course corrections.
+// transfers round the Sun and mid-course corrections, and for a shuttle's
+// transfers round a world (planetary.js: its own GM, and no floor on the
+// periapsis but the one its caller checks).
 // Reference: Curtis, "Orbital Mechanics for Engineering Students", §5.3
 // ============================================================
 
@@ -24,9 +26,11 @@ function stumpffS(z) {
  * Solve Lambert's problem for a prograde (counter-clockwise), single-revolution arc.
  * @param {number} r1x,r1y,r2x,r2y  positions in meters
  * @param {number} tof  time of flight in seconds (> 0)
+ * @param {number} mu  the body's GM (m³/s²: the Sun's by default)
+ * @param {number} rpMin  arcs whose periapsis, passed on the way, is inside this (m) are refused (0: none)
  * @returns {{v1x,v1y,v2x,v2y}|null} departure/arrival velocities in m/s, or null if no solution
  */
-export function solveLambert(r1x, r1y, r2x, r2y, tof, mu = GM_SUN) {
+export function solveLambert(r1x, r1y, r2x, r2y, tof, mu = GM_SUN, rpMin = MIN_PERIHELION) {
   const r1 = Math.hypot(r1x, r1y);
   const r2 = Math.hypot(r2x, r2y);
   if (r1 === 0 || r2 === 0 || !(tof > 0)) return null;
@@ -95,14 +99,14 @@ export function solveLambert(r1x, r1y, r2x, r2y, tof, mu = GM_SUN) {
   const v1y = (r2y - f * r1y) / g;
 
   // Reject sun-grazing arcs (perihelion inside ~0.15 AU): unflyable and numerically nasty.
-  if (minPerihelion > 0) {
+  if (rpMin > 0) {
     const h = r1x * v1y - r1y * v1x;
     const v2 = v1x * v1x + v1y * v1y;
     const energy = v2 / 2 - mu / r1;
     const e = Math.sqrt(Math.max(0, 1 + 2 * energy * h * h / (mu * mu)));
     const rp = (h * h / mu) / (1 + e);
     // Perihelion only matters if it's actually traversed between r1 and r2
-    if (rp < minPerihelion && rp < Math.min(r1, r2)) return null;
+    if (rp < rpMin && rp < Math.min(r1, r2)) return null;
   }
 
   return {
@@ -112,4 +116,4 @@ export function solveLambert(r1x, r1y, r2x, r2y, tof, mu = GM_SUN) {
   };
 }
 
-const minPerihelion = 0.15 * 149_597_870_700;
+const MIN_PERIHELION = 0.15 * 149_597_870_700;

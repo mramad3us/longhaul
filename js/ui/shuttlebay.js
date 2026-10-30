@@ -4,9 +4,11 @@
 // What our shuttles are doing (sim/shuttles.js), and where they can go:
 // from a world's high orbit (the parking orbit or a stationary one held:
 // worlds.js), a spaceport in one of its airspaces. The plan is the run's
-// whole timeline before anything moves (the drop to the air, the entry and
-// what it costs the shield and the crew, the landing, the turnaround, the
-// climb, the way back), its controller's answer to the landing, and the
+// whole timeline before anything moves (a wait in the bay for its window,
+// the way down, burn, coast, burn, by a low orbit if that is quicker, the
+// entry and what it costs the shield and the crew, the landing, the
+// turnaround, the climb, the way back), its controller's answer to the
+// landing, and the
 // freight bound for that pad that will go down with it (PLANETSIDE
 // contracts), who goes (the pilot, the riders in its seats, and ASHORE:
 // a run ashore at the spaceport, the pad held eight hours, each who goes
@@ -67,6 +69,19 @@ export function closeShuttleBay() {
 export function toggleShuttleBay() { if (shuttleBayOpen()) closeShuttleBay(); else openShuttleBay(); }
 
 const dur = (min) => formatDuration(Math.max(0, min));
+/**
+ * The run as it would be launched now, worked out again only as the game
+ * moves on or the choice changes (a plan takes tens of milliseconds: not
+ * every redraw, nor every minute of a warp); the launch plans afresh.
+ */
+let planMemo = null;
+function planNow(s) {
+  const key = `${chosen.shuttle}|${chosen.airspace}|${chosen.leave}|${s.flight.hold?.id}|${s.flight.hold?.r ?? ''}`, now = s.clock.minute;
+  if (planMemo && planMemo.key === key && now >= planMemo.at && now - planMemo.at < 30 && performance.now() - planMemo.wall < 4000) return planMemo.p;
+  const p = planRun(s, chosen.shuttle, chosen.airspace, { leave: chosen.leave });
+  planMemo = { key, at: now, wall: performance.now(), p };
+  return p;
+}
 
 function render() {
   const s = ui.state;
@@ -98,7 +113,7 @@ function render() {
         if (!free.some(x => x.id === chosen.shuttle)) chosen.shuttle = free[0].id;
         // (the first time, the pad our freight is bound for)
         if (!air.some(a => a.id === chosen.airspace)) chosen.airspace = (air.find(a => cargoFor(s, a.id, 'lander').items.length) || air[0]).id;
-        const p = planRun(s, chosen.shuttle, chosen.airspace, { leave: chosen.leave });
+        const p = planNow(s);
         const clr = landingClearance(s, chosen.airspace, p.ok ? p.plan.groundMin : undefined);
         const sh = bay.find(x => x.id === chosen.shuttle);
         const load = cargoFor(s, chosen.airspace, sh.cls);
@@ -230,12 +245,14 @@ function tradeHTML(s, w, sh) {
 /** A plan's whole run, stretch by stretch. */
 function timeline(S) {
   const step = (k, v, note = '') => `<div class="sb-step"><span class="sb-k">${k}</span><span class="sb-v">${v}</span><span class="sb-note">${note}</span></div>`;
+  const by = (phased) => phased ? ', by way of a low orbit (round it until its way on comes round)' : '';
   return `<div class="sb-timeline">
-    ${step('DROP', dur(S.dropMin), S.air ? `on the drive to the top of the air, braking to ${(S.entryV / 1000).toFixed(1)} km/s` : 'on the drive, to 10 km over the pad')}
+    ${S.windowMin ? step('WINDOW', dur(S.windowMin), 'in the bay until the way down opens: the quickest way, waiting for it') : ''}
+    ${step('DROP', dur(S.dropMin), S.air ? `a burn, a coast, a burn to the top of the air${by(S.phasedDown)}, braked to ${(S.entryV / 1000).toFixed(1)} km/s` : `a burn, a coast, a burn${by(S.phasedDown)}, to 10 km over the pad`)}
     ${S.air ? step('ENTRY', dur(S.downMin), `${(S.entryV / 1000).toFixed(1)} km/s in · heat ${(S.peakHeat / 1e6).toFixed(2)} MW/m² at its peak · ${Math.round(S.downrangeKm).toLocaleString()} km of glide · up to ${S.peakG.toFixed(1)} G · down on the drive`) : step('LANDING', dur(S.downMin), `on the drive · up to ${S.peakG.toFixed(1)} G`)}
-    ${step('GROUND', dur(S.groundMin), chosen.leave ? 'a run ashore for whoever goes; the freight off' : 'the freight off, the pad cleared')}
+    ${step('GROUND', dur(S.groundMin + (S.padWaitMin || 0)), `${chosen.leave ? 'a run ashore for whoever goes; the freight off' : 'the freight off, the pad cleared'}${S.padWaitMin ? `; then ${dur(S.padWaitMin)} on the pad for its window up` : ''}`)}
     ${step('CLIMB', dur(S.upMin), S.air ? 'through the air on the drive' : 'off the pad on the drive')}
-    ${step('BACK', dur(S.returnMin), 'up to us on our orbit')}
+    ${step('BACK', dur(S.returnMin), `a burn, a coast, a burn${by(S.phasedUp)}, up to us on our orbit`)}
     ${step('TOTAL', dur(S.totalMin), `${S.fuelKg.toFixed(1)} kg of reaction mass`)}
   </div>`;
 }
@@ -248,7 +265,7 @@ function runPanel(s, run) {
     <div class="sb-line">${live} · this stretch ${dur(rd.legEnd)} more · home in ${dur(rd.eta)}</div>
     <div class="bd-actions"><button class="btn btn-secondary" data-act="watch" data-run="${esc(run.id)}" title="Its cameras on the exterior display: NOSE, DOWN, TAIL">CAMERA</button>
       <button class="btn btn-secondary" data-act="follow" data-run="${esc(run.id)}" title="Follow it on the system display, framed on ${esc(run.world)}'s space, its track drawn">MAP</button>
-      ${['launch', 'drop', 'down', 'ground'].includes(rd.phase) && !run.aborted ? `<button class="btn btn-secondary" data-act="abort" data-run="${esc(run.id)}" title="Bring it back: braking short of the air while it still can, or else landing and lifting again at once">CALL BACK</button>` : ''}</div>
+      ${['window', 'launch', 'drop', 'phasing', 'deorbit', 'down', 'ground'].includes(rd.phase) && !run.aborted ? `<button class="btn btn-secondary" data-act="abort" data-run="${esc(run.id)}" title="Bring it back: from where it is on its way down while it still can, or else landing and lifting again at once">CALL BACK</button>` : ''}</div>
     <div class="bd-log">${run.log.slice().reverse().map(l => `<div>${esc(l.text)}</div>`).join('')}</div></div>`;
 }
 

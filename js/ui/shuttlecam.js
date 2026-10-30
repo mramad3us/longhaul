@@ -12,12 +12,13 @@
 //
 // The craft flies as its run's flight path has it (planetary.js: every
 // stretch flown once as physics, ridden on rails), and is turned as it
-// would be: on the drive, its nose along its push (planetary.js
-// pushOnLeg, worked from the path's own curve: what bends it round the
-// world as well as what speeds it up, flipped to brake), its back away
-// from the world, rolled through the plane's north as the push passes
-// straight up or down (the world's up is no guide then, and a back held
-// to it would turn the craft over from one frame to the next); in the
+// would be: on the drive, its nose along its push (planetary.js xferAt:
+// a burn's own push); coasting, held as the last burn left it, then
+// turned end for end in time for the next (turnFor), and after the burn
+// into the air turned to fly the way it goes; its back away from the
+// world, rolled through the plane's north as the push passes straight up
+// or down (the world's up is no guide then, and a back held to it would
+// turn the craft over from one frame to the next); in the
 // entry, belly first into the air flowing past it (the air turning with
 // the world), its nose pitched up by its angle of attack, steep at the top
 // and easing as it slows, level for the powered landing; on the pad, on
@@ -42,8 +43,8 @@
 
 import { AU_M, DAY_MIN, G0, MIN_S } from '../core/constants.js';
 import { getWorld, predictEntity } from '../sim/world.js';
-import { activeRuns, runOf, runReadout } from '../sim/shuttles.js';
-import { flightPathAt, pushOnLeg } from '../sim/planetary.js';
+import { activeRuns, runOf, runReadout, LAUNCH_MIN } from '../sim/shuttles.js';
+import { flightPathAt, xferAt, xferBurns } from '../sim/planetary.js';
 import { worldOf, worldAngle, airspaceById, airspacesOf } from '../sim/worlds.js';
 import { bodyPos, bodyVel, BODIES } from '../sim/ephemeris.js';
 import { hullOf, partExtent } from '../sim/hulls.js';
@@ -71,7 +72,7 @@ const SUN_GLARE_RAD = 0.35;
 const FONT = '10px "IBM Plex Mono", monospace';
 const PAD_R = { gig: 25, pinnace: 40, lander: 60 };
 const TURN_S = 0.45;              // how quickly the picture follows a change of attitude (s of real time)
-const FLIP_S = 30;                // s of game time either side of the flip to brake: the craft turning end for end
+const FLIP_S = 30;                // s of game time: a flip (end for end, for the next burn) takes twice this
 const ROLL_K = 0.15;              // the plane's north in the craft's up (the push this near straight up or down, sin: rolled through it)
 
 /**
@@ -134,6 +135,18 @@ export function shuttleMount(hull, id) {
 }
 
 /**
+ * Turned from `before` to `after` by `tEnd` (s), over its last FLIP_S·2: end
+ * for end yawing through the plane's north, its back to the sky all the way
+ * round (the drive off meanwhile: the push is off the nose).
+ */
+function turnFor(before, after, sec, tEnd) {
+  const k = smooth(tEnd - 2 * FLIP_S, tEnd, sec);
+  if (k <= 0) return before;
+  const c = Math.max(0, -dot(before, after));
+  return norm(add(add(scale(before, 1 - k), after, k), [0, 0, 1], Math.sin(Math.PI * k) * c));
+}
+
+/**
  * The craft's place and attitude at tm: { fp (flightPathAt), W (the world),
  * c (its centre, AU), X, Y, Z (the hull's axes, world), ur (up), vAir (the
  * air past it, m/s), plume (G) }.
@@ -155,39 +168,46 @@ export function shuttleAttitude(state, run, tm) {
   // the attitude in the plane: the nose `th` above the horizontal `h` (the way it moves along the ground)
   const pitched = (h, th) => ({ X: add(scale(h, Math.cos(th)), ur, Math.sin(th)), Z: add(scale(h, -Math.sin(th)), ur, Math.cos(th)) });
   let att, plume = 0;
+  // (the way its ground angle grows: the profiles fly that way)
+  const along = [-ur[1], ur[0], 0], sAir = Math.hypot(vAir[0], vAir[1]);
+  // belly first into the air: steep at the top of it, easing as it slows, level for the powered landing
+  const belly = () => {
+    const gam = sAir > 1 ? Math.atan2(dot(vAir, ur), dot(vAir, along)) : 0;
+    const aoa = (12 + 28 * smooth(600, 2500, sAir)) * Math.PI / 180;
+    const level = 1 - smooth(120, 420, sAir) * smooth(1500, 6000, fp.h ?? 1e9);
+    return { att: pitched(along, (gam + aoa) * (1 - level)), level };
+  };
   if (fp.leg === 'ground') att = pitched(east, 0);
   else if (fp.leg === 'down' || fp.leg === 'up') {
-    // (the way its ground angle grows: the profiles fly that way)
-    const way = [-ur[1], ur[0], 0];
-    const s = Math.hypot(vAir[0], vAir[1]);
+    const way = along, s = sAir;
     const gam = s > 1 ? Math.atan2(dot(vAir, ur), dot(vAir, way)) : fp.leg === 'up' ? Math.PI / 2 : 0;
     if (fp.leg === 'down') {
-      // belly first: steep at the top of the air, easing as it slows, level for the powered landing
-      const aoa = (12 + 28 * smooth(600, 2500, s)) * Math.PI / 180;
-      const level = 1 - smooth(120, 420, s) * smooth(1500, 6000, fp.h ?? 1e9);
-      att = pitched(way, (gam + aoa) * (1 - level));
-      plume = level > 0.3 ? Math.max(0.3, fp.g || 0) : 0;
+      const b = belly();
+      att = b.att;
+      plume = b.level > 0.3 ? Math.max(0.3, fp.g || 0) : 0;
     } else {
       att = pitched(way, gam);
       plume = craft.drive.maxG * 0.85;
     }
-  } else if (fp.leg === 'path' || fp.leg === 'hold') {
-    // on the drive: the nose along its push; coasting (a hold is free fall), along its way
-    let leg = path.legs[0];
-    for (const l of path.legs) { if (tm >= l.t0) leg = l; else break; }
-    const g = leg.kind === 'path' ? leg.g : null, sec = Math.max(0, (tm - leg.t0) * MIN_S);
-    const p = g ? pushOnLeg(W, g, sec) : { ax: 0, ay: 0 };
-    const al = Math.hypot(p.ax, p.ay), pd = al > 0.25 ? [p.ax / al, p.ay / al, 0] : null;
-    let X = pd || norm(Math.hypot(vr[0], vr[1]) > 1 ? vr : east);
-    const t1 = g ? (g.vm - g.vA) / g.a : 0;
-    if (pd && t1 > 0 && Math.abs(sec - t1) < FLIP_S) {
-      // (the rails turn the push to brake at once; the craft turns end for end over a minute, yawing through the
-      // plane's north, its back to the sky all the way round, its drive off while its nose is off the push)
-      const dirAt = (x) => { const q = pushOnLeg(W, g, x), l = Math.hypot(q.ax, q.ay) || 1; return [q.ax / l, q.ay / l, 0]; };
-      const before = sec <= t1 ? pd : dirAt(t1), after = sec > t1 ? pd : dirAt(t1 + 1e-3);
-      const k = smooth(t1 - FLIP_S, t1 + FLIP_S, sec), c = Math.max(0, -dot(dirAt(t1), dirAt(t1 + 1e-3)));
-      X = norm(add(add(scale(before, 1 - k), after, k), [0, 0, 1], Math.sin(Math.PI * k) * c));
-    }
+  } else if (fp.leg === 'xfer' || fp.leg === 'hold') {
+    // on the drive, the nose along its push; coasting, held as the last burn left it (or along its way round
+    // an orbit), then turned for the burn to come, over its last FLIP_S·2 before it; after the burn into the
+    // air, turned to fly the way it goes, belly first
+    let i = 0;
+    path.legs.forEach((l, k) => { if (tm >= l.t0) i = k; });
+    const leg = path.legs[i], next = path.legs[i + 1], sec = Math.max(0, (tm - leg.t0) * MIN_S);
+    const flat = (d) => [d[0], d[1], 0];
+    const way = norm(Math.hypot(vr[0], vr[1]) > 1 ? vr : east);
+    let X = way, pd = null, al = 0;
+    if (leg.kind === 'xfer') {
+      const q = xferAt(W.GM, leg.x, sec), B = xferBurns(W.GM, leg.x);
+      al = Math.hypot(q.ax, q.ay);
+      pd = al > 0.05 ? [q.ax / al, q.ay / al, 0] : null;
+      if (pd) X = pd;
+      else if (sec < B.t0) X = turnFor(way, flat(B.d1), sec, B.t0);
+      else if (sec < B.t2) X = turnFor(B.t1 > B.t0 ? flat(B.d1) : way, flat(B.d2), sec, B.t2);
+      else X = turnFor(flat(B.d2), next?.kind === 'down' ? norm(belly().att.X) : way, sec, Math.min(B.t3 + 2 * FLIP_S, (leg.t1 - leg.t0) * MIN_S));
+    } else if (next?.kind === 'xfer') X = turnFor(way, flat(xferBurns(W.GM, next.x).d1), sec, (leg.t1 - leg.t0) * MIN_S);
     const u = add(ur, [0, 0, 1], ROLL_K);
     att = { X, Z: add(u, X, -dot(u, X)) };
     plume = pd ? Math.min(craft.drive.maxG, al / G0) * Math.max(0, dot(X, pd)) : 0;
@@ -244,8 +264,8 @@ export class ShuttleCamView {
     const rd = runReadout(state, run, tm);
     const A = shuttleAttitude(state, run, tm);
     if (A.fp.leg === 'dock') {
-      const out = rd.phase === 'launch';
-      this.osd(ctx, W, H, camDef, run, out ? `IN ITS BAY · out in ${Math.max(1, Math.round(rd.legEnd))} min` : 'IN ITS BAY · aboard');
+      const out = rd.phase === 'launch' || rd.phase === 'window';
+      this.osd(ctx, W, H, camDef, run, out ? `IN ITS BAY${rd.phase === 'window' ? ', WAITING FOR ITS WINDOW' : ''} · out in ${Math.max(1, Math.round(rd.legEnd + (rd.phase === 'window' ? LAUNCH_MIN : 0)))} min` : 'IN ITS BAY · aboard');
       return;
     }
     // (the picture follows a small change of attitude over a moment, as the craft turns; a big one, or

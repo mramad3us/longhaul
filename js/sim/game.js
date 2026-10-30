@@ -57,7 +57,7 @@ import { leaseTick } from './leases.js';
 import { setGravityEpoch } from './gravity.js';
 import { fireTick } from './fire.js';
 import { createDroneStores, dronesTick } from './drones.js';
-import { createShuttles, shuttlesTick, npcShuttlesTick } from './shuttles.js';
+import { createShuttles, shuttlesTick, npcShuttlesTick, upgradeRuns } from './shuttles.js';
 import { createMarket, marketTick, holdOf } from './market.js';
 import { GOODS } from './goods.js';
 
@@ -213,6 +213,7 @@ export function upgradeState(state) {
   ensurePopulation(state);
   if (fresh && state.traffic.population > 0) seedForces(state);
   upgradeContracts(state);
+  upgradeRuns(state);
   return state;
 }
 

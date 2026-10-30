@@ -9,10 +9,13 @@
 // back. A RUN is planned whole when it is launched (planRun), each stretch
 // flown as physics once (planetary.js) and ridden on rails after:
 //
+//   window    (if waiting is the quick way) in the bay for its window
 //   launch    out of the bay (LAUNCH_MIN)
-//   drop      down to the top of the air on the drive, aimed at where the
-//             entry must begin for the pad to be under the glide's end (the
-//             world turns meanwhile: the plan is solved for it)
+//   drop      down to the top of the air (a transfer: a burn, a coast, a
+//             burn), aimed at where the entry must begin for the pad to be
+//             under the glide's end (the world turns meanwhile: the plan is
+//             solved for it); or down to a low orbit, round it (phasing)
+//             until the entry comes round, then down (deorbit)
 //   down      the entry, the glide, the powered landing (or, airless, the
 //             powered landing from HOVER_M over the pad)
 //   ground    at the spaceport: the cargo bound there is handed over (a
@@ -20,8 +23,10 @@
 //             goods it carried down are sold on the world's market and a
 //             purchase loaded to bring up (market.js shuttleTrade: paid by
 //             radio), and it waits out the turnaround
-//   up        the ascent, off the pad to the top of the air
-//   return    back up to us on the drive, to where we will be on our orbit
+//   up        the ascent, off the pad to the top of the air (the pad held
+//             longer first if waiting for a window up is the quick way)
+//   return    back up to us (a transfer), to where we will be on our orbit;
+//             or to a low orbit (orbit), round it (phasing), then up
 //   recover   into the bay (RECOVER_MIN): the crew back aboard
 //
 // A landing needs its airspace controller's clearance (landingClearance):
@@ -60,8 +65,8 @@ import { createEntity } from './entities.js';
 import { CLASSES, bayOf, maxCrew } from './ship-classes.js';
 import { bodyPos, bodyVel } from './ephemeris.js';
 import { worldOf, worldAt, airspaceById, airspacesOf, worldAngle, controlWords, worldOfs } from './worlds.js';
-import { entryProfile, ascentProfile, pathLeg, craftOf, flightPathAt, carrierPlace, placeOnLeg, distanceAt, speedAt, placeAlong, PLAYER_AT, HOVER_M, LAUNCH_MIN, RECOVER_MIN, GROUND_MIN, runMinutes } from './planetary.js';
-export { LAUNCH_MIN, RECOVER_MIN, GROUND_MIN, runMinutes };
+import { entryProfile, ascentProfile, craftOf, flightPathAt, carrierPlace, placeOnLeg, airState, kepler, xferSweep, xferPlan, xferAt, xferDv, xferBurns, ENTRY_LEAD, TURN_LEAD, PLAYER_AT, HOVER_M, LAUNCH_MIN, RECOVER_MIN, GROUND_MIN } from './planetary.js';
+export { LAUNCH_MIN, RECOVER_MIN, GROUND_MIN };
 import { targetStateAt } from './nav.js';
 import { FACTIONS } from './factions.js';
 import { hostileTo } from './service.js';
@@ -74,14 +79,13 @@ import { GOODS } from './goods.js';
 import { LEAVE_MIN, LEAVE_COST, restedAshore, signOn } from './crew-services.js';
 import { errandsFor, errandCost, finishErrand, retireOnWorld, groundHall, treatmentFor } from './ground.js';
 
-const SPAN_MIN = 0.4;                        // a leg round a world goes at least this far round (rad): a gentle spiral, never a plunge
 const RENDEZVOUS_M = 20_000;                 // a shuttle home further than this from us (we moved) chases us
 const HOLD_MIN = 10;                         // …or, with us out of its world's space, orbits where it is and looks again this often
 const ABORT_GROUND_MIN = 10;                 // called back with it committed to its entry, or down: off the pad this soon
 const NPC_SHUTTLES_MAX = 10;                 // NPC shuttles flown where we can see them, at most
 const NPC_LAUNCH_P = 0.25;                   // a carrier in a planetary call sends one down, each look (every NPC_LOOK_MIN)
 const NPC_LOOK_MIN = 5;
-const PHASE_WORDS = { launch: 'launching', drop: 'dropping to the air', abort: 'braking, called back', down: 'entry and landing', ground: 'on the ground', up: 'climbing out', return: 'coming back up', hold: 'waiting for us in orbit', recover: 'into the bay', done: 'stowed' };
+const PHASE_WORDS = { window: 'in its bay, waiting for its window', launch: 'launching', drop: 'on its way down', phasing: 'round a low orbit, waiting for its way on to come round', deorbit: 'on its way down to the air', down: 'entry and landing', ground: 'on the ground', up: 'climbing out', orbit: 'climbing to a low orbit', return: 'coming back up', hold: 'waiting for us in orbit', recover: 'into the bay', done: 'stowed' };
 
 /** Our shuttle bays, full (a class's BAYS): [{ id, cls, name }]. */
 export function createShuttles(classId) {
@@ -151,7 +155,141 @@ export function landingClearance(state, airspaceId, groundMin = GROUND_MIN) {
   return { ok: true, text: `${who}: cleared to land at ${a.port.name}. Report at the interface; the pad is yours for ${Math.round(groundMin / 60 * 10) / 10} hours.` };
 }
 
-const wrapSpan = (d) => SPAN_MIN + (((d - SPAN_MIN) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+// ---- PLANNING A RUN ----
+//
+// Every stretch on the drive is a transfer (planetary.js: a burn, a coast
+// on a conic, a burn), and the pilot takes the quickest of those it could
+// fly that costs at most BRISK times the cheapest way to go now (or
+// BRISK_SPARE more, round a small world where the cheapest is little):
+// straight there, after waiting in the bay (or on the pad) up to WINDOW_MAX
+// for its window where that is quicker,
+// or by way of a low orbit (PHASING: well above the air, well below the
+// carrier), round it until where it is going comes round, then on (a low
+// orbit goes round fast: the wait is an hour or two, not the days the high
+// orbit and the turning ground would take to line up). Coming down it
+// arrives at the top of the air at the entry's speed and angle, upstream
+// of the pad by the glide's own way over the ground (or HOVER_M over the
+// pad, airless); going up, alongside its carrier, wherever it will be.
+
+const BRISK = 2;                             // the quickest way that costs at most this many times the cheapest (Δv),
+const BRISK_SPARE = 2500;                    // …or this much more (m/s: four minutes of a G), where the cheapest is little
+const WINDOW_MAX = 6 * 60;                   // min: the longest a shuttle waits in its bay, or on its pad, for a window
+const XFER_MAX_S = 16 * 3600;                // the longest transfer considered (s)
+const PHASING = [1.12, 1.35, 1.8, 2.6];      // the low orbits it may go round, in the world's radii
+const GRID = {                               // how finely the planner looks: our runs, and an NPC's (a cheaper look)
+  fine: { waitStep: 20, n: 36, sigmaStep: 20 },
+  coarse: { waitStep: 60, n: 24, sigmaStep: 45 },
+};
+const TWO_PI = 2 * Math.PI;
+const wrap = (a) => ((a % TWO_PI) + TWO_PI) % TWO_PI;
+const angleOf = (s) => Math.atan2(s.y, s.x);
+const radiusOf = (s) => Math.hypot(s.x, s.y);
+/** A state turned by `a` round the world's centre. */
+const turned = (s, a) => { const c = Math.cos(a), n = Math.sin(a); return { x: s.x * c - s.y * n, y: s.x * n + s.y * c, vx: s.vx * c - s.vy * n, vy: s.vx * n + s.vy * c }; };
+/** A circular orbit's state at radius r, angle th. */
+const circle = (GM, r, th) => { const v = Math.sqrt(GM / r); return { x: r * Math.cos(th), y: r * Math.sin(th), vx: -v * Math.sin(th), vy: v * Math.cos(th) }; };
+/** A place (AU, m/s) at minute m as a state round world w (m, m/s from its centre). */
+function stateRound(w, p, m) {
+  const c = bodyPos(w.body, m / DAY_MIN), u = bodyVel(w.body, m / DAY_MIN);
+  return { x: (p.pos.x - c.x) * AU_M, y: (p.pos.y - c.y) * AU_M, vx: p.vel.vx - u.vx, vy: p.vel.vy - u.vy };
+}
+/** How fast a state goes round (rad/s). */
+const rateOf = (s) => (s.x * s.vy - s.y * s.vx) / (s.x * s.x + s.y * s.y);
+
+const _last = new Map();
+/** The most a brisk way may cost, the cheapest costing `dv`. */
+const brisk = (dv) => Math.max(BRISK * dv, dv + BRISK_SPARE);
+
+/**
+ * The quickest way, within BRISK of the cheapest, from a place to where it
+ * must arrive. dep(W) → { t (minute), s (state) }: where it leaves from,
+ * having waited W min (`waits`: the waits it may take); arr(t) → the state
+ * it must arrive in at minute t, a thing going round at `om` rad/s (the
+ * turning ground's entry point, or its carrier). `lead`: seconds it coasts
+ * first, turning (a transfer from a craft flying another way). Returns {
+ * legs: the drive's legs (an 'xfer', or 'xfer', 'hold', 'xfer'; `names`
+ * their phases), W, tArr, dv }, or null.
+ */
+function reach(w, cls, dep, waits, arr, om, { tail = 0, lead = 0, names, grid = GRID.fine }) {
+  const GM = w.GM, acc = craftOf(cls).aCruise, air = w.atmo ? w.atmo.interfaceM : HOVER_M, rFloor = w.R + 0.9 * air;
+  // (the transfers are laid out from where the coast first leaves it: `from`; their times count the coast)
+  const from = (D) => lead ? kepler(GM, D.s, lead) : D.s;
+  const cands = [];
+  for (const W of waits) {
+    const D = dep(W), S = from(D), A0 = arr(D.t), rCeil = 1.3 * Math.max(radiusOf(D.s), radiusOf(A0));
+    for (const c of xferSweep(GM, S, (tof) => arr(D.t + (lead + tof) / 60), acc, { tMax: XFER_MAX_S, n: grid.n, rFloor, rCeil }))
+      cands.push({ W, D, tof: lead + c.tof, dv: c.dv, total: W + (lead + c.tof) / 60 });
+  }
+  // by way of a low orbit: down (or up) to it, round it, then on
+  const D = dep(0), S0 = from(D), rD = radiusOf(D.s), thD = angleOf(S0), A0 = arr(D.t), rA = radiusOf(A0);
+  for (const k of PHASING) {
+    const rP = k * w.R, nP = Math.sqrt(GM / rP ** 3);
+    if (rP < w.R + 3 * air || rP > 0.7 * Math.max(rD, rA) || nP <= om * 1.2) continue;
+    const last = lastLeg(w, cls, rP, turned(A0, -angleOf(A0)), om, grid, tail);
+    if (!last) continue;
+    for (let sg = grid.sigmaStep; sg < 360; sg += grid.sigmaStep) {
+      const thP = thD + sg * Math.PI / 180, P = circle(GM, rP, thP);
+      for (const c of xferSweep(GM, S0, () => P, acc, { tMax: XFER_MAX_S, n: grid.n, rFloor, rCeil: 1.3 * Math.max(rD, rP) })) {
+        const tP = D.t + (lead + c.tof) / 60;
+        // round the low orbit until what it goes to is `last.psi` ahead of it (it gains on it at nP − om)
+        const H = wrap(angleOf(arr(tP)) - thP - last.psi) / (nP - om);
+        cands.push({ W: 0, D, phased: { rP, nP, thP, tof1: lead + c.tof, H, last }, dv: c.dv + last.dv, total: (lead + c.tof + H + last.tof) / 60 });
+      }
+    }
+  }
+  if (!cands.length) return null;
+  // (measured against the cheapest way to go now: a long wait for a cheap window is no reason to refuse a brisk way)
+  const now = cands.filter(c => !c.W);
+  const cap = brisk(Math.min(...(now.length ? now : cands).map(c => c.dv)));
+  const order = [...cands.filter(c => c.dv <= cap).sort((a, b) => a.total - b.total), ...cands.filter(c => c.dv > cap).sort((a, b) => a.dv - b.dv)];
+  for (const c of order.slice(0, 40)) {
+    const t0 = c.D.t;
+    if (!c.phased) {
+      const x = xferPlan(GM, c.D.s, arr(t0 + c.tof / 60), c.tof, acc, tail, rFloor, lead);
+      if (x) return { W: c.W, tArr: t0 + c.tof / 60, dv: xferDv(x), legs: [{ phase: names[0], kind: 'xfer', t0, t1: t0 + c.tof / 60, x }] };
+      continue;
+    }
+    const p = c.phased, tP = t0 + p.tof1 / 60, tD = tP + p.H / 60, tArr = tD + p.last.tof / 60;
+    const x1 = xferPlan(GM, c.D.s, circle(GM, p.rP, p.thP), p.tof1, acc, 0, rFloor, lead);
+    const x2 = x1 && xferPlan(GM, circle(GM, p.rP, p.thP + p.nP * p.H), arr(tArr), p.last.tof, acc, tail, rFloor);
+    if (x2) return { W: 0, tArr, dv: xferDv(x1) + xferDv(x2), legs: [
+      { phase: names[1], kind: 'xfer', t0, t1: tP, x: x1 },
+      { phase: 'phasing', kind: 'hold', t0: tP, t1: tD, r: p.rP, th0: p.thP },
+      { phase: names[2], kind: 'xfer', t0: tD, t1: tArr, x: x2 },
+    ] };
+  }
+  return null;
+}
+
+/**
+ * The last leg from a low orbit (radius rP) to a thing going round at om
+ * whose state, seen with it at angle 0, is `shape`: { psi (how far ahead of
+ * the craft it must be as it leaves), tof, dv }, the quickest brisk one
+ * that flies with burns of their length (cached: it depends on the world,
+ * the orbit and the thing, not on when).
+ */
+function lastLeg(w, cls, rP, shape, om, grid, tail) {
+  const key = `${w.name}|${cls}|${rP}|${Math.round(radiusOf(shape) / 1e3)}|${Math.round(shape.vx)}|${Math.round(shape.vy)}|${om.toExponential(3)}|${grid.n}|${tail}`;
+  if (_last.has(key)) return _last.get(key);
+  const GM = w.GM, acc = craftOf(cls).aCruise, air = w.atmo ? w.atmo.interfaceM : HOVER_M;
+  const C = circle(GM, rP, 0), out = [];
+  for (let deg = 0; deg < 360; deg += 5) {
+    const psi = deg * Math.PI / 180;
+    for (const c of xferSweep(GM, C, (tof) => turned(shape, psi + om * tof), acc, { tMax: XFER_MAX_S, n: grid.n, rFloor: w.R + 0.9 * air, rCeil: 1.3 * Math.max(rP, radiusOf(shape)) }))
+      out.push({ psi, tof: c.tof, dv: c.dv });
+  }
+  let best = null;
+  if (out.length) {
+    const cap = brisk(Math.min(...out.map(c => c.dv)));
+    for (const c of out.filter(c => c.dv <= cap).sort((a, b) => a.tof - b.tof).slice(0, 40)) {
+      const x = xferPlan(GM, C, turned(shape, c.psi + om * c.tof), c.tof, acc, tail, w.R + 0.9 * air);
+      if (x) { best = { ...c, dv: xferDv(x) }; break; }
+    }
+  }
+  if (_last.size > 200) _last.clear();
+  _last.set(key, best);
+  return best;
+}
 
 /**
  * Plan a run: the shuttle `shuttle` ({ cls }) from carrier `carrier`
@@ -159,115 +297,129 @@ const wrapSpan = (d) => SPAN_MIN + (((d - SPAN_MIN) % (2 * Math.PI)) + 2 * Math.
  * down to airspace `airspaceId`'s spaceport and back, starting `t0`.
  * Returns { ok, why, legs, summary } (legs: plain data for its flight path).
  */
-export function planLegs(worldName, cls, airspaceId, t0, carrierPlace, { groundMin = GROUND_MIN } = {}) {
+export function planLegs(worldName, cls, airspaceId, t0, carrierPlace, { groundMin = GROUND_MIN, npc = false } = {}) {
   const w = worldOf(worldName), a = airspaceById(airspaceId);
   if (!w || !a || a.world !== w.name) return { ok: false, why: 'No such spaceport.' };
   const down = entryProfile(w.name, cls), up = ascentProfile(w.name, cls);
   if (!down || !up) return { ok: false, why: `A ${CLASSES[cls].name.toLowerCase()} can't make ${w.name}: its air is more than its shield takes, or its pull more than its drive.` };
-  const craft = craftOf(cls), acc = craft.aCruise;
-  const air = !!w.atmo;
-  const tA = t0 + LAUNCH_MIN;
-  const cA = carrierPlace(tA);
-  const C = polarOf(w, cA.pos, tA);
-  // (it leaves the bay going round with us: our speed round the world)
-  const vCarrier = roundSpeed(w, cA, tA);
-  // the drop: aimed at the entry point (upstream of the pad by the glide's own way over the ground), for when it gets there
-  const phiE = air ? a.port.ang - down.th : a.port.ang;
-  const rE = w.R + down.topM, vB = Math.hypot(down.vRound, down.vRadial);
-  let g = null, T = 3600, span = null;
-  for (let k = 0; k < 12; k++) {
-    const thE = worldAngle(w, phiE, tA + T / 60);
-    span = keepSpan(span, thE - C.th, wrapSpan);
-    // (level as it leaves us; into the air at the entry's own angle: radiusAt)
-    g = pathLeg(C.r, C.th, rE, span, { t0: 0, t1: down.vRadial / down.vRound, span }, vCarrier, vB, acc);
-    if (Math.abs(g.T - T) < 1) break;
-    T = g.T;
-  }
-  const tE = tA + g.T / 60, tLand = tE + down.t / 60, tLift = tLand + groundMin;
+  const grid = npc ? GRID.coarse : GRID.fine, waits = [];
+  // out of the bay (after a wait for its window, if that is the quick way)
+  for (let W = 0; W <= WINDOW_MAX; W += grid.waitStep) waits.push(W);
+  const D = downLegs(w, cls, a, (W) => { const t = t0 + W + LAUNCH_MIN; return { t, s: stateRound(w, carrierPlace(t), t) }; }, waits, carrierPlace, groundMin, grid);
+  if (!D) return { ok: false, why: `No way down from here to ${a.port.name} and back up to us that the drive can fly.` };
   const legs = [
-    { phase: 'launch', kind: 'dock', t0, t1: tA },
-    { phase: 'drop', kind: 'path', t0: tA, t1: tE, g },
-    { phase: 'down', kind: 'down', t0: tE, t1: tLand, phi0: phiE },
-    { phase: 'ground', kind: 'ground', t0: tLand, t1: tLift, phi: a.port.ang },
-    ...backLegs(w, cls, a, tLift, carrierPlace),
+    ...(D.W ? [{ phase: 'window', kind: 'dock', t0, t1: t0 + D.W }] : []),
+    { phase: 'launch', kind: 'dock', t0: t0 + D.W, t1: t0 + D.W + LAUNCH_MIN },
+    ...D.legs,
   ];
-  const back = legs.find(l => l.phase === 'return').g;
-  const fuel = legsFuel(w.name, cls, legs);
+  return { ok: true, legs, summary: summarize(w, cls, legs, down, up, groundMin, t0) };
+}
+
+/**
+ * The rest of a run from where it leaves for the ground (dep(W), as reach
+ * has it): the way down to where the entry begins, the entry, the pad, the
+ * way back. { W, legs }, or null.
+ */
+function downLegs(w, cls, a, dep, waits, carrierPlace, groundMin, grid, lead = 0) {
+  const down = entryProfile(w.name, cls), air = !!w.atmo, phiE = air ? a.port.ang - down.th : a.port.ang;
+  const D = reach(w, cls, dep, waits, (t) => airState(w, down, phiE, t), TWO_PI / w.rotS, { tail: air ? ENTRY_LEAD : 0, lead, names: ['drop', 'drop', 'deorbit'], grid });
+  if (!D) return null;
+  const tE = D.tArr, tLand = tE + down.t / 60;
+  const back = backLegs(w, cls, a, tLand, tLand + groundMin, carrierPlace, { grid });
+  return back && { W: D.W, legs: [...D.legs, { phase: 'down', kind: 'down', t0: tE, t1: tLand, phi0: phiE }, ...back] };
+}
+
+/** A plan's numbers, for the shuttle window and the callouts. */
+function summarize(w, cls, legs, down, up, groundMin, t0) {
+  const air = !!w.atmo, fuel = legsFuel(w.name, cls, legs);
+  const span = (from, to) => { const a = legs.find(l => from.includes(l.phase)), b = [...legs].reverse().find(l => to.includes(l.phase)); return a && b ? b.t1 - a.t0 : 0; };
+  const g = legs.find(l => l.phase === 'ground');
   return {
-    ok: true, legs,
-    summary: {
-      world: w.name, air, entryV: air ? down.entryV : 0, peakHeat: down.peakHeat, peakG: Math.max(down.peakG, up.peakG), downrangeKm: air ? down.th * w.R / 1000 : 0,
-      dropMin: g.T / 60, downMin: down.t / 60, groundMin, upMin: up.t / 60, returnMin: back.T / 60, totalMin: legs.at(-1).t1 - t0,
-      gMin: fuel.gMin, fuelKg: fuel.kg,
-    },
+    world: w.name, air, entryV: air ? down.entryV : 0, peakHeat: down.peakHeat, peakG: Math.max(down.peakG, up.peakG), downrangeKm: air ? down.th * w.R / 1000 : 0,
+    windowMin: span(['window'], ['window']), dropMin: span(['drop'], ['deorbit', 'drop']), phasedDown: legs.some(l => l.phase === 'deorbit'), downMin: down.t / 60,
+    groundMin, padWaitMin: g ? Math.max(0, g.t1 - g.t0 - groundMin) : 0, upMin: up.t / 60,
+    returnMin: span(['orbit', 'return'], ['return']), phasedUp: legs.some(l => l.phase === 'orbit'), totalMin: legs.at(-1).t1 - t0,
+    gMin: fuel.gMin, fuelKg: fuel.kg,
   };
 }
 
-const polarOf = (w, p, m) => { const c = bodyPos(w.body, m / DAY_MIN); const dx = (p.x - c.x) * AU_M, dy = (p.y - c.y) * AU_M; return { r: Math.hypot(dx, dy), th: Math.atan2(dy, dx) }; };
-/** A place's speed round a world (m/s, counterclockwise positive): its velocity less the world's, across the radius. */
-function roundSpeed(w, place, m) {
-  const c = bodyPos(w.body, m / DAY_MIN), u = bodyVel(w.body, m / DAY_MIN);
-  const dx = place.pos.x - c.x, dy = place.pos.y - c.y, r = Math.hypot(dx, dy) || 1;
-  return Math.max(0, (-(place.vel.vx - u.vx) * dy + (place.vel.vy - u.vy) * dx) / r);
-}
-
 /**
- * A leg from (r, th) round world `w`, at speed v0 at minute `t`, to where
- * the carrier will be when it gets there (iterated: the carrier moves on
- * its orbit meanwhile). `span`: how the angle between is taken (wrapSpan
- * for a leg that spirals out from the air; the short way for a hop).
+ * The way back from a pad, landed at `tLand` and free to lift at `tLift`:
+ * the pad (held longer if waiting there for the window is the quick way),
+ * the climb, the transfer up to the carrier, the bay. Null if the drive
+ * can't fly it.
  */
-function chaseLeg(w, r, th, v0, t, carrierPlace, acc, flat, wrap = wrapSpan, t0 = 0) {
-  let g = null, T = 3600, span = null;
-  for (let k = 0; k < 12; k++) {
-    const tArr = t + T / 60;
-    const cp = carrierPlace(tArr);
-    const P = polarOf(w, cp.pos, tArr);
-    span = keepSpan(span, P.th - th, wrap);
-    // (it comes alongside going round as we do: our speed round the world then)
-    g = pathLeg(r, th, P.r, span, flat === 'both' && t0 ? { t0, t1: 0, span } : flat, v0, roundSpeed(w, cp, tArr), acc);
-    if (Math.abs(g.T - T) < 1) break;
-    T = g.T;
-  }
-  return g;
-}
-const shortSpan = (d) => Math.atan2(Math.sin(d), Math.cos(d));
-/**
- * The span for an angle `d` between, wrapped the first time and kept
- * continuous with the last after (an aim that crosses the wrap would
- * otherwise flip between going round a little and going round a whole
- * turn, and the time never settle).
- */
-const keepSpan = (last, d, wrap) => last == null ? wrap(d) : last + shortSpan(d - last);
-
-/** The way back from a pad, lifting at `tLift`: the climb, the leg up to the carrier, the bay. */
-function backLegs(w, cls, a, tLift, carrierPlace) {
-  const up = ascentProfile(w.name, cls);
-  const tX = tLift + up.t / 60;
-  // (out of the air at the climb's own angle, alongside level)
-  const g2 = chaseLeg(w, w.R + up.topM, worldAngle(w, a.port.ang + up.th, tX), Math.hypot(up.vRound, up.vRadial), tX, carrierPlace, craftOf(cls).aCruise, 'both', wrapSpan, up.vRadial / up.vRound);
-  const tArr = tX + g2.T / 60;
+function backLegs(w, cls, a, tLand, tLift, carrierPlace, { grid = GRID.fine, wait = true } = {}) {
+  const up = ascentProfile(w.name, cls), phi = a.port.ang + up.th;
+  const waits = [0];
+  if (wait) for (let W = grid.waitStep; W <= WINDOW_MAX; W += grid.waitStep) waits.push(W);
+  const om = rateOf(stateRound(w, carrierPlace(tLift), tLift));
+  const dep = (W) => { const t = tLift + W + up.t / 60; return { t, s: airState(w, up, phi, t) }; }, arr = (t) => stateRound(w, carrierPlace(t), t);
+  // (coasting a moment at the top of the climb to turn to its burn; a drive whose cruise can't hold it up meanwhile burns on at once)
+  const R = reach(w, cls, dep, waits, arr, om, { lead: TURN_LEAD, names: ['return', 'orbit', 'return'], grid })
+    || reach(w, cls, dep, waits, arr, om, { names: ['return', 'orbit', 'return'], grid });
+  if (!R) return null;
+  const lift = tLift + R.W, tX = lift + up.t / 60;
   return [
-    { phase: 'up', kind: 'up', t0: tLift, t1: tX, phi0: a.port.ang },
-    { phase: 'return', kind: 'path', t0: tX, t1: tArr, g: g2 },
-    { phase: 'recover', kind: 'dock', t0: tArr, t1: tArr + RECOVER_MIN },
+    { phase: 'ground', kind: 'ground', t0: tLand, t1: lift, phi: a.port.ang },
+    { phase: 'up', kind: 'up', t0: lift, t1: tX, phi0: a.port.ang },
+    ...R.legs,
+    { phase: 'recover', kind: 'dock', t0: R.tArr, t1: R.tArr + RECOVER_MIN },
   ];
 }
 
+/** From a craft's state `s` round world `w` at minute `t`, back up to its carrier: the transfer legs and the bay, or null. */
+function toCarrier(w, cls, s, t, carrierPlace, grid = GRID.fine) {
+  const om = rateOf(stateRound(w, carrierPlace(t), t));
+  const dep = () => ({ t, s }), arr = (m) => stateRound(w, carrierPlace(m), m);
+  const R = reach(w, cls, dep, [0], arr, om, { lead: TURN_LEAD, names: ['return', 'orbit', 'return'], grid }) || reach(w, cls, dep, [0], arr, om, { names: ['return', 'orbit', 'return'], grid });
+  return R && [...R.legs, { phase: 'recover', kind: 'dock', t0: R.tArr, t1: R.tArr + RECOVER_MIN }];
+}
+
 /**
- * What a run's legs burn: the drive's legs at their acceleration for as
- * long as each is flown (one cut short by a call back, to the cut), the
- * powered part of the landing (the glide is the air's) and the climb.
- * { gMin, kg }.
+ * What a run's legs burn: each transfer's Δv (one cut short by a call back,
+ * as far as it was flown), the powered part of the landing (the glide is
+ * the air's) and the climb. { gMin, kg }.
  */
 function legsFuel(worldName, cls, legs) {
   let gMin = 0;
   for (const l of legs) {
-    if (l.kind === 'path') gMin += Math.min(l.g.T / 60, Math.max(0, l.t1 - l.t0)) * (l.g.a / G0);
+    if (l.kind === 'xfer') gMin += xferDv(l.x, Math.max(0, l.t1 - l.t0) * MIN_S) / G0 / 60;
     else if (l.kind === 'down') gMin += entryProfile(worldName, cls).driveGmin;
     else if (l.kind === 'up') gMin += ascentProfile(worldName, cls).driveGmin;
   }
   return { gMin, kg: gMin * FUEL_PER_G_MIN * craftOf(cls).m / 1e5 };
+}
+
+/**
+ * How long an NPC carrier's shuttles take to move `tonnes` to a world's
+ * ground from its parking orbit, by trips (min): the traffic's outcome when
+ * nobody is near to see it (traffic.js). One trip is planned as ours are,
+ * from a carrier on the parking orbit, at a few phases of it, averaged
+ * (worked out once a world and craft).
+ */
+const _trips = new Map();
+export function runMinutes(worldName, cls, tonnes, shuttles = 1) {
+  const key = `${worldName}|${cls}`;
+  let trip = _trips.get(key);
+  if (trip === undefined) {
+    const w = worldOf(worldName), a = w && airspacesOf(w)[0];
+    trip = null;
+    if (a && entryProfile(worldName, cls) && ascentProfile(worldName, cls)) {
+      const n = Math.sqrt(w.GM / w.parkM ** 3), times = [];
+      for (const ph of [0, 2.1, 4.2]) {
+        const at = (m) => { const c = bodyPos(w.body, m / DAY_MIN), u = bodyVel(w.body, m / DAY_MIN), s = circle(w.GM, w.parkM, ph + n * m * MIN_S);
+          return { pos: { x: c.x + s.x / AU_M, y: c.y + s.y / AU_M }, vel: { vx: u.vx + s.vx, vy: u.vy + s.vy } }; };
+        const p = planLegs(worldName, cls, a.id, 0, at, { npc: true });
+        if (p.ok) times.push(p.summary.totalMin);
+      }
+      if (times.length) trip = times.reduce((s, x) => s + x, 0) / times.length;
+    }
+    _trips.set(key, trip);
+  }
+  if (trip == null) return null;
+  const trips = Math.max(1, Math.ceil(tonnes / Math.max(1, CLASSES[cls].cargoT) / shuttles));
+  return trip * trips;
 }
 
 /**
@@ -383,7 +535,7 @@ export function launchRun(state, plan, emit = () => {}, { crew = null, trade = n
   const { sell, buy } = tradeLoad(state, sh.cls, load.mass, trade, plan.summary.world, freeBefore);
   const run = {
     id, shuttle: sh.id, cls: sh.cls, name: sh.name, world: plan.summary.world, airspace: a.id, port: { id: a.port.id, name: a.port.name },
-    carrier: 'player', phase: 'launch', legs: plan.legs, summary: plan.summary, crew: party, pilot: pilotId, leave: !!plan.leave, cargo: load.items, delivered: [], sell, buy, up: [],
+    carrier: 'player', phase: plan.legs[0].phase, legs: plan.legs, summary: plan.summary, crew: party, pilot: pilotId, leave: !!plan.leave, cargo: load.items, delivered: [], sell, buy, up: [],
     errands: doing, hires: signing, paid: {},
     clearance: clr.text, startedAt: state.clock.minute, entity: `shuttle-${id}`, log: [],
   };
@@ -402,7 +554,8 @@ export function launchRun(state, plan, emit = () => {}, { crew = null, trade = n
   world.refresh(e, state.clock.minute);
   log(run, state, `Launched for ${a.port.name}, ${run.world}: ${clr.text}`);
   emit('shuttle-launched', { run: id, name: sh.name, port: a.port.name, world: run.world });
-  emit('nav-callout', { level: 'info', key: 'shuttle', text: `${sh.name} away for ${a.port.name}, ${run.world}: entry in ${Math.round(plan.summary.dropMin)} min, down in ${Math.round(plan.summary.dropMin + plan.summary.downMin)}.` });
+  const S0 = plan.summary, entry = (S0.windowMin || 0) + LAUNCH_MIN + S0.dropMin;
+  emit('nav-callout', { level: 'info', key: 'shuttle', text: `${sh.name} ${S0.windowMin ? `waiting in its bay ${Math.round(S0.windowMin)} min for its window to ${a.port.name}, ${run.world}` : `away for ${a.port.name}, ${run.world}`}: ${S0.air ? 'entry' : 'over the pad'} in ${Math.round(entry)} min, down in ${Math.round(entry + S0.downMin)}.` });
   return { ok: true, text: clr.text, run };
 }
 
@@ -422,18 +575,31 @@ const legIndex = (run, minute) => { let i = 0; run.legs.forEach((l, k) => { if (
 function relay(state, run, i, legs) {
   run.legs = [...run.legs.slice(0, i), ...legs];
   const f = legsFuel(run.world, run.cls, run.legs);
-  run.summary = { ...run.summary, gMin: f.gMin, fuelKg: f.kg, totalMin: run.legs.at(-1).t1 - run.startedAt, returnMin: (run.legs.find(l => l.phase === 'return')?.g.T || 0) / 60 };
+  const back = run.legs.filter(l => l.phase === 'return' || l.phase === 'orbit' || (l.phase === 'phasing' && run.legs.indexOf(l) > run.legs.findIndex(x => x.phase === 'up')));
+  run.summary = { ...run.summary, gMin: f.gMin, fuelKg: f.kg, totalMin: run.legs.at(-1).t1 - run.startedAt, returnMin: back.length ? back.at(-1).t1 - back[0].t0 : 0 };
   const e = getWorld(state).get(run.entity);
   if (e?.flightPath) { e.flightPath.legs = run.legs; getWorld(state).refresh(e, state.clock.minute); }
 }
 
 /**
+ * Where a craft is on a drive's leg (a transfer, or round an orbit) at
+ * `minute`: its state round the world (m, m/s from its centre).
+ */
+function craftState(w, leg, minute) {
+  const s = Math.max(0, (minute - leg.t0) * MIN_S);
+  if (leg.kind === 'xfer') { const p = xferAt(w.GM, leg.x, s); return { x: p.x, y: p.y, vx: p.vx, vy: p.vy }; }
+  if (leg.kind === 'hold') return circle(w.GM, leg.r, leg.th0 + Math.sqrt(w.GM / leg.r ** 3) * s);
+  return null;
+}
+
+/**
  * Call a run back. Still in its bay: it stays there, its crew and cargo
- * back aboard. On its drop with room to stop short of the air: it brakes
- * along its way, then comes back up to us. Past that point it is committed
- * to its entry, so, as in its entry or on the pad, it lands, lifts again as
- * soon as it can (ABORT_GROUND_MIN) and comes back. Climbing or coming
- * back, it is on its way already. Returns { ok, text }.
+ * back aboard. On its way down with room to turn back: from where it is,
+ * a transfer back up to us (or by way of a low orbit). Once its last burn
+ * has begun it is committed to its entry, so, as in its entry or on the
+ * pad, it lands, lifts again as soon as it can (ABORT_GROUND_MIN) and comes
+ * back. Climbing or coming back, it is on its way already. Returns { ok,
+ * text }.
  */
 export function abortRun(state, runId, emit = () => {}) {
   const run = runOf(state, runId);
@@ -442,7 +608,7 @@ export function abortRun(state, runId, emit = () => {}) {
   const at = (m) => carrierAt(state, m);
   let i = legIndex(run, now);
   const leg = run.legs[i];
-  if (leg.phase === 'launch') {
+  if (leg.phase === 'launch' || leg.phase === 'window') {
     // nothing burned yet: the run is called off in the bay
     run.legs = run.legs.slice(0, i + 1).map(l => ({ ...l, t1: now }));
     run.summary = { ...run.summary, fuelKg: 0 };
@@ -451,35 +617,30 @@ export function abortRun(state, runId, emit = () => {}) {
     recover(state, run, emit);
     return { ok: true, text: `${run.name} stays in its bay.` };
   }
-  if (leg.phase === 'drop') {
-    const g = leg.g, s = (now - leg.t0) * MIN_S, d = distanceAt(g, s), v = speedAt(g, s);
-    const stop = d + v * v / (2 * g.a);
-    if (stop < g.L * 0.97) {
-      const tB = now + v / g.a / 60, p = placeAlong(g, stop);
-      const back = chaseLeg(w, p.r, p.th, 0, tB, at, g.a, 'both', shortSpan);
-      const tArr = tB + back.T / 60;
-      relay(state, run, i, [
-        { ...leg, t1: now },
-        { phase: 'abort', kind: 'path', t0: now, t1: tB, g: { ...g, vA: v, vm: v, vB: 0, d0: d, T: v / g.a } },
-        { phase: 'return', kind: 'path', t0: tB, t1: tArr, g: back },
-        { phase: 'recover', kind: 'dock', t0: tArr, t1: tArr + RECOVER_MIN },
-      ]);
+  const downward = ['drop', 'phasing', 'deorbit'].includes(leg.phase);
+  if (downward) {
+    // (committed once the burn into the air has begun)
+    const entering = run.legs[i + 1]?.kind === 'down' && leg.kind === 'xfer' && (now - leg.t0) * MIN_S >= xferBurns(w.GM, leg.x).t2;
+    const back = !entering && toCarrier(w, run.cls, craftState(w, leg, now), now, at);
+    if (back) {
+      relay(state, run, i, [{ ...leg, t1: now }, ...back]);
       run.aborted = true;
-      log(run, state, 'Called back: braking short of the air');
-      emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} called back: braking, ${Math.round((v / g.a) / 60)} min, then up to us. Alongside in ${Math.round(tArr - now)} min.` });
+      log(run, state, 'Called back: turning back short of the air');
+      emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} called back: on its drive back up to us from where it is. Alongside in ${Math.round(run.legs.at(-1).t0 - now)} min.` });
       return { ok: true, text: `${run.name} turning back.` };
     }
-    i = run.legs.findIndex(l => l.phase === 'down');
   }
-  if (['drop', 'down', 'ground'].includes(leg.phase)) {
+  if (downward || ['down', 'ground'].includes(leg.phase)) {
     const gi = run.legs.findIndex(l => l.phase === 'ground');
     const ground = run.legs[gi];
     const lift = Math.max(now + 1, ground.t0 + ABORT_GROUND_MIN);
     if (lift >= ground.t1) return { ok: false, text: `${run.name} lifts off in ${Math.max(1, Math.round(ground.t1 - now))} min anyway.` };
-    relay(state, run, gi, [{ ...ground, t1: lift }, ...backLegs(w, run.cls, a, lift, at)]);
+    const back = backLegs(w, run.cls, a, ground.t0, lift, at, { wait: false });
+    if (!back) return { ok: false, text: `${run.name} can't find a way back up to us from the pad yet: it keeps to its plan.` };
+    relay(state, run, gi, back);
     run.aborted = true;
     if (run.ashore) run.leaveCut = true;                   // (called in from leave: no better for it)
-    const why = leg.phase === 'ground' ? 'lifting off now' : leg.phase === 'down' ? 'it lands first, then lifts at once' : 'too near the air to stop: it lands, then lifts at once';
+    const why = leg.phase === 'ground' ? 'lifting off now' : leg.phase === 'down' ? 'it lands first, then lifts at once' : 'committed to its entry: it lands, then lifts at once';
     log(run, state, `Called back: ${why}`);
     emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} called back: ${why}. Alongside in ${Math.round(run.legs.at(-1).t0 - now)} min.` });
     return { ok: true, text: `${run.name} called back: ${why}.` };
@@ -489,34 +650,28 @@ export function abortRun(state, runId, emit = () => {}) {
 
 /**
  * At the end of its way back: are we where the plan put us? If we moved
- * (a burn, a new orbit), it chases us, a short leg to where we will be; if
- * we are out of its world's space, it holds a free orbit where it is and
- * looks again in HOLD_MIN.
+ * (a burn, a new orbit), it comes after us from where it is (a transfer to
+ * where we will be); if we are out of its world's space, it holds a free
+ * orbit where it is and looks again in HOLD_MIN.
  */
 function rejoin(state, run, i, emit) {
   const now = state.clock.minute, w = worldOf(run.world), f = state.flight;
   const prev = run.legs[i - 1];
-  // (in the world's frame: it moves tens of km a second round the Sun; and where we were when it got there)
-  const t = prev.kind === 'hold' ? now : prev.t1;
-  const P = polarOf(w, placeOnLeg({ world: run.world, cls: run.cls }, prev, t).pos, t);
-  const c = bodyPos(w.body, now / DAY_MIN), u = bodyVel(w.body, now / DAY_MIN), back = (now - t) * MIN_S;
-  const ux = (f.pos.x - c.x) * AU_M - (f.vel.vx - u.vx) * back, uy = (f.pos.y - c.y) * AU_M - (f.vel.vy - u.vy) * back;
-  const gap = Math.hypot(P.r * Math.cos(P.th) - ux, P.r * Math.sin(P.th) - uy);
+  // (in the world's frame: it moves tens of km a second round the Sun)
+  const S = craftState(w, prev, now) || stateRound(w, flightPathAt(getWorld(state), { world: run.world, cls: run.cls, carrier: run.carrier, legs: run.legs.slice(0, i) }, now), now);
+  const us = stateRound(w, { pos: f.pos, vel: f.vel }, now);
+  const gap = Math.hypot(S.x - us.x, S.y - us.y);
   if (gap < RENDEZVOUS_M) return false;
   const at = (m) => carrierAt(state, m);
   const inside = worldAt(state.flight.pos.x, state.flight.pos.y, now)?.w.name === w.name;
-  // (from where it is, going round as it was: an orbit's speed waiting, or the speed it came home at)
-  const v0 = prev.kind === 'hold' ? Math.sqrt(w.GM / P.r) : prev.g?.vB || 0;
-  const from = prev.kind === 'hold' ? i - 1 : i;
-  if (inside) {
-    const g = chaseLeg(w, P.r, P.th, v0, now, at, craftOf(run.cls).aCruise, 'both', shortSpan);
-    relay(state, run, from, [
-      { phase: 'return', kind: 'path', t0: now, t1: now + g.T / 60, g },
-      { phase: 'recover', kind: 'dock', t0: now + g.T / 60, t1: now + g.T / 60 + RECOVER_MIN },
-    ]);
+  const from = prev.kind === 'hold' && prev.phase === 'hold' ? i - 1 : i;
+  const chase = inside && toCarrier(w, run.cls, S, now, at);
+  if (chase) {
+    relay(state, run, from, chase);
     log(run, state, `Chasing us: ${Math.round(gap / 1000).toLocaleString()} km`);
-    emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} home, but we are ${Math.round(gap / 1000).toLocaleString()} km from where we said: it comes after us, alongside in ${Math.round(g.T / 60)} min.` });
+    emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} home, but we are ${Math.round(gap / 1000).toLocaleString()} km from where we said: it comes after us, alongside in ${Math.round(run.legs.at(-1).t0 - now)} min.` });
   } else {
+    const P = { r: radiusOf(S), th: angleOf(S) };
     // (still out of reach: the same wait, carried on, not another leg on the end)
     relay(state, run, from, [
       { phase: 'hold', kind: 'hold', t0: now, t1: now + HOLD_MIN, r: P.r, th0: P.th },
@@ -528,6 +683,52 @@ function rejoin(state, run, i, emit) {
     }
   }
   return true;
+}
+
+/**
+ * A save from before 1.12.8: a run on the old spiral legs is planned again
+ * from where its old leg has the craft now (in its bay: the whole run from
+ * now; on its way down: on down from there; past the pad: the way back from
+ * where it is), and an NPC shuttle on them is taken off. Called on load
+ * (game.js upgradeState).
+ */
+export function upgradeRuns(state) {
+  const S = state.shuttles;
+  if (!S) return;
+  const world = getWorld(state), now = state.clock.minute, at = (m) => carrierAt(state, m);
+  for (const run of activeRuns(state)) {
+    if (!run.legs.some(l => l.kind === 'path' && l.t1 > now)) continue;
+    const w = worldOf(run.world), a = airspaceById(run.airspace), i = legIndex(run, now), leg = run.legs[i];
+    const here = () => stateRound(w, flightPathAt(world, { world: run.world, cls: run.cls, carrier: run.carrier, legs: run.legs }, now), now);
+    const ground = run.groundMin ?? run.summary.groundMin ?? GROUND_MIN;
+    let legs = null, from = i;
+    if (leg.kind === 'dock' && leg.phase === 'launch') {
+      const p = planLegs(run.world, run.cls, run.airspace, now, at, { groundMin: ground });
+      legs = p.ok ? p.legs : null;
+    } else if (leg.kind === 'path' && leg.phase === 'drop') {
+      // (on down from where it is; if it can't, it comes back up to us)
+      const D = downLegs(w, run.cls, a, () => ({ t: now, s: here() }), [0], at, ground, GRID.fine, TURN_LEAD);
+      const rest = D ? D.legs : toCarrier(w, run.cls, here(), now, at);
+      legs = rest && [{ ...leg, t1: now }, ...rest];
+    } else if (leg.kind === 'path') {
+      const back = toCarrier(w, run.cls, here(), now, at);
+      legs = back && [{ ...leg, t1: now }, ...back];
+    } else if (leg.kind === 'up') {
+      const up = ascentProfile(run.world, run.cls), tX = leg.t1, back = toCarrier(w, run.cls, airState(w, up, a.port.ang + up.th, tX), tX, at);
+      if (back) { legs = back; from = i + 1; }
+    } else {
+      const gi = run.legs.findIndex(l => l.phase === 'ground'), g = run.legs[gi];
+      const back = g && backLegs(w, run.cls, a, g.t0, Math.max(g.t1, now + 1), at, { wait: false });
+      if (back) { legs = back; from = gi; }
+    }
+    if (legs) { relay(state, run, from, legs); run.entered = Math.min(run.entered ?? i, legIndex(run, now)); }
+  }
+  for (const id of [...(S.npc || [])]) {
+    const e = world.get(id);
+    if (e && !e.flightPath?.legs.some(l => l.kind === 'path')) continue;
+    if (e) { const c = world.get(e.tags.carrier); if (c?.tags?.shuttleOut === id) c.tags.shuttleOut = null; world.remove(e); }
+    S.npc.splice(S.npc.indexOf(id), 1);
+  }
 }
 
 /** Per minute: our runs along their legs, and what each phase change brings. */
@@ -551,15 +752,23 @@ export function shuttlesTick(state, emit = () => {}) {
 function enterLeg(state, run, leg, emit) {
     const s = run.summary, w0 = worldOf(run.world);
     switch (leg.phase) {
-      case 'drop': emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} clear of the bay, on its drive for ${worldOfs(run.world)} air.` }); break;
+      case 'drop': emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} clear of the bay, on its way down: ${s.phasedDown ? 'by a low orbit, ' : ''}entry in ${Math.round(leg.t0 + s.dropMin - state.clock.minute)} min.` }); break;
+      case 'phasing': emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} in a low orbit round ${run.world}, its drive cold, ${Math.round(leg.t1 - leg.t0)} min until its way on comes round.` }); break;
       case 'down':
         emit('nav-callout', { level: 'info', key: 'shuttle', text: s.air ? `${run.name} at ${worldOfs(run.world)} entry interface: ${(s.entryV / 1000).toFixed(1)} km/s, the heat peaking at ${(s.peakHeat / 1e6).toFixed(2)} MW/m².` : `${run.name} over ${run.port.name}: down on its drive.` });
         log(run, state, s.air ? `Entry at ${(s.entryV / 1000).toFixed(1)} km/s` : 'Powered descent');
         break;
       case 'ground': landed(state, run, emit); break;
       case 'up': emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} lifting off from ${run.port.name}.` }); log(run, state, 'Lift-off'); break;
-      case 'return': if (!run.aborted && !run.log.at(-1)?.text.startsWith('Chasing')) emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} ${w0?.atmo ? `out of ${worldOfs(run.world)} air` : `off ${run.world}`}, coming back up to us: alongside in ${Math.round(s.returnMin)} min.` }); break;
-      case 'abort': case 'hold': break;
+      case 'orbit': case 'return': {
+        if (run.aborted || run.log.at(-1)?.text.startsWith('Chasing')) break;
+        const prev = run.legs[run.legs.indexOf(leg) - 1], home = Math.round(run.legs.at(-1).t0 - state.clock.minute);
+        const out = w0?.atmo ? `out of ${worldOfs(run.world)} air` : `off ${run.world}`;
+        if (prev?.phase === 'up') emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} ${out}, coming back up to us${leg.phase === 'orbit' ? ' by a low orbit' : ''}: alongside in ${home} min.` });
+        else if (prev?.phase === 'phasing') emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} leaving its low orbit, up to us: alongside in ${home} min.` });
+        break;
+      }
+      case 'deorbit': case 'abort': case 'hold': case 'window': break;
       case 'recover': emit('nav-callout', { level: 'info', key: 'shuttle', text: `${run.name} alongside, into its bay.` }); break;
     }
 }
@@ -745,7 +954,7 @@ export function npcShuttlesTick(state) {
     const bay = bayOf(carrier.cls);
     if (!bay.length) continue;
     const cls = pick(bay).cls, a = pick(airspacesOf(w));
-    const p = planLegs(w.name, cls, a.id, now, (m) => carrierPlace(world, carrier.id, m));
+    const p = planLegs(w.name, cls, a.id, now, (m) => carrierPlace(world, carrier.id, m), { npc: true });
     // (none that would keep it past the end of its call)
     if (!p.ok || p.legs.at(-1).t1 > carrier.tags.until) continue;
     const id = `npcsh-${carrier.id}-${now}`;

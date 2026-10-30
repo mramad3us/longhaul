@@ -25,8 +25,9 @@
 // Our shuttles out over the world (sim/shuttles.js) draw their way ahead
 // over it (drawShuttleTracks): the rest of the run sampled off its flight
 // path, in the world's frame (it moves tens of km a second round the Sun,
-// and the track goes with it), the drive's legs dashed, the air's stretch
-// solid, the pad a ring.
+// and the track goes with it), its burns dashed, its coasts dotted (the
+// drive cold, on a conic, or round a low orbit), the air's stretch solid,
+// the pad a ring.
 // ============================================================
 
 import { AU_M } from '../core/constants.js';
@@ -166,12 +167,12 @@ export function drawShuttleTracks(ctx, state, w, x, y, pxM) {
       const p = flightPathAt(world, path, Math.min(m, end));
       const c = bodyPos(w.body, Math.min(m, end) / DAY_MIN);
       const sx = x + (p.pos.x - c.x) * AU_M * pxM, sy = y - (p.pos.y - c.y) * AU_M * pxM;
-      const k = p.leg === 'down' || p.leg === 'up' ? 'air' : p.leg === 'ground' ? 'ground' : 'drive';
+      const k = p.leg === 'down' || p.leg === 'up' ? 'air' : p.leg === 'ground' ? 'ground' : p.g > 0.01 ? 'drive' : 'coast';
       if (k !== kind) {
         if (kind) { ctx.lineTo(sx, sy); ctx.stroke(); }
         ctx.beginPath();
-        ctx.setLineDash(k === 'drive' ? [5, 4] : []);
-        ctx.strokeStyle = `rgba(${TRACK},${k === 'air' ? 0.95 : 0.55})`; ctx.lineWidth = k === 'air' ? 1.8 : 1.2;
+        ctx.setLineDash(k === 'drive' ? [5, 4] : k === 'coast' ? [1.5, 4] : []);
+        ctx.strokeStyle = `rgba(${TRACK},${k === 'air' ? 0.95 : k === 'coast' ? 0.45 : 0.6})`; ctx.lineWidth = k === 'air' ? 1.8 : 1.2;
         ctx.moveTo(sx, sy);
         kind = k;
         if (k === 'ground') { ctx.save(); ctx.setLineDash([]); ctx.strokeStyle = `rgba(${TRACK},0.95)`; ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); ctx.beginPath(); ctx.moveTo(sx, sy); }
