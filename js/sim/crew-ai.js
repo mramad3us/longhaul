@@ -280,6 +280,11 @@ function generateJobs(state) {
       if (!p.lost) layOut(state, p);
       continue;
     }
+    if (p.away) {                               // (off the ship: not ours to carry)
+      const j = state.jobs.list.find(x => x.type === JobType.RESCUE && x.data.patient === p.id);
+      if (j?.status === 'open') closeJob(state, j);
+      continue;
+    }
     const helpless = !isConscious(p) || hasCondition(p, 'critical');
     const inCare = p.seat?.startsWith('medbay:') || p.task?.type === 'carried' || p.task?.type === 'heal';
     const has = state.jobs.list.find(j => j.type === JobType.RESCUE && j.data.patient === p.id);

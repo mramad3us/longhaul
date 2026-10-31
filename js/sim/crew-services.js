@@ -32,6 +32,7 @@ import { closeJob } from './jobs.js';
 import { leaseShortfall, extendLease } from './leases.js';
 import { startCareer, careerDraw, backFromLeave, farewell, note, rankTitle, fullName, wageOf, ageOf } from './careers.js';
 import { getWorld } from './world.js';
+import { backFromHospital } from './hospital.js';
 
 export const LEAVE_MIN = 8 * 60;
 export const LEAVE_COST = 60;               // MCR a head, ashore
@@ -216,11 +217,18 @@ export function leaveTick(state, emit = () => {}) {
     if (!m.away?.ashore || now < m.away.until) continue;
     const lock = airlockFor(state.ship, state.dock?.port);
     const node = lock?.access != null ? shipGeometry(state.ship).nodes[lock.access] : shipGeometry(state.ship).nodes[0];
-    const at = m.away.ashore;
+    const at = m.away.ashore, stay = m.away.hospital ? m.away : null;
     m.away = null;
     m.pos = { sx: node.sx, sy: node.sy }; m.$px = node.sx; m.$py = node.sy;
-    restedAshore(m, now, { station: STATIONS[at]?.body || getWorld(state).get(at)?.orbit?.body || null });
     m.homeDeck = homeDeckFor(state.ship, m.role);
+    if (stay) {
+      // (out of a hospital bed, not off a run ashore)
+      m.needs.rest = Math.max(m.needs.rest, 90); m.needs.food = Math.max(m.needs.food, 90); m.needs.hygiene = 100;
+      const mended = backFromHospital(m, stay.hospital, now, now >= stay.full);
+      emit('crew-back', { count: 1, text: `${m.name} back aboard ${mended ? 'from hospital, mended' : 'from hospital, the treatment cut short'}.` });
+      continue;
+    }
+    restedAshore(m, now, { station: STATIONS[at]?.body || getWorld(state).get(at)?.orbit?.body || null });
     back++;
   }
   if (back) emit('crew-back', { count: back, text: `${back} back aboard from shore leave.` });
@@ -228,7 +236,7 @@ export function leaveTick(state, emit = () => {}) {
 
 /** Recall everyone ashore now (their leave is cut short). */
 export function recallLeave(state) {
-  for (const m of state.ship.crew) if (m.away?.ashore) m.away.until = state.clock.minute;
+  for (const m of state.ship.crew) if (m.away?.ashore && !m.away.hospital) m.away.until = state.clock.minute;
 }
 
 export const crewAshore = (state) => state.ship.crew.filter(m => m.away?.ashore).length;

@@ -14,7 +14,7 @@ import { logEntry } from './log.js';
 import { G0, MIN_S } from '../core/constants.js';
 import { TileType, TILE_NAMES, TILE_DESCRIPTIONS } from '../sim/tiles.js';
 import { tileEntry } from './library.js';
-import { overallHealth, isConscious, CONDITION_LABELS } from '../sim/crew.js';
+import { overallHealth, isConscious, lastingWound, CONDITION_LABELS } from '../sim/crew.js';
 import { orderHeal, orderStandDown } from '../sim/crew-ai.js';
 import { shipGeometry, FIXTURE_KIND, seatKind } from '../sim/ship-layout.js';
 import { atmoStatus, setVented, setBreach, suitsOnDeck } from '../sim/life-support.js';
@@ -93,12 +93,15 @@ function crewHTML(s, m) {
   const beat = h.bpm > 0 ? Math.max(0.5, 91.7 / h.bpm) : 0;
   const conds = [...m.conditions];
   if (m.juiced) conds.unshift('juiced');
+  if (lastingWound(m)) conds.push(m.stabilized ? 'stabilized' : 'worsening');
   const condHtml = conds.length ? conds.map(c => {
+    if (c === 'stabilized') return '<span class="crew-condition crew-condition-dim">STABILIZED · NEEDS A HOSPITAL</span>';
+    if (c === 'worsening') return '<span class="crew-condition crew-condition-danger">WORSENING · GET THEM TO THE AUTODOC</span>';
     if (c === 'juiced') return `<span class="crew-condition crew-condition-juice">${m.juiceDose === 'high' ? 'HIGH-DOSE JUICE' : 'JUICED'}</span>`;
     if (c === 'juice-hangover') return `<span class="crew-condition crew-condition-hangover">${m.juiceCrash ? 'JUICE CRASH' : 'HANGOVER'} ${Math.ceil(m.juiceHangover / 60)}h</span>`;
-    const sev = ['dead', 'crushed', 'unconscious', 'decompression', 'internal-bleeding'].includes(c) ? 'danger'
+    const sev = ['dead', 'crushed', 'unconscious', 'decompression', 'internal-bleeding', 'severe-burns', 'deep-trauma'].includes(c) ? 'danger'
       : c === 'critical' ? 'critical'
-      : ['brain-damage', 'cardiac-stress', 'injured', 'hypoxic', 'hypercapnia', 'fracture', 'dehydrated', 'starving'].includes(c) ? 'warning' : 'dim';
+      : ['brain-damage', 'cardiac-stress', 'injured', 'hypoxic', 'hypercapnia', 'fracture', 'dehydrated', 'starving', 'burned'].includes(c) ? 'warning' : 'dim';
     return `<span class="crew-condition crew-condition-${sev}">${CONDITION_LABELS[c] || c.toUpperCase()}</span>`;
   }).join('') : '<span class="crew-condition crew-condition-ok">NOMINAL</span>';
   const skills = ['piloting', 'security', 'engineering', 'medical'].map(k =>

@@ -36,7 +36,8 @@
 // ============================================================
 
 import { DAY_MIN } from '../core/constants.js';
-import { overallHealth, hasCondition, removeCondition, refreshDerivedConditions } from './crew.js';
+import { overallHealth, hasCondition, hospitalCure } from './crew.js';
+import { treatment, harmOf } from './hospital.js';
 import { note, fullName, homeOfWorld, ageOf } from './careers.js';
 import { drawHall, signOffAway } from './crew-services.js';
 
@@ -60,19 +61,16 @@ export const NEURAL_COST = 2500;            // MCR: brain damage mended, at a bi
 
 export const groundOf = (world) => GROUND[world] || null;
 
-/** How much harm a hospital would mend (points: the body's and the heart's shortfall). */
-const harmOf = (m) => Math.max(0, 100 - overallHealth(m)) + Math.max(0, 100 - m.heart.health) * 0.5;
-
 /** What the hospital here would do for someone, and its bill: null if nothing it can mend. */
 export function treatmentFor(m, world) {
   const g = groundOf(world);
   if (!g || m.dead) return null;
+  const level = g.hospital === 'full' ? 'full' : 'clinic';
+  const t = treatment(m, level), hangover = m.juiceHangover > 0, harm = harmOf(m);
   const brain = hasCondition(m, 'brain-damage');
-  const harm = harmOf(m), hangover = m.juiceHangover > 0;
-  if (harm < 2 && !hangover && !(brain && g.hospital === 'full')) return null;
-  const cost = Math.round((HOSPITAL_BASE + harm * HOSPITAL_PER_POINT + (brain && g.hospital === 'full' ? NEURAL_COST : 0)) / 10) * 10;
-  const what = [brain && g.hospital === 'full' && 'brain damage', harm >= 2 && 'injuries', hangover && 'the juice'].filter(Boolean);
-  return { cost, brain: brain && g.hospital === 'full', untreatable: brain && g.hospital !== 'full', text: `${g.hospital === 'full' ? 'hospital' : 'clinic'}: ${what.join(', ')}` };
+  if (t?.cost == null && harm < 2 && !hangover) return t?.refused ? { cost: 0, untreatable: true, text: 'brain damage wants a big world\'s hospital' } : null;
+  const what = [...(t?.what || (harm >= 2 ? ['injuries'] : [])), hangover && 'the juice'].filter(Boolean);
+  return { cost: Math.round((t?.cost ?? HOSPITAL_BASE + harm * HOSPITAL_PER_POINT) / 10) * 10, brain: brain && level === 'full', untreatable: brain && level !== 'full', text: `${level === 'full' ? 'hospital' : 'clinic'}: ${what.join(', ')}` };
 }
 
 /** When someone may next take a course (minute), and the gain one would bring in a skill. */
@@ -124,15 +122,8 @@ export function finishErrand(state, m, errand, world) {
   if (errand === 'hospital') {
     const t = treatmentFor(m, world);
     if (!t) return;
-    const b = m.body;
-    for (const k of Object.keys(b)) b[k] = 100;
-    m.heart.health = 100; m.heart.stress = 0;
-    for (const c of ['fracture', 'internal-bleeding', 'cardiac-stress', 'juice-hangover']) removeCondition(m, c);
-    m.juiceHangover = 0; m.juiceCrash = false;
-    if (t.brain) { removeCondition(m, 'brain-damage'); note(m, now, `Brain damage mended at a ${world} hospital`); }
-    else note(m, now, `Treated at ${world}'s ${g.hospital === 'full' ? 'hospital' : 'clinic'}`);
-    m.consciousness = Math.max(m.consciousness, 90);
-    refreshDerivedConditions(m);
+    hospitalCure(m, g.hospital === 'full' ? 'full' : 'clinic');
+    note(m, now, t.brain ? `Brain damage mended at a ${world} hospital` : `Treated at ${world}'s ${g.hospital === 'full' ? 'hospital' : 'clinic'}`);
   }
 }
 

@@ -104,6 +104,27 @@ export function leaseShortfall(state, minutes) {
   return { hours, cost: Math.round(hours * leaseRate(state)) };
 }
 
+/** What holding the berth for `minutes` more would cost past what the lease and any yard job cover. */
+export function berthCostFor(state, minutes) {
+  const L = leaseFor(state);
+  if (!L) return 0;
+  const end = state.clock.minute + minutes, covered = Math.max(L.until, state.refit?.until ?? 0);
+  return end <= covered ? 0 : Math.round(Math.ceil((end - covered) / 60) * leaseRate(state));
+}
+
+/** Hold the berth for someone in hospital: paid for, past the week a lease is let for (a port won't put a patient's ship out). */
+export function holdBerthFor(state, minutes) {
+  const b = berthed(state);
+  if (!b) return 0;
+  ensureLease(state);
+  const cost = berthCostFor(state, minutes);
+  state.resources.credits.current -= cost;
+  b.d.lease.until = Math.max(b.d.lease.until, state.clock.minute + minutes);
+  b.d.lease.paid += cost;
+  b.d.lease.warned = 0;
+  return cost;
+}
+
 function ensureLease(state) {
   const b = berthed(state);
   if (b && !b.d.lease) {

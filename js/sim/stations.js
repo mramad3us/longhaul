@@ -224,42 +224,42 @@ const LAYOUTS = {
  */
 export const STATIONS = {
   'ceres-station': {
-    site: 'surface', body: 'Ceres', phase: 0.6, kind: 'Surface port', gateKm: 100, anchorKm: 400,
+    site: 'surface', body: 'Ceres', phase: 0.6, kind: 'Surface port', care: 'full', gateKm: 100, anchorKm: 400,
     population: 1_800_000, services: ['fuel', 'market', 'repair', 'yard', 'arms', 'hiring', 'leave'],
     defense: { tl: 2, pdc: 16, tubes: 4, magazine: { he: 24, nuke: 0 }, railgun: 0, armor: 4, hp: 24_000 },
   },
   'pallas-station': {
-    site: 'surface', body: 'Pallas', phase: 0.4, kind: 'Refinery port', gateKm: 60, anchorKm: 250,
+    site: 'surface', body: 'Pallas', phase: 0.4, kind: 'Refinery port', care: 'clinic', gateKm: 60, anchorKm: 250,
     population: 240_000, services: ['fuel', 'market', 'repair', 'arms', 'hiring', 'leave'],
     defense: { tl: 1, pdc: 8, tubes: 2, magazine: { he: 10, nuke: 0 }, railgun: 0, armor: 3, hp: 12_000 },
   },
   'vesta-depot': {
-    site: 'surface', body: 'Vesta', phase: 2.6, kind: 'Mining depot', gateKm: 50, anchorKm: 250,
+    site: 'surface', body: 'Vesta', phase: 2.6, kind: 'Mining depot', care: 'clinic', gateKm: 50, anchorKm: 250,
     population: 30_000, services: ['fuel', 'market', 'repair', 'arms', 'hiring', 'leave'],
     defense: { tl: 2, pdc: 6, tubes: 0, magazine: null, railgun: 0, armor: 2, hp: 6_000 },
   },
   'hygiea-ring': {
-    site: 'orbit', body: 'Hygiea', rKm: 2_000, phase: 5.7, kind: 'Ring station', gateKm: 50, anchorKm: 300,
+    site: 'orbit', body: 'Hygiea', rKm: 2_000, phase: 5.7, kind: 'Ring station', care: 'clinic', gateKm: 50, anchorKm: 300,
     population: 45_000, services: ['fuel', 'market', 'repair', 'arms', 'hiring', 'leave'],
     defense: { tl: 1, pdc: 6, tubes: 2, magazine: { he: 8, nuke: 0 }, railgun: 0, armor: 2, hp: 8_000 },
   },
   'tycho-station': {
-    site: 'orbit', body: 'Juno', rKm: 1_500, phase: 1.1, kind: 'Construction platform', gateKm: 80, anchorKm: 300,
+    site: 'orbit', body: 'Juno', rKm: 1_500, phase: 1.1, kind: 'Construction platform', care: 'full', gateKm: 80, anchorKm: 300,
     population: 130_000, services: ['fuel', 'market', 'repair', 'yard', 'arms', 'hiring', 'leave'],
     defense: { tl: 2, pdc: 12, tubes: 4, magazine: { he: 16, nuke: 4 }, railgun: 0, armor: 3, hp: 18_000 },
   },
   'luna-yards': {
-    site: 'orbit', body: 'Luna', rKm: 6_000, phase: 0.2, kind: 'Orbital shipyard', gateKm: 100, anchorKm: 600,
+    site: 'orbit', body: 'Luna', rKm: 6_000, phase: 0.2, kind: 'Orbital shipyard', care: 'full', gateKm: 100, anchorKm: 600,
     population: 300_000, services: ['fuel', 'market', 'repair', 'yard', 'arms', 'hiring', 'leave'],
     defense: { tl: 3, pdc: 30, tubes: 8, magazine: { he: 40, nuke: 16 }, railgun: 2, armor: 5, hp: 40_000 },
   },
   'phobos-yard': {
-    site: 'surface', body: 'Phobos', phase: 3.0, kind: 'Naval yard', gateKm: 60, anchorKm: 40, military: true,
+    site: 'surface', body: 'Phobos', phase: 3.0, kind: 'Naval yard', care: 'full', gateKm: 60, anchorKm: 40, military: true,
     population: 60_000, services: ['fuel', 'repair', 'yard', 'arms'],
     defense: { tl: 4, pdc: 24, tubes: 8, magazine: { he: 24, nuke: 24 }, railgun: 4, armor: 6, hp: 30_000 },
   },
   'ganymede-station': {
-    site: 'orbit', body: 'Ganymede', rKm: 10_000, phase: 4.2, kind: 'Transfer station', gateKm: 80, anchorKm: 500,
+    site: 'orbit', body: 'Ganymede', rKm: 10_000, phase: 4.2, kind: 'Transfer station', care: 'clinic', gateKm: 80, anchorKm: 500,
     population: 210_000, services: ['fuel', 'market', 'repair', 'yard', 'arms', 'hiring', 'leave'],
     defense: { tl: 2, pdc: 10, tubes: 2, magazine: { he: 10, nuke: 0 }, railgun: 0, armor: 3, hp: 16_000 },
   },

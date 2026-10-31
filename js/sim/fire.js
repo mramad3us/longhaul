@@ -25,7 +25,7 @@ import { random } from '../core/rng.js';
 import { addJob, closeJob, JobType, JOB_PRIORITY } from './jobs.js';
 import { shipGeometry } from './ship-layout.js';
 import { SYSTEMS, damageSystem, shipSystems } from './systems.js';
-import { addCondition } from './crew.js';
+import { addCondition, addBurn } from './crew.js';
 
 export const FIRE = {
   OUT_KPA: 25,          // nothing burns below this pressure…
@@ -42,6 +42,8 @@ const status = (a) => a?.fire ? a.fire.intensity : 0;
 export const onFire = (deck) => status(deck.atmosphere) > 0;
 
 /** Start (or feed) a fire on a deck: only where there is air to burn. Returns true if it caught. */
+const BURN_PER_MIN = 4;              // burn (0–100) a minute in a full fire with no suit on
+
 export function ignite(state, deck, intensity = 0.15, cause = 'hit', emit = () => {}) {
   const d = state.ship.decks[deck];
   const a = d?.atmosphere;
@@ -95,7 +97,7 @@ export function fireTick(state, emit = () => {}) {
       m.body.torso = Math.max(0, m.body.torso - 1.5 * f.intensity * k2);
       m.body.leftArm = Math.max(0, m.body.leftArm - f.intensity * k2);
       m.body.rightArm = Math.max(0, m.body.rightArm - f.intensity * k2);
-      if (!m.suit.wearing && f.intensity > 0.3) addCondition(m, 'burned');
+      if (!m.suit.wearing && f.intensity > 0.3) addBurn(m, BURN_PER_MIN * f.intensity);
     }
     // through the shaft to the next deck, while the hatches are open
     if (f.intensity > 0.7 && random() < FIRE.SPREAD) {

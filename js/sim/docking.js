@@ -952,6 +952,8 @@ function landSurvivors(state, st, emit) {
 export function undock(state, emit = () => {}, { evicted = false } = {}) {
   const d = state.dock;
   if (!d || d.phase !== 'docked') return { ok: false, text: 'Not docked.' };
+  const patient = state.ship.crew.find(m => m.away?.hospital);
+  if (patient) return { ok: false, text: `${patient.name} is in hospital here. Discharge them or wait.` };
   if (state.ship.crew.some(m => m.away)) return { ok: false, text: 'Crew are aboard the other side. Recall them first.' };
   if (state.refit) return { ok: false, text: `The yard has the ship apart. Call off the work to leave.` };
   const e = getWorld(state).get(d.target.id);

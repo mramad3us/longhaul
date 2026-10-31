@@ -5,6 +5,7 @@
 // shows and hides them.
 // ============================================================
 
+import { careAt, patientsHere, quote, admit, discharge } from '../sim/hospital.js';
 import { refitPlan, refitStatus, refitKind, startRefit, callOffRefit, nearestYard, describeTime } from '../sim/refit.js';
 import { hullSound } from '../sim/systems.js';
 import { ui } from './context.js';
@@ -321,6 +322,23 @@ let stationTab = 'board';
 /** What a station does only for a ship in one of its berths. */
 const DOCKED_TABS = new Set(['services', 'hire', 'leave', 'berth']);
 let currentStation = null;
+/** The services window's sick list: who is in, who could go in, what it comes to. */
+function hospitalHTML(s, st) {
+  const level = careAt(st);
+  if (!level) return '';
+  const inBed = s.ship.crew.filter(m => m.away?.hospital);
+  const who = patientsHere(s, st), refused = s.ship.crew.filter(m => !m.away && !m.dead && quote(s, m, st)?.refused);
+  if (!inBed.length && !who.length && !refused.length) return '';
+  const label = st.tags?.command ? 'Sick bay' : level === 'full' ? 'Hospital' : 'Clinic';
+  const rows = [
+    ...inBed.map(m => `<div class="service-row"><span class="service-name">${esc(m.name)}</span><span class="service-stock">in ${label.toLowerCase()} · ${describeTime(Math.max(0, m.away.until - s.clock.minute))} left</span>
+      <button class="station-mission-accept" data-act="discharge" data-id="${m.id}">DISCHARGE</button></div>`),
+    ...who.map(m => { const q = quote(s, m, st), cost = q.cost + q.berth; return `<div class="service-row"><span class="service-name">${esc(m.name)}</span><span class="service-stock">${esc(q.what.join(', '))}</span><span class="service-price">${describeTime(q.minutes)}</span>
+      <button class="station-mission-accept" data-act="admit" data-id="${m.id}" ${cost > s.resources.credits.current ? 'disabled' : ''}>ADMIT · ${fmtNum(cost)} MCR</button></div>`; }),
+  ];
+  return `<div class="missions-section">${label.toUpperCase()}</div>${rows.join('')}${refused.length ? `<div class="station-mission-desc">${esc(refused.map(m => m.name).join(', '))}: brain damage wants a full hospital (Ceres, Tycho, Luna, Phobos, or a big world's ground).</div>` : ''}`;
+}
+
 /** The services window's repair row: a yard's refit, a port's dock, or the work in hand. */
 function refitHTML(s, st, command) {
   const R = refitStatus(s);
@@ -438,6 +456,7 @@ function renderStation() {
       const turnRow = turn ? `<div class="service-row"><span class="service-name">Contraband aboard</span><span class="service-stock">${turn.items.map(c => `${(c.mass / 1000).toFixed(1)} t ${esc(c.name.toLowerCase())}`).join(', ')}: turned over, for reputation and standing</span><span class="service-price"></span><button class="station-mission-accept" data-act="mkt-turn">TURN IT OVER</button></div>` : '';
       content = `<div class="service-list">${cheap}${turnRow}${rows}${drones}${torps}
         ${refitHTML(s, st, command)}
+        ${hospitalHTML(s, st)}
         <div class="service-credits">Credits: <b>${fmtNum(s.resources.credits.current)} MCR</b></div></div>`;
     }
   }
@@ -552,6 +571,13 @@ function onStationClick(e) {
       const r = startRefit(s);
       toast(r.text, r.ok ? 'ok' : 'warn');
       if (r.ok) logEntry(r.text, 'ok');
+      break;
+    }
+    case 'admit':
+    case 'discharge': {
+      const r = (b.dataset.act === 'admit' ? admit : discharge)(s, +b.dataset.id);
+      toast(r.text, r.ok ? 'ok' : 'warn');
+      if (r.ok) logEntry(r.text, 'crew');
       break;
     }
     case 'refit-off': {

@@ -1,4 +1,9 @@
 // Crew behaviour: medicine, rescue chain, inertial events, life support.
+import { addBurn, hasCondition, addCondition, needsMedical, needsHospital, woundCap, applyImpact, isAboard, SEVERE_BURN } from '../js/sim/crew.js';
+import { careAt, patientsHere, quote, admit, discharge, treatment } from '../js/sim/hospital.js';
+import { treatmentFor } from '../js/sim/ground.js';
+import { dockedPort } from '../js/sim/contracts.js';
+import { undock } from '../js/sim/docking.js';
 import { assert, fmt } from './helpers.mjs';
 import { seedRandom } from '../js/core/rng.js';
 import { bus } from '../js/core/events.js';
@@ -12,7 +17,8 @@ import { createStance } from '../js/sim/stance.js';
 import { spawnAgent } from '../js/sim/agents.js';
 import { getWorld } from '../js/sim/world.js';
 import { sensorsTick } from '../js/sim/sensors.js';
-import { AU_M } from '../js/core/constants.js';
+import { AU_M, DAY_MIN } from '../js/core/constants.js';
+import { serialize, deserialize } from '../js/sim/save.js';
 import { orderShutdown, orderStartup, ReactorState } from '../js/sim/reactor.js';
 import { forceDistress } from '../js/sim/missions.js';
 import { protectedG, physiologyTick } from '../js/sim/crew.js';
@@ -28,7 +34,105 @@ function game(seed = 1, crewCount = 6) {
   return s;
 }
 
+/** A docked crew at `home` with nothing else going on. */
+function medGame(home = 'ceres-station', seed = 9) {
+  seedRandom(seed);
+  bus.clear();
+  const s = createGame({ crewCount: 8, traffic: 0, forces: false, home });
+  s.politics.quietUntil = Infinity;
+  s.missions.cooldown = 1e9;
+  return s;
+}
+
 export default [
+  {
+    name: 'burns are the autodoc\'s to heal; severe burns and deep trauma it can only hold, and left alone they kill; a hospital finishes them, in days, the ship waiting; the brain wants a full one',
+    fn: () => {
+      // a light burn: into the autodoc on their own, and gone
+      const s = medGame();
+      const m = s.ship.crew.find(x => x.role === 'Deckhand') || s.ship.crew[3];
+      addBurn(m, 15);
+      assert(hasCondition(m, 'burned') && needsMedical(m), 'a burn wants the autodoc, whatever the rest of them reads');
+      let t = 0;
+      while (t < 12 * 60 && m.burns > 0) { advance(s, 1); t++; }
+      assert(m.burns === 0 && !hasCondition(m, 'burned'), `healed (${fmt(m.burns, 1)} left after ${t} min)`);
+      console.log(`      a light burn healed aboard in ${fmt(t / 60, 1)} h`);
+
+      // severe: the autodoc holds it, and that is all
+      const v = medGame(), p = v.ship.crew.find(x => x.role === 'Deckhand') || v.ship.crew[3];
+      addBurn(p, 60);
+      p.body.torso = 30; p.body.leftArm = 40;
+      assert(hasCondition(p, 'severe-burns') && !hasCondition(p, 'burned') && needsHospital(p) && !p.stabilized, 'severe');
+      for (let i = 0; i < 3 * DAY_MIN && !p.stabilized; i++) advance(v, 1);
+      assert(p.stabilized && p.burns === SEVERE_BURN, `stabilized, its burns at ${fmt(p.burns, 0)}`);
+      assert(p.body.torso >= 69 && p.body.torso <= 70.01, `the body back as far as it comes (${fmt(p.body.torso, 0)}%)`);
+      assert(!needsMedical(p), 'and off the bed, not back on it');
+      const h0 = p.heart.health;
+      for (let i = 0; i < 2 * DAY_MIN; i++) advance(v, 1);
+      assert(p.body.torso <= 70.01 && p.burns === SEVERE_BURN && needsHospital(p) && p.heart.health >= h0 - 1 && !p.dead, 'held, and no further');
+
+      // left alone, it kills: about two days
+      const k = medGame(), q = k.ship.crew.find(x => x.role === 'Deckhand') || k.ship.crew[3];
+      addBurn(q, 60);
+      let d = 0;
+      const physio = () => { d++; physiologyTick(q, 1, 1); };
+      while (!q.dead && d < 6 * DAY_MIN) physio();
+      assert(q.dead && d > DAY_MIN && d < 4 * DAY_MIN, `unheld, ${fmt(d / DAY_MIN, 1)} days`);
+      console.log(`      severe burns unheld: dead in ${fmt(d / DAY_MIN, 1)} days`);
+
+      // deep trauma, from a crushing blow, the same
+      const r = medGame(), w = r.ship.crew.find(x => x.role === 'Deckhand') || r.ship.crew[3];
+      applyImpact(w, 10);
+      assert(hasCondition(w, 'deep-trauma') && woundCap(w) === 70 && needsHospital(w), 'deep trauma');
+
+      // a clinic at a station: a stay, the ship waiting, the berth held
+      const c = medGame('hygiea-ring'), n = c.ship.crew.find(x => x.role === 'Deckhand') || c.ship.crew[3];
+      addBurn(n, 60); n.stabilized = true;
+      c.resources.credits.current = 50_000;
+      const st = dockedPort(c);
+      assert(careAt(st) === 'clinic' && patientsHere(c, st).includes(n), 'a clinic takes burns');
+      const qt = quote(c, n, st);
+      assert(qt.minutes >= 7 * DAY_MIN && qt.minutes <= 12 * DAY_MIN, `days of grafts (${fmt(qt.minutes / DAY_MIN, 1)})`);
+      const money = c.resources.credits.current;
+      assert(admit(c, n.id).ok, 'admitted');
+      assert(c.resources.credits.current === money - qt.cost - qt.berth, 'the bill and the berth paid');
+      assert(n.away?.hospital && !isAboard(n), 'off the ship');
+      assert(!undock(c).ok, 'we wait for them');
+      for (let i = 0; i < qt.minutes + 3; i++) advance(c, 1);
+      assert(!n.away && !n.burns && !hasCondition(n, 'severe-burns') && n.body.torso === 100 && !needsHospital(n), `mended (${n.conditions})`);
+      assert(c.dock?.phase === 'docked' && !(c.law.citations || []).length, 'the berth held for the stay');
+      console.log(`      severe burns at a clinic: ${fmt(qt.minutes / DAY_MIN, 1)} days, ${qt.cost.toLocaleString()} MCR and ${qt.berth.toLocaleString()} MCR of berth`);
+
+      // discharged early: as they went, the rest back
+      const e = medGame('hygiea-ring'), o = e.ship.crew.find(x => x.role === 'Deckhand') || e.ship.crew[3];
+      addBurn(o, 60); o.stabilized = true;
+      e.resources.credits.current = 50_000;
+      admit(e, o.id);
+      for (let i = 0; i < 1440; i++) advance(e, 1);
+      assert(discharge(e, o.id).ok, 'discharged');
+      advance(e, 1); advance(e, 1);
+      assert(!o.away && hasCondition(o, 'severe-burns') && needsHospital(o), 'still burned');
+
+      // the brain: a clinic won't, a full hospital will, and a world's clinic the same
+      const b = medGame('hygiea-ring'), u = b.ship.crew.find(x => x.role === 'Deckhand') || b.ship.crew[3];
+      addCondition(u, 'brain-damage');
+      assert(quote(b, u, dockedPort(b))?.refused && !patientsHere(b).includes(u), 'a clinic can\'t');
+      assert(treatment(u, 'full').brain && treatment(u, 'full').minutes === 14 * DAY_MIN, 'a full hospital can');
+      assert(treatmentFor(u, 'Ganymede').untreatable && treatmentFor(u, 'Mars').brain, 'nor a world\'s clinic, and a big world\'s hospital can');
+      // a world's ground takes burns too
+      addBurn(u, 50);
+      assert(treatmentFor(u, 'Ganymede').cost > 0 && /burn/.test(treatmentFor(u, 'Ganymede').text), 'burns at a world\'s clinic');
+
+      // a command ship's sick bay
+      assert(careAt({ id: 'cmd', tags: { command: { body: 'Ganymede' } } }) === 'clinic', 'a forward base has a sick bay');
+
+      // an old save: the burned tag that nothing took off
+      const a = medGame(), g = a.ship.crew.find(x => x.role === 'Deckhand') || a.ship.crew[3];
+      addCondition(g, 'burned'); delete g.burns;
+      const back = deserialize(serialize(a)).state, g2 = back.ship.crew.find(x => x.id === g.id);
+      assert(g2.burns === 20 && needsMedical(g2), 'light burns, the autodoc\'s to heal');
+    },
+  },
   {
     name: 'unconscious crew: medic stabilizes, carries to autodoc, patient heals',
     fn: () => {

@@ -62,7 +62,7 @@ export const CONDITION_LABELS = {
   'cardiac-stress': 'CARDIAC STRESS', injured: 'INJURED', unconscious: 'UNCONSCIOUS',
   starving: 'STARVING', dehydrated: 'DEHYDRATED', hypoxic: 'HYPOXIC', hypercapnia: 'HYPERCAPNIA',
   decompression: 'DECOMPRESSION', 'juice-hangover': 'JUICE HANGOVER', fracture: 'FRACTURE',
-  'internal-bleeding': 'INTERNAL BLEEDING', burned: 'BURNED',
+  'internal-bleeding': 'INTERNAL BLEEDING', burned: 'BURNED', 'severe-burns': 'SEVERE BURNS', 'deep-trauma': 'DEEP TRAUMA',
 };
 
 /**
@@ -144,8 +144,50 @@ export const isAble = (m) => isConscious(m) && !hasCondition(m, 'critical');
 
 export function needsMedical(m) {
   if (m.dead) return false;
-  return overallHealth(m) < 85 || m.heart.health < 70 || hasCondition(m, 'critical') ||
+  const lasting = lastingWound(m);
+  if (lasting ? !m.stabilized : (m.burns || 0) > 0) return true;
+  return overallHealth(m) < (lasting ? 60 : 85) || m.heart.health < 70 || hasCondition(m, 'critical') ||
     hasCondition(m, 'internal-bleeding') || hasCondition(m, 'fracture') || !isConscious(m);
+}
+
+// ---- WHAT A SHIP CAN'T MEND ----
+// The autodoc heals what it can: cuts and breaks, a bleed, a burn on the
+// skin. Severe burns (m.burns past SEVERE_BURN: grafts) and deep trauma
+// (what a crushing blow leaves: a surgeon) it can only hold. Left alone
+// they get worse, day on day, until the heart gives out; an autodoc
+// stabilizes them (m.stabilized) and brings the body back as far as
+// WOUND_CAP, and there it stays until a hospital (hospital.js, ground.js).
+// Brain damage is the same, without the worsening.
+
+export const SEVERE_BURN = 35;           // burns (0–100) past this want grafts
+const WOUND_CAP = 70;                    // how far back the autodoc can bring a body with such a wound
+const FESTER_PER_MIN = 0.03;             // heart health a minute, an unheld wound: about two days to the end
+const BURN_HEAL_PER_MIN = 0.25;          // an autodoc on a burn, at its full rate
+const BURN_MEND_PER_MIN = 0.01;          // a light burn, left to itself
+
+/** A wound only a hospital can finish: severe burns, deep trauma. */
+export const lastingWound = (m) => (m.burns || 0) >= SEVERE_BURN || hasCondition(m, 'deep-trauma');
+/** Someone the ship can do no more for. */
+export const needsHospital = (m) => !m.dead && (lastingWound(m) || hasCondition(m, 'brain-damage'));
+/** How far back a body can come aboard (%). */
+export const woundCap = (m) => lastingWound(m) ? WOUND_CAP : 100;
+
+/** Burned, by `amount` (points). */
+export function addBurn(m, amount) {
+  m.burns = Math.min(100, (m.burns || 0) + amount);
+  if (m.burns >= SEVERE_BURN) { removeCondition(m, 'burned'); addCondition(m, 'severe-burns'); m.stabilized = false; }
+  else addCondition(m, 'burned');
+}
+
+/** Made whole in a hospital (`level` 'full': the brain too). */
+export function hospitalCure(m, level) {
+  for (const k of Object.keys(m.body)) m.body[k] = 100;
+  m.heart.health = 100; m.heart.stress = 0;
+  for (const c of ['fracture', 'internal-bleeding', 'cardiac-stress', 'juice-hangover', 'burned', 'severe-burns', 'deep-trauma', 'critical']) removeCondition(m, c);
+  m.juiceHangover = 0; m.juiceCrash = false; m.burns = 0; m.stabilized = false; m.deathTimer = -1;
+  if (level === 'full') removeCondition(m, 'brain-damage');
+  m.consciousness = Math.max(m.consciousness, hasCondition(m, 'brain-damage') ? 50 : 90);
+  refreshDerivedConditions(m);
 }
 
 /** Movement speed multiplier from injuries and gravity (0 = can't move). */
@@ -259,6 +301,10 @@ export function physiologyTick(m, effectiveG, gForceRaw) {
   const ev = [];
   const b = m.body, h = m.heart;
 
+  // (a wound nobody is holding gets worse: an autodoc stops it)
+  const festering = lastingWound(m) && !m.stabilized;
+  if (festering) h.health = clamp(h.health - FESTER_PER_MIN);
+
   // ---- Death spiral: heart failure → critical → death unless stabilized
   if (h.health <= 0 || hasCondition(m, 'critical')) {
     h.health = Math.max(0, h.health);
@@ -298,15 +344,17 @@ export function physiologyTick(m, effectiveG, gForceRaw) {
     if (h.stress < 20) removeCondition(m, 'cardiac-stress');
     if (G >= G_THRESHOLDS.COMFORTABLE) m.morale = clamp(m.morale + 0.05);
     if (!hasCondition(m, 'internal-bleeding')) {
-      b.torso = clamp(b.torso + 0.01);
-      b.leftArm = clamp(b.leftArm + 0.02); b.rightArm = clamp(b.rightArm + 0.02);
-      b.leftLeg = clamp(b.leftLeg + 0.02); b.rightLeg = clamp(b.rightLeg + 0.02);
-      if (!hasCondition(m, 'brain-damage')) b.head = clamp(b.head + 0.01);
+      const cap = woundCap(m), mend = (v, n) => Math.max(v, Math.min(cap, v + n));
+      b.torso = mend(b.torso, 0.01);
+      b.leftArm = mend(b.leftArm, 0.02); b.rightArm = mend(b.rightArm, 0.02);
+      b.leftLeg = mend(b.leftLeg, 0.02); b.rightLeg = mend(b.rightLeg, 0.02);
+      if (!hasCondition(m, 'brain-damage')) b.head = mend(b.head, 0.01);
+      if ((m.burns || 0) > 0 && m.burns < SEVERE_BURN) { m.burns = Math.max(0, m.burns - BURN_MEND_PER_MIN); if (!m.burns) removeCondition(m, 'burned'); }
     }
   }
 
   // (a crashed heart barely mends until the hangover clears: about a day for the crash itself)
-  if (!hasCondition(m, 'cardiac-stress') && !hasCondition(m, 'critical') && h.health < 100) {
+  if (!festering && !hasCondition(m, 'cardiac-stress') && !hasCondition(m, 'critical') && h.health < 100) {
     h.health = clamp(h.health + (m.juiceCrash && m.juiceHangover > 0 ? 0.01 : 0.15));
   }
 
@@ -419,17 +467,23 @@ export function medbayTick(m, supplied, rate = 1) {
   const k = (supplied ? 1 : 0.3) * rate;
   stabilize(m);
   removeCondition(m, 'internal-bleeding');
-  const b = m.body, h = m.heart;
-  b.head = clamp(b.head + 0.3 * k); b.torso = clamp(b.torso + 0.25 * k);
-  b.leftArm = clamp(b.leftArm + 0.4 * k); b.rightArm = clamp(b.rightArm + 0.4 * k);
-  b.leftLeg = clamp(b.leftLeg + 0.35 * k); b.rightLeg = clamp(b.rightLeg + 0.35 * k);
+  const b = m.body, h = m.heart, lasting = lastingWound(m), top = woundCap(m);
+  const heal = (v, n) => Math.max(v, Math.min(top, v + n * k));
+  b.head = heal(b.head, 0.3); b.torso = heal(b.torso, 0.25);
+  b.leftArm = heal(b.leftArm, 0.4); b.rightArm = heal(b.rightArm, 0.4);
+  b.leftLeg = heal(b.leftLeg, 0.35); b.rightLeg = heal(b.rightLeg, 0.35);
   h.health = clamp(h.health + 0.2 * k);
+  // (a burn down as far as it goes: all the way, or to where only grafts will take it)
+  const floor = (m.burns || 0) >= SEVERE_BURN ? SEVERE_BURN : 0;
+  if (m.burns > floor) m.burns = Math.max(floor, m.burns - BURN_HEAL_PER_MIN * k);
+  if (m.burns === 0) removeCondition(m, 'burned');
   h.stress = clamp(h.stress - 1);
   const cap = hasCondition(m, 'brain-damage') ? 50 : 100;
   m.consciousness = clamp(m.consciousness + 0.8, 10, cap);
-  const healed = b.head >= 99.5 && b.torso >= 99.5 && b.leftArm >= 99.5 && b.rightArm >= 99.5 &&
-    b.leftLeg >= 99.5 && b.rightLeg >= 99.5 && h.health >= 99.5;
-  if (healed) removeCondition(m, 'fracture');
+  const done = top - 0.5;
+  const healed = b.head >= done && b.torso >= done && b.leftArm >= done && b.rightArm >= done &&
+    b.leftLeg >= done && b.rightLeg >= done && h.health >= 99.5 && (m.burns || 0) <= floor;
+  if (healed) { removeCondition(m, 'fracture'); if (lasting) m.stabilized = true; }
   refreshDerivedConditions(m);
   return healed;
 }
@@ -458,7 +512,7 @@ export function applyImpact(m, speed) {
   m.consciousness = clamp(m.consciousness - ko, 10, 100);
   m.heart.stress = clamp(m.heart.stress + stress);
   if ((sev === 'hard-impact' && random() < 0.3) || sev === 'bone-breaking' || sev === 'crushing' || sev === 'lethal') addCondition(m, 'fracture');
-  if (sev === 'crushing' || sev === 'lethal') addCondition(m, 'internal-bleeding');
+  if (sev === 'crushing' || sev === 'lethal') { addCondition(m, 'internal-bleeding'); addCondition(m, 'deep-trauma'); m.stabilized = false; }
   if (sev === 'lethal' && b.head < 20) addCondition(m, 'brain-damage');
   if (b.head <= 0 || b.torso <= 0) { kill(m); return { severity: 'fatal', message: `${m.name} killed on impact` }; }
   refreshDerivedConditions(m);

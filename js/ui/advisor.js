@@ -102,7 +102,8 @@ import { atmoStatus } from '../sim/life-support.js';
 import { shipGeometry, isSecureSeat } from '../sim/ship-layout.js';
 import { SYSTEMS, Status, shipSystems, partsFor, waterRecovery, hullSound, HULL_SAFE_PCT } from '../sim/systems.js';
 import { JobType } from '../sim/jobs.js';
-import { needsMedical, isAboard } from '../sim/crew.js';
+import { needsMedical, needsHospital, lastingWound, isAboard } from '../sim/crew.js';
+import { careAt } from '../sim/hospital.js';
 import { FUEL_PER_G_MIN } from '../sim/flight.js';
 import { nearestSurface } from '../sim/gravity.js';
 import { timeToImpact } from '../sim/terrain.js';
@@ -566,6 +567,17 @@ function ruleCrew(state, c, add) {
       key: 'stores:med', level: CAUTION, rank: 56,
       text: 'We are out of medical supplies: the autodoc treats at 30% speed.',
       actions: resupplyActions(state, c),
+    });
+  }
+  // Past what the autodoc can do
+  const wards = c.crew.filter(m => isAboard(m) && needsHospital(m));
+  if (wards.length) {
+    const worse = wards.filter(m => lastingWound(m) && !m.stabilized);
+    add({
+      key: 'hospital', level: worse.length ? CAUTION : ADVICE, rank: worse.length ? 57 : 44, sig: wards.map(m => `${m.id}:${!!m.stabilized}`),
+      text: worse.length ? `${worse[0].name}${worse.length > 1 ? ` and ${plural(worse.length - 1, 'other')}` : ''} getting worse: the autodoc can hold it.` : `${wards[0].name}${wards.length > 1 ? ` and ${plural(wards.length - 1, 'other')}` : ''} stabilized: the rest wants a hospital.`,
+      detail: 'Severe burns and deep trauma: the autodoc stops them getting worse and brings the body back to 70%. A station\'s clinic, a command ship\'s sick bay or a world\'s ground can finish it, in days. Brain damage wants a full hospital.',
+      actions: c.dockedSt && careAt(c.dockedSt) ? [A.station(c.dockedSt.id, 'services', 'HOSPITAL')] : [],
     });
   }
   ruleCareers(state, c, add);

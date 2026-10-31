@@ -219,6 +219,8 @@ export function upgradeState(state) {
   upgradeRuns(state);
   upgradeFallen(state);
   upgradeLost(state);
+  // (burned from before burns were measured: a tag nothing took off; light burns now, the autodoc's to heal)
+  for (const m of state.ship.crew) if (!m.dead && m.burns == null && m.conditions.includes('burned')) m.burns = 20;
   return state;
 }
 

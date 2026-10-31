@@ -1900,7 +1900,7 @@ function figureSpec(lens, env, fig, P, selected, W, H) {
 function woundsOf(m) {
   const b = m.body || {};
   const d = (k) => Math.max(0, Math.min(1, 1 - (b[k] ?? 100) / 100));
-  return [d('head'), d('torso'), d('leftArm'), d('rightArm'), d('leftLeg'), d('rightLeg'), m.conditions?.includes('burned') ? 0.7 : 0, m.dead ? 1 : 0];
+  return [d('head'), d('torso'), d('leftArm'), d('rightArm'), d('leftLeg'), d('rightLeg'), Math.min(1, (m.burns || (m.conditions?.includes('burned') ? 20 : 0)) / 40), m.dead ? 1 : 0];
 }
 
 /**
