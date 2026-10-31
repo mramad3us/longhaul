@@ -24,7 +24,7 @@
 import { AU_M } from '../core/constants.js';
 import { getWorld } from './world.js';
 import { STATIONS } from './stations.js';
-import { PLAYER, ensureHull, profile, kinematics, isOutOfFight, sees } from './combatants.js';
+import { PLAYER, ensureHull, profile, kinematics, isOutOfFight, sees, noteLock } from './combatants.js';
 import { launchTorpedo, fireRailgun, strafe, launchedBy } from './ordnance.js';
 import { TORPEDO_RELOAD_MIN, RAIL_RELOAD_MIN, RAIL_RANGE_M } from './weapons.js';
 import { makeHostile } from './agents.js';
@@ -108,6 +108,7 @@ function fireOn(state, st, h, tid, now, emit) {
   const p = profile(state, st.id), tp = profile(state, tid);
   if (!p || !tp) return;
   const dAU = Math.hypot(tk.pos.x - st.pos.x, tk.pos.y - st.pos.y), dM = dAU * AU_M;
+  if (tid === PLAYER) noteLock(state, st, p, dM, REACH_AU);
   const aim = tp.cls?.category === 'irregular' || tp.faction === 'pirate' ? 'kill' : 'disable';
   let fired = false;
   if (p.tubes > 0 && p.torps > 0 && dAU <= REACH_AU) {

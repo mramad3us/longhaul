@@ -195,6 +195,8 @@ The panel shows only what the ship carries. A hull without tubes has no torpedo 
 
 At **battle stations** the best shot takes the weapons console, the best engineer the engineering station, the next best eye ops, and the pilot the helm. Everyone else goes to a couch.
 
+The **hostile light** on the top rail goes by what the ship knows. A hostile on the board lights it (`hostilesOnBoard`, so the band the board is set to counts). So does a lock on us (`locksOnUs`): a ship or station fighting us, with us on its sensors and inside the reach of what it carries (torpedoes to the range it launches at, railguns to 30,000 km, PDCs). The hull's warning receivers say so whether or not we can see who holds it, and the light reads LOCKED ON. Fire control's THREATS list says the same, and a ship off the board is listed as unseen, with no range. A hostile off the board with no lock on us lights nothing, however long it stays hostile.
+
 Time warp is capped by the tactical picture: 1× when a torpedo is under 30 minutes out, a hostile is inside 75,000 km, a demand awaits an answer, one of our own torpedoes is in its last 3 minutes to its target (`OWN_ARRIVAL_S`: its arrival is watched, below), or a reactor on a fuse near us is in its last 2 minutes; 2× within six hours or 750,000 km.
 
 Shooting at a lawful ship is a crime (WORLD.md). Shooting back at whoever fired first never is.

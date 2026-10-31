@@ -12,10 +12,10 @@
 // fights never pays for it.
 // ============================================================
 
-import { G0 } from '../core/constants.js';
+import { G0, AU_M } from '../core/constants.js';
 import { getWorld } from './world.js';
 import { CLASSES, SIZES, TECH, classOf, targetRadius, isEvasive, hullPoints, PLAYER_CLASS } from './ship-classes.js';
-import { PDC, PDC_AUTO_FACTOR, TORPEDO_MOTOR, RAILGUN, MINING_GEAR } from './weapons.js';
+import { PDC, PDC_AUTO_FACTOR, TORPEDO_MOTOR, RAILGUN, MINING_GEAR, RAIL_RANGE_M } from './weapons.js';
 import { systemPerf } from './systems.js';
 import { isConscious } from './crew.js';
 import { seatKind } from './ship-layout.js';
@@ -119,6 +119,25 @@ export function ensureHull(e) {
 
 export const isWreck = (e) => e?.combat?.status === 'wreck';
 export const isOutOfFight = (e) => !e || e.combat?.status === 'wreck' || e.combat?.status === 'surrendered';
+
+// ---- LOCKS ON US ----
+// A ship or a station fighting us, with us on its sensors and inside the
+// reach of what it carries, is ranging us: its laser on our hull is what the
+// warning receivers are there for, and they say so whether or not we can see
+// who holds it. Noted each minute by whoever is aiming (agents.js fight,
+// station-defense.js fireOn), the list begun afresh with the minute's
+// fighting (combat.js combatTick). Runtime: a load has it back in a minute.
+
+/** `e`, profile `p`, is aiming at us from `dM` metres: a lock if anything it carries reaches (torpedoes to `torpAU`). */
+export function noteLock(state, e, p, dM, torpAU) {
+  if ((p.tubes > 0 && p.torps > 0 && dM <= torpAU * AU_M) || (p.railMounts > 0 && dM <= RAIL_RANGE_M) || (p.pdc.mounts > 0 && dM <= p.pdc.strafeM)) (state.$locks ||= []).push(e.id);
+}
+
+/** Who holds a lock on us, as of the last minute's fighting. */
+export function locksOnUs(state) {
+  const world = getWorld(state);
+  return (state.$locks || []).map(id => world.get(id)).filter(e => e && !isOutOfFight(e));
+}
 
 // ---- WHO IS AT THE GUNS ----
 

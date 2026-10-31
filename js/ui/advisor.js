@@ -92,8 +92,9 @@ import { getWorld } from '../sim/world.js';
 import { PLAYER } from '../sim/combatants.js';
 import { threats } from '../sim/combat.js';
 import { blastClearM } from '../sim/damage.js';
-import { hostilesOfPlayer } from '../sim/agents.js';
-import { isIdentified } from '../sim/sensors.js';
+import { hostilesOnBoard } from '../sim/agents.js';
+import { locksOnUs } from '../sim/combatants.js';
+import { isIdentified, isTracked } from '../sim/sensors.js';
 import { CLASSES, playerClass } from '../sim/ship-classes.js';
 import { FACTIONS, POWERS, controlAt } from '../sim/factions.js';
 import { zonesAt, zonePos, ZONE_KINDS } from '../sim/conflict.js';
@@ -413,8 +414,17 @@ function ruleOrdnance(state, c, add) {
 }
 
 function ruleHostiles(state, c, add) {
-  const tracked = state.sensors.$seen;
-  const held = hostilesOfPlayer(state).filter(e => tracked?.has(e.id) || state.sensors.contacts.some(x => x.id === e.id));
+  const held = hostilesOnBoard(state);
+  // (a lock from off the board: the warning receivers can say it, and nothing more)
+  const unseen = locksOnUs(state).filter(e => !isTracked(state, e.id));
+  if (unseen.length && !held.length) {
+    add({
+      key: 'hostiles', level: WARNING, rank: 80, sig: ['unseen', ...unseen.map(e => e.id)], text: `${unseen.length > 1 ? `${unseen.length} ships we can't see have` : `A ship we can't see has`} a lock on us.`,
+      detail: 'The hull\'s warning receivers have a ranging laser on them: someone holds a firing solution on us from past what our sensors show, a cold hull or one beyond the band the board is set to.',
+      actions: [!state.combatStations && A.battle(), A.weapons()],
+    });
+    return;
+  }
   // (one running from us isn't attacking: it is getting away, as long as its crew can take the burn)
   const running = (e) => e.agent.mode === 'leave' || e.agent.mode === 'flee';
   const hs = held.filter(e => !running(e));

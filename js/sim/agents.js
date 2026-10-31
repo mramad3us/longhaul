@@ -64,12 +64,10 @@ import { FACTIONS } from './factions.js';
 import { flightStep, SLEW_RATE } from './flight.js';
 import { createPlan, guidanceStep, targetStateAt } from './nav.js';
 import { abortRoute } from './autopilot.js';
-import { REVEAL, canSee, signatureRange, hullSignature } from './sensors.js';
+import { REVEAL, canSee, signatureRange, hullSignature, isTracked } from './sensors.js';
 import { HIGH_DOSE_G, STROKE_RISK } from './crew.js';
 import { knownName } from './flags.js';
-import {
-  PLAYER, kinematics, profile, snapshot, sees, strength, ensureHull, isOutOfFight, sensorQuality, DISABLED_BELOW,
-} from './combatants.js';
+import { PLAYER, kinematics, profile, snapshot, sees, strength, ensureHull, isOutOfFight, sensorQuality, DISABLED_BELOW, noteLock } from './combatants.js';
 import { launchTorpedo, fireRailgun, strafe, fireGear, inboundTo, launchedBy, timeToGo, torpedoForecast } from './ordnance.js';
 import { hullTick } from './damage.js';
 import { wantedBy, settleInspection, adjustStanding, inJurisdiction, recentlyInspected } from './law.js';
@@ -234,6 +232,9 @@ export function hostilesOfPlayer(state) {
   for (const e of getWorld(state).driven) if (e.type === 'ship' && e.agent?.hostile.includes(PLAYER) && !isOutOfFight(e)) out.push(e);
   return out;
 }
+
+/** Those on our board. The rest are out there and nothing aboard can know it, unless they lock on (combatants.js locksOnUs). */
+export const hostilesOnBoard = (state) => hostilesOfPlayer(state).filter(e => isTracked(state, e.id));
 
 // ---- REQUESTS (demands on the player) ----
 
@@ -1029,6 +1030,7 @@ function fight(state, e, emit) {
   }
 
   if (!sees(state, e.id, tid)) return;
+  if (tid === PLAYER) noteLock(state, e, p, dM, R.launchAU);
   let fired = false;
 
   // Torpedoes: keep a salvo big enough to saturate their point defense in the air.

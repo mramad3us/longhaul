@@ -27,12 +27,13 @@ import { factionColor, FACTIONS } from '../sim/factions.js';
 import { classLabel } from '../sim/ship-classes.js';
 import { PLAYER, profile, gunner } from '../sim/combatants.js';
 import { timeToGo, launchedBy, torpedoForecast, aimPoint } from '../sim/ordnance.js';
-import { hostilesOfPlayer } from '../sim/agents.js';
+import { hostilesOfPlayer, hostilesOnBoard } from '../sim/agents.js';
+import { locksOnUs } from '../sim/combatants.js';
 import { setFireTarget, setPdcMode, setAim, setEvasive, fireTorpedo, readyTubes, threats, PDC_MODES } from '../sim/combat.js';
 import { AIM } from '../sim/damage.js';
 import { WARHEADS, PROFILES } from '../sim/weapons.js';
 import { WANTED_LABEL } from '../sim/law.js';
-import { contactById, REVEAL, isDark, isIdentified } from '../sim/sensors.js';
+import { contactById, REVEAL, isDark, isIdentified, isTracked } from '../sim/sensors.js';
 import { relativeTo, STANCE_PHASE } from './hud.js';
 import { stanceRanges, STANCE_MODES } from '../sim/stance.js';
 import { quickStance, openStance, currentStance, release as releaseStance } from './stance.js';
@@ -249,9 +250,14 @@ export function renderFireControl(state, box) {
     <div class="fc-desc">Jinking throws off torpedo homing, railguns and PDC aim. Costs reaction mass and puts ${state.$jinkG ? state.$jinkG.toFixed(1) : '2.5'}G on the crew.</div>`;
 
   const inbound = threats(state);
-  const hostiles = hostilesOfPlayer(state);
+  const hostiles = hostilesOnBoard(state), locks = locksOnUs(state);
   const threatRows = inbound.map(th => `<div class="fc-threat"><span>${th.kind === 'slug' ? 'SLUG' : th.warhead === 'nuke' ? 'NUKE' : 'TORPEDO'}</span><b>${isFinite(th.etaS) ? formatDuration(th.etaS / 60) : 'opening'}</b></div>`).join('')
-    + hostiles.map(h => `<div class="fc-threat fc-hostile"><span>${esc(isIdentified(state, h) ? h.name : 'hostile contact')}${markChips(marksOf(fm, h.id, isDark(h), h.tags?.wreck))}</span><b>${fmtKm(Math.hypot(h.pos.x - state.flight.pos.x, h.pos.y - state.flight.pos.y) * AU_KM)}</b></div>`).join('');
+    + hostiles.map(h => `<div class="fc-threat fc-hostile"><span>${esc(isIdentified(state, h) ? h.name : 'hostile contact')}${locks.includes(h) ? ' · LOCK' : ''}${markChips(marksOf(fm, h.id, isDark(h), h.tags?.wreck))}</span><b>${fmtKm(Math.hypot(h.pos.x - state.flight.pos.x, h.pos.y - state.flight.pos.y) * AU_KM)}</b></div>`).join('')
+    // (a lock from off the board: the warning receivers give no range; a station aiming at us is on it)
+    + locks.filter(e => !hostiles.includes(e)).map(e => {
+      const seen = isTracked(state, e.id);
+      return `<div class="fc-threat fc-hostile"><span>${esc(seen ? e.name : 'unseen ship')} · LOCK</span><b>${seen ? fmtKm(Math.hypot(e.pos.x - state.flight.pos.x, e.pos.y - state.flight.pos.y) * AU_KM) : '—'}</b></div>`;
+    }).join('');
   // (MARS, not MCR: beside the credits, MCR reads as money)
   const record = ['UN', 'MCR', 'OPA'].map(f => `<span class="fc-law ${state.law.wanted[f] ? 'fc-warn' : ''}">${{ MCR: 'MARS' }[f] || f} ${Math.round(state.law.standing[f])} · ${WANTED_LABEL[state.law.wanted[f]]}</span>`).join('');
 

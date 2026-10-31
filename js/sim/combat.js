@@ -165,6 +165,7 @@ export { moveAgents };
 
 export function combatTick(state, emit = () => {}) {
   const C = state.combat;
+  state.$locks = null;                     // (who has a lock on us: noted afresh as they aim, combatants.js)
   agentsTick(state, emit);
   fusesTick(state, emit);
 

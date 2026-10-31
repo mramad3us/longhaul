@@ -7,10 +7,10 @@ import { createGame, advance } from '../js/sim/game.js';
 import { getWorld } from '../js/sim/world.js';
 import { CLASSES, CLASS_IDS, SIZES, TECH, BUILDERS, KINDS, PLAYABLE, rollIdentity } from '../js/sim/ship-classes.js';
 import { hullOf } from '../js/sim/hulls.js';
-import { spawnAgent, respondToRequest, surrender, makeHostile, ROLES } from '../js/sim/agents.js';
+import { spawnAgent, respondToRequest, surrender, makeHostile, ROLES, hostilesOfPlayer, hostilesOnBoard } from '../js/sim/agents.js';
 import { launchTorpedo, fireRailgun } from '../js/sim/ordnance.js';
 import { applyHit, detonate } from '../js/sim/damage.js';
-import { PLAYER, ensureHull, profile, gunner, isOutOfFight, classStrength } from '../js/sim/combatants.js';
+import { PLAYER, ensureHull, profile, gunner, isOutOfFight, classStrength, locksOnUs } from '../js/sim/combatants.js';
 import { setFireTarget, fireTorpedo, setPdcMode, setEvasive } from '../js/sim/combat.js';
 import { sensorsTick } from '../js/sim/sensors.js';
 import { circularSpeed } from '../js/sim/ephemeris.js';
@@ -130,6 +130,48 @@ export default [
       }
       // OPA builds no destroyers: it sends the nearest thing it has
       assert(CLASSES[rollIdentity({ kind: 'destroyer', category: 'military', faction: 'OPA' }).cls].factions.OPA, 'fallback stays in the faction');
+    },
+  },
+  {
+    name: 'the hostile light: a hostile off the board lights nothing, however long it stays hostile; on the board it does; a lock on us does, seen or not, and goes when the lock does; a station aiming at us too',
+    fn: () => {
+      const s = game(31);
+      const state = () => `${hostilesOfPlayer(s).length} hostile, ${hostilesOnBoard(s).length} on the board, ${locksOnUs(s).length} locks`;
+      s.sensors.range = 2;
+      // three AU off: hostile, and nothing aboard can know it (the user's SH Guardian 19, running from us at 5 AU)
+      const far = near(s, 3);
+      const e = spawnAgent(s, { role: 'navy', cls: 'mcrn-corvette', faction: 'MCR', pos: far.pos, vel: far.vel });
+      makeHostile(s, e, 'player');
+      advance(s, 2);
+      console.log(`      3 AU off: ${state()}`);
+      assert(hostilesOfPlayer(s).length === 1 && !hostilesOnBoard(s).length && !locksOnUs(s).length, `hostile, and nothing lit (${state()})`);
+      // on the board, past what it can reach
+      const seen = near(s, 0.05);
+      Object.assign(e.pos, seen.pos); Object.assign(e.vel, seen.vel);
+      advance(s, 1);
+      console.log(`      7.5 million km off: ${state()}`);
+      assert(hostilesOnBoard(s).length === 1, `a hostile on the board (${state()})`);
+      assert(!locksOnUs(s).length, 'past its reach: no lock');
+      // inside its reach and past the band the board is set to: the board has nothing, the receivers do
+      const lock = near(s, 0.01);
+      Object.assign(e.pos, lock.pos); Object.assign(e.vel, lock.vel);
+      s.sensors.range = 0;
+      advance(s, 1);
+      console.log(`      1.5 million km off, the board on SHORT: ${state()}`);
+      assert(!hostilesOnBoard(s).length, `off the board (${state()})`);
+      assert(locksOnUs(s)[0] === e, 'but it has a lock on us');
+      // it breaks off: the lock goes, and with no track nothing is lit, though it hates us still
+      e.agent.mode = 'flee'; e.agent.threat = 'player';
+      advance(s, 1);
+      assert(!locksOnUs(s).length && !hostilesOnBoard(s).length && hostilesOfPlayer(s).length === 1, `running: nothing lit (${state()})`);
+      // a station's batteries: not a ship among the hostiles, a lock all the same
+      const b = game(32);
+      const st = getWorld(b).get('ceres-station');
+      b.law.wanted[st.faction] = 3;
+      b.flight.pos = { x: st.pos.x + 0.001, y: st.pos.y };
+      b.flight.vel = { vx: st.vel.vx, vy: st.vel.vy };
+      advance(b, 2);
+      assert(locksOnUs(b).includes(st), `the station's guns lock on (${locksOnUs(b).map(x => x.name)})`);
     },
   },
   {

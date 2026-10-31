@@ -28,7 +28,8 @@ import { shipSystems, Status, waterRecovery } from '../sim/systems.js';
 import { systemsStripHTML } from './shipboard.js';
 import { controlAt, spaceLabel } from '../sim/factions.js';
 import { zonesAt, ZONE_KINDS } from '../sim/conflict.js';
-import { hostilesOfPlayer } from '../sim/agents.js';
+import { hostilesOnBoard } from '../sim/agents.js';
+import { locksOnUs } from '../sim/combatants.js';
 import { getWorld } from '../sim/world.js';
 import { clearanceFor } from '../sim/traffic-control.js';
 import { finesOwed } from '../sim/law.js';
@@ -297,13 +298,16 @@ function updateTactical(state) {
     el.space.className = `rail-space ${zone ? 'space-hot' : ctl.lawless ? 'space-lawless' : ctl.contested ? 'space-contested' : ''}`;
   }
   const th = threatSummary(state);
-  const hostiles = hostilesOfPlayer(state).length;
+  // (what the board shows, and whoever has a lock on us, seen or not; not every ship in the system with a grudge)
+  const board = hostilesOnBoard(state), locks = locksOnUs(state);
+  const hostiles = board.length + locks.filter(e => !board.includes(e)).length;
   const show_ = !!th || hostiles > 0;
   show(el.threat, show_);
   if (!show_) return;
   // (an annunciator on the rail: what, over how soon or how many)
   setHTML(el.threat, th
     ? `<span class="ann-label">${th.count} ${th.nuke ? 'NUKE' : 'TORP'}${th.count > 1 ? 'S' : ''} INBOUND<br>${isFinite(th.eta) ? `${formatDuration(th.eta / 60)} OUT` : 'CLOSING'}</span>`
+    : locks.length ? `<span class="ann-label">LOCKED ON<br>${hostiles} HOSTILE${hostiles > 1 ? 'S' : ''}</span>`
     : `<span class="ann-label">${hostiles} HOSTILE<br>CONTACT${hostiles > 1 ? 'S' : ''}</span>`);
   toggleClass(el.threat, 'urgent', !!th && th.eta < 30 * 60);
 }
