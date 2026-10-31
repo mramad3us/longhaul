@@ -203,6 +203,9 @@ export function propagateFree(pos, vel, t0, t1, thrustG, heading, maxStepMin) {
  */
 export const FLIGHT_PATH = { at: null };
 
+/** What becomes of a hull adrift that comes down on a body (terrain.js sets it when it loads): fn(world, e, surface, minute). */
+export const HULL_DOWN = { fn: null };
+
 export function predictEntity(e, minute, world = null) {
   const pos = { x: e.pos.x, y: e.pos.y };
   const vel = { vx: e.vel.vx, vy: e.vel.vy };
@@ -397,10 +400,11 @@ export class World {
       if (!transitStateAt(this, e, minute, e.pos, e.vel)) e.transit = null;   // endpoint vanished: drift
     } else if (minute > e.t) {
       propagateFree(e.pos, e.vel, e.t, minute, e.thrust || 0, e.heading || 0, e.thrust > 0 ? 1 : 15);
-      // (a hull adrift, a wreck, that comes down on a rock rests there, turning with it: terrain.js
-      // groundCheck does the same, with the blow, for what is flown)
+      // (a hull adrift, a wreck, that comes down: terrain.js settles what becomes of it, as
+      // groundCheck does for what is flown; it lies where it came down, turning with the world)
       const s = nearestSurface(e.pos.x, e.pos.y, minute);
       if (s && s.alt < 0) {
+        HULL_DOWN.fn?.(this, e, s, minute);
         const spinDays = s.body.rotH / 24, days = minute / DAY_MIN;
         e.orbit = { body: s.body.name, r: s.body.radius / AU_KM, phase: Math.atan2(s.uy, s.ux) - (spinDays ? 2 * Math.PI * days / spinDays : 0), period: spinDays };
         e.thrust = 0;
@@ -423,6 +427,8 @@ export class World {
     hash.query(focus.x, focus.y, NEAR_RANGE_AU, near);
     for (let i = 0; i < near.length; i++) {
       const e = near[i];
+      // (a hull gone into a giant goes from the board at once, not when the net comes round; the minute after, so what hung on it has heard)
+      if (e.tags?.fell && e.tags.despawnAt < minute && this.state.dock?.target.id !== e.id) { this.remove(e); continue; }
       if (e.t === minute) continue;
       this.refresh(e, minute);
       hash.update(e);

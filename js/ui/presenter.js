@@ -152,7 +152,7 @@ const HANDLERS = {
   'sos-chatter': ({ from, text }) => logEntry(`[${from}] ${text}`, 'comms'),
   'sos-heard': ({ entity, distanceAU }) => { if (!entity.tags?.missionId && distanceAU > RANGE.LONG) logEntry(`Distress beacon on long range: ${entity.name}`, 'comms'); },
   'sos-failed': ({ mission, reason }) => { logEntry(`${mission.title} — ${reason}`, 'danger'); toast(`Mission failed: ${mission.title}`, 'danger'); },
-  'sos-lost': ({ mission }) => logEntry(`${mission.title.replace('SOS — ', '')} — distress beacon fell silent`, 'comms'),
+  'sos-lost': ({ mission, reason }) => logEntry(`${mission.title.replace('SOS — ', '')} — ${/^Fell into/.test(reason || '') ? reason.toLowerCase() : 'distress beacon fell silent'}`, 'comms'),
   'sos-auto': () => logEntry('Blackout: automatic distress beacon activated', 'danger'),
 
   'contract-progress': ({ text }) => { logEntry(text, 'nav'); toast(text, 'nav'); },

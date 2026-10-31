@@ -44,7 +44,7 @@ import { createPolitics, politicsTick } from './conflict.js';
 import { destroyPlayer } from './damage.js';
 import { snapshot, PDC_ROUNDS_PER_MOUNT } from './combatants.js';
 import { dockingTick, finishMinute, dockHold, dockHolds, inFrame, frameStep, dockInstant, PROX_RATES, hoverG, hoverOnRcs } from './docking.js';
-import { terrainTick } from './terrain.js';
+import { terrainTick, upgradeFallen } from './terrain.js';
 import { refitBerths } from './stations.js';
 import { worldsTick, airDrag } from './worlds.js';
 import { createTrafficControl, trafficControlTick, keepOutDriveCap } from './traffic-control.js';
@@ -216,6 +216,7 @@ export function upgradeState(state) {
   upgradeContracts(state);
   refitBerths(state);
   upgradeRuns(state);
+  upgradeFallen(state);
   return state;
 }
 

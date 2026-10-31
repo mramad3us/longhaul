@@ -5,12 +5,19 @@
 // formation → hail to complete the rescue.
 // UNDER ATTACK calls come from the encounter director (conflict.js):
 // a ship with pirates on it. Drive them off or kill them, then hail.
+//
+// A ship that loses its drive inside a world's planetary space goes on
+// round that world as it was going, and may be going too slowly to miss it:
+// such a call says so, and how long it has is how long it has to fall. A
+// hull in a giant is gone (terrain.js); this is what its crew know first.
 // ============================================================
 
 import { AU_M, RANGE, DAY_MIN } from '../core/constants.js';
 import { random, randRange, randInt, pick, weightedPick, chance } from '../core/rng.js';
-import { getWorld } from './world.js';
-import { circularSpeed } from './ephemeris.js';
+import { getWorld, propagateFree } from './world.js';
+import { circularSpeed, isGiant } from './ephemeris.js';
+import { nearestSurface } from './gravity.js';
+import { worldAt } from './worlds.js';
 import { createEntity } from './entities.js';
 import { rollIdentity } from './ship-classes.js';
 import { controlAt } from './factions.js';
@@ -75,12 +82,17 @@ const CHATTER = {
   REACTOR_SCRAM: { normal: ['{name} beacon — reactor scram, total blackout. On suit O₂.', 'This is {name}, we are dark. Total power loss.'],
     urgent: ['{name}... suit O₂ at fifty percent. Temperature dropping.', 'Getting cold in here. {name} to any ship.'],
     critical: ['{name}... suit O₂ critical... can barely move...', '... {name} ... cold ... please ...'] },
+  FALLING: { normal: ['{name}: still falling, and nothing aboard can stop it. {body} is getting bigger.', 'This is {name}. We make it the same as you do: we are not going to miss {body}.'],
+    urgent: ['{name}: {body} fills the ports now. We have stopped looking.', '{name} to any ship. How long? We make it not long.'],
+    critical: ['{name}... we can see the weather on it...', '... {name} ... tell them at home ...'] },
   UNDER_ATTACK: { normal: ['{name}: they\'re still on us — burning everything we have!', 'This is {name}, raider closing, we have no point defense!'],
     urgent: ['{name}: they hit the drive section — we\'re losing thrust!', 'Anyone — {name} — they\'re lining up another salvo!'],
     critical: ['{name}... hull breached... we can\'t hold them off...', '... {name} ... they\'re matching course ... boarding ...'] },
 };
 
 const SPAWN_CHANCE = 0.0007;     // per minute when eligible (~4%/h)
+const ORBIT_SPEED = [0.25, 1.05];  // a ship adrift in a world's space: its speed round it, of a circular orbit's there
+const FALL_STEP_MIN = 2;         // how finely a fall is looked ahead
 const COOLDOWN = 720;
 const MAX_OPEN = 3;
 
@@ -115,21 +127,57 @@ export function assessIntercept(state, entity, timerMin) {
   return { feasible: true, g, juice, minutes: est.minutes, reason: '' };
 }
 
+/**
+ * Where a ship in trouble is, somewhere near us, and how it moves: { pos,
+ * vel, dist }. Never in a world or on top of one. Out in the open it goes
+ * round the Sun about as we do; in a world's planetary space, round that
+ * world, at anything from a circular orbit's speed to a good deal less
+ * (a ship working those moons, or dropping off one, when its drive quit).
+ * Plus whatever it was doing when it went wrong.
+ */
+function adriftPlace(state, sp) {
+  const minute = state.clock.minute;
+  let pos, dist, s;
+  for (let i = 0; i < 12; i++) {
+    const ang = random() * Math.PI * 2;
+    dist = randRange(0.004, 0.025);                  // 600k – 3.7M km
+    pos = { x: sp.x + Math.cos(ang) * dist, y: sp.y + Math.sin(ang) * dist };
+    s = nearestSurface(pos.x, pos.y, minute);
+    if (!s || s.alt > s.body.radius * 1000) break;   // (at least a radius off it)
+  }
+  const pa = random() * Math.PI * 2, pm = randRange(50, 300);
+  const here = worldAt(pos.x, pos.y, minute);
+  let base;
+  if (here) {
+    const th = Math.atan2(pos.y - here.pos.y, pos.x - here.pos.x) + Math.PI / 2;
+    const v = Math.sqrt(here.w.GM / here.rM) * randRange(ORBIT_SPEED[0], ORBIT_SPEED[1]);
+    base = { vx: here.vel.vx + v * Math.cos(th), vy: here.vel.vy + v * Math.sin(th) };
+  } else {
+    const r = Math.hypot(pos.x, pos.y), v = circularSpeed(r), th = Math.atan2(pos.y, pos.x) + Math.PI / 2;
+    base = { vx: v * Math.cos(th), vy: v * Math.sin(th) };
+  }
+  return { pos, vel: { vx: base.vx + pm * Math.cos(pa), vy: base.vy + pm * Math.sin(pa) }, dist };
+}
+
+/** A hull adrift from here: does it hit something inside `within` minutes? { minutes, body } or null. */
+function fallOf(pos, vel, minute, within) {
+  if (!worldAt(pos.x, pos.y, minute)) return null;
+  const p = { ...pos }, v = { ...vel };
+  for (let t = FALL_STEP_MIN; t <= within; t += FALL_STEP_MIN) {
+    propagateFree(p, v, minute + t - FALL_STEP_MIN, minute + t, 0, 0, 1);
+    const s = nearestSurface(p.x, p.y, minute + t);
+    if (s && s.alt < 0) return { minutes: t, body: s.body };
+  }
+  return null;
+}
+
 function spawn(state, emit) {
   const world = getWorld(state);
   const type = weightedPick(Object.keys(DEF).filter(k => DEF[k].weight > 0), k => DEF[k].weight);
   const d = DEF[type];
   const sp = state.flight.pos;
   const id = rollIdentity({ category: 'civilian', near: controlAt(sp.x, sp.y, state.clock.minute).faction, state });
-  const ang = random() * Math.PI * 2;
-  const dist = randRange(0.004, 0.025);              // 600k – 3.7M km
-  const pos = { x: sp.x + Math.cos(ang) * dist, y: sp.y + Math.sin(ang) * dist };
-  // roughly co-orbiting with us, plus whatever they were doing when it went wrong
-  const r = Math.hypot(pos.x, pos.y);
-  const v = circularSpeed(r);
-  const th = Math.atan2(pos.y, pos.x) + Math.PI / 2;
-  const pa = random() * Math.PI * 2, pm = randRange(50, 300);
-  const vel = { vx: v * Math.cos(th) + pm * Math.cos(pa), vy: v * Math.sin(th) + pm * Math.sin(pa) };
+  const { pos, vel, dist } = adriftPlace(state, sp);
   const runaway = type === SosType.RUNAWAY;
   const g = runaway ? Math.round(randRange(2, 5) * 10) / 10 : 0;
   const entity = world.add(createEntity({
@@ -139,8 +187,12 @@ function spawn(state, emit) {
   }));
 
   const crew = randInt(2, 14);
-  const hours = Math.floor(d.timer / 60);
-  const story = fill(pick(d.story), { name: id.name, cls: id.shipClass, faction: id.faction, crew, g: g.toFixed(1), hours });
+  // (no drive to stop it: if it is going to hit something, that is how long it has)
+  const fall = runaway ? null : fallOf(pos, vel, state.clock.minute, d.timer);
+  const timer = fall ? fall.minutes : d.timer;
+  const hours = Math.floor(timer / 60);
+  const story = fill(pick(d.story), { name: id.name, cls: id.shipClass, faction: id.faction, crew, g: g.toFixed(1), hours })
+    + (fall ? ` And they are falling: ${id.name} is going too slowly to miss ${fall.body.name}, and reaches ${isGiant(fall.body) ? 'its cloud tops' : fall.body.atmo ? 'its air' : 'its ground'} in ${fall.minutes < 120 ? `${fall.minutes} minutes` : `about ${Math.round(fall.minutes / 60)} hours`}.` : '');
   const m = {
     id: `sos-${state.missions.nextId++}`,
     kind: 'sos',
@@ -149,8 +201,9 @@ function spawn(state, emit) {
     description: story,
     entityId: entity.id,
     status: 'offered',
-    timer: d.timer,
-    timerMax: d.timer,
+    timer,
+    timerMax: timer,
+    fallsInto: fall?.body.name ?? null,
     rewards: { ...d.rewards },
     crewAboard: crew,
     offeredAt: state.clock.minute,
@@ -160,7 +213,7 @@ function spawn(state, emit) {
   entity.tags.missionId = m.id;
   state.missions.list.push(m);
   state.missions.cooldown = COOLDOWN;
-  const feasibility = assessIntercept(state, entity, d.timer);
+  const feasibility = assessIntercept(state, entity, timer);
   emit('sos-offered', { mission: m, entity, distanceAU: dist, feasibility });
 }
 
@@ -240,7 +293,7 @@ function grant(state, rewards) {
 /** Schedule the mission's ship to leave the simulation later. */
 function retire(state, m, afterMin) {
   const e = getWorld(state).get(m.entityId);
-  if (e) e.tags.despawnAt = state.clock.minute + afterMin;
+  if (e && !e.tags.fell) e.tags.despawnAt = state.clock.minute + afterMin;
 }
 
 function fail(state, m, reason, emit) {
@@ -269,8 +322,9 @@ export function missionsTick(state, emit = () => {}) {
     m.timer--;
     const e = world.get(m.entityId);
     if (!e) { fail(state, m, m.type === SosType.UNDER_ATTACK ? 'Destroyed — nothing left but debris' : 'Contact lost', emit); continue; }
+    if (e.tags.fell) { fail(state, m, `Fell into ${e.tags.fell}, with all hands`, emit); continue; }
     if (e.tags.wreck) { fail(state, m, 'The raiders gutted the ship', emit); continue; }
-    if (m.timer <= 0) { fail(state, m, 'Too late — no survivors', emit); continue; }
+    if (m.timer <= 0) { fail(state, m, m.fallsInto ? `Fell into ${m.fallsInto}, with all hands` : 'Too late — no survivors', emit); continue; }
     if (m.status === 'accepted') {
       const d = Math.hypot(e.pos.x - state.flight.pos.x, e.pos.y - state.flight.pos.y);
       if (d > RANGE.SOS) { fail(state, m, 'Beacon out of range — signal lost', emit); continue; }
@@ -280,7 +334,7 @@ export function missionsTick(state, emit = () => {}) {
     if (m.status === 'accepted' && (m.timer % 30 === 0 || (m.timer < 60 && m.timer % 10 === 0))) {
       const frac = m.timer / m.timerMax;
       const tier = frac > 0.5 ? 'normal' : frac > 0.2 ? 'urgent' : 'critical';
-      emit('sos-chatter', { mission: m, from: e.name, text: fill(pick(CHATTER[m.type][tier]), { name: e.name, g: (e.thrust || 0).toFixed(1) }) });
+      emit('sos-chatter', { mission: m, from: e.name, text: fill(pick(CHATTER[m.fallsInto ? 'FALLING' : m.type][tier]), { name: e.name, g: (e.thrust || 0).toFixed(1), body: m.fallsInto }) });
     }
   }
 

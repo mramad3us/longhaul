@@ -97,6 +97,9 @@ for (const a of ASTEROID_DATA) {
 export const PLANETS = BODIES.filter(b => b.type === 'planet');
 export const ASTEROIDS = BODIES.filter(b => b.type === 'asteroid');
 
+/** A world with no ground under its air (its radius is the 1-bar level): a hull that falls in is gone. */
+export const isGiant = (b) => b?.atmo != null && b.atmo.surfaceKPa == null;
+
 export function getBody(name) {
   return BY_NAME.get(name) || null;
 }

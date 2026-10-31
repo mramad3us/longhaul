@@ -236,7 +236,9 @@ The contract board, news, the traffic board, clearances and fines are radio work
 | SALVAGE | hold formation with a derelict while the crew strips it (2 h), return. The derelict is the wreck of a civilian hull dead 3 to 60 days: dark and tumbling, nobody aboard, and like any wreck it can be docked with and salvaged run after run for what the job doesn't take |
 | SURVEY | loiter within 150,000 km of a survey mark for the required time, return |
 
-**Distress calls** (`sim/missions.js`) come in four kinds: fuel-dry drifters, dead drives, runaway torches stuck at high G, and scrammed reactors. Each comes with a survival timer and a feasibility estimate from the nav computer. Accept, intercept, hold formation within 10 km and hail to rescue.
+**Distress calls** (`sim/missions.js`) come in four kinds: fuel-dry drifters, dead drives, runaway torches stuck at high G, and scrammed reactors. Each comes with a survival timer and a feasibility estimate from the nav computer. Accept, intercept, hold formation within 10 km and hail to rescue. A ship that loses its drive inside a world's planetary space goes on round that world, at up to a circular orbit's speed (`ORBIT_SPEED`), never closer than one radius when the call goes out. One going too slowly to miss is **falling**: its call says so, and the clock is how long it has to fall.
+
+**A hull that comes down** (`terrain.js`). Nobody is flying a hull adrift, but it falls as anything does. Into a giant it is gone, beacon and all: a giant has no ground, and the pressure does for it; our own ship the same, however gently it comes. On a world with ground it is a wreck where it hit, unless it touched down at a walk (2 m/s).
 
 Stations near hot zones (within 0.6 AU) also post conflict work, up to 40% of their board (and military work for a contractor of a power fighting near them: above):
 

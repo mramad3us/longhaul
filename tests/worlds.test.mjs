@@ -23,6 +23,11 @@ import {
   WORLDS, worldOf, atmosphere, layerOf, airspacesOf, airspaceAt, groundAngle, worldAngle, proceduralSite, solarDayH, orbitPeriodS, airDrag, settlementOf,
 } from '../js/sim/worlds.js';
 import { BODY_FACTS } from '../js/sim/bodyfacts.js';
+import { forceDistress } from '../js/sim/missions.js';
+import { getWorld } from '../js/sim/world.js';
+import { createEntity } from '../js/sim/entities.js';
+import { serialize, deserialize } from '../js/sim/save.js';
+import { nearestSurface } from '../js/sim/gravity.js';
 import { bodySheet } from '../js/ui/bodysheet.js';
 
 /** A game away from any port, the ship set down beside a world at `offAU` from it, co-moving. */
@@ -131,6 +136,57 @@ export default [
       const pos = { x: c.x + r, y: c.y }, vel = { vx: v.vx - 2000, vy: v.vy };
       const g = terrainGuard(pos, vel, { ax: 0, ay: 0 }, null, 3 * G0, s.clock.minute);
       assert(g?.climb && g.ax > 0, `a climb, away from the air (${g ? g.ax.toFixed(1) : 'none'})`);
+    },
+  },
+  {
+    name: 'a hull adrift falls as anything does: into a giant it is gone, beacon and all, and a distress call knows it is falling and says when; on the ground, a wreck; a save\'s hull lying on a giant\'s cloud tops is gone on load',
+    fn: () => {
+      const s = nearWorld('Jupiter', 0.012, 11), world = getWorld(s), J = getBody('Jupiter');
+      const offers = [];
+      for (let i = 0; i < 60; i++) forceDistress(s, (t, p) => { if (t === 'sos-offered') offers.push(p); });
+      const now = s.clock.minute, c = bodyPos(J, now / DAY_MIN), v = bodyVel(J, now / DAY_MIN);
+      const bound = offers.filter(o => Math.hypot(o.entity.pos.x - c.x, o.entity.pos.y - c.y) * AU_M < worldOf('Jupiter').wellM && !o.entity.thrust);
+      for (const o of offers) { const g = nearestSurface(o.entity.pos.x, o.entity.pos.y, now); assert(!g || g.alt > g.body.radius * 1000, `${o.entity.name} spawned ${fmt(g.alt / 1000, 0)} km over ${g.body.name}`); }
+      // round the world, not going its way round the Sun
+      for (const o of bound) {
+        const rM = Math.hypot(o.entity.pos.x - c.x, o.entity.pos.y - c.y) * AU_M, rel = Math.hypot(o.entity.vel.vx - v.vx, o.entity.vel.vy - v.vy);
+        assert(rel <= 1.05 * Math.sqrt(worldOf('Jupiter').GM / rM) + 320, `${o.entity.name}: ${fmt(rel, 0)} m/s against Jupiter`);
+      }
+      const falling = offers.filter(o => o.mission.fallsInto === 'Jupiter').sort((a, b) => a.mission.timer - b.mission.timer);
+      assert(falling.length && bound.length > falling.length, `some fall, not all (${falling.length} of ${bound.length} in its space)`);
+      const m = falling[0].mission, e = world.get(m.entityId);
+      assert(/falling/.test(m.description) && /Jupiter/.test(m.description) && m.timerMax === m.timer, 'the call says so, and the clock is the fall');
+      const beacons = () => [...world.beacons].includes(e);
+      assert(beacons(), 'calling');
+      // it comes to the cloud tops when it was said to, and is gone
+      const tell = m.timer;
+      let t = 0;
+      while (t < tell + 20 && !e.tags.fell) { advance(s, 1); t++; }
+      assert(e.tags.fell === 'Jupiter' && Math.abs(t - tell) <= 8, `fell in ${t} min, the call said ${tell}`);
+      assert(m.status === 'lost' && /Fell into Jupiter/.test(m.failReason) && !beacons() && !e.transponder, `its call over (${m.status}, ${m.failReason})`);
+      for (let i = 0; i < 10 && world.get(e.id); i++) advance(s, 1);
+      assert(!world.get(e.id), 'off the board, not lying on the clouds');
+      // a save from before, a hull on Jupiter's cloud tops turning with it
+      const old = world.add(createEntity({ id: 'old-hull', name: 'Bradbury Placer', type: 'ship', cls: 'arsia', faction: 'MCR', transponder: true, sos: true, t: s.clock.minute, tags: { sos: true },
+        orbit: { body: 'Jupiter', r: J.radius * 1000 / AU_M, phase: 1, period: J.rotH / 24 } }));
+      const back = deserialize(serialize(s)).state, w2 = getWorld(back), o2 = w2.get(old.id);
+      assert(o2.tags.fell === 'Jupiter' && !o2.sos && !o2.transponder, 'gone on load');
+      for (let i = 0; i < 10 && w2.get(old.id); i++) advance(back, 1);
+      assert(!w2.get(old.id), 'and off the board');
+      // on ground: a wreck where it hit, lying there
+      const g = nearWorld('Ganymede', 0.002, 12), wg = getWorld(g), G = getBody('Ganymede');
+      const gc = bodyPos(G, g.clock.minute / DAY_MIN), gv = bodyVel(G, g.clock.minute / DAY_MIN);
+      const drop = wg.add(createEntity({ id: 'drop', name: 'Dropped', type: 'ship', cls: 'arsia', faction: 'MCR', transponder: true, t: g.clock.minute, tags: {},
+        pos: { x: gc.x + (G.radius + 300) * 1000 / AU_M, y: gc.y }, vel: { vx: gv.vx - 800, vy: gv.vy } }));
+      for (let i = 0; i < 40 && !drop.tags.fell; i++) advance(g, 1);
+      assert(drop.tags.fell === 'Ganymede' && drop.tags.wreck && drop.orbit?.body === 'Ganymede' && !drop.transponder, 'a wreck on the ground');
+      // and us: there is no ground on a giant to come gently down on
+      const u = nearWorld('Jupiter', 0.012, 13), uc = bodyPos(J, u.clock.minute / DAY_MIN), uv = bodyVel(J, u.clock.minute / DAY_MIN);
+      u.flight.pos = { x: uc.x + (J.radius - 1) * 1000 / AU_M, y: uc.y };
+      u.flight.vel = { vx: uv.vx, vy: uv.vy + 2 * Math.PI * J.radius * 1000 / (J.rotH * 3600) };
+      for (let i = 0; i < 3 && !u.lost; i++) advance(u, 1);
+      assert(u.lost, 'no landing on Jupiter');
+      console.log(`      of ${offers.length} calls near Jupiter, ${bound.length} in its space, ${falling.length} falling: the soonest in ${tell} min, down in ${t}`);
     },
   },
   {

@@ -17,7 +17,9 @@
 //
 // NPC hulls and torpedoes come down too: a torpedo that meets the ground
 // is spent; a hull that hits faster than a touch is wrecked, and either
-// way it is left lying on the surface, on rails with the rock.
+// way it is left lying on the surface, on rails with the rock. A giant
+// has no ground: a hull that falls into one is gone, beacon and all, and
+// no ship of ours comes to rest there however gently it comes.
 //
 // Routes are planned as if space were empty, so the nav computer (and an
 // NPC's) flies a guard over them near a body (terrainGuard: inside twenty
@@ -44,10 +46,11 @@
 // still the ground's.
 // ============================================================
 
-import { AU_M, MIN_S, TWO_PI } from '../core/constants.js';
+import { AU_KM, AU_M, MIN_S, TWO_PI } from '../core/constants.js';
 import { nearestSurface, pullAt } from './gravity.js';
 import { SLEW_RATE } from './flight.js';
-import { getWorld } from './world.js';
+import { getWorld, HULL_DOWN } from './world.js';
+import { getBody, isGiant } from './ephemeris.js';
 import { hullPoints, CLASSES, PLAYER_CLASS } from './ship-classes.js';
 import { applyHit, wreckNpc } from './damage.js';
 import { PLAYER, ensureHull } from './combatants.js';
@@ -284,10 +287,12 @@ function contact(state, s, emit) {
   const v = againstGround(s, f.vel);
   const speed = Math.hypot(v.vx, v.vy);
   const name = s.body.name;
-  if (speed > TOUCH_MS) {
+  const giant = isGiant(s.body);
+  if (speed > TOUCH_MS || giant) {
     const hp = hullPoints(CLASSES[state.ship.classId || PLAYER_CLASS]);
-    const share = Math.min(1.2, ((speed - TOUCH_MS) / (LOST_MS - TOUCH_MS)) ** 2);
-    emit('ground-impact', { body: name, speed, text: `Impact with ${name} at ${Math.round(speed)} m/s.` });
+    // (a giant has no ground to come to rest on: the pressure does it, however gently we came)
+    const share = giant ? 1.2 : Math.min(1.2, ((speed - TOUCH_MS) / (LOST_MS - TOUCH_MS)) ** 2);
+    emit('ground-impact', { body: name, speed, text: giant ? `Down through ${name}'s cloud tops at ${Math.round(speed)} m/s: the hull is going.` : `Impact with ${name} at ${Math.round(speed)} m/s.` });
     applyHit(state, PLAYER, { kind: 'impact', weapon: `the surface of ${name}`, dp: share * hp, spread: true, from: null }, emit);
     if (state.lost) return;
   }
@@ -323,7 +328,8 @@ export function groundCheck(state, e, emit = () => {}) {
   const v = againstGround(s, e.vel);
   const speed = Math.hypot(v.vx, v.vy);
   const world = getWorld(state);
-  if (speed > TOUCH_MS && ensureHull(e).status !== 'wreck') wreckNpc(state, e, null, emit);
+  if (isGiant(s.body)) lostInto(world, e, s.body, state.clock.minute);
+  else if (speed > TOUCH_MS && ensureHull(e).status !== 'wreck') wreckNpc(state, e, null, emit);
   world.setDriven(e, false);
   const spinDays = s.body.rotH / 24;
   const days = state.clock.minute / 1440;
@@ -331,6 +337,41 @@ export function groundCheck(state, e, emit = () => {}) {
   e.thrust = 0;
   world.refresh(e, state.clock.minute);
   world.hash.update(e);
-  emit('ship-crashed', { id: e.id, name: e.name, body: s.body.name, speed, text: `${e.name} came down on ${s.body.name} at ${Math.round(speed)} m/s.` });
+  emit('ship-crashed', { id: e.id, name: e.name, body: s.body.name, speed, text: `${e.name} ${isGiant(s.body) ? 'fell into' : 'came down on'} ${s.body.name} at ${Math.round(speed)} m/s.` });
   return true;
+}
+
+/** A hull gone into a giant: nothing comes back up, and no beacon does. It is taken off the board (despawnAt). */
+function lostInto(world, e, body, minute) {
+  e.tags.fell = body.name;
+  e.tags.despawnAt = minute;
+  e.transponder = false;
+  world.setSos(e, false);
+  // (we were holding on it: it is gone from under us)
+  const f = world.state?.flight;
+  if (f?.hold?.id === e.id) f.hold = null;
+}
+
+// A hull adrift has nobody flying it, so nothing calls groundCheck for it: it comes to the world as it refreshes
+// (world.js). Into a giant it is gone; on a world with ground, a wreck, unless it touched down at a walk.
+HULL_DOWN.fn = (world, e, s, minute) => {
+  if (isGiant(s.body)) { lostInto(world, e, s.body, minute); return; }
+  const v = againstGround(s, e.vel), speed = Math.hypot(v.vx, v.vy);
+  if (speed <= TOUCH_MS) return;
+  e.tags.fell = s.body.name;
+  if (ensureHull(e).status !== 'wreck') wreckNpc(world.state, e, null);
+};
+
+/**
+ * On load: hulls a save has lying on a giant's cloud tops, turning with it
+ * (before 1.12.13 a hull adrift came to rest on any world, the Bradbury
+ * Placer on Jupiter with its beacon still calling).
+ */
+export function upgradeFallen(state) {
+  const world = getWorld(state), now = state.clock.minute;
+  for (const e of world.byId.values()) {
+    if (e.type !== 'ship' || !e.orbit || e.tags?.fell) continue;
+    const b = getBody(e.orbit.body);
+    if (isGiant(b) && Math.abs(e.orbit.r * AU_KM - b.radius) < 1) lostInto(world, e, b, now);
+  }
 }
