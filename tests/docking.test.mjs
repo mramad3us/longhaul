@@ -12,7 +12,7 @@ import { getBody, surfaceGravity } from '../js/sim/ephemeris.js';
 import { CLASSES, PLAYABLE, maxCrew } from '../js/sim/ship-classes.js';
 import { hullOf, COLLARS, partExtent } from '../js/sim/hulls.js';
 import { createLayout, shipGeometry, airlockFor, DECK_PROGRAMS } from '../js/sim/ship-layout.js';
-import { STATIONS, stationModel, stationOrbit, gateId, berthCounts, berthPose, berthClear, berthsClash, berthFits, berthSizesFor, collarFor, corridorOf, parkHull } from '../js/sim/stations.js';
+import { STATIONS, stationModel, stationOrbit, gateId, berthCounts, berthPose, berthClear, berthsClash, berthFits, berthSizesFor, collarFor, corridorOf, parkHull, freeBerth, ourBerth, holdBerth, berthOccupant, berthOf } from '../js/sim/stations.js';
 import { buildStationMesh } from '../js/ui/gl/hullmesh.js';
 import { createEntity } from '../js/sim/entities.js';
 import * as TC from '../js/sim/traffic-control.js';
@@ -162,6 +162,125 @@ export default [
       const ceres = world.get('ceres-station');
       const r = TC.requestDocking(s, 'ceres-station');
       assert(r.ok, `a cleared arrival finds a berth: ${r.text}`);
+    },
+  },
+  {
+    name: 'a berth we are cleared for is ours: traffic is given every other, the same one comes back when asked again, and it goes back when the clearance lapses',
+    fn: () => {
+      const id = 'ganymede-station';
+      const s = game(21, { traffic: 400 });
+      advance(s, 240);
+      const world = getWorld(s), st = world.get(id);
+      atGate(s, id);
+      const r = TC.requestDocking(s, id);
+      assert(r.ok, `cleared: ${r.text}`);
+      assert(ourBerth(s, st) === r.berth, 'the berth it names is ours');
+      assert(!berthOccupant(world, st, r.berth), 'and nobody lies in it');
+      // every hull that comes, till the port is full: the first of these is the user's light freighter, two minutes behind the clearance
+      const ours = stationModel(id).berths.find(b => b.id === r.berth), given = [];
+      for (const cls of ['light-freighter', 'light-freighter', ...PLAYABLE, ...PLAYABLE, ...PLAYABLE]) {
+        const b = freeBerth(s, st, cls);
+        if (!b) continue;
+        assert(b !== ours, `a ${cls} given the berth we are cleared for`);
+        assert(!berthsClash(b, cls, ours, s.ship.classId), `a ${cls} given ${b.id}, lying across ours`);
+        const e = createEntity({ id: `caller-${given.length}`, name: 'Caller', type: 'ship', cls, orbit: st.orbit, tags: { traffic: true } });
+        world.add(e);
+        holdBerth(st, b.id, e);
+        given.push({ b, e });
+      }
+      console.log(`      ${given.length} hulls berthed round ${r.berth}, none on it`);
+      assert(given.length >= 5, `the port took hulls (${given.length})`);
+      assert(!freeBerth(s, st, s.ship.classId), 'nothing left for a hull like ours');
+      const again = TC.requestDocking(s, id);
+      assert(again.ok && again.berth === r.berth && again.port === r.port, `asked again, the same berth (${again.berth})`);
+      // lapsed, with no dock under way: the port has it back
+      s.clock.minute += TC.DOCK_CLEARANCE_MIN + 1;
+      assert(ourBerth(s, st) == null, 'a lapsed clearance holds nothing');
+      assert(freeBerth(s, st, s.ship.classId) === ours, 'the berth is free again, for anyone');
+    },
+  },
+  {
+    name: 'a berth we are flying down to stays ours past the clearance; asked again on the way it is the same one; called off, it goes back',
+    fn: () => {
+      const id = 'ganymede-station';
+      const s = game(22);
+      const world = getWorld(s), st = world.get(id);
+      atGate(s, id);
+      const r = TC.requestDocking(s, id);
+      assert(D.beginDocking(s, { kind: 'station', id }, { mode: 'auto' }).ok, 'down to it');
+      const ours = stationModel(id).berths.find(b => b.id === r.berth);
+      s.tc.clear[id].dock.until = s.clock.minute;                  // (the clearance runs out on the final approach, as the user's did)
+      assert(!TC.clearanceFor(s, id).dock, 'the clearance has lapsed');
+      assert(ourBerth(s, st) === r.berth, 'the berth under us is still ours');
+      assert(freeBerth(s, st, s.ship.classId) !== ours, 'and not for traffic');
+      const again = TC.requestDocking(s, id);
+      assert(again.ok && again.berth === r.berth, `asked on the way down, the same berth (${again.berth}), not one we would not go to`);
+      s.tc.clear[id].dock.until = s.clock.minute;
+      assert(D.abortDocking(s, () => {}, 'called off'), 'called off');
+      advance(s, 3);
+      if (!s.dock?.berth) assert(ourBerth(s, st) == null, 'called off and no clearance: not ours');
+      // the whole way in, a busy port all round: nobody else in it when we come
+      const b = createGame({ traffic: 500, forces: false });
+      b.politics.quietUntil = Infinity; b.missions.cooldown = 1e9;
+      advance(b, 240);
+      const w2 = getWorld(b), st2 = w2.get(id);
+      atGate(b, id);
+      const c = TC.requestDocking(b, id);
+      assert(c.ok, c.text);
+      assert(D.beginDocking(b, { kind: 'station', id }, { mode: 'auto' }).ok, 'cleared, in we go');
+      for (let i = 0; i < 90 && b.dock?.phase !== 'docked'; i++) {
+        advance(b, 1);
+        for (const e of w2.byId.values()) assert(e.tags?.at !== id || e.tags?.berth !== c.berth, `${e.name} given our ${c.berth} at minute ${i}`);
+      }
+      assert(b.dock?.phase === 'docked' && b.dock.berth === c.berth, `down at ${c.berth} (${b.dock?.phase})`);
+      assert(st2.berths[c.berth] === 'player', 'and the table says so');
+    },
+  },
+  {
+    name: 'a save with a hull in the berth we hold, or are cleared for: the port moves it on, its work going on elsewhere',
+    fn: () => {
+      const id = 'ganymede-station';
+      const lie = (s, st, e, b) => {
+        e.tags.at = st.id; e.tags.berth = b.id; e.transit = null; e.thrust = 0;
+        e.tags.call = { work: 281, lay: 60, tender: 0, since: s.clock.minute, port: st.id, phase: 'work' };
+        e.tags.until = s.clock.minute + 200;
+        e.orbit = { ...st.orbit };
+      };
+      const s = game(23, { traffic: 200 });
+      advance(s, 60);
+      assert(D.dockInstant(s, id), 'docked');
+      const world = getWorld(s), st = world.get(id), our = s.dock.berth;
+      const hull = [...world.byId.values()].find(e => e.tags?.traffic && e.cls === 'light-freighter' && !e.driven && !e.tags.berth);
+      assert(hull, 'a freighter to put there');
+      if (hull.tags.slot) { delete st.holding?.[hull.tags.slot]; hull.tags.slot = null; }
+      lie(s, st, hull, berthOf(id, our));                          // (as the user's save had it: its tags on our berth, the table ours)
+      const { state: l } = deserialize(serialize(s));
+      const w = getWorld(l), e = w.get(hull.id), st2 = w.get(id);
+      assert(l.dock.berth === our && st2.berths[our] === 'player', 'we keep the berth');
+      assert(e.tags.berth !== our, `the hull has moved on (${e.tags.berth})`);
+      assert(e.tags.at === id, 'in port still');
+      if (e.tags.berth) assert(st2.berths[e.tags.berth] === e.id, 'its new berth is its own');
+      const dM = Math.hypot(e.pos.x - l.flight.pos.x, e.pos.y - l.flight.pos.y) * AU_M;
+      assert(dM > 50, `it lies elsewhere now (${fmt(dM, 0)} m off)`);
+      assert(e.tags.call.phase === 'work' && e.tags.until > l.clock.minute, 'its work goes on');
+      console.log(`      ${e.name} moved from ${our} to ${e.tags.berth || 'the anchorage'}, ${fmt(dM, 0)} m off`);
+      advance(l, 300);
+      assert(e.tags.berth !== our, 'and it leaves in its own time');
+      assert(st2.berths[our] === 'player', 'our berth untouched by its going');
+      // the same with only a clearance: the berth given before the fix, a hull already in it
+      const c = game(24, { traffic: 200 });
+      advance(c, 60);
+      const w3 = getWorld(c), st3 = w3.get(id);
+      atGate(c, id);
+      const r = TC.requestDocking(c, id);
+      const h3 = [...w3.byId.values()].find(e => e.tags?.traffic && e.cls === 'light-freighter' && !e.driven && !e.tags.berth);
+      if (h3.tags.slot) { delete st3.holding?.[h3.tags.slot]; h3.tags.slot = null; }
+      lie(c, st3, h3, berthOf(id, r.berth));
+      st3.berths[r.berth] = h3.id;
+      const { state: l3 } = deserialize(serialize(c));
+      const e3 = getWorld(l3).get(h3.id);
+      assert(e3.tags.berth !== r.berth, `cleared for it, the hull is moved on (${e3.tags.berth})`);
+      assert(!berthOccupant(getWorld(l3), getWorld(l3).get(id), r.berth), 'and the berth stands empty for us');
     },
   },
   {

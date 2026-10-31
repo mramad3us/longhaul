@@ -34,6 +34,7 @@ import { clearanceFor } from '../sim/traffic-control.js';
 import { finesOwed } from '../sim/law.js';
 import { threatSummary } from './combat.js';
 import { ourName } from '../sim/service.js';
+import { maxCrew } from '../sim/ship-classes.js';
 
 let el = {};
 let onThreat = null;
@@ -385,7 +386,7 @@ export function setResourceAlertHandler(fn) { onResourceAlert = fn; }
 
 function updateResources(state) {
   const alive = state.ship.crew.filter(m => !m.dead).length;
-  setText(resEls.crew.val, `${alive} / ${state.ship.crew.length}${aboardLabel(state)}`);
+  setText(resEls.crew.val, `${alive} / ${maxCrew(state.ship.classId)}${aboardLabel(state)}`);
   setText(resEls.credits.val, `${fmtNum(state.resources.credits.current)} MCR`);
   let critical = false;
   for (const cfg of RES) {

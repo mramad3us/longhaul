@@ -27,7 +27,7 @@ import { respondToRequest } from '../sim/agents.js';
 import { WARHEADS } from '../sim/weapons.js';
 import { TECH } from '../sim/ship-classes.js';
 import { WANTED_LABEL, turnOverHere } from '../sim/law.js';
-import { STATIONS, stationModel } from '../sim/stations.js';
+import { STATIONS, stationModel, ourBerth } from '../sim/stations.js';
 import { clearanceFor, requestDocking, stationTraffic } from '../sim/traffic-control.js';
 import { hiringHall, hire, dismiss, shoreLeave, recallLeave, LEAVE_COST, LEAVE_MIN } from '../sim/crew-services.js';
 import { rankTitle, fullName, wageOf, payroll } from '../sim/careers.js';
@@ -185,7 +185,7 @@ export function openJobs() {
   const rows = s.jobs.list.map(j => `<div class="job-row"><span class="job-priority job-priority-${['critical', 'high', 'normal'][j.priority]}">${P[j.priority]}</span>
     <span class="job-type">${esc(label(j))}</span><span class="job-status job-status-${j.status === 'open' ? 'pending' : 'assigned'}">${j.status}</span>
     <span class="job-assignee ${j.assignee == null ? 'job-assignee-none' : ''}">${esc(j.assignee == null ? '—' : name(j.assignee))}</span></div>`).join('');
-  const crew = s.ship.crew.map(m => `<div class="job-row"><span class="job-type">${esc(m.name)}</span><span class="job-status">${esc(m.dead ? 'deceased' : describeActivity(m))}</span></div>`).join('');
+  const crew = s.ship.crew.filter(m => !m.dead).map(m => `<div class="job-row"><span class="job-type">${esc(m.name)}</span><span class="job-status">${esc(describeActivity(m))}</span></div>`).join('');
   openDialog({
     title: 'Crew Jobs', cls: 'dialog-jobs',
     html: `<div class="jobs-list">${rows ? `<div class="jobs-header"><span class="jobs-col-priority">PRI</span><span class="jobs-col-type">Job</span><span class="jobs-col-status">Status</span><span class="jobs-col-assignee">Assignee</span></div>${rows}` : '<p class="jobs-empty">— No open jobs —</p>'}</div>
@@ -519,11 +519,11 @@ function trafficHTML(s, st) {
   const world = getWorld(s);
   const m = stationModel(st.id);
   const t = stationTraffic(s, st);
-  const cl = clearanceFor(s, st.id);
+  const cl = clearanceFor(s, st.id), promised = ourBerth(s, st);
   const rows = (m?.berths || []).map(b => {
     const who = st.berths?.[b.id];
     const e = who && who !== 'player' ? world.get(who) : null;
-    return `<div class="service-row"><span class="service-name">${esc(b.id)}</span><span class="service-stock">${esc(b.label)} · ${b.accepts.join('/')}</span><span class="service-price">${who === 'player' ? `${esc(s.ship.name)} (ours)` : e ? esc(e.transponder ? e.name : 'unregistered') : (st.berthsOut?.[b.id] > s.clock.minute ? 'OUT OF SERVICE' : 'free')}</span><span></span></div>`;
+    return `<div class="service-row"><span class="service-name">${esc(b.id)}</span><span class="service-stock">${esc(b.label)} · ${b.accepts.join('/')}</span><span class="service-price">${who === 'player' ? `${esc(s.ship.name)} (ours)` : e ? esc(e.transponder ? e.name : 'unregistered') : (st.berthsOut?.[b.id] > s.clock.minute ? 'OUT OF SERVICE' : b.id === promised ? 'held for us' : 'free')}</span><span></span></div>`;
   }).join('');
   return `<div class="service-list"><div class="station-mission-desc">${t.used} of ${t.total} berths taken · ${t.holding} of ${t.holdingTotal} holding slots${t.anchored ? ` · ${t.anchored} at the anchorage` : ''} · ${t.inbound} on the approach.
     Our clearance: ${cl.dock ? `docking at ${esc(cl.dock.berth)}` : cl.hold ? `holding ${esc(cl.hold.slot)}` : cl.approach ? 'approach' : cl.depart ? 'departure' : 'none'}.</div>${rows}</div>`;

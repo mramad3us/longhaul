@@ -30,7 +30,8 @@
 //     waits at the anchorage when they are full; traffic control keeps a
 //     share of berths free for arrivals it has cleared (RESERVE). A berth
 //     found free is held for the ship it is given to while it comes down
-//     (holdBerth), so one berth isn't sent every ship waiting; how many
+//     (holdBerth), so one berth isn't sent every ship waiting, and the
+//     berth we are cleared for is kept from traffic (ourBerth); how many
 //     are taken is kept at runtime ($bh), counted again hourly. A berth
 //     let go calls down a ship from the port's queue (BERTH_FREED: traffic.js).
 //
@@ -533,10 +534,25 @@ export function wayRound(id, a, b, lengthM) {
 const occupantClass = (world, who) => who === 'player' ? world.state.ship?.classId || PLAYER_CLASS : world.get(who)?.cls;
 
 /**
+ * The berth that is ours at a port though we don't lie in it yet: the one
+ * we are flying down to or holding off, clearance or no, else the one a
+ * clearance still good has given us. It is worked out from those, not
+ * claimed in the berth table, so a clearance lapsing or a dock called off
+ * gives it back with nothing to let go.
+ */
+export function ourBerth(state, st) {
+  const d = state.dock;
+  if (d?.target.id === st.id && d.berth && d.phase !== 'outbound') return d.berth;   // (climbing out: let go, undock)
+  const c = state.tc?.clear?.[st.id]?.dock;
+  return c && c.until > state.clock.minute ? c.berth : null;
+}
+
+/**
  * A free berth for a hull of class `classId`, its collars of `sizes`, or
  * null: one that takes its collar, that it clears (berthClear), with no
- * neighbour's hull across it. Traffic can't take the reserved share
- * (`reserve`): those are for arrivals traffic control has cleared.
+ * neighbour's hull across it, and not ours (ourBerth). Traffic can't take
+ * the reserved share (`reserve`): those are for arrivals traffic control
+ * has cleared.
  */
 export function freeBerth(state, st, classId, { reserve = false, sizes = berthSizesFor(classId) } = {}) {
   const m = stationModel(st.id);
@@ -546,6 +562,8 @@ export function freeBerth(state, st, classId, { reserve = false, sizes = berthSi
   if (reserve && berthsUsed(world, st, m, state.clock.minute) >= Math.floor(m.berths.length * (1 - RESERVE))) return null;
   const taken = [];
   for (const b of m.berths) { const who = berthOccupant(world, st, b.id); if (who) taken.push({ b, cls: occupantClass(world, who) }); }
+  const ours = ourBerth(state, st), mine = ours && m.berths.find(b => b.id === ours);
+  if (mine && !taken.some(t => t.b === mine)) taken.push({ b: mine, cls: occupantClass(world, 'player') });
   // the smallest berth that fits, so a cradle stays free for a bulk hull
   return m.berths.filter(b => sizes.some(sz => berthFits(b, sz)) && !taken.some(t => t.b === b) && berthClear(st.id, b, classId))
     .sort((a, b) => a.accepts.length - b.accepts.length || (a.accepts.includes('L') ? 1 : 0) - (b.accepts.includes('L') ? 1 : 0))
@@ -657,7 +675,10 @@ export function parkHull(state, e, st, { reserve = true } = {}) {
  * On load: hulls lying in berths where they were saved. A port's layout can
  * change under a save (1.12.12 moved Luna's berths and others): a hull is
  * put back on its berth as it now is, and one that no longer clears it
- * goes where it can.
+ * goes where it can. And before 1.12.17 a clearance didn't keep its berth,
+ * so we could come down on a hull given the same one (the user's Longhaul,
+ * on a light freighter at Ganymede): a hull in a berth that is ours is
+ * moved on, to another berth or the anchorage, its work going on there.
  */
 export function refitBerths(state) {
   const world = getWorld(state);
@@ -671,6 +692,15 @@ export function refitBerths(state) {
       if (!port || !berthClear(st.id, b, e.cls)) { parkHull(state, e, st); continue; }
       e.orbit = berthOrbit(st, b, mateOffset({ pos: { x: 0, y: 0 }, normal: vec(b.face), up: vec(b.up) }, port));
     }
+  }
+  const now = state.clock.minute;
+  for (const e of world.byId.values()) {
+    const st = e.tags?.berth && e.tags.at ? world.get(e.tags.at) : null;
+    if (!st || (berthTable(st)[e.tags.berth] === e.id && ourBerth(state, st) !== e.tags.berth)) continue;
+    if (!e.orbit || e.transit) { releaseHull(world, e); continue; }     // (one still coming down looks for a berth when it gets here)
+    parkHull(state, e, st);
+    world.refresh(e, now);
+    world.hash.update(e);
   }
 }
 

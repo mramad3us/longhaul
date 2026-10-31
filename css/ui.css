@@ -315,7 +315,6 @@ body.reduce-motion .sys-led, body.reduce-motion .sys-frame { animation: none !im
 .roster-head { font-family: var(--font-pixel); font-size: 0.3rem; letter-spacing: 0.12em; color: var(--text-dim); padding: 0 8px 6px; }
 .roster { display: flex; flex-direction: column; gap: 4px; }
 .roster-row { padding: 6px 8px; border: 1px solid var(--hull-primary); background: rgba(16, 25, 42, 0.5); }
-.roster-row.roster-dead { opacity: 0.4; }
 .roster-who { display: flex; flex-direction: column; }
 .roster-name { font-family: var(--font-display); font-weight: 600; font-size: 0.85rem; color: var(--text-primary); }
 .roster-role { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-secondary); }
@@ -333,7 +332,6 @@ body.reduce-motion .sys-led, body.reduce-motion .sys-frame { animation: none !im
 .duty-now.duty-duty { color: var(--accent); }
 .duty-now.duty-free { color: var(--ok); }
 .duty-now.duty-sleep { color: #8E9EEA; }
-.duty-now.duty-dead { color: var(--danger); }
 .roster-needs { display: flex; align-items: flex-end; gap: 4px; height: 22px; }
 .need-mini { display: flex; align-items: flex-end; width: 9px; height: 20px; background: var(--hull-primary); }
 .need-mini > span { display: block; width: 100%; background: var(--ok); }

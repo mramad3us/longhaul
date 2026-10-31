@@ -172,7 +172,6 @@ const needBars = (m) => NEEDS.map(k => {
 }).join('');
 
 function blockLabel(state, m) {
-  if (m.dead) return '<span class="duty-now duty-dead">DECEASED</span>';
   const b = scheduleBlock(state, m);
   const left = formatDuration(minutesLeftInBlock(state, m));
   const txt = b === 'duty' ? `ON WATCH · ${left}` : b === 'sleep' ? `SLEEP · ${left}` : `OFF · ${left}`;
@@ -197,19 +196,20 @@ export function openRoster() {
   const render = () => {
     const s = ui.state;
     if (!s) return '';
-    const rows = s.ship.crew.map(m => {
+    // (the living: the dead come off it the day they die, and are named under IN MEMORY below)
+    const rows = s.ship.crew.filter(m => !m.dead).map(m => {
       const opts = ['none', ...STATION_IDS].map(id => {
         const st = STATIONS[id];
         const sk = st?.skill ? ` (${st.skill.slice(0, 3).toUpperCase()} ${Math.floor(m.skills[st.skill])})` : '';
         return `<option value="${id}" ${m.duty.station === id ? 'selected' : ''}>${id === 'none' ? 'No station' : st.label + sk}</option>`;
       }).join('');
-      const shifts = SHIFTS.map((sh, i) => `<button class="duty-shift ${m.duty.shift === i ? 'active' : ''}" data-act="duty-shift" data-id="${m.id}" data-shift="${i}" ${m.dead ? 'disabled' : ''}>${sh.label}</button>`).join('');
-      return `<div class="roster-row ${m.dead ? 'roster-dead' : ''}">
-        <div class="roster-who"><span class="roster-name">${esc(m.name)}${m.dead ? '' : flags(m)}</span><span class="roster-role">${esc(m.role === 'Captain' || m.born == null ? m.role : rankTitle(m))}</span>${m.born != null ? `<span class="roster-role">${m.role === 'Captain' || rankTitle(m).includes(m.role) ? '' : `${esc(m.role)} · `}${Math.floor(ageOf(m, s.clock.minute))}</span>` : ''}</div>
-        <select class="roster-station" data-id="${m.id}" ${m.dead ? 'disabled' : ''}>${opts}</select>
+      const shifts = SHIFTS.map((sh, i) => `<button class="duty-shift ${m.duty.shift === i ? 'active' : ''}" data-act="duty-shift" data-id="${m.id}" data-shift="${i}">${sh.label}</button>`).join('');
+      return `<div class="roster-row">
+        <div class="roster-who"><span class="roster-name">${esc(m.name)}${flags(m)}</span><span class="roster-role">${esc(m.role === 'Captain' || m.born == null ? m.role : rankTitle(m))}</span>${m.born != null ? `<span class="roster-role">${m.role === 'Captain' || rankTitle(m).includes(m.role) ? '' : `${esc(m.role)} · `}${Math.floor(ageOf(m, s.clock.minute))}</span>` : ''}</div>
+        <select class="roster-station" data-id="${m.id}">${opts}</select>
         <div class="roster-shifts">${shifts}</div>
-        <div class="roster-now">${blockLabel(s, m)}<span class="roster-activity">${esc(m.dead ? '' : describeActivity(m))}</span></div>
-        <div class="roster-needs">${m.dead ? '' : needBars(m)}<span class="roster-morale" title="Morale">${m.dead ? '' : Math.round(m.morale)}</span><span class="roster-eff" title="Efficiency">${m.dead ? '' : Math.round(efficiency(m) * 100) + '%'}</span></div>
+        <div class="roster-now">${blockLabel(s, m)}<span class="roster-activity">${esc(describeActivity(m))}</span></div>
+        <div class="roster-needs">${needBars(m)}<span class="roster-morale" title="Morale">${Math.round(m.morale)}</span><span class="roster-eff" title="Efficiency">${Math.round(efficiency(m) * 100) + '%'}</span></div>
       </div>`;
     }).join('');
     const cover = STATION_IDS.map(id => `<div class="cover-row"><span class="cover-station">${STATIONS[id].label}</span>${SHIFTS.map((sh, i) => {

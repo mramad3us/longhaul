@@ -65,7 +65,7 @@ Every hand has a life longer than a watch: an age, a home, a rank in their depar
 - **Leave.** From 21 days without a run ashore, cabin fever: −0.4 morale a day, to −15. A run ashore resets it: +8 at a station, +15 on a world's ground by shuttle, +20 at home (a Belter at a Belt station, a Martian on Mars…); a day ashore on an errand (a course, the hospital: FLIGHT.md, a world's ground) +6.
 - **The end.** Each has an age they mean to stop at (58–70). Past it they ask to retire: granted, they sign off at the next port (back pay settled as far as it goes; +3 morale to the rest, a send-off); asked to stay, they stay (−8 morale) and ask again in 90 days; five years past it they go regardless. A hand under 15 morale for 7 days means to sign off at the next port (−3 to the rest when they go), unless their morale climbs back to 35 first.
 - **Command.** A captain who dies is succeeded by the senior officer aboard: the helm's first, then by rank and experience.
-- **Records.** Each hand keeps their last 12 entries (signed on, promoted, took command…); the ship keeps a memorial of the dead (cause and day) and a list of those who left (paid off, retired, quit), 40 each.
+- **Records.** Each hand keeps their last 12 entries (signed on, promoted, took command…); the ship keeps a memorial of the dead (cause and day) and a list of those who left (paid off, retired, quit), 40 each. The dead come off the duty roster and the crew activity list when they die, and the roster's SERVICE section names them under In memory; the crew counter reads the living over the ship's complement (`maxCrew`).
 
 Morale beyond the needs (`moraleTarget`) adds `careerMood`: back pay owed, cabin fever and a step up overdue, worked out daily.
 

@@ -24,7 +24,7 @@
 // Clearances are granted by hailing (dialogue.js, or the nav computer's
 // one-click request): approach (good for 6 hours), holding (a slot in the
 // port's holding pattern, holding.js: good for a day, and renewed by
-// asking again), docking (a berth assigned, good for 2 hours), departure
+// asking again), docking (a berth assigned, kept from traffic, good for 2 hours), departure
 // (30 minutes). Port space (the approach) is where the radio side of a
 // station is worked: a ship there with a clearance is in port. A docking request
 // may be refused: a power that wants us, standing under −20, a naval
@@ -48,7 +48,7 @@ import { FACTIONS } from './factions.js';
 import { hostileTo, flagOf } from './service.js';
 import { PLAYER_CLASS } from './ship-classes.js';
 import { hullOf } from './hulls.js';
-import { STATIONS, CORRIDOR_M, stationModel, freeBerth, collarFor, berthCounts, berthOccupant, gateId } from './stations.js';
+import { STATIONS, CORRIDOR_M, stationModel, freeBerth, ourBerth, collarFor, berthCounts, berthOccupant, gateId } from './stations.js';
 import { cite, recordOffense } from './law.js';
 import { holdingPattern, freeSlot, claimSlot, releaseSlot, slotOccupant, slotDescription, slotCounts, PORT_M } from './holding.js';
 import { plansTo } from './intel.js';
@@ -150,16 +150,15 @@ export function requestDocking(state, stationId, { emergency = false } = {}) {
   if ((st.combat?.docks ?? 1) < 0.25) return { ok: false, text: 'Our docks are out of action. We cannot take you.' };
   const ports = ourPorts(state);
   const sizes = [...new Set(ports.map(p => p.size))];
-  const held = clearanceFor(state, stationId).dock;
-  // a berth still ours (backed off it, holding) is given back: the dock can go straight in from where it holds
-  const d = state.dock;
-  const ours = d?.target.id === stationId && d.berth && ['undock', 'separate', 'holding'].includes(d.phase) ? stationModel(stationId).berths.find(b => b.id === d.berth) : null;
-  const berth = held ? stationModel(stationId).berths.find(b => b.id === held.berth) : ours || freeBerth(state, st, state.ship.classId || PLAYER_CLASS, { sizes });
+  // a berth already ours is given back: cleared and asking again, the clearance run out on the way down to it
+  // (nothing else could be given then: the dock goes on to that one), or backed off it, holding
+  const d = state.dock, mine = ourBerth(state, st);
+  const berth = mine ? stationModel(stationId).berths.find(b => b.id === mine) : freeBerth(state, st, state.ship.classId || PLAYER_CLASS, { sizes });
   if (!berth) {
     const eta = nextFreeing(state, st);
     return { ok: false, full: true, text: `All berths that take your collars are full.${eta != null ? ` One should clear in about ${Math.max(10, Math.round(eta / 10) * 10)} minutes.` : ''} Hold at the anchorage and call again.` };
   }
-  const port = (berth === ours && ports.find(p => p.id === d.port)) || collarFor(state.ship.classId || PLAYER_CLASS, berth);
+  const port = (d?.target.id === stationId && d.berth === berth.id && ports.find(p => p.id === d.port)) || collarFor(state.ship.classId || PLAYER_CLASS, berth);
   const c = clear(state, stationId);
   c.dock = { berth: berth.id, port: port.id, until: state.clock.minute + DOCK_CLEARANCE_MIN };
   c.approach = Math.max(c.approach ?? 0, c.dock.until);
