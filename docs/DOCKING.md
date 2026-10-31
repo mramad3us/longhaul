@@ -138,7 +138,7 @@ A boarding party is chosen from the crew (`sim/boarding.js`), through a mated co
 
 An EVA crosses open space: nobody goes without a suit. Crew ashore aren't waited for at the muster.
 
-While away the party is off our ship: not on its decks, not breathing its air, not at its stations. Routes wait for them and we cannot undock.
+While away the party is off our ship: not on its decks, not breathing its air, not at its stations. Routes wait for them and we cannot undock. A hull that goes with them aboard takes them with it, and any prisoner of ours it held, whenever it goes: dead, grieved, on the memorial, and nothing of them comes home. A party that wins carries its dead back; one that falls back leaves them where they fell.
 
 Who resists: a navy crew fights for every compartment (all of them, quality 0.75), police hard (85%, 0.6), pirates nearly as hard (90%, 0.55), a civilian crew mostly hides (30%, 0.3). A beaten ship fights at 60%. A crew that struck hardly fights at all, though holdouts are possible (30% chance aboard a pirate, 12% otherwise). Each minute both sides trade hits in proportion to their strength: a boarder's is security skill, health and spirits, and the defenders get the cover. Our wounded take real injuries. Defenders give up when most of them are down (military crews fight to the last tenth); the party falls back when most of it is, and anyone it can't carry is taken prisoner, to be freed if that ship is boarded again.
 

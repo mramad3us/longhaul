@@ -11,7 +11,7 @@ import { G0 } from '../core/constants.js';
 import { random } from '../core/rng.js';
 import { BLOCKING } from './tiles.js';
 import { shipGeometry, isRestraint } from './ship-layout.js';
-import { isConscious, applyImpact } from './crew.js';
+import { isConscious, applyImpact, isAboard } from './crew.js';
 import { abandonTask } from './crew-ai.js';
 
 const TILE_M = 0.9;                 // meters per tile
@@ -51,7 +51,7 @@ export function triggerManeuver(state, type, opts) {
   const isBurn = type !== Maneuver.FLIP;
   const bodies = [];
   for (const m of state.ship.crew) {
-    if (m.away || isRestraint(m.seat) || m.task?.type === 'carried') continue;     // (not aboard: not thrown about)
+    if (!isAboard(m) || isRestraint(m.seat) || m.task?.type === 'carried') continue;     // (not aboard: not thrown about)
     if (!m.dead && isConscious(m) && isBurn) {
       if (!opts.surprise && dG <= BRACE_G) continue;   // braced for an announced burn
       if (opts.surprise && dG <= SURPRISE_G) continue;

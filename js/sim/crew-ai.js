@@ -277,7 +277,7 @@ function generateJobs(state) {
     if (p.dead) {
       const j = state.jobs.list.find(x => x.type === JobType.RESCUE && x.data.patient === p.id);
       if (j) closeJob(state, j);
-      layOut(state, p);
+      if (!p.lost) layOut(state, p);
       continue;
     }
     const helpless = !isConscious(p) || hasCondition(p, 'critical');

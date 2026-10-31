@@ -83,7 +83,7 @@ import { TileType, INTERACTIVE_TILES, WALKABLE } from '../sim/tiles.js';
 import { shipGeometry, seatKind, FIXTURE_KIND, airlockFor, fixtureFacing, tableFrame } from '../sim/ship-layout.js';
 import { SYSTEM_BY_FIXTURE, Status } from '../sim/systems.js';
 import { ATMO } from '../sim/life-support.js';
-import { isConscious } from '../sim/crew.js';
+import { isConscious, isAboard } from '../sim/crew.js';
 import { formatDate, formatTime } from '../core/clock.js';
 import { renderFigures } from './gl/figures.js';
 
@@ -2131,7 +2131,7 @@ function drawCam(cam, state, alpha, now) {
   for (let r = 0; r < room.rows; r++) byRow.push([]);
   const inertia = state.$inertia?.active ? state.$inertia : null;
   for (const m of ship.crew) {
-    if (m.away) continue;
+    if (!isAboard(m)) continue;
     const px = m.$px ?? m.pos.sx, py = m.$py ?? m.pos.sy;
     const x = px + (m.pos.sx - px) * alpha, y = py + (m.pos.sy - py) * alpha;
     if (geo.deckOfRow(y) !== cam.deck) continue;
@@ -2196,7 +2196,7 @@ function drawCam(cam, state, alpha, now) {
         if (st) lamp(g, lens, l, LAMP[st], st !== 'off');
       }
       for (const o of dyn.occupancy) {
-        const busy = o.cell != null ? o.cell < held : ship.crew.some(m => !m.away && Math.round(m.pos.sx) === o.tx && Math.round(m.pos.sy - start) === o.tz);
+        const busy = o.cell != null ? o.cell < held : ship.crew.some(m => isAboard(m) && Math.round(m.pos.sx) === o.tx && Math.round(m.pos.sy - start) === o.tz);
         lamp(g, lens, o, busy ? C_WARN : C_OWN, true);
       }
     }

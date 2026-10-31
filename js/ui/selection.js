@@ -122,7 +122,7 @@ function crewHTML(s, m) {
     NEEDS.map(k => `<div class="crew-stat"><span class="crew-stat-label">${NEED_LABEL[k]}</span><div class="crew-stat-bar"><div class="crew-stat-fill need-fill${m.needs[k] < 20 ? ' need-low' : m.needs[k] < 45 ? ' need-mid' : ''}" style="width:${Math.round(m.needs[k])}%"></div></div></div>`).join('');
   const rank = m.born != null && m.role !== 'Captain' && !rankTitle(m).includes(m.role) ? `${rankTitle(m)} · ` : '';
   return `<div class="crew-detail-name">${esc(fullName(m))}</div>
-    <div class="crew-detail-role">${esc(rank)}${esc(m.role)} · ${esc(deck?.name || '')}</div>
+    <div class="crew-detail-role">${esc(rank)}${esc(m.role)} · ${esc(m.lost ? `lost with ${m.lost}` : deck?.name || '')}</div>
     <div class="crew-activity">${esc(describeActivity(m))}</div>
     ${dutyLine}
     <div class="crew-section-label">CONDITION</div>

@@ -50,7 +50,7 @@ import { worldsTick, airDrag } from './worlds.js';
 import { createTrafficControl, trafficControlTick, keepOutDriveCap } from './traffic-control.js';
 import { stationsTick } from './station-defense.js';
 import { createDossier, dossierTick } from './manifest.js';
-import { boardingTick } from './boarding.js';
+import { boardingTick, upgradeLost } from './boarding.js';
 import { leaveTick, signOff } from './crew-services.js';
 import { careersTick, startCareer, careerDraw, remember, succession, note } from './careers.js';
 import { hostilesOfPlayer } from './agents.js';
@@ -217,6 +217,7 @@ export function upgradeState(state) {
   refitBerths(state);
   upgradeRuns(state);
   upgradeFallen(state);
+  upgradeLost(state);
   return state;
 }
 

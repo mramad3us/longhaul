@@ -16,7 +16,12 @@
 //            and any ship's computer to crack for its credit store
 //   return   back across, and the party is aboard again.
 // While away the party is off our ship: not in its rooms, not breathing
-// its air, not at its stations, and we cannot leave without them.
+// its air, not at its stations, and we cannot leave without them. A hull
+// that goes with them aboard takes them with it, the prisoners it held and
+// the dead the party had not yet brought home: nothing of them comes back
+// (m.lost, a name on the memorial, no body on our decks). A party that
+// wins carries its dead home; one that falls back leaves them where they
+// fell.
 //
 // THE FIGHT. Who resists depends on who they are and how they got here:
 // a navy crew fights for every compartment, pirates nearly as hard, a
@@ -54,7 +59,7 @@ import { AU_M } from '../core/constants.js';
 import { random, randInt, chance } from '../core/rng.js';
 import { getWorld } from './world.js';
 import { classOf } from './ship-classes.js';
-import { isAble, applyImpact, overallHealth, mourn } from './crew.js';
+import { isAble, applyImpact, overallHealth, mourn, kill } from './crew.js';
 import { efficiency } from './needs.js';
 import { crewAboard, passengersAboard, setCrewAboard, learn, freeCells } from './manifest.js';
 import { prisonerGroup } from './prisoners.js';
@@ -166,16 +171,46 @@ function note(state, text, emit, level = 'info') {
 
 const membersOf = (state, b) => b.party.map(id => state.ship.crew.find(m => m.id === id)).filter(Boolean);
 
+/**
+ * Gone with a hull: a hand who won't come home, dead now if they weren't
+ * (the crew grieve those who were alive to lose), nothing of them left aboard us.
+ */
+function lostOffShip(state, m, name, emit) {
+  m.away = null;
+  m.lost = name;
+  if (m.dead) return;
+  kill(m);
+  m.deathCause = `lost with ${name}`;
+  mourn(state.ship.crew, m);
+  emit('crew-died', { member: m, cause: m.deathCause });
+}
+
+/** Anyone of ours on a hull that is gone went with it, party or prisoner, whenever it went. Returns how many. */
+function lostWithHull(state, emit) {
+  const world = getWorld(state);
+  let n = 0;
+  for (const m of state.ship.crew) {
+    const on = m.away?.aboard;
+    if (on == null) continue;
+    const e = world.get(on);
+    if (e && !e.tags?.blown) continue;
+    lostOffShip(state, m, m.away.name || (state.boarding?.target === on ? state.boarding.name : 'the ship that held them'), emit);
+    n++;
+  }
+  return n;
+}
+
 export function boardingTick(state, emit = () => {}) {
+  const lost = lostWithHull(state, emit);
   const b = state.boarding;
   if (!b || b.phase === 'done') return;
   const e = getWorld(state).get(b.target);
   const now = state.clock.minute;
   const party = membersOf(state, b);
   if (!e || e.tags?.blown) {
-    // the ship is gone: anyone aboard went with it
-    for (const m of party) if (m.away && !m.dead) { m.away = null; m.dead = true; m.deathCause = `lost with ${b.name}`; m.conditions.push('dead'); emit('crew-died', { member: m }); }
-    note(state, `${b.name} is gone, and the party with it.`, emit, 'danger');
+    // (the ship is gone: anyone mustering stands down)
+    for (const m of party) if (m.task?.type === 'board') { m.task = null; m.path = []; }
+    note(state, lost ? `${b.name} is gone, and the party with it.` : `${b.name} is gone. Boarding called off.`, emit, lost ? 'danger' : undefined);
     b.phase = 'done';
     return;
   }
@@ -200,7 +235,7 @@ export function boardingTick(state, emit = () => {}) {
         for (const m of late) if (m.task?.type === 'board') { m.task = null; m.path = []; }
         if (late.length) note(state, `${late.map(m => m.name).join(', ')} not at the lock in time: stay${late.length > 1 ? '' : 's'} aboard.`, emit, 'warn');
         b.party = ready.map(m => m.id);
-        for (const m of ready) { m.away = { op: b.id, aboard: e.id }; m.task = null; m.seat = null; m.path = []; m.activity = 'away'; }
+        for (const m of ready) { m.away = { op: b.id, aboard: e.id, name: b.name }; m.task = null; m.seat = null; m.path = []; m.activity = 'away'; }
         b.phase = 'cross'; b.since = now;
         note(state, `Party through the lock: ${ready.length} ${b.via === 'dock' ? 'in the collar' : 'crossing on suit thrusters'}.`, emit);
       } else if (!able.length) { b.phase = 'done'; note(state, 'Nobody fit to go: boarding called off.', emit, 'warn'); }
@@ -254,9 +289,12 @@ function fightMinute(state, b, e, party, emit) {
     const left = party.filter(m => m.away && !isAble(m) && !m.dead);
     const carried = left.slice(0, ours.length);
     for (const m of left.slice(ours.length)) { m.away.captured = true; m.away.by = e.id; note(state, `${m.name} is left behind, a prisoner aboard ${e.name}.`, emit, 'danger'); }
-    b.party = party.filter(m => !m.away?.captured).map(m => m.id);
+    // (the dead stay where they fell: the living have the living to carry)
+    const fallen = party.filter(m => m.away && m.dead);
+    for (const m of fallen) lostOffShip(state, m, b.name, emit);
+    b.party = party.filter(m => m.away && !m.away.captured).map(m => m.id);
     b.phase = 'return'; b.since = state.clock.minute;
-    note(state, `The party falls back${carried.length ? `, carrying ${carried.map(m => m.name).join(', ')}` : ''}.`, emit, 'danger');
+    note(state, `The party falls back${carried.length ? `, carrying ${carried.map(m => m.name).join(', ')}` : ''}${fallen.length ? `, leaving ${fallen.map(m => m.name).join(', ')} where they fell` : ''}.`, emit, 'danger');
     return;
   }
   const power = ours.reduce((s, m) => s + (0.3 + 0.7 * m.skills.security / 100) * overallHealth(m) / 100 * (0.6 + 0.4 * efficiency(m)), 0);
@@ -308,7 +346,7 @@ function secure(state, b, e, emit) {
   const crew = crewAboard(e), pax = passengersAboard(e);
   learn(state, e, { crew, pax, note: 'Boarded and secured' }, 'boarded', { by: ourName(state) });
   // freed: anyone of ours held aboard
-  for (const m of state.ship.crew) if (m.away?.captured && m.away.by === e.id) { m.away = { op: b.id, aboard: e.id }; if (!b.party.includes(m.id)) b.party.push(m.id); note(state, `${m.name} found and freed.`, emit); }
+  for (const m of state.ship.crew) if (m.away?.captured && m.away.by === e.id) { m.away = { op: b.id, aboard: e.id, name: b.name }; if (!b.party.includes(m.id)) b.party.push(m.id); note(state, `${m.name} found and freed.`, emit); }
   note(state, `${b.name} secured. ${crew} crew${pax ? ` and ${pax} passengers` : ''} aboard.`, emit, 'ok');
   emit('boarding', { phase: 'secured', target: e.name, crew, pax });
 }
@@ -520,6 +558,18 @@ function comeHome(state, b, emit) {
   b.endedAt = state.clock.minute;
   note(state, 'Party back aboard.', emit, 'ok');
   emit('boarding', { phase: 'done', target: b.name });
+}
+
+/**
+ * On load: those a save has lost with a hull, whose bodies lay on our decks
+ * where they left the lock, their hearts still going (before 1.12.14), and
+ * anyone it still has away on a hull that is gone.
+ */
+export function upgradeLost(state) {
+  for (const m of state.ship.crew) {
+    const w = m.dead && !m.lost && /^lost with (.+)$/.exec(m.deathCause || '');
+    if (w) { kill(m); m.lost = w[1]; }
+  }
 }
 
 /** Call the party back (from any phase). */

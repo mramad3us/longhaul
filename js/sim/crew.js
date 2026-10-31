@@ -381,6 +381,9 @@ export function mourn(crew, dead) {
   for (const m of crew) if (m !== dead && !m.dead) m.moraleMod = (m.moraleMod || 0) - 25;
 }
 
+/** Is someone physically on our ship? Not across on another hull or ashore (m.away), and not lost off it (m.lost: nothing of them came home). */
+export const isAboard = (m) => !m.away && !m.lost;
+
 export function kill(m) {
   m.dead = true;
   m.consciousness = 0;

@@ -101,7 +101,7 @@ import { atmoStatus } from '../sim/life-support.js';
 import { shipGeometry, isSecureSeat } from '../sim/ship-layout.js';
 import { SYSTEMS, Status, shipSystems, partsFor, waterRecovery } from '../sim/systems.js';
 import { JobType } from '../sim/jobs.js';
-import { needsMedical } from '../sim/crew.js';
+import { needsMedical, isAboard } from '../sim/crew.js';
 import { FUEL_PER_G_MIN } from '../sim/flight.js';
 import { nearestSurface } from '../sim/gravity.js';
 import { timeToImpact } from '../sim/terrain.js';
@@ -313,7 +313,7 @@ function context(state, mem) {
     loud: false,               // a warning is up (the small advice keeps quiet under it)
     _eta: undefined, _near: undefined,
   };
-  c.aboard = c.crew.filter(m => !m.away);
+  c.aboard = c.crew.filter(isAboard);
   // whose space we are in: the influence map, cached per game minute
   if (mem._ctl?.minute !== now) mem._ctl = { minute: now, v: controlAt(c.f.pos.x, c.f.pos.y, now) };
   c.ctl = mem._ctl.v;
@@ -1156,7 +1156,7 @@ function ruleShuttles(state, c, add) {
 function ruleGround(state, c, add, world) {
   const g = groundOf(world);
   if (!g) return;
-  const crew = c.crew.filter(m => !m.away);
+  const crew = c.crew.filter(isAboard);
   const mend = crew.filter(m => treatmentFor(m, world)?.brain);
   if (mend.length) add({
     key: `ground-hospital:${world}`, level: ADVICE, rank: 48, sig: mend.map(m => m.id),

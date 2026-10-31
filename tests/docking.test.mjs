@@ -22,7 +22,8 @@ import { mateRotation, turn } from '../js/sim/mating.js';
 import { ensureHull, PLAYER, profile } from '../js/sim/combatants.js';
 import { crewAboard, complementOf, knownCrew, dossierOf, learn } from '../js/sim/manifest.js';
 import { openChannel, topics, say, closeChannel } from '../js/sim/dialogue.js';
-import { startBoarding, boardingActions, orderAboard } from '../js/sim/boarding.js';
+import { startBoarding, boardingActions, orderAboard, partyAway } from '../js/sim/boarding.js';
+import { kill, isAboard } from '../js/sim/crew.js';
 import { applyHit, wreckNpc, tumbleOf, tumbleAngle, tumbling } from '../js/sim/damage.js';
 import { serialize, deserialize } from '../js/sim/save.js';
 import { releaseHold, engageRoute } from '../js/sim/autopilot.js';
@@ -658,6 +659,65 @@ export default [
       D.beginDocking(s, { kind: 'ship', id: w2.id }, { mode: 'auto' });
       run(s, st => st.dock?.phase === 'docked', 240);
       assert(seen.includes('spin') && s.dock?.phase === 'docked', `matched again (${seen.join(' → ')})`);
+    },
+  },
+  {
+    name: 'a hull that goes with our people aboard takes them with it: no body on our decks, the crew grieve, nobody left away to hold us there; a party that falls back leaves its dead; a save\'s are mended',
+    fn: () => {
+      const s = game(15, { classId: 'cutter', crewCount: 8 });
+      releaseHold(s);
+      s.dock = null;
+      s.flight.pos.y += 0.02;
+      const f = s.flight;
+      const w = spawnAgent(s, { role: 'civilian', cls: 'meridian', faction: 'UN', pos: { x: f.pos.x + 900 / AU_M, y: f.pos.y }, vel: { ...f.vel } });
+      wreckNpc(s, w, null);
+      const crew = s.ship.crew, party = crew.filter(m => m.role !== 'Captain' && m.role !== 'Pilot').slice(0, 3), stay = crew.find(m => m.role === 'Pilot');
+      assert(startBoarding(s, w.id, { party: party.map(m => m.id), via: 'eva' }).ok, 'boarding');
+      run(s, st => st.boarding?.phase === 'secured', 200);
+      assert(s.boarding.phase === 'secured' && party.every(m => m.away), 'all across');
+      // one of them killed over there, one a prisoner; then it goes up
+      const [hit, held, well] = party;
+      kill(hit); hit.deathCause = 'killed boarding it';
+      Object.assign(held.away, { captured: true, by: w.id });
+      const was = stay.moraleMod || 0, name = s.boarding.name;
+      const ev = events();
+      getWorld(s).remove(w);
+      advance(s, 1);
+      assert(party.every(m => m.dead && m.lost === name && !m.away && !isAboard(m)), 'all three gone with it');
+      assert(well.heart.bpm === 0 && well.consciousness === 0 && well.conditions.length === 1 && well.deathCause === `lost with ${name}` && hit.deathCause === 'killed boarding it', 'dead as anyone dies');
+      assert((stay.moraleMod || 0) <= was - 2 * 20, 'the crew feel it, for the two who were alive to lose');
+      assert((ev['crew-died'] || []).length === 2 && s.boarding.phase === 'done', 'told once each');
+      assert(!partyAway(s) && !crew.some(m => m.away), 'nobody away to wait for');
+      // a prisoner held on after the boarding was over goes with their captors, whenever that is
+      const j = crew.find(m => !m.dead && m.role !== 'Captain' && m.role !== 'Pilot');
+      j.away = { op: 'old', aboard: 'gone-hull', name: 'Old Enemy', captured: true, by: 'gone-hull' };
+      advance(s, 1);
+      assert(j.dead && j.lost === 'Old Enemy', 'lost with their captors');
+      assert(s.ship.memorial.filter(x => party.some(m => m.id === x.id)).length === 3, 'on the memorial');
+
+      // a party that falls back: the living come home, the dead stay where they fell
+      const t = game(16, { classId: 'cutter', crewCount: 8 });
+      releaseHold(t);
+      t.dock = null;
+      t.flight.pos.y += 0.02;
+      const g = spawnAgent(t, { role: 'civilian', cls: 'meridian', faction: 'UN', pos: { x: t.flight.pos.x + 900 / AU_M, y: t.flight.pos.y }, vel: { ...t.flight.vel } });
+      wreckNpc(t, g, null);
+      const four = t.ship.crew.filter(m => m.role !== 'Captain' && m.role !== 'Pilot').slice(0, 4);
+      assert(startBoarding(t, g.id, { party: four.map(m => m.id), via: 'eva' }).ok, 'boarding again');
+      run(t, st => st.boarding?.phase === 'secured', 200);
+      t.boarding.phase = 'fight'; t.boarding.secured = false; t.boarding.defenders = 6;
+      kill(four[0]); kill(four[1]); four[2].consciousness = 0;
+      advance(t, 1);
+      assert(t.boarding.phase === 'return' && four[0].lost && four[1].lost && !four[0].away, 'the dead left where they fell');
+      run(t, st => st.boarding?.phase === 'done', 120);
+      assert(!four[3].away && isAboard(four[3]) && !four[3].lost, 'the living home');
+
+      // a save from before: dead with a pulse, on our deck
+      const old = t.ship.crew.find(m => !m.dead && m.role === 'Pilot');
+      Object.assign(old, { dead: true, deathCause: 'lost with Comet of Melpomene', lost: undefined });
+      old.conditions.push('dead');
+      const back = deserialize(serialize(t)).state.ship.crew.find(m => m.id === old.id);
+      assert(back.lost === 'Comet of Melpomene' && back.heart.bpm === 0 && !isAboard(back), 'mended on load');
     },
   },
   {
