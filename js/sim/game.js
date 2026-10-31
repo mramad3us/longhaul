@@ -45,6 +45,7 @@ import { destroyPlayer } from './damage.js';
 import { snapshot, PDC_ROUNDS_PER_MOUNT } from './combatants.js';
 import { dockingTick, finishMinute, dockHold, dockHolds, inFrame, frameStep, dockInstant, PROX_RATES, hoverG, hoverOnRcs } from './docking.js';
 import { terrainTick } from './terrain.js';
+import { refitBerths } from './stations.js';
 import { worldsTick, airDrag } from './worlds.js';
 import { createTrafficControl, trafficControlTick, keepOutDriveCap } from './traffic-control.js';
 import { stationsTick } from './station-defense.js';
@@ -213,6 +214,7 @@ export function upgradeState(state) {
   ensurePopulation(state);
   if (fresh && state.traffic.population > 0) seedForces(state);
   upgradeContracts(state);
+  refitBerths(state);
   upgradeRuns(state);
   return state;
 }

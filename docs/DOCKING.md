@@ -19,7 +19,9 @@ There are two kinds, as there would be: **surface ports** built on an asteroid o
 | Phobos Naval Yard | Phobos' surface (11 km, tidally locked) | 3.6 km | 10 | 60 km | 24 PDC (TL4), 8 silos, 4 railguns |
 | Ganymede Station | 10,000 km round Ganymede (17.5 h) | 3.3 km | 21 | 80 km | 10 PDC, 2 silos |
 
-Each station has a frame that turns with it (x up from the body's centre, y along its motion). Its parts and berths are laid out in that frame; `berthPose` turns a berth into the solar frame, with the velocity of the turn.
+Each station has a frame that turns with it (x up from the body's centre, y along its motion). Its parts and berths are laid out in that frame; `berthPose` turns a berth into the solar frame, with the velocity of the turn. A spin ring (Hygiea, Tycho, Ganymede) turns about the docking spine: it lies across the spine and its arms, out of the plane ships dock in.
+
+**What fits where** (`stations.js`). A berth takes a collar by size, and a hull only if it clears the station lying there: `berthClear`, its parts against the station's, once per class and berth and kept, with room to back out along its collar's axis. A hull at a berth doesn't lie across its neighbour's (`berthsClash`, asked when a berth is given: a frigate, 120 m long, leaves the arm beside it to something smaller). A hull with no clear berth at a port rides the anchorage and works by tender (a liner at Ceres, Vesta or Phobos); every hull we can fly has a clear berth at every port. **The way in** is planned from the same shapes: a corridor runs a kilometre out along the collar's axis, or half of what is clear of it, 170 m at the least (`corridorOf`: a tower's arm has another tower across from it), and the final approach and the climb out go round what stands in the plane (`wayRound`: the shortest way from corner to corner of the solids, grown by half the hull and 40 m). Tests fly every berth, in and out, and try every hull in every berth against every triangle the station draws.
 
 Round every station:
 
@@ -80,7 +82,7 @@ Near a hub the radio is busy, and it is the real traffic: traffic control clears
 |---|---|
 | inbound | a route to the gate (or alongside a ship), flown by the autopilot |
 | awaiting | holding at the gate for docking clearance |
-| approach | the final approach, flown by the docking computer in the berth's frame on the drive at 0.1 G, no faster than 150 m/s and no faster than it can stop, to the corridor's mouth 1 km out along the collar's axis (300 m for a ship) |
+| approach | the final approach, flown by the docking computer in the berth's frame on the drive at 0.1 G, no faster than 150 m/s and no faster than it can stop, round whatever of the station stands in the way, to the corridor's mouth, up to 1 km out along the collar's axis (300 m for a ship) |
 | spin | a **spin match**, off a tumbling wreck: at the corridor's mouth, our ship takes up its turn on the RCS and flies round it until its collar faces us down the corridor (below) |
 | prox | proximity operations, second by second on the RCS (auto or by hand) |
 | capture | soft capture inside the envelope; 2 min to hard dock |
@@ -88,7 +90,7 @@ Near a hub the radio is busy, and it is the real traffic: traffic control clears
 | undock | 2 min to vent the lock and unlatch |
 | separate | backing out on RCS to the hold point, 150 m out (slow off the collar, 1 m/s clear of it); with a route waiting, on through it without stopping |
 | holding | station-keeping in the berth's frame until a route takes us away, or we clear off (CLEAR OFF) |
-| outbound | leaving a station: up the corridor to just through the gate (1.03 gates out), on the RCS alone (0.02 G, under 180 m/s), still in the berth's frame, round the station's side if the gate lies beyond it, from wherever we are (backing out, holding, or stopped dead on a final approach turned back); there the dock lets us go. A route goes on out of the approach on RCS before its drive lights (FLIGHT.md, the departure leg); with none (CLEAR OFF), the nav computer flies the same leg on its own and holds past the approach, where the torch is free (FLIGHT.md, clearing off) |
+| outbound | leaving a station: up the corridor to just through the gate (1.03 gates out), on the RCS alone (0.02 G, under 180 m/s), still in the berth's frame, round the station if it stands in the way, from wherever we are (backing out, holding, or stopped dead on a final approach turned back); there the dock lets us go. A route goes on out of the approach on RCS before its drive lights (FLIGHT.md, the departure leg); with none (CLEAR OFF), the nav computer flies the same leg on its own and holds past the approach, where the torch is free (FLIGHT.md, clearing off) |
 
 **The frame.** From the final approach on, our ship is held in the berth's frame: its place is the berth's plus our offset, turning with the station. The body's gravity, which station and ship share, is left out of the motion: a station circling a moon quickly would otherwise take more drive to keep up with than traffic control allows inside the gate. What holding against it costs is charged (`hoverG`): to the drive on the final approach, which flies on it anyway, and to the RCS everywhere else, so the torch never lights by a berth. Nothing in the frame meets the ground. That is why a departure stays in it to the gate: a hold point by a surface port is a hundred metres over the rock, and the RCS can't hold a ship up against even Ceres' pull (0.027 G against 0.02 G). Let go there, the ship falls.
 

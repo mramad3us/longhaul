@@ -48,6 +48,11 @@ export const COLLARS = {
 };
 
 /** Unit vectors of the faces a port can sit on. */
+/** A collar's radius (m), by size; how far round it a collar needs the hull clear (m, along it and across), and its neck's margin past what it clears. */
+export const COLLAR_R = { L: 3, M: 1.1, S: 0.5 };
+const COLLAR_REACH_M = { along: 5, across: 4 };
+const COLLAR_NECK_MARGIN_M = 0.3;
+
 export const FACES = {
   'x+': [1, 0, 0], 'x-': [-1, 0, 0], 'y+': [0, 1, 0], 'y-': [0, -1, 0], 'z+': [0, 0, 1], 'z-': [0, 0, -1],
 };
@@ -490,6 +495,7 @@ export function hullOf(classId) {
 }
 
 function finish(b, c, classId) {
+  collarsClear(b);
   const bounds = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, z0: Infinity, z1: -Infinity };
   for (const p of b.parts) {
     const e = partExtent(p);
@@ -506,6 +512,39 @@ function finish(b, c, classId) {
     rcs: { accel: RCS_ACCEL[c.size] * tl, rotDeg: RCS_ROT_DEG[c.size] * tl },
     atmo: c.atmo || null,
   };
+}
+
+/**
+ * A flank collar sits on the skin, and radiators, tubes and mounts stand
+ * out past the skin round it: whatever it mates with (a berth's arm, 8 m
+ * wide and 6 m deep, a ship's collar) would go through them. So a collar
+ * stands out on a neck as far as anything of the hull does within reach of
+ * it (COLLAR_REACH_M, along the hull and across it), a little more, and a
+ * thin fin the neck would pass through gives way round it.
+ */
+function collarsClear(b) {
+  for (const p of b.ports) {
+    if (p.face[0] === 'x') continue;
+    const y = p.face[0] === 'y', n = FACES[p.face], sign = y ? n[1] : n[2];
+    const at = y ? p.y : p.z, across = y ? p.z : p.y;
+    let proud = 0;
+    for (const q of b.parts) {
+      const e = partExtent(q), a0 = y ? e.z0 : e.y0, a1 = y ? e.z1 : e.y1;
+      if (e.x0 > p.x + COLLAR_REACH_M.along || e.x1 < p.x - COLLAR_REACH_M.along || a0 > across + COLLAR_REACH_M.across || a1 < across - COLLAR_REACH_M.across) continue;
+      proud = Math.max(proud, (sign > 0 ? (y ? e.y1 : e.z1) : -(y ? e.y0 : e.z0)) - sign * at);
+    }
+    if (proud <= 0) continue;
+    p.neck = proud + COLLAR_NECK_MARGIN_M;
+    if (y) p.y += sign * p.neck; else p.z += sign * p.neck;
+    // (a fin the neck goes through is cut in two round it)
+    const R = COLLAR_R[p.size] + 0.4, tip = y ? p.y : p.z, lo = Math.min(tip, tip - sign * p.neck), hi = Math.max(tip, tip - sign * p.neck);
+    for (let i = b.parts.length - 1; i >= 0; i--) {
+      const q = b.parts[i];
+      if (q.k !== 'box' || q.role !== 'radiator') continue;
+      if (q.x0 > p.x + R || q.x1 < p.x - R || (y ? q.z0 : q.y0) > across + R || (y ? q.z1 : q.y1) < across - R || (y ? q.y0 : q.z0) > hi || (y ? q.y1 : q.z1) < lo) continue;
+      b.parts.splice(i, 1, ...[{ ...q, x1: p.x - R }, { ...q, x0: p.x + R }].filter(r => r.x1 - r.x0 > 0.5));
+    }
+  }
 }
 
 /** Axis-aligned extent of a part in the ship frame. */

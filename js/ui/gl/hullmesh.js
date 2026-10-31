@@ -21,6 +21,7 @@
 // Meshes are made once per class or station and kept.
 // ============================================================
 
+import { COLLAR_R } from '../../sim/hulls.js';
 import { linear } from './gl.js';
 
 /** Surfaces (the shader's switch): keep in step with ships3d.js. */
@@ -560,8 +561,8 @@ function ringPart(mb, p, tl, r) {
     const segs = 3;
     for (let j = 0; j < segs; j++) {
       const b0 = a0 + (a1 - a0) * j / segs, b1 = a0 + (a1 - a0) * (j + 1) / segs;
-      const P = (rr, a, x) => p.plane === 'xy' ? [p.x + rr * Math.cos(a), rr * Math.sin(a), x] : [x, rr * Math.cos(a), rr * Math.sin(a)];
-      const xa = p.plane === 'xy' ? -p.w / 2 : p.x - p.w / 2, xb = p.plane === 'xy' ? p.w / 2 : p.x + p.w / 2;
+      const P = (rr, a, x) => p.plane === 'xz' ? [p.x + rr * Math.cos(a), p.y + x, -rr * Math.sin(a)] : [x, rr * Math.cos(a), rr * Math.sin(a)];
+      const xa = p.plane === 'xz' ? -p.w / 2 : p.x - p.w / 2, xb = p.plane === 'xz' ? p.w / 2 : p.x + p.w / 2;
       const tone = weather(TONES.hab, tl, r);
       mb.quad(P(R1, b0, xa), P(R1, b1, xa), P(R1, b1, xb), P(R1, b0, xb), tone, MAT.PLATE);
       mb.quad(P(R0, b1, xa), P(R0, b0, xa), P(R0, b0, xb), P(R0, b1, xb), tone, MAT.PLATE);
@@ -572,17 +573,19 @@ function ringPart(mb, p, tl, r) {
   // spokes to the hub
   for (let k = 0; k < 4; k++) {
     const a = k / 4 * Math.PI * 2 + 0.3;
-    const P = (rr) => p.plane === 'xy' ? [p.x + rr * Math.cos(a), rr * Math.sin(a), 0] : [p.x, rr * Math.cos(a), rr * Math.sin(a)];
+    const P = (rr) => p.plane === 'xz' ? [p.x + rr * Math.cos(a), p.y, -rr * Math.sin(a)] : [p.x, rr * Math.cos(a), rr * Math.sin(a)];
     mb.tube(P(R0 * 0.08), P(R0), Math.max(0.3, p.d * 0.12), Math.max(0.3, p.d * 0.12), 8, TONES.truss, MAT.TRUSS);
   }
 }
 
 /** A docking collar: a short barrel off the face, a thin marked rim, the hatch in it, latches round it. */
 function collar(mb, pt, hull) {
-  const R = pt.size === 'L' ? 3 : pt.size === 'M' ? 1.1 : 0.5;
+  const R = COLLAR_R[pt.size];
   const n = { 'x+': [1, 0, 0], 'x-': [-1, 0, 0], 'y+': [0, 1, 0], 'y-': [0, -1, 0], 'z+': [0, 0, 1], 'z-': [0, 0, -1] }[pt.face];
   const at = (k) => [pt.x + n[0] * k, pt.y + n[1] * k, pt.z + n[2] * k];
   const out = Math.min(1.2, R * 0.55);
+  // (out on its neck, past what the hull carries round it: hulls.js)
+  if (pt.neck) mb.tube(at(-pt.neck - 0.3), at(-0.1), R * 0.9, R, 16, TONES.plate, MAT.PLATE);
   mb.tube(at(-0.2), at(out), R * 1.12, R * 1.08, 24, TONES.plate, MAT.PLATE);
   mb.tube(at(out - 0.12), at(out + 0.04), R * 1.14, R * 1.14, 24, TONES.gear, MAT.HAZARD, false);
   mb.tube(at(out), at(out + 0.03), R * 0.86, R * 0.86, 24, TONES.dark, MAT.DARK);
@@ -645,9 +648,9 @@ export function buildStationMesh(model, seed = 'station') {
     mb.box(p.x0, p.x1, p.y0, p.y1, p.z0, p.z1, weather(tone, 3, r), mat, Math.min(2, Math.min(w, h, len) * 0.06));
     if (p.role === 'hab' || p.role === 'command') stationWindows(mb, p);
     if (p.role === 'dock') {
-      // the arm's working lamps along its top
-      const n = Math.max(1, Math.round(w / 15));
-      for (let k = 0; k < n; k++) mb.sphere([p.x1 + 0.4, p.y0 + w * (k + 0.5) / n, p.z1 * 0.5], 0.5, 5, TONES.white, MAT.LAMP);
+      // the arm's working lamps along its top (not on its tip: that's where a collar comes)
+      const along = len > w, n = Math.max(1, Math.round(Math.max(len, w) / 15));
+      for (let k = 0; k < n; k++) mb.sphere([along ? p.x0 + len * (k + 0.5) / n : (p.x0 + p.x1) / 2, along ? (p.y0 + p.y1) / 2 : p.y0 + w * (k + 0.5) / n, p.z1 + 0.4], 0.5, 5, TONES.white, MAT.LAMP);
     }
     if (p.role === 'machinery' || p.role === 'command' || p.role === 'hab') stationRoof(mb, p, r);
   }

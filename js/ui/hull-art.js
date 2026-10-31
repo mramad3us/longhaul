@@ -241,11 +241,11 @@ export function drawStation(ctx, model, o) {
     const [fill, edge] = ROLE[p.role] || ROLE.hab;
     ctx.lineWidth = Math.max(0.6, Math.min(2.5, o.scale * 2));
     if (p.k === 'ring') {
-      const n = p.n || 20;
+      // (it lies across the spine: seen from above, edge on, its segments in a row)
+      const n = Math.max(4, Math.round((p.n || 20) / 2)), R = p.r + p.d, y0 = p.y - p.w / 2, y1 = p.y + p.w / 2;
       for (let k = 0; k < n; k++) {
-        const a0 = (k + 0.06) / n * Math.PI * 2 + (o.t || 0) * 0.01, a1 = (k + 0.94) / n * Math.PI * 2 + (o.t || 0) * 0.01;
-        const r0 = p.r, r1 = p.r + p.d;
-        poly(ctx, [P(p.x + r0 * Math.cos(a0), r0 * Math.sin(a0)), P(p.x + r1 * Math.cos(a0), r1 * Math.sin(a0)), P(p.x + r1 * Math.cos(a1), r1 * Math.sin(a1)), P(p.x + r0 * Math.cos(a1), r0 * Math.sin(a1))]);
+        const x0 = p.x - R + 2 * R * (k + 0.06) / n, x1 = p.x - R + 2 * R * (k + 0.94) / n;
+        poly(ctx, [P(x0, y0), P(x1, y0), P(x1, y1), P(x0, y1)]);
         ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = edge; ctx.stroke();
       }
       continue;

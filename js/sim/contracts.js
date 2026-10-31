@@ -477,7 +477,7 @@ export function upgradeContracts(state) {
     if (e && !e.tags?.blown && !e.tags?.derelict) lostShip(e, c);
   }
   // (a salvage job's derelict from before 1.12.11 had no class: nothing to see, dock with or cut up)
-  for (const c of state.contracts?.active || []) {
+  for (const c of [...(state.contracts?.active || []), ...(state.contracts?.history || [])]) {
     const e = c.type === ContractType.SALVAGE && c.targetId ? world.get(c.targetId) : null;
     if (e && !e.cls) derelictHull(state, e, world.get(c.station)?.faction);
   }

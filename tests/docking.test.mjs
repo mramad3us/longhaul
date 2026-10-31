@@ -10,12 +10,15 @@ import { createGame, advance, minuteTick } from '../js/sim/game.js';
 import { getWorld } from '../js/sim/world.js';
 import { getBody, surfaceGravity } from '../js/sim/ephemeris.js';
 import { CLASSES, PLAYABLE, maxCrew } from '../js/sim/ship-classes.js';
-import { hullOf, COLLARS } from '../js/sim/hulls.js';
+import { hullOf, COLLARS, partExtent } from '../js/sim/hulls.js';
 import { createLayout, shipGeometry, airlockFor, DECK_PROGRAMS } from '../js/sim/ship-layout.js';
-import { STATIONS, stationModel, stationOrbit, gateId, berthCounts, berthPose } from '../js/sim/stations.js';
+import { STATIONS, stationModel, stationOrbit, gateId, berthCounts, berthPose, berthClear, berthsClash, berthFits, berthSizesFor, collarFor, corridorOf, parkHull } from '../js/sim/stations.js';
+import { buildStationMesh } from '../js/ui/gl/hullmesh.js';
+import { createEntity } from '../js/sim/entities.js';
 import * as TC from '../js/sim/traffic-control.js';
 import * as D from '../js/sim/docking.js';
 import { spawnAgent, surrender, makeHostile } from '../js/sim/agents.js';
+import { mateRotation, turn } from '../js/sim/mating.js';
 import { ensureHull, PLAYER, profile } from '../js/sim/combatants.js';
 import { crewAboard, complementOf, knownCrew, dossierOf, learn } from '../js/sim/manifest.js';
 import { openChannel, topics, say, closeChannel } from '../js/sim/dialogue.js';
@@ -51,6 +54,28 @@ function atGate(s, stationId) {
   s.flight.pos = { x: g.pos.x, y: g.pos.y };
   s.flight.vel = { vx: g.vel.vx, vy: g.vel.vy };
   return g;
+}
+
+/** A class's hull lying in a berth, its parts as boxes [x0, x1, y0, y1, z0, z1] in the station's frame, `out` metres back along the collar's axis. */
+function hullInBerth(cls, b, out = 0) {
+  const F = { 'x+': [1, 0], 'x-': [-1, 0], 'y+': [0, 1], 'y-': [0, -1] }, n = F[b.face], u = F[b.up];
+  const R = mateRotation(collarFor(cls, b).face, { x: n[0], y: n[1] }, { x: u[0], y: u[1] }), p = collarFor(cls, b), c = turn(R, [p.x, p.y, p.z]);
+  const x = b.x + n[0] * out - c[0], y = b.y + n[1] * out - c[1], z = b.z - c[2];
+  return hullOf(cls).parts.map(q => {
+    const e = partExtent(q), A = turn(R, [e.x0, e.y0, e.z0]), B = turn(R, [e.x1, e.y1, e.z1]);
+    return [Math.min(A[0], B[0]) + x, Math.max(A[0], B[0]) + x, Math.min(A[1], B[1]) + y, Math.max(A[1], B[1]) + y, Math.min(A[2], B[2]) + z, Math.max(A[2], B[2]) + z];
+  });
+}
+
+/** Does a triangle pass through a box (separating axes: the box's, the triangle's, their edges')? A hair's touch doesn't count. */
+function triangleInBox(a, b, c, B) {
+  const C = [(B[0] + B[1]) / 2, (B[2] + B[3]) / 2, (B[4] + B[5]) / 2], H = [(B[1] - B[0]) / 2 - 0.05, (B[3] - B[2]) / 2 - 0.05, (B[5] - B[4]) / 2 - 0.05];
+  const v = [a, b, c].map(p => [p[0] - C[0], p[1] - C[1], p[2] - C[2]]);
+  const cross = (u, w) => [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], dot = (u, w) => u[0] * w[0] + u[1] * w[1] + u[2] * w[2];
+  const apart = (ax) => { const p = v.map(w => dot(w, ax)), r = H[0] * Math.abs(ax[0]) + H[1] * Math.abs(ax[1]) + H[2] * Math.abs(ax[2]); return Math.min(...p) > r || Math.max(...p) < -r; };
+  const e = [0, 1, 2].map(i => { const q = v[(i + 1) % 3]; return [q[0] - v[i][0], q[1] - v[i][1], q[2] - v[i][2]]; });
+  const axes = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  return !axes.some(apart) && !apart(cross(e[0], e[1])) && !e.some(f => axes.some(u => apart(cross(u, f))));
 }
 
 const emit = (t, p) => bus.emit(t, p);
@@ -163,6 +188,104 @@ export default [
       s.law.wanted.OPA = 2;
       assert(!TC.requestDocking(s, 'ceres-station').ok, 'a wanted ship gets no berth');
       console.log(`      warnings: ${[...new Set(warned)].join(', ')} · citations ${s.law.fines.length} · ${s.law.record.map(r => r.kind).join(', ')}`);
+    },
+  },
+  {
+    name: 'a berth only takes a hull that clears it: no hull it is given touches a triangle the station draws, or its neighbour; every hull we can fly has a berth at every port',
+    fn: () => {
+      const classes = Object.keys(CLASSES).filter(id => berthSizesFor(id).length && !CLASSES[id].carried);
+      let pairs = 0, tris = 0, refused = 0;
+      for (const id of Object.keys(STATIONS)) {
+        const m = stationModel(id), { data, count } = buildStationMesh(m, id), k = data.length / count, T = [];
+        for (let i = 0; i + 2 < count; i += 3) {
+          const P = (j) => [data[(i + j) * k], data[(i + j) * k + 1], data[(i + j) * k + 2]], a = P(0), b = P(1), c = P(2);
+          if (Math.min(a[2], b[2], c[2]) < 60 && Math.max(a[2], b[2], c[2]) > -60) T.push({ a, b, c, x0: Math.min(a[0], b[0], c[0]), x1: Math.max(a[0], b[0], c[0]), y0: Math.min(a[1], b[1], c[1]), y1: Math.max(a[1], b[1], c[1]) });
+        }
+        tris += T.length;
+        for (const cls of classes) {
+          const fit = m.berths.filter(b => berthSizesFor(cls).some(z => berthFits(b, z)));
+          const clear = fit.filter(b => berthClear(id, b, cls));
+          refused += fit.length - clear.length;
+          if (PLAYABLE.includes(cls) && fit.length) assert(clear.length, `${id}: no berth clear for a ${cls}`);
+          for (const b of clear) {
+            pairs++;
+            const boxes = hullInBerth(cls, b);
+            const X0 = Math.min(...boxes.map(q => q[0])), X1 = Math.max(...boxes.map(q => q[1])), Y0 = Math.min(...boxes.map(q => q[2])), Y1 = Math.max(...boxes.map(q => q[3]));
+            for (const t of T) {
+              if (t.x0 > X1 || t.x1 < X0 || t.y0 > Y1 || t.y1 < Y0) continue;
+              assert(!boxes.some(q => triangleInBox(t.a, t.b, t.c, q)), `${id} ${b.id}: a ${cls} goes through the station at ${t.a.map(x => fmt(x, 0))}`);
+            }
+          }
+        }
+      }
+      // a port filled by whoever comes: nobody lying across a neighbour
+      const s = game(12, { forces: false });
+      const world = getWorld(s);
+      const rows = [];
+      for (const id of Object.keys(STATIONS)) {
+        const st = world.get(id), m = stationModel(id);
+        st.berths = {};
+        for (let i = 0; i < 90; i++) parkHull(s, world.add(createEntity({ id: `fill-${id}-${i}`, name: `Fill ${i}`, type: 'ship', cls: classes[i % classes.length], faction: 'independent', pos: { x: 0, y: 0 }, vel: { vx: 0, vy: 0 }, tags: {} })), st, { reserve: false });
+        const lying = m.berths.filter(b => st.berths[b.id]).map(b => ({ b, cls: world.get(st.berths[b.id]).cls }));
+        for (const p of lying) {
+          assert(berthClear(id, p.b, p.cls), `${id} ${p.b.id}: a ${p.cls} given a berth it doesn't clear`);
+          for (const q of lying) assert(p === q || !berthsClash(p.b, p.cls, q.b, q.cls), `${id}: a ${p.cls} at ${p.b.id} across a ${q.cls} at ${q.b.id}`);
+        }
+        rows.push(`${id.split('-')[0]} ${lying.length}/${m.berths.length}`);
+      }
+      // a save from before a port's layout moved: its hulls back on their berths, as they lie now
+      const at = stationModel('luna-yards').berths.find(b => world.get('luna-yards').berths[b.id]), who = world.get(world.get('luna-yards').berths[at.id]);
+      const right = who.orbit.r;
+      who.orbit.r *= 1.01;
+      const back = deserialize(serialize(s)).state;
+      assert(Math.abs(getWorld(back).get(who.id).orbit.r - right) < 1e-12, 'put back on its berth on load');
+      console.log(`      ${pairs} hulls in berths against ${tris} triangles, none through; ${refused} too big for where they'd lie; filled with all comers: ${rows.join(', ')}`);
+    },
+  },
+  {
+    name: 'every berth has a clear way in and out: the docking computer flies round what stands in the way, down a corridor as long as is clear, in and out again, every time',
+    fn: () => {
+      let flown = 0, closest = Infinity, longest = 0;
+      // (a small hull, ours, and a long one)
+      for (const cls of ['rockhopper', 'mcrn-corvette', 'pirate-gunship']) for (const id of Object.keys(STATIONS)) {
+        const m = stationModel(id), half = hullOf(cls).L / 2;
+        const solid = m.parts.map(p => p.k === 'ring' ? [p.x - p.r - p.d, p.x + p.r + p.d, p.y - p.w / 2, p.y + p.w / 2, -p.r - p.d, p.r + p.d] : p.k === 'cyl' ? [p.x0, p.x1, p.y - p.r, p.y + p.r, -p.r, p.r] : [p.x0, p.x1, p.y0, p.y1, p.z0, p.z1]);
+        const inPlane = solid.filter(q => q[4] < 20 && q[5] > -20);
+        for (const b of m.berths) {
+          if (!berthSizesFor(cls).some(z => berthFits(b, z)) || !berthClear(id, b, cls)) continue;
+          const s = game(8, { classId: cls, forces: false, docked: false });
+          for (const f of Object.keys(s.law.standing)) s.law.standing[f] = 40;
+          s.dock = null;
+          atGate(s, id);
+          assert(TC.requestDocking(s, id).ok, `${id}: cleared`);
+          Object.assign(TC.clearanceFor(s, id).dock, { berth: b.id, port: collarFor(cls, b).id });
+          assert(D.beginDocking(s, { kind: 'station', id }, { mode: 'auto' }).ok, `${id} ${b.id}: begun`);
+          s.$dockTrace = [];
+          const ev = events();
+          const t = run(s, st => st.dock?.phase === 'docked', 200);
+          assert(s.dock?.phase === 'docked' && s.dock.berth === b.id, `${id} ${b.id}, a ${cls}: docked (${s.dock?.phase} after ${t} min)`);
+          assert(!(ev.citation || []).length, `${id} ${b.id}: by the rules`);
+          longest = Math.max(longest, t);
+          flown++;
+          // flying in, it stays a hull's half-length off anything standing in the plane
+          const F = { 'x+': [1, 0], 'x-': [-1, 0], 'y+': [0, 1], 'y-': [0, -1] }, n = F[b.face], u = F[b.up];
+          const off = (p, q) => { const x = b.x + n[0] * p.x + u[0] * p.y, y = b.y + n[1] * p.x + u[1] * p.y; return Math.hypot(Math.max(q[0] - x, 0, x - q[1]), Math.max(q[2] - y, 0, y - q[3])); };
+          for (const p of s.$dockTrace) for (const q of inPlane) { const c = off(p, q) - half; closest = Math.min(closest, c); assert(c >= 0, `${id} ${b.id}, a ${cls}: ${fmt(c, 0)} m into the structure flying in`); }
+          // down the corridor, as it will lie, nothing in the way
+          const len = corridorOf(id, b, cls);
+          for (let o = 2; o <= len; o += 10) for (const h of hullInBerth(cls, b, o)) for (const q of solid) {
+            assert(!(h[0] < q[1] - 0.05 && q[0] < h[1] - 0.05 && h[2] < q[3] - 0.05 && q[2] < h[3] - 0.05 && h[4] < q[5] - 0.05 && q[4] < h[5] - 0.05), `${id} ${b.id}, a ${cls}: the corridor is blocked ${fmt(o, 0)} m out`);
+          }
+          // and out, through the gate
+          TC.requestDeparture(s, id);
+          assert(D.undock(s).ok, `${id} ${b.id}: undocked`);
+          s.$dockTrace = [];
+          for (let i = 0; i < 300 && s.dock; i++) { advance(s, 1); if (s.dock?.phase === 'holding') D.clearOff(s); }
+          assert(!s.dock, `${id} ${b.id}, a ${cls}: out through the gate`);
+          for (const p of s.$dockTrace) for (const q of inPlane) assert(off(p, q) >= 1, `${id} ${b.id}, a ${cls}: flown out through the structure`);
+        }
+      }
+      console.log(`      ${flown} dockings flown in and out, the longest ${longest} min from the gate; closest to the structure ${fmt(closest, 0)} m past half a hull`);
     },
   },
   {

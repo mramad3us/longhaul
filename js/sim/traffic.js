@@ -221,7 +221,7 @@ function leavePort(world, e) {
 function arrive(world, e, st, minute) {
   const call = e.tags.call = { ...planCall(e), since: minute, port: st.id };
   if (call.work > 0) {
-    const b = freeBerth(world.state, st, berthSizesFor(e.cls), { reserve: true });
+    const b = freeBerth(world.state, st, e.cls, { reserve: true });
     if (b) { holdBerth(st, b.id, e); e.tags.ends = 'berth'; return flyLeg(world, e, minute, gateId(st.id), st.id, LOCAL_G, st.id); }
     call.giveUp = minute + GIVE_UP_MIN;
     return toSlot(world, e, st, minute, 'wait');
@@ -323,7 +323,7 @@ function nextInPort(world, e, minute) {
     return;
   }
   if (call.phase === 'wait') {
-    const b = freeBerth(world.state, st, berthSizesFor(e.cls), { reserve: true });
+    const b = freeBerth(world.state, st, e.cls, { reserve: true });
     if (b) {
       // a berth: out of the slot to the gate, down to it (held for it on the way)
       const slot = { orbit: e.orbit };
@@ -369,7 +369,7 @@ function callDown(world, st) {
     const e = world.get(q[k]);
     if (!e?.tags?.traffic || e.tags.at !== st.id || e.tags.call?.phase !== 'wait' || e.transit) { q[k] = null; continue; }
     looked++;
-    if (!freeBerth(state, st, berthSizesFor(e.cls), { reserve: true })) continue;
+    if (!freeBerth(state, st, e.cls, { reserve: true })) continue;
     q[k] = null;
     e.tags.until = now + 1;                  // (it asks for the berth itself next minute: nextInPort)
     world.plan(e, now);

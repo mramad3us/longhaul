@@ -758,7 +758,7 @@ function modelBounds(model) {
   b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, z0: Infinity, z1: -Infinity };
   for (const p of model.parts) {
     const e = p.k === 'box' ? [p.x0, p.x1, p.y0, p.y1, p.z0, p.z1] : p.k === 'cyl' ? [p.x0, p.x1, p.y - p.r, p.y + p.r, (p.z || 0) - p.r, (p.z || 0) + p.r]
-      : p.k === 'ring' ? [p.x - p.r - p.d, p.x + p.r + p.d, -p.r - p.d, p.r + p.d, -p.w / 2, p.w / 2] : null;
+      : p.k === 'ring' ? [p.x - p.r - p.d, p.x + p.r + p.d, p.y - p.w / 2, p.y + p.w / 2, -p.r - p.d, p.r + p.d] : null;
     if (!e) continue;
     b.x0 = Math.min(b.x0, e[0]); b.x1 = Math.max(b.x1, e[1]); b.y0 = Math.min(b.y0, e[2]); b.y1 = Math.max(b.y1, e[3]); b.z0 = Math.min(b.z0, e[4]); b.z1 = Math.max(b.z1, e[5]);
   }

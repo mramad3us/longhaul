@@ -13,8 +13,9 @@
 //             nav computer won't do it for us
 //   approach  the final approach, gate to corridor, flown by the docking
 //             computer in the berth's frame (below) on the drive at 0.1G and
-//             under the keep-out speed limit (traffic-control.js), to a
-//             point CORRIDOR out along the berth's axis
+//             under the keep-out speed limit (traffic-control.js), round
+//             what stands in the way (stations.js wayRound) to a point out
+//             along the berth's axis, as far as that is clear (corridorOf)
 //   spin      SPIN MATCH, off a tumbling wreck (damage.js tumbleOf): at
 //             the corridor's mouth our ship takes up the wreck's turn on
 //             the RCS, and flies round it as it does until the collar we
@@ -84,7 +85,7 @@ import { random, gaussian } from '../core/rng.js';
 import { getWorld, predictEntity } from './world.js';
 import { hullOf, COLLARS } from './hulls.js';
 import { mateRotation, planeView, turn, shipPortFrame } from './mating.js';
-import { berthFrame, berthOf, claimBerth, releaseBerth, stationModel, gateId, STATIONS } from './stations.js';
+import { berthFrame, berthOf, claimBerth, releaseBerth, corridorOf, wayRound, stationModel, gateId, STATIONS } from './stations.js';
 import { systemPerf } from './systems.js';
 import { RCS_FUEL_PER_G_MIN, RCS_MAX_G, fuelUsed } from './flight.js';
 import { createPlan, portOfTarget } from './nav.js';
@@ -106,6 +107,8 @@ export const CLEAR_M = 150;         // the hold point after separation
 const OUT_PAST = 1.03;              // leaving: let go this far out, in gates (just through it)
 const OUT_MS = 180;                 // …climbing to it no faster than this (traffic-control.js KEEPOUT_SPEED_MS, kept 10% under)
 const SHIP_CORRIDOR_M = 300;        // a ship's corridor is shorter than a station's
+const WAY_PASS_M = 40;              // a point on the way round a station is passed this close, and turned at
+const FACE_XY = { 'x+': [1, 0], 'x-': [-1, 0], 'y+': [0, 1], 'y-': [0, -1] };
 const APPROACH_G = 0.1;             // the final approach, inside the gate
 const APPROACH_CRUISE_MS = 150;     // …under the keep-out limit
 const BUMP_DP_PER_KJ = 1 / 60;      // collar strikes: hull damage per kJ over the first 200
@@ -333,9 +336,30 @@ export function berthLabel(state, d = state.dock) {
   return `${e?.name || 'the ship'}'s ${hullOf(e?.cls)?.ports.find(p => p.id === d.berth)?.label.toLowerCase() || 'collar'}`;
 }
 
+/** How far out along the collar's axis this dock's corridor starts (m): as far as the way is clear (stations.js corridorOf). */
+function corridorM(state, d) {
+  if (d.target.kind === 'ship') return SHIP_CORRIDOR_M;
+  const b = berthOf(d.target.id, d.berth);
+  return b ? corridorOf(d.target.id, b, state.ship.classId || PLAYER_CLASS) : CORRIDOR_M;
+}
+
+/**
+ * The way to fly from `from` to `to` (points in the berth's frame, x along
+ * its normal, y along its up) round the station (stations.js wayRound):
+ * the points to pass in that frame, `to` last. A ship has nothing to go round.
+ */
+function wayInFrame(state, d, from, to) {
+  const b = d.target.kind === 'station' && berthOf(d.target.id, d.berth);
+  if (!b) return [to];
+  const n = FACE_XY[b.face], u = FACE_XY[b.up];
+  const out = (p) => ({ x: b.x + n[0] * p.x + u[0] * p.y, y: b.y + n[1] * p.x + u[1] * p.y });
+  const back = (p) => ({ x: (p.x - b.x) * n[0] + (p.y - b.y) * n[1], y: (p.x - b.x) * u[0] + (p.y - b.y) * u[1] });
+  return wayRound(d.target.id, out(from), out(to), hullOf(state.ship.classId || PLAYER_CLASS).L).map(back);
+}
+
 /** The point the final approach flies to: the corridor's mouth, out along the berth's axis. */
-export function corridorTarget(d) {
-  return { kind: 'port', id: d.target.id, berth: d.berth, offsetM: d.target.kind === 'ship' ? SHIP_CORRIDOR_M : CORRIDOR_M, dockKind: d.target.kind };
+export function corridorTarget(state, d) {
+  return { kind: 'port', id: d.target.id, berth: d.berth, offsetM: corridorM(state, d), dockKind: d.target.kind };
 }
 
 /** Where our centre is now in a dock's berth frame, and how it moves there (`f`: our place, the flight's by default). */
@@ -362,6 +386,8 @@ function startApproach(state, emit) {
   d.rel = { ...zeroRel(), ...c };
   d.facing = state.flight.facing;
   d.t = 0;
+  // (round the station to the corridor's mouth, if it stands in the way)
+  d.way = wayInFrame(state, d, c, { x: corridorM(state, d), y: 0 }).slice(0, -1);
   state.flight.hold = null;
   emit('dock-phase', { phase: 'approach', berth: berthLabel(state) });
 }
@@ -374,13 +400,15 @@ function startApproach(state, emit) {
 function approachStep(state, dtS, emit) {
   const d = state.dock, r = d.rel;
   const f = state.flight;
-  const goal = d.target.kind === 'ship' ? SHIP_CORRIDOR_M : CORRIDOR_M;
+  const by = d.way?.[0];
+  const goal = corridorM(state, d);
   const aMax = Math.min(APPROACH_G, f.maxG > 0 ? f.maxG : APPROACH_G) * G0;
-  const ex = r.x - goal, ey = r.y, ez = r.z;
+  const ex = r.x - (by ? by.x : goal), ey = r.y - (by ? by.y : 0), ez = r.z;
   const dist = Math.hypot(ex, ey, ez);
+  if (by && dist < WAY_PASS_M) d.way.shift();
   const vmax = Math.min(APPROACH_CRUISE_MS, Math.sqrt(2 * 0.6 * aMax * dist));
   const k = dist > 1e-6 ? vmax / dist : 0;
-  const tau = 6;
+  const tau = 2.5;
   let ax = (-ex * k - r.vx) / tau, ay = (-ey * k - r.vy) / tau, az = (-ez * k - r.vz) / tau;
   const a = Math.hypot(ax, ay, az);
   if (a > aMax) { ax *= aMax / a; ay *= aMax / a; az *= aMax / a; }
@@ -399,7 +427,8 @@ function approachStep(state, dtS, emit) {
   state.$dockThrust = drive ? g : 0;
   state.$dockRcs = drive ? 0 : g;
   d.t += dtS;
-  if (dist < 40 && Math.hypot(r.vx, r.vy, r.vz) < 2) {
+  state.$dockTrace?.push({ x: r.x, y: r.y });
+  if (!d.way?.length && dist < 40 && Math.hypot(r.vx, r.vy, r.vz) < 2) {
     const e = d.target.kind === 'ship' && getWorld(state).get(d.target.id);
     if (e && tumbling(e)) startSpin(state, e, emit); else startProx(state, emit);
   }
@@ -510,10 +539,8 @@ export function clearOff(state, emit = () => {}) {
   d.rel = { ...zeroRel(), ...c };
   d.goal = { x: ox * fr.normal.x + oy * fr.normal.y, y: ox * fr.up.x + oy * fr.up.y };
   d.start = { x: c.x, y: c.y };
-  // a gate on the far side of the station: round it by a point off its side, ours, clear of the structure
-  const sx = (sp.x - fr.pos.x) * AU_M, sy = (sp.y - fr.pos.y) * AU_M;
-  const S = { x: sx * fr.normal.x + sy * fr.normal.y, y: sx * fr.up.x + sy * fr.up.y };
-  d.via = roundStation(c, d.goal, S, 0.6 * (stationModel(e.id)?.sizeM || 500) + 200);
+  // a gate on the far side of the station: round it, clear of the structure
+  d.way = wayInFrame(state, d, c, d.goal).slice(0, -1);
   d.facing = wasFacing;
   d.t = t;
   d.cleared = false;
@@ -523,25 +550,15 @@ export function clearOff(state, emit = () => {}) {
   return { ok: true, text: `Climbing out of the corridor on RCS, through the gate at ${STATIONS[e.id]?.gateKm ?? 50} km.` };
 }
 
-/** A point to fly by so the line from `a` to `b` misses a station centred at `S` (radius R), or null if it already does. */
-function roundStation(a, b, S, R) {
-  const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1;
-  const t = Math.max(0, Math.min(1, ((S.x - a.x) * dx + (S.y - a.y) * dy) / L2));
-  if (Math.hypot(a.x + t * dx - S.x, a.y + t * dy - S.y) >= R) return null;
-  // off the station across the line to the gate, on the side we're on
-  const gx = b.x - S.x, gy = b.y - S.y, g = Math.hypot(gx, gy) || 1;
-  let px = -gy / g, py = gx / g;
-  if ((a.x - S.x) * px + (a.y - S.y) * py < 0) { px = -px; py = -py; }
-  return { x: S.x + px * 1.5 * R, y: S.y + py * 1.5 * R };
-}
-
 /** One second of the climb out: straight at the point past the gate, on RCS, under the keep-out limit. */
 function outboundStep(state, dtS, emit = () => {}) {
   const d = state.dock, r = d.rel;
   const aMax = RCS_MAX_G * G0 * Math.min(1, ourRcs(state).accel / Math.max(1e-6, hullOf(state.ship.classId || PLAYER_CLASS).rcs.accel));
   if (aMax <= 0 && !d.rcsOut) { d.rcsOut = true; emit('nav-callout', { level: 'warn', text: 'RCS out: the docking computer cannot move us. We hold here until it is repaired, or the tanks are filled.' }); }
   else if (aMax > 0) d.rcsOut = false;
-  const aim = d.via || d.goal;
+  // (a save from before 1.12.12 has the one point to go by)
+  if (d.via) { d.way = [d.via]; d.via = null; }
+  const aim = d.way?.[0] || d.goal;
   const ex = aim.x - r.x, ey = aim.y - r.y;
   const dist = Math.hypot(ex, ey);
   const ux = dist > 1e-6 ? ex / dist : 0, uy = dist > 1e-6 ? ey / dist : 0;
@@ -558,11 +575,12 @@ function outboundStep(state, dtS, emit = () => {}) {
   state.$dockThrust = 0;
   state.$dockRcs = g;
   d.t += dtS;
+  state.$dockTrace?.push({ x: r.x, y: r.y });
   // there (or past it, along the line we set out on): on to the gate, or through it, and the
   // dock lets go at the next minute (clearGate)
   const st = d.start || aim;
   if (dist < 100 || ex * (aim.x - st.x) + ey * (aim.y - st.y) <= 0) {
-    if (d.via) { d.start = { x: d.via.x, y: d.via.y }; d.via = null; }
+    if (d.way?.length) d.start = d.way.shift();
     else d.cleared = true;
   }
 }
@@ -1046,7 +1064,7 @@ export function dockStatus(state) {
     phase: d.phase, mode: d.mode, target: e?.name || '—', kind: d.target.kind, berth: berthLabel(state), port, collar: col,
     range: r.x, closing: -r.vx, lateral: Math.hypot(r.y, r.z), y: r.y, z: r.z, vy: r.vy, vz: r.vz,
     toGo: d.phase === 'outbound' && d.goal ? Math.hypot(d.goal.x - r.x, d.goal.y - r.y)
-      : d.phase === 'approach' ? Math.hypot(r.x - (d.target.kind === 'ship' ? SHIP_CORRIDOR_M : CORRIDOR_M), r.y, r.z) : null,
+      : d.phase === 'approach' ? Math.hypot(r.x - corridorM(state, d), r.y, r.z) : null,
     yaw: r.yaw / RAD, pitch: r.pitch / RAD, roll: r.roll / RAD, fuel: d.fuel, bumps: d.bumps, tumble: d.phase === 'spin' && e ? tumbleOf(e)?.rate || 0 : 0,
     timer: d.phase === 'spin' ? Math.max(0, (d.spinS - d.timer) / MIN_S) : d.phase === 'capture' ? CAPTURE_MIN - (state.clock.minute - d.since) : d.phase === 'seal' ? SEAL_MIN - (state.clock.minute - d.since) : d.phase === 'undock' ? UNDOCK_MIN - (state.clock.minute - d.since) : null,
     rate: PROX_RATES[d.rate ?? 3],

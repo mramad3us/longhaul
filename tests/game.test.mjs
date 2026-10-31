@@ -1,4 +1,5 @@
 // Whole-game integration: every system ticking together, minute by minute.
+import { STATIONS } from '../js/sim/stations.js';
 import { extendLease } from '../js/sim/leases.js';
 import { assert, fmt, dockHere } from './helpers.mjs';
 import { AU_M, DAY_MIN } from '../js/core/constants.js';
@@ -157,10 +158,12 @@ export default [
       const s = newGame(5);
       let offer = null;
       bus.on('sos-offered', (p) => { offer = p; });
-      for (let i = 0; i < 20 && !(offer && offer.mission.type !== 'RUNAWAY' && offer.feasibility.feasible); i++) {
+      // (one with time in hand: the estimate doesn't count the minutes spent getting under way)
+      const inTime = (o) => o && o.mission.type !== 'RUNAWAY' && o.feasibility.feasible && o.feasibility.minutes < 0.8 * o.mission.timer;
+      for (let i = 0; i < 40 && !inTime(offer); i++) {
         offer = null; forceDistress(s, (t, p) => bus.emit(t, p));
       }
-      assert(offer && offer.feasibility.feasible, 'no feasible distress call generated');
+      assert(inTime(offer), 'no feasible distress call generated');
       const m = offer.mission;
       acceptMission(s, m.id);
       const plan = createPlan('closing', { kind: 'entity', id: m.entityId }, { accelG: offer.feasibility.g, standoff: STANDOFF.TACTICAL });
@@ -178,11 +181,17 @@ export default [
   {
     name: 'contracts: cargo delivery and field investigation complete end to end',
     fn: async () => {
-      const s = newGame(21);
+      // (no navies or raiders about: this is the paperwork, not a fight)
+      seedRandom(21);
+      bus.clear();
+      const s = createGame({ shipName: 'Test', captainName: 'Cap', crewCount: 6, forces: false });
+      s.politics.quietUntil = Infinity;
       run(s, 20);   // boards populate
       const home = getWorld(s).get('ceres-station');
-      let cargo = home.board.missions.find(c => c.type === 'CARGO');
-      for (let i = 0; i < 30 && !cargo; i++) { home.board.lastRefresh = -Infinity; home.board.missions = []; run(s, 10); cargo = home.board.missions.find(c => c.type === 'CARGO'); }
+      // (to a port that berths anyone: a naval yard turns away a hull without standing)
+      const open = (c) => c.type === 'CARGO' && !STATIONS[c.dest]?.military;
+      let cargo = home.board.missions.find(open);
+      for (let i = 0; i < 30 && !cargo; i++) { home.board.lastRefresh = -Infinity; home.board.missions = []; run(s, 10); cargo = home.board.missions.find(open); }
       assert(cargo, 'no cargo contract generated');
       const acc = acceptContract(s, home.id, cargo.id);
       assert(acc.ok, acc.text);
