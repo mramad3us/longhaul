@@ -30,8 +30,12 @@
 // as ours (crew.js): no one holds 8G for hours. A ship running silent
 // (no transponder) cuts its drive and coasts dark as soon as it is out
 // past what the pursuer's sensors hold of a cold hull, and stays dark
-// until it is found again. Run down all the same, it strikes if its kind
-// ever does, or turns and fights it out.
+// until it is found again. One showing a transponder or a beacon can't go
+// cold, and cuts its drive past what a lit hull shows. Run down all the
+// same, it strikes if its kind ever does, or turns and fights it out. Clear
+// of it, nobody after it for CALM_MIN (or the pursuer gone), a navy's
+// captain stands down and goes back to its beat; a civilian calms, and the
+// rest leave. Nobody runs for ever.
 //
 // Talking to us goes through *requests* (state.comms.requests): an
 // order to heave to, a pirate's ultimatum, a warning, an offer of
@@ -55,7 +59,7 @@
 // ============================================================
 
 import { groundCheck, terrainGuard, hoverCmd } from './terrain.js';
-import { AU_M, G0, MIN_S, DAY_MIN } from '../core/constants.js';
+import { AU_M, G0, MIN_S, DAY_MIN, RANGE } from '../core/constants.js';
 import { randInt, chance } from '../core/rng.js';
 import { getWorld, predictEntity } from './world.js';
 import { createEntity } from './entities.js';
@@ -111,7 +115,7 @@ const PIRATE_NERVE = 0.5;             // pirates stalk ships up to twice their s
 // Running (run): what a captain asks of a crew with bodies
 export const SUSTAIN_G = HIGH_DOSE_G; // juiced on the couches, a crew takes this for days (past it: strokes)
 export const SPRINT_LOSS = 0.1;       // the share of its crew a captain will spend in strokes to break contact
-const DARK_MARGIN = 1.2;              // running silent, it goes cold this far out past the pursuer's reach on its hull
+const DARK_MARGIN = 1.2;              // running, it cuts its drive this far out past the pursuer's reach on what it shows
 const CORNERED_S = 3600;              // a pursuer that will be on it inside this, its own best burn and all: no getting away
 
 // ---- SPAWNING ----
@@ -828,6 +832,7 @@ function steer(state, e, emit) {
       const from = a.mode === 'flee' ? a.threat || a.target : a.threat;
       a.evade = a.mode === 'flee' && !!CLASSES[e.cls]?.evasive;
       if (from && kinematics(state, from)) run(state, e, from, p, emit);
+      else if (a.mode === 'flee' && a.role === 'navy') standDown(state, e, from);    // (whoever it ran from is gone)
       else fleeFrom(e, state.flight.pos, Math.min(p.maxG, CLASSES[e.cls]?.drive.cruiseG || 1));
       return;
     }
@@ -901,8 +906,9 @@ function holdWith(tgt) {
 
 /**
  * Breaking contact with `fromId`, as a captain with people aboard would
- * (the header has the doctrine). Out past the pursuer's reach on our cold
- * hull, a ship running silent coasts dark; found, it burns away, at the
+ * (the header has the doctrine). Out past the pursuer's reach on its cold
+ * hull, a ship running silent coasts dark (one with a transponder or a
+ * beacon lit, past its reach on a lit hull); found, it burns away, at the
  * drive's best while the sprint lasts (SPRINT_LOSS of the crew to strokes),
  * then at SUSTAIN_G; caught all the same, it is cornered.
  */
@@ -916,15 +922,21 @@ function run(state, e, fromId, p, emit) {
   // until they are due it keeps burning, so they spend their Δv running it down
   const now = state.clock.minute;
   const seen = seenInbound(state, e);
-  if (seen.length) a.waryUntil = Math.max(a.waryUntil || 0, now + Math.min(...seen.map(o => timeToGo(state, o))) / MIN_S + 10);
+  // (one opening on it, outrun or spent, is never due: it stops nobody cutting their drive, or nobody ever would)
+  const due = seen.map(o => timeToGo(state, o)).filter(Number.isFinite);
+  if (due.length) a.waryUntil = Math.max(a.waryUntil || 0, now + Math.min(...due) / MIN_S + 10);
   // (dark already, it stays dark while unseen; burning, it goes cold with a margin, or it would flicker)
-  const reach = hullSignature(e) * sensorQuality(state, fromId);
-  if (!e.transponder && !e.sos && !(now < (a.waryUntil || 0)) && d > reach * (a.dark ? 1 : DARK_MARGIN)) {
-    if (!a.dark) { a.dark = true; emit('agent-runs-dark', { id: e.id, name: knownName(state, e.id), seen: !!state.sensors.$seen?.has(e.id) }); }
+  const silent = !e.transponder && !e.sos;
+  const reach = (silent ? hullSignature(e) : RANGE.LONG) * sensorQuality(state, fromId);
+  if (!(now < (a.waryUntil || 0)) && d > reach * (a.dark ? 1 : DARK_MARGIN)) {
+    if (!a.dark) { a.dark = true; if (silent) emit('agent-runs-dark', { id: e.id, name: knownName(state, e.id), seen: !!state.sensors.$seen?.has(e.id) }); }
     a.cmd = null; a.$toward = null;
+    a.clearSince ??= now;
+    if (a.role === 'navy' && now - a.clearSince >= CALM_MIN) standDown(state, e, fromId);
     return;
   }
   a.dark = false;
+  a.clearSince = null;
   const sprint = (a.strain || 0) < SPRINT_LOSS;
   const g = sprint ? p.maxG : Math.min(p.maxG, SUSTAIN_G);
   if (!sprint && p.maxG > SUSTAIN_G && !a.flags.eased) {
@@ -933,6 +945,24 @@ function run(state, e, fromId, p, emit) {
   }
   if (!sprint && caughtWithin(e, k, d * AU_M, g) < CORNERED_S && cornered(state, e, fromId, emit)) return;
   fleeFrom(e, k.pos, g);
+}
+
+/**
+ * A navy hull clear of `fromId`, with nobody after it: back to its beat, at
+ * peace with `fromId` unless they meet again, when its brain decides that
+ * as it would for anyone. With no beat left to go back to (the mark it was
+ * set at gone with its job), it leaves.
+ */
+function standDown(state, e, fromId) {
+  const a = e.agent;
+  a.hostile = a.hostile.filter(id => id !== fromId);
+  if (a.target === fromId) a.target = null;
+  a.threat = null;
+  a.dark = false;
+  a.clearSince = null;
+  a.calmSince = state.clock.minute;
+  const beat = a.home && (a.home.kind !== 'entity' || getWorld(state).get(a.home.id));
+  a.mode = beat ? defaultMode(a.role) : 'leave';
 }
 
 /**

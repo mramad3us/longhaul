@@ -211,6 +211,8 @@ export function upgradeState(state) {
   state.combat.fuses ??= [];
   // (a save from before fuses were kept: a scuttled hull still counting down is armed again)
   for (const e of state.entities || []) if (e.combat?.containment != null && !e.agent && !state.combat.fuses.includes(e.id)) state.combat.fuses.push(e.id);
+  // (before 1.12.19 a torpedo that could never arrive kept a runner wary, and burning, for good: run ends that now)
+  for (const e of state.entities || []) if (e.agent?.waryUntil === Infinity) e.agent.waryUntil = 0;
   const fresh = state.traffic && !state.traffic.v;
   ensurePopulation(state);
   if (fresh && state.traffic.population > 0) seedForces(state);

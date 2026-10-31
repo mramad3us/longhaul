@@ -43,6 +43,7 @@ Roles: Captain, Pilot, Engineer, Medic, Gunner, Mechanic, Scientist, Cook. Each 
 A dose stays in the blood for an hour, so a flip or a lull between combat burns is covered: a burn costs one dose per person, not one per leg. The bill comes when it wears off:
 - **hangover** (standard dose): up to 3 days, scaled by the peak G. Work efficiency ×0.85, lower morale, and hard G risks brain bleeds.
 - **crash** (high dose): heart stress +40 and heart health −15, which barely mends while it lasts. It runs 6 days plus 1.5 h for every hour on the high dose, capped at 10 days. Work efficiency ×0.6, morale down hard, twice the brain-bleed risk. Cardiac stress builds at dangerous loads, and a failing heart goes critical: death within minutes unless someone gives first aid.
+- Both show by the name on the duty roster, with the time left. Rest and shore leave don't shorten them; a hospital on a world's ground clears them (FLIGHT.md).
 
 **Medicine.** The cameras show what the crew trauma model says: blood where a part of the body is hurt (wet on skin, soaked dark into the jumpsuit), char where someone burned, the pallor of the dead; the badly hurt and the dead lie where they fell, each their own way (on their back, on their side, face down), in a pool as wide as the wound is bad. Critical crew are stabilized and carried to the autodoc by whoever is free with medical skill. The autodoc heals over hours using med supplies; it runs faster with a medic on watch and slower when damaged.
 

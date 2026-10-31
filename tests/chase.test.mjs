@@ -8,8 +8,9 @@ import { bus } from '../js/core/events.js';
 import { createGame, advance } from '../js/sim/game.js';
 import { getWorld } from '../js/sim/world.js';
 import { getBody, bodyPos } from '../js/sim/ephemeris.js';
-import { spawnAgent, respondToRequest } from '../js/sim/agents.js';
-import { launchTorpedo, torpedoForecast } from '../js/sim/ordnance.js';
+import { spawnAgent, respondToRequest, makeHostile, hostilesOfPlayer } from '../js/sim/agents.js';
+import { launchTorpedo, torpedoForecast, timeToGo } from '../js/sim/ordnance.js';
+import { serialize, deserialize } from '../js/sim/save.js';
 import { PLAYER } from '../js/sim/combatants.js';
 import { releaseHold, engageRoute, overrideSecure } from '../js/sim/autopilot.js';
 import { createPlan, planRoutes, targetName, simulatePlan, planRun } from '../js/sim/nav.js';
@@ -167,6 +168,82 @@ export default [
       advance(s, 3);
       assert(p.agent.waryUntil > s.clock.minute, 'it saw the torpedo and stays lit while it is due');
       assert(p.thrust > 0, 'burning, so the torpedo spends its Δv');
+    },
+  },
+  {
+    name: 'nobody runs for ever: a torpedo that will never arrive keeps nobody burning, a warship clear of us stands down, transponder or no, and a pursuer gone ends it at once',
+    fn: () => {
+      // a navy hull, running from us, as the fight leaves one (agents.js fight)
+      const warship = (s, distAU, transponder, home) => {
+        const { pos, vel } = near(s, distAU);
+        const e = spawnAgent(s, { role: 'navy', cls: 'mcrn-corvette', faction: 'MCR', pos, vel, transponder, home });
+        makeHostile(s, e, PLAYER);
+        e.agent.mode = 'flee'; e.agent.threat = PLAYER;
+        return e;
+      };
+      const speed = (s, e) => Math.hypot(e.vel.vx - s.flight.vel.vx, e.vel.vy - s.flight.vel.vy) / 1000;
+      const HOME = { kind: 'entity', id: 'ceres-station' };
+      // the user's SH Guardian 19: a torpedo after it that it has outrun, opening, never due
+      let s = game(41);
+      const p = warship(s, 0.01, false);
+      const dir = (() => { const dx = p.pos.x - s.flight.pos.x, dy = p.pos.y - s.flight.pos.y, l = Math.hypot(dx, dy); return { x: dx / l, y: dy / l }; })();
+      p.vel.vx += dir.x * 500_000; p.vel.vy += dir.y * 500_000;      // (500 km/s: no motor makes that up)
+      const o = launchTorpedo(s, PLAYER, p.id, { warhead: 'he', profile: 'fast' }, (x, q) => bus.emit(x, q));
+      assert(timeToGo(s, o) === Infinity, 'the torpedo is opening: never due');
+      advance(s, 4);
+      assert(getWorld(s).get(o.id) && timeToGo(s, o) === Infinity, 'and still out there, still opening');
+      assert(Number.isFinite(p.agent.waryUntil ?? 0), `wary for a while, not for good (${p.agent.waryUntil})`);
+      assert(p.thrust === 0 && p.agent.dark, `it cuts its drive (${p.thrust} G, wary until ${p.agent.waryUntil})`);
+      // silent, far off: dark, and six hours on, back to its beat
+      s = game(42);
+      const d = warship(s, 0.05, false, HOME);
+      advance(s, 3);
+      assert(d.thrust === 0 && d.agent.dark, `past our reach it cuts its drive (${d.thrust} G)`);
+      assert(hostilesOfPlayer(s).includes(d), 'hostile still, for now');
+      advance(s, 6 * 60 + 2);
+      assert(d.agent.mode === 'patrol', `clear for six hours it stands down (${d.agent.mode})`);
+      assert(!hostilesOfPlayer(s).includes(d), 'and is no longer hostile');
+      // with its transponder on it can't go cold: burning till it is past what a lit hull shows, then the same
+      s = game(43);
+      const lit = warship(s, 0.03, true, HOME);
+      advance(s, 6);                               // (turned to the burn first)
+      assert(lit.thrust > 1, `inside what a lit hull shows, it runs (${lit.thrust} G)`);
+      let cut = null, peak = 0;
+      for (let m = 0; m < 2 * DAY_MIN && lit.agent.mode === 'flee'; m++) {
+        advance(s, 1);
+        peak = Math.max(peak, speed(s, lit));
+        if (cut == null && lit.thrust === 0) cut = m;
+      }
+      console.log(`      transponder on: drive cut after ${cut} min at ${fmt(distKm(s, lit) / 1e6, 1)}M km, ${fmt(peak, 0)} km/s at most; ${lit.agent.mode}`);
+      assert(cut != null, 'it cuts its drive');
+      assert(lit.agent.mode === 'patrol', `and stands down (${lit.agent.mode})`);
+      assert(peak < 2_000, `nothing like the 9,600 km/s the user's reached (${fmt(peak, 0)} km/s)`);
+      // whoever it ran from is gone
+      s = game(44);
+      const g = warship(s, 0.02, true, HOME);
+      g.agent.hostile = ['nobody-now']; g.agent.threat = 'nobody-now'; g.agent.target = 'nobody-now';
+      advance(s, 2);
+      assert(g.agent.mode === 'patrol' && !g.agent.hostile.length, `its pursuer gone, it stands down (${g.agent.mode}, ${g.agent.hostile})`);
+      // a save's: wary for good, burning for days, its mark gone with its job: it stops on load, and six hours on it has left
+      s = game(45);
+      const w = warship(s, 3, false);
+      w.agent.waryUntil = Infinity;
+      const { state: l } = deserialize(serialize(s));
+      const e = getWorld(l).get(w.id);
+      assert(e.agent.waryUntil === 0, `mended on load (${e.agent.waryUntil})`);
+      advance(l, 6 * 60 + 3);
+      assert(!getWorld(l).get(w.id) && !hostilesOfPlayer(l).length, `with no beat to go back to, a save's runner has left (${e.agent?.mode})`);
+      // and over a fortnight no role is left burning hard
+      for (const role of ['navy', 'pirate', 'patrol', 'picket', 'civilian']) for (const transponder of [true, false]) {
+        const r = game(46);
+        const { pos, vel } = near(r, 0.02);
+        const x = spawnAgent(r, { role, cls: role === 'civilian' ? 'light-freighter' : 'mcrn-corvette', faction: role === 'pirate' ? 'pirate' : 'MCR', pos, vel, transponder });
+        makeHostile(r, x, PLAYER);
+        x.agent.mode = role === 'navy' || role === 'civilian' ? 'flee' : 'leave'; x.agent.threat = PLAYER;
+        advance(r, 14 * DAY_MIN);
+        const left = getWorld(r).get(x.id);
+        assert(!left || left.thrust <= 1.01, `a ${role}, transponder ${transponder}, still burning ${fmt(left?.thrust, 1)} G a fortnight on (${left?.agent?.mode})`);
+      }
     },
   },
   {

@@ -178,9 +178,10 @@ function blockLabel(state, m) {
   return `<span class="duty-now duty-${b}">${txt}</span>`;
 }
 
-/** Marks by a name: a step up earned, a retirement asked, a hand meaning to go (sim/careers.js). */
+/** Marks by a name: a step up earned, a retirement asked, a hand meaning to go (sim/careers.js), the juice still being paid for (crew.js). */
 const flags = (m) => [promotionDue(m) && '<span class="roster-flag roster-flag-up" title="Due a step up: PROMOTE in their panel">▲</span>',
-  m.retire && '<span class="roster-flag" title="Asks to retire">R</span>', m.quit && '<span class="roster-flag roster-flag-bad" title="Means to sign off at the next port">✕</span>'].filter(Boolean).join('');
+  m.retire && '<span class="roster-flag" title="Asks to retire">R</span>', m.quit && '<span class="roster-flag roster-flag-bad" title="Means to sign off at the next port">✕</span>',
+  m.juiceHangover > 0 && `<span class="roster-flag ${m.juiceCrash ? 'roster-flag-bad' : ''}" title="${m.juiceCrash ? 'Juice crash: works at ×0.6 until it passes' : 'Juice hangover: works at ×0.85 until it passes'}. Rest and leave don't shorten it; a hospital on a world's ground clears it.">${m.juiceCrash ? 'CRASH' : 'HANGOVER'} ${formatDuration(m.juiceHangover)}</span>`].filter(Boolean).join('');
 
 /** The month's pay, and those the ship has lost or seen off. */
 function serviceFoot(s) {
