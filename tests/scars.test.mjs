@@ -21,7 +21,7 @@ import { spawnAgent } from '../js/sim/agents.js';
 import { applyHit, wreckNpc, SCARS_MAX } from '../js/sim/damage.js';
 import { ensureHull, PLAYER } from '../js/sim/combatants.js';
 import { getWorld } from '../js/sim/world.js';
-import { releaseHold } from '../js/sim/autopilot.js';
+import { releaseHold, holdStation } from '../js/sim/autopilot.js';
 import { startBoarding, orderAboard, SCUTTLE_FUSE_MIN } from '../js/sim/boarding.js';
 import { hullOf } from '../js/sim/hulls.js';
 import { damageLook, pieces } from '../js/ui/gl/damage.js';
@@ -34,6 +34,7 @@ import { shipDockable } from '../js/sim/docking.js';
 import { boardable } from '../js/sim/boarding.js';
 import { crewAboard } from '../js/sim/manifest.js';
 import { openChannel } from '../js/sim/dialogue.js';
+import { CLASSES } from '../js/sim/ship-classes.js';
 
 function game(seed = 21, opts = {}) {
   seedRandom(seed);
@@ -232,6 +233,51 @@ export default [
       const c2 = back.contracts.active.find(x => x.id === c.id);
       assert(e2.tags.blown && e2.combat.wreckedAt === c2.lostAt && c2.offeredAt - c2.lostAt === 60 * Number(/comms (\d+) hours ago/.exec(c2.description)[1]), 'an old debris target blown on load');
       assert(h2.tags.derelict && !h2.tags.blown && crewAboard(h2) === 0, 'an old derelict dead on load');
+    },
+  },
+  {
+    name: 'a salvage job\'s derelict is a wreck with a hull: the telescope and the cameras have something to draw, docking its collars, boarding something to cut up, the radio nothing; a save\'s is mended on load',
+    fn: () => {
+      seedRandom(21);
+      bus.clear();
+      const s = createGame({ crewCount: 6, traffic: 0, forces: false });
+      s.politics.quietUntil = Infinity;
+      s.missions.cooldown = 1e9;
+      const st = dockedStation(s);
+      let c = null;
+      for (let i = 0; i < 120 && !c; i++) { st.board.lastRefresh = -Infinity; st.board.missions = []; advance(s, 10); c = st.board.missions.find(x => x.type === 'SALVAGE'); }
+      assert(c, 'no salvage posted');
+      assert(acceptContract(s, st.id, c.id).ok, 'accept');
+      const e = getWorld(s).get(c.targetId), hull = hullOf(e.cls);
+      assert(hull && e.shipClass === CLASSES[e.cls].name, `a hull of a class (${e.cls})`);
+      // a wreck to everything that reads one, dark, nobody aboard, dead weeks
+      const age = (s.clock.minute - e.combat.wreckedAt) / 1440;
+      assert(e.tags.wreck && e.tags.derelict && !e.tags.blown && e.combat.status === 'wreck' && !e.transponder && crewAboard(e) === 0 && age >= 3 && age <= 61, `dead ${fmt(age, 0)} days`);
+      // what the pictures draw: the hull, broken and unlit, and the telescope's size is the hull's
+      const look = damageLook(e, hull, s.clock.minute);
+      assert(look && !look.blown && look.lights === 0, 'drawn as a dead hull');
+      const sight = sightOf(s, e, e.pos, { x: e.pos.x, y: e.pos.y + 2000 / AU_M }, scopeOf(s));
+      assert(sight.regime === 'resolved' && Math.abs(sight.angRad * sight.distM / sight.foreshorten - hull.L) < 1, 'resolved at its own length');
+      // the job itself: held on it, the crew work it
+      releaseHold(s);
+      s.dock = null;
+      s.flight.pos = { x: e.pos.x + 900 / AU_M, y: e.pos.y }; s.flight.vel = { ...e.vel };
+      assert(holdStation(s, { kind: 'entity', id: e.id }) !== false, 'held on it');
+      advance(s, 5);
+      assert((c.worked || 0) >= 4, `worked while we hold on it (${c.worked})`);
+      // alongside uninvited, its collars there, a party can cross, and nobody answers
+      assert(shipDockable(s, e).ok && shipDockable(s, e).uninvited && hull.ports.length > 0, 'collars to come alongside at');
+      assert(boardable(s, e).ok, 'boardable');
+      assert(/Dead air|Nothing on any band/.test(openChannel(s, e.id).lines[0].text), 'no one answers');
+      // a save from before: no class, not a wreck; a real hull on load, the job going on
+      const was = `${e.shipClass}, ${fmt(hull.L, 0)} m, ${hull.ports.length} collars`;
+      for (const k of ['cls', 'combat', 'crewAboard']) delete e[k];
+      e.tl = 2; e.faction = 'independent'; e.shipClass = 'Hulk'; e.mass = 90_000;
+      delete e.tags.wreck; delete e.tags.derelict;
+      const back = deserialize(serialize(s)).state, e2 = getWorld(back).get(e.id);
+      assert(hullOf(e2.cls) && e2.tags.wreck && e2.tags.derelict && e2.combat.status === 'wreck' && crewAboard(e2) === 0, 'mended on load');
+      assert(back.contracts.active.find(x => x.id === c.id)?.worked === c.worked, 'the job as it was');
+      console.log(`      ${was}, dead ${fmt(age, 0)} days; an old save's mended on load as a ${e2.shipClass}`);
     },
   },
 ];

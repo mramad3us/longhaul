@@ -10,7 +10,8 @@
 //                                (an investigation finds its crew alive, a
 //                                dead hull, or debris: the ship blown apart
 //                                when it dropped off comms, damage.js)
-//   SALVAGE                    — hold formation with a derelict while the
+//   SALVAGE                    — hold formation with a derelict (the
+//                                wreck of a ship dead for weeks) while the
 //                                crew strips it (2h), return
 //   SURVEY                     — loiter within 150k km of a survey mark
 //                                for the required time, return
@@ -81,7 +82,7 @@ import { dockedStationEntity, dockedTo } from './docking.js';
 import { gateOrbit } from './stations.js';
 import { freeBerths } from './manifest.js';
 import { MIL_TYPES, MIL_LABEL, milShare, milRefusal, generateMil, spawnMil, milProgress, milTurnIn } from './military.js';
-import { blowApart } from './damage.js';
+import { blowApart, deadHull } from './damage.js';
 import { WORLDS, airspacesOf, worldOf } from './worlds.js';
 import { storeFactor } from './market.js';
 import { STORE_GOOD } from './goods.js';
@@ -266,6 +267,8 @@ function generate(state, station, others) {
 // ---- HOT-ZONE WORK ----
 
 const STANDING_TO_TRADE = -20;        // below this a power's stations won't deal with us
+const DERELICT_DAYS = [3, 60];     // how long ago a salvage job's derelict died
+
 const HOT_TYPES = new Set([ContractType.BOUNTY, ContractType.ESCORT, ContractType.SMUGGLE, ContractType.RECON]);
 const HOT_SHARE = 0.4;               // share of board slots offered to conflict work when any applies
 const LOG_MAX = 30;                   // lines a contract's timeline keeps
@@ -472,6 +475,11 @@ export function upgradeContracts(state) {
     c.lostAt = c.offeredAt - 60 * Number(/comms (\d+) hours ago/.exec(c.description || '')?.[1] ?? 24);
     const e = c.targetId && world.get(c.targetId);
     if (e && !e.tags?.blown && !e.tags?.derelict) lostShip(e, c);
+  }
+  // (a salvage job's derelict from before 1.12.11 had no class: nothing to see, dock with or cut up)
+  for (const c of state.contracts?.active || []) {
+    const e = c.type === ContractType.SALVAGE && c.targetId ? world.get(c.targetId) : null;
+    if (e && !e.cls) derelictHull(state, e, world.get(c.station)?.faction);
   }
   for (const c of state.contracts?.active || []) {
     if (c.type !== ContractType.ESCORT || c.phase !== 'active') continue;
@@ -767,7 +775,8 @@ function spawnTarget(state, station, c) {
   if (c.type === ContractType.SURVEY) {
     e = createEntity({ id: world.newId('mark'), name: `Survey mark ${c.sector}`, type: 'nav', orbit, transponder: false, tags: { contract: c.id } });
   } else if (c.type === ContractType.SALVAGE) {
-    e = createEntity({ id: world.newId('wreck'), name: `Derelict ${randInt(100, 999)}`, type: 'ship', shipClass: pick(['Wreck', 'Hulk', 'Derelict']), mass: randInt(30_000, 150_000), orbit, transponder: false, tags: { contract: c.id } });
+    e = createEntity({ id: world.newId('wreck'), name: `Derelict ${randInt(100, 999)}`, type: 'ship', orbit, transponder: false, tags: { contract: c.id } });
+    derelictHull(state, e, station.faction);
   } else {
     const alive = c.type === ContractType.MEDEVAC || c.outcome === 'alive';
     const name = c.outcome === 'debris' ? `Debris — ${c.ship.name}` : c.ship.name;
@@ -788,6 +797,20 @@ function lostShip(e, c) {
   if (c.type !== ContractType.INVESTIGATE) return;
   if (c.outcome === 'debris') blowApart(e, c.lostAt ?? c.offeredAt - DAY_MIN);
   else if (c.outcome === 'derelict') { e.tags.derelict = true; e.crewAboard = 0; }
+}
+
+/**
+ * A salvage job's derelict: the hull of a ship that died out here weeks ago.
+ * Its class is what the telescope and the cameras draw and docking finds
+ * its collars on (a ship with none shows as nothing at all); dead, it is a
+ * wreck to all of them, dark, tumbling, nobody aboard, its name its only
+ * record.
+ */
+function derelictHull(state, e, near) {
+  const v = rollIdentity({ category: 'civilian', near, state });
+  Object.assign(e, { cls: v.cls, tl: v.tl, faction: v.faction, sub: v.sub, shipClass: v.shipClass, mass: v.mass, crewAboard: 0 });
+  e.tags.derelict = true;
+  deadHull(e, state.clock.minute - randInt(DERELICT_DAYS[0], DERELICT_DAYS[1]) * DAY_MIN);
 }
 
 function retireTarget(world, c, now) {

@@ -520,11 +520,16 @@ const BLOWN_FACE = 0.3;           // a piece's cross-section to the light, as a 
 
 /** Make `e` what is left of a ship blown apart at `minute`: a wreck with no hull, no one aboard, its pieces spreading. */
 export function blowApart(e, minute) {
+  deadHull(e, minute);
+  e.tags.blown = true;
+}
+
+/** A hull dead since `minute`, a wreck to everything that reads one, with no fight behind it. */
+export function deadHull(e, minute) {
   e.combat = { hp: 0, hpMax: 1, drive: 0, reactor: 0, weapons: 0, sensors: 0, crew: 0, status: 'wreck', containment: null, scrammed: true, rounds: 0, magazine: { he: 0, nuke: 0 }, tubes: [], rail: [], wreckedAt: minute };
   e.thrust = 0;
   e.tags ||= {};
   e.tags.wreck = true;
-  e.tags.blown = true;
 }
 
 const _blown = new Map();
