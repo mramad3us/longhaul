@@ -953,6 +953,7 @@ export function undock(state, emit = () => {}, { evicted = false } = {}) {
   const d = state.dock;
   if (!d || d.phase !== 'docked') return { ok: false, text: 'Not docked.' };
   if (state.ship.crew.some(m => m.away)) return { ok: false, text: 'Crew are aboard the other side. Recall them first.' };
+  if (state.refit) return { ok: false, text: `The yard has the ship apart. Call off the work to leave.` };
   const e = getWorld(state).get(d.target.id);
   // (thrown off the berth by the station itself, there's no clearance to have asked for)
   if (d.target.kind === 'station' && e && !evicted && !clearanceFor(state, e.id).depart) {

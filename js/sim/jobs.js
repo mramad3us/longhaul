@@ -14,6 +14,7 @@ export const JobType = {
   HELM: 'helm',              // fly the ship by hand (flight computer down)
   SEAL: 'seal',              // { deck } patch a hull breach (suit required)
   FIRE: 'fire',              // { deck } fight a fire (suit and extinguisher: fire.js)
+  PATCH: 'patch',            // cut plate and patch the hull (systems.js)
 };
 
 export const JOB_PRIORITY = { CRITICAL: 0, HIGH: 1, NORMAL: 2 };
@@ -22,6 +23,7 @@ export const JOB_PRIORITY = { CRITICAL: 0, HIGH: 1, NORMAL: 2 };
 export const JOB_SKILL = {
   [JobType.RESCUE]: ['medical', 20],
   [JobType.REPAIR]: ['engineering', 15],
+  [JobType.PATCH]: ['engineering', 15],
   [JobType.MAINTAIN]: ['engineering', 15],
   [JobType.FABRICATE]: ['engineering', 25],
   [JobType.REACTOR]: ['engineering', 15],

@@ -9,6 +9,20 @@
 // PATCHED runs at half performance and gives out again within a day
 // or two. Preventive maintenance restores integrity before it bites.
 //
+// HEAVY DAMAGE is another matter. A machine that takes a heavy hit (a
+// major fault from outside: battle, a rock, a fire) can't be put right
+// aboard. The crew rig it to run first (a jury-rig, an hour or two), then
+// put in the long job (the better part of a day, more the harder it was
+// hit, and its spares), and that leaves it RIGGED: half performance, but
+// it holds. Only a yard makes it whole (refit.js).
+//
+// THE HULL likewise. Structure can't be mended aboard, only patched: cut
+// plate over the holes, from scrap or spares, a few percent a job, and
+// only while the ship isn't burning or fighting. Patches (hull.patched, a
+// share of hull.integrity) soak a hit and go first; they carry no load, so
+// what limits a hard burn is what is still SOUND, and they go only half
+// way back to whole.
+//
 // Spent parts become scrap; the machine shop refurbishes scrap into
 // spare parts, so a ship with a working shop and a mechanic can stay
 // out longer.
@@ -27,7 +41,7 @@ import { random, pick, randInt, weightedPick } from '../core/rng.js';
 import { addJob, closeJob, setJobPriority, JobType, JOB_PRIORITY } from './jobs.js';
 import { CLASSES, TECH, PLAYER_CLASS } from './ship-classes.js';
 
-export const Status = { NOMINAL: 'nominal', DEGRADED: 'degraded', PATCHED: 'patched', FAILED: 'failed' };
+export const Status = { NOMINAL: 'nominal', DEGRADED: 'degraded', PATCHED: 'patched', RIGGED: 'rigged', FAILED: 'failed' };
 
 /**
  * System catalogue (display order). Per system:
@@ -175,6 +189,16 @@ export const MAINTAIN_AT = 75;                 // integrity below which maintena
 export const PARTS_FOR = { minor: 1, major: 3 };   // at TL2; scaled by TECH.parts
 const MAINT_PARTS_PER_POINT = 0.02;            // 25 points of maintenance ≈ half a part
 const SCRAP_PER_PART = 0.6;
+const HEAVY_CAUSES = new Set(['combat', 'meteoroid', 'fire']);   // what hits a machine hard enough to want a yard
+const HEAVY_REPAIR_MIN = 480;                  // a heavy hit's long job, before how hard it was hit…
+const HEAVY_REPAIR_PER_LOSS = 20;              // …and this a point of it
+const HEAVY_PARTS = 2;                         // spares, against a major fault's
+export const PATCH_SHARE = 0.5;                // how far back to whole a hull can be patched
+export const PATCH_STEP = 5;                   // percent of hull a patching job puts on
+const PATCH_MIN = 300;                         // hands-on minutes a job, a medium hull at TL2
+const PATCH_SCRAP = 1.5;                       // scrap a job (or half that in spares)
+const PATCH_MAX_G = 0.3;                       // nobody is out on the hull under more thrust than this
+const HULL_WORK = { S: 0.6, M: 1, L: 1.6, XL: 2.5 };
 export const FABRICATE_SCRAP = 1.5;            // scrap per refurbished part
 export const FABRICATE_MINUTES = 240;
 const METEOROID_DAYS = 150;                    // mean days between damaging strikes
@@ -222,10 +246,16 @@ const by = (perf, full, half, none) => perf >= 1 ? full : perf > 0 ? half : none
 export function driveLimitG(state) {
   const drive = by(systemPerf(state, 'drive'), Infinity, 3, 0);
   const cool = by(systemPerf(state, 'coolant'), Infinity, 3, 0.3);
-  // A battered hull can't take hard burns: below half structure, 3G at most
-  const hull = (state.hull?.integrity ?? 100) < HULL_SAFE_PCT ? 3 : Infinity;
+  // A battered hull can't take hard burns: below half structure, 3G at most (a patch carries no load)
+  const hull = hullSound(state) < HULL_SAFE_PCT ? 3 : Infinity;
   return Math.min(drive, cool, hull);
 }
+
+/** How much of the hull is real structure (%): its integrity less what is patch. */
+export const hullSound = (state) => Math.max(0, (state.hull?.integrity ?? 100) - (state.hull?.patched || 0));
+/** How far patching can bring the hull (%): half way back to whole from what is sound. */
+export const hullPatchLimit = (state) => { const s = hullSound(state); return s + (100 - s) * PATCH_SHARE; };
+const hullWork = (state) => HULL_WORK[(CLASSES[state.ship.classId || PLAYER_CLASS]).size] ?? 1;
 export const HULL_SAFE_PCT = 50;
 export const driveFuelFactor = (state) => systemPerf(state, 'drive') === 0.5 ? 1.25 : 1;
 export const slewFactor = (state) => by(systemPerf(state, 'rcs'), 1, 0.5, 0.2);
@@ -262,6 +292,8 @@ export function damageSystem(state, id, { severity = 'minor', loss = 0, cause = 
   const u = state.systems.units[id];
   if (!u) return false;
   u.integrity = Math.max(0, u.integrity - loss);
+  // (hit hard from outside: past what a crew can make good)
+  if (severity === 'major' && HEAVY_CAUSES.has(cause)) u.heavy = { at: state.clock.minute, loss: (u.heavy?.loss || 0) + loss };
   return setFault(state, id, severity, cause, emit);
 }
 
@@ -282,6 +314,8 @@ export function systemsTick(state, ctx) {
     u.integrity = Math.max(0, u.integrity - def.wear * T.wear / 1440 * def.load(ctx));
 
     if (u.status === Status.PATCHED && now >= u.patchUntil) {
+      // (it holds while someone has their hands in it)
+      if (state.jobs.list.some(j => j.type === JobType.REPAIR && j.data.system === id && j.status === 'assigned')) { u.patchUntil = now + 60; continue; }
       u.status = Status.FAILED;
       u.patchUntil = null;
       u.fault.severity = 'major';
@@ -332,16 +366,21 @@ const skillFactor = (skill) => Math.max(0.6, 1.6 - skill / 100);
 /** Will a repair now be a proper fix (parts aboard) or a jury-rig? */
 export function repairMode(state, id) {
   const u = state.systems.units[id];
-  const need = partsFor(state, u.fault?.severity || 'major');
-  return state.resources.parts.current >= need ? 'repair' : 'jury';
+  if (u.heavy && u.status !== Status.PATCHED) return 'jury';     // (first, get it running)
+  return state.resources.parts.current >= repairParts(state, u) ? 'repair' : 'jury';
 }
+
+/** Spares a proper repair of this machine takes. */
+const repairParts = (state, u) => partsFor(state, u.fault?.severity || 'major') * (u.heavy ? HEAVY_PARTS : 1);
 
 /** Minutes of hands-on work a job takes for this worker. */
 export function workMinutes(state, type, id, skill, eff = 1) {
   const u = state.systems.units[id];
   let base;
-  if (type === JobType.MAINTAIN) base = Math.max(20, (100 - u.integrity) * 3);
+  if (type === JobType.PATCH) base = PATCH_MIN * hullWork(state);
+  else if (type === JobType.MAINTAIN) base = Math.max(20, (100 - u.integrity) * 3);
   else if (type === JobType.FABRICATE) base = FABRICATE_MINUTES;
+  else if (u.heavy && u.status === Status.PATCHED) base = HEAVY_REPAIR_MIN + HEAVY_REPAIR_PER_LOSS * (u.heavy.loss || 0);
   else {
     base = u.fault?.severity === 'major' ? 150 : 50;
     if (repairMode(state, id) === 'jury') base *= 0.6;
@@ -356,8 +395,16 @@ export function completeRepair(state, id, skill) {
   if (u.status === Status.NOMINAL) return { success: true, mode: 'none', message: `${def.name} already working` };
   if (random() > Math.min(0.97, 0.55 + skill * 0.005)) return { success: false, mode: 'retry', message: `${def.name}: couldn't isolate the fault — trying again` };
   const res = state.resources;
-  const need = partsFor(state, u.fault?.severity || 'major');
-  if (res.parts.current >= need) {
+  const need = repairParts(state, u);
+  if (u.heavy && u.status === Status.PATCHED) {
+    if (res.parts.current < need) return { success: false, mode: 'no-parts', message: `${def.name}: not enough spares to make the rig hold` };
+    res.parts.current -= need;
+    res.scrap.current = Math.min(res.scrap.max, res.scrap.current + need * SCRAP_PER_PART);
+    u.status = Status.RIGGED;
+    u.patchUntil = null;
+    return { success: true, mode: 'rig', message: `${def.name} rigged: it holds, at half power, until a yard rebuilds it — ${need} parts used` };
+  }
+  if (!u.heavy && res.parts.current >= need) {
     res.parts.current -= need;
     res.scrap.current = Math.min(res.scrap.max, res.scrap.current + need * SCRAP_PER_PART);
     const what = u.fault?.text || 'fault';
@@ -369,7 +416,27 @@ export function completeRepair(state, id, skill) {
   const [lo, hi] = techOf(state).patchHours;
   u.status = Status.PATCHED;
   u.patchUntil = state.clock.minute + randInt(lo * 60, hi * 60);
-  return { success: true, mode: 'jury', message: `${def.name} jury-rigged — no spare parts. It won't hold for long.` };
+  return { success: true, mode: 'jury', message: `${def.name} jury-rigged${u.heavy ? ' to run' : ' — no spare parts'}. It won't hold for long.` };
+}
+
+/** Can the crew get at the hull now, and have what to patch it with? */
+function canPatch(state) {
+  if (state.hull.integrity + 0.5 > hullPatchLimit(state) || state.combatStations || state.refit || (state.flight?.thrustG || 0) > PATCH_MAX_G) return false;
+  const res = state.resources, k = hullWork(state);
+  return res.scrap.current >= PATCH_SCRAP * k || res.parts.current >= PATCH_SCRAP / 2 * k;
+}
+
+/** Finish a patching job: cut plate over the worst of it, from scrap, else from spares. */
+export function completeHullPatch(state) {
+  const room = hullPatchLimit(state) - state.hull.integrity;
+  if (room <= 0) return { success: true, message: 'The hull is patched as far as patches go' };
+  const res = state.resources, k = hullWork(state), step = Math.min(PATCH_STEP, room);
+  if (res.scrap.current >= PATCH_SCRAP * k) res.scrap.current -= PATCH_SCRAP * k;
+  else if (res.parts.current >= PATCH_SCRAP / 2 * k) res.parts.current -= PATCH_SCRAP / 2 * k;
+  else return { success: false, message: 'Nothing left to cut a patch from' };
+  state.hull.integrity += step;
+  state.hull.patched = (state.hull.patched || 0) + step;
+  return { success: true, message: `Hull patched to ${Math.round(state.hull.integrity)}%: ${Math.round(hullSound(state))}% of it sound` };
 }
 
 /** Finish preventive maintenance. */
@@ -394,13 +461,6 @@ export function completeFabrication(state) {
   res.scrap.current -= FABRICATE_SCRAP;
   res.parts.current = Math.min(res.parts.max, res.parts.current + 1);
   return { success: true, message: 'Machine shop: one spare part refurbished from scrap' };
-}
-
-/** Dockside overhaul: every system back to factory condition. */
-export function overhaulSystems(state) {
-  for (const u of Object.values(state.systems.units)) {
-    u.integrity = 100; u.status = Status.NOMINAL; u.fault = null; u.patchUntil = null; u.enabled = true;
-  }
 }
 
 /** Captain's order: service this system now (maintenance at high priority). */
@@ -450,18 +510,23 @@ export function systemsJobs(state) {
     const u = state.systems.units[id];
     const repair = jobs.find(j => j.type === JobType.REPAIR && j.data.system === id);
     const maint = jobs.find(j => j.type === JobType.MAINTAIN && j.data.system === id);
-    const needsRepair = u.status === Status.DEGRADED || u.status === Status.FAILED ||
-      (u.status === Status.PATCHED && parts >= partsFor(state, u.fault?.severity || 'major'));
+    // (a machine a yard has apart is the yard's: nobody aboard spends spares on it; refit.js)
+    const inYard = state.refit?.items.some(x => x.id === id && !x.done);
+    const needsRepair = !inYard && (u.status === Status.DEGRADED || u.status === Status.FAILED ||
+      (u.status === Status.PATCHED && parts >= repairParts(state, u)));
     if (needsRepair) {
       const pr = repair?.data.urgent ? JOB_PRIORITY.CRITICAL : repairPriority(state, id, u);
       if (!repair) addJob(state, JobType.REPAIR, pr, { system: id });
       else if (repair.status === 'open') setJobPriority(state, repair, pr);
     } else if (repair && repair.status === 'open') closeJob(state, repair);
 
-    const needsMaint = u.status === Status.NOMINAL && u.enabled && u.integrity < MAINTAIN_AT;
+    const needsMaint = !inYard && u.status === Status.NOMINAL && u.enabled && u.integrity < MAINTAIN_AT;
     if (needsMaint && !maint) addJob(state, JobType.MAINTAIN, JOB_PRIORITY.NORMAL, { system: id });
     else if (maint && maint.status === 'open' && u.status !== Status.NOMINAL) closeJob(state, maint);
   }
+  const patch = jobs.find(j => j.type === JobType.PATCH);
+  if (canPatch(state) && !patch) addJob(state, JobType.PATCH, JOB_PRIORITY.NORMAL, {});
+  else if (!canPatch(state) && patch?.status === 'open') closeJob(state, patch);
   const res = state.resources;
   const fab = jobs.find(j => j.type === JobType.FABRICATE);
   const canFab = res.scrap.current >= FABRICATE_SCRAP && res.parts.current <= res.parts.max - 1;
@@ -476,6 +541,7 @@ export function statusLabel(u) {
     case Status.NOMINAL: return u.integrity < MAINTAIN_AT ? 'SERVICE DUE' : 'NOMINAL';
     case Status.DEGRADED: return 'DEGRADED';
     case Status.PATCHED: return 'JURY-RIGGED';
+    case Status.RIGGED: return 'RIGGED · YARD';
     case Status.FAILED: return 'FAILED';
     default: return u.status.toUpperCase();
   }

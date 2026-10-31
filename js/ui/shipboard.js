@@ -11,8 +11,7 @@ import { logEntry } from './log.js';
 import { openDialog } from './dialogs.js';
 import { formatDuration } from '../core/clock.js';
 import {
-  SYSTEMS, shipSystems, Status, MAINTAIN_AT, statusLabel, repairMode, orderService, prioritizeRepair, toggleSystem,
-} from '../sim/systems.js';
+  SYSTEMS, shipSystems, Status, MAINTAIN_AT, statusLabel, repairMode, orderService, prioritizeRepair, toggleSystem, hullSound, hullPatchLimit } from '../sim/systems.js';
 import { STATIONS, STATION_IDS, SHIFTS, scheduleBlock, minutesLeftInBlock, setDuty, rostered } from '../sim/duty.js';
 import { NEEDS, NEED_LABEL, efficiency } from '../sim/needs.js';
 import { rankTitle, fullName, ageOf, promotionDue, payroll } from '../sim/careers.js';
@@ -33,6 +32,7 @@ const ACTIVITY = {
   'watch-helm': 'On watch at the helm', 'watch-ops': 'On watch at ops', 'watch-weapons': 'On watch at fire control', 'watch-engineering': 'On the engineering watch',
   'watch-workshop': 'On duty in the machine shop', 'watch-medbay': 'On duty in sick bay', 'watch-galley': 'Cooking in the galley',
   'to-fabricating': 'Heading to the machine shop', fabricating: 'Refurbishing spare parts',
+  'to-patching': 'Heading to the machine shop', patching: 'Cutting plate and patching the hull',
   'to-sealing': 'Heading out to patch the hull breach', sealing: 'Sealing a hull breach',
 };
 
@@ -56,9 +56,10 @@ export function jobLabel(state, j) {
   const sys = j.data.system ? SYSTEMS[j.data.system].name : '';
   switch (j.type) {
     case JobType.RESCUE: return `Rescue → ${name(j.data.patient)}`;
-    case JobType.REPAIR: return `Repair ${sys}${state.systems.units[j.data.system].status !== Status.PATCHED && repairMode(state, j.data.system) === 'jury' ? ' (jury-rig: no spares)' : ''}`;
+    case JobType.REPAIR: return `Repair ${sys}${state.systems.units[j.data.system].status !== Status.PATCHED && repairMode(state, j.data.system) === 'jury' ? (state.systems.units[j.data.system].heavy ? ' (rig it to run)' : ' (jury-rig: no spares)') : ''}`;
     case JobType.MAINTAIN: return `Service ${sys}`;
     case JobType.FABRICATE: return 'Refurbish spare parts from scrap';
+    case JobType.PATCH: return 'Patch the hull';
     case JobType.HELM: return 'Fly the ship by hand';
     case JobType.SEAL: return `Seal hull breach — ${state.ship.decks[j.data.deck].name}`;
     case JobType.REACTOR: return `Reactor: ${j.data.work}`;
@@ -82,12 +83,12 @@ export function systemCardHTML(state, id, { compact = false } = {}) {
   const who = job?.assignee != null ? state.ship.crew.find(c => c.id === job.assignee) : null;
   let work = '';
   if (job) {
-    const what = job.type === JobType.REPAIR ? (u.status === Status.PATCHED ? 'Proper repair' : repairMode(state, id) === 'jury' ? 'Jury-rig' : 'Repair') : 'Servicing';
+    const what = job.type === JobType.REPAIR ? (u.status === Status.PATCHED ? (u.heavy ? 'Rigging it to hold' : 'Proper repair') : repairMode(state, id) === 'jury' ? 'Jury-rig' : 'Repair') : 'Servicing';
     const t = who?.task;
     const pct = t?.need ? ` ${Math.min(99, Math.round(t.progress / t.need * 100))}%` : '';
     work = who ? `${what}: ${who.name}${t?.phase === 'work' ? pct : ' en route'}` : `${what} queued — waiting for an engineer`;
   }
-  const effect = u.status === Status.FAILED ? def.effects.failed : u.status !== Status.NOMINAL ? def.effects.degraded : '';
+  const effect = u.status === Status.FAILED ? def.effects.failed : u.status === Status.RIGGED ? `${def.effects.degraded}. Heavy damage: a yard's work` : u.status !== Status.NOMINAL ? def.effects.degraded : '';
   const patch = u.status === Status.PATCHED && u.patchUntil ? ` · holds ~${formatDuration(u.patchUntil - state.clock.minute)}` : '';
   const actions = [];
   if (job?.type === JobType.REPAIR && job.priority !== 0) actions.push(`<button class="crew-action-btn crew-action-rescue" data-act="sys-repair" data-sys="${id}">REPAIR FIRST</button>`);
@@ -135,7 +136,12 @@ export function openSystems() {
     const eng = w.engineering != null ? s.ship.crew.find(c => c.id === w.engineering) : null;
     const shop = w.workshop != null ? s.ship.crew.find(c => c.id === w.workshop) : null;
     const faults = shipSystems(s).filter(id => s.systems.units[id].status !== Status.NOMINAL).length;
-    return `<div class="sys-summary">
+    const hull = s.hull.integrity, sound = hullSound(s), limit = hullPatchLimit(s), patchJob = s.jobs.list.find(j => j.type === JobType.PATCH);
+    const patcher = patchJob?.assignee != null ? s.ship.crew.find(c => c.id === patchJob.assignee) : null;
+    const hullLine = sound >= 99.5 ? '' : `<div class="sys-summary"><span>HULL <b>${Math.round(hull)}%</b>, <b>${Math.round(sound)}%</b> sound</span>
+        <span>${hull + 0.5 < limit ? (patcher ? `${esc(patcher.name)} patching` : patchJob ? 'patch job waiting for a hand' : 'patching waits: no plate, or under burn or fire') : `patched as far as patches go (${Math.round(limit)}%)`}</span>
+        <span>Structure is a yard's work</span></div>`;
+    return `${hullLine}<div class="sys-summary">
         <span>SPARES <b>${res.parts.current.toFixed(1)}</b> parts</span>
         <span>SCRAP <b>${res.scrap.current.toFixed(1)}</b></span>
         <span>ENGINEERING WATCH <b class="${eng ? '' : 'sys-none'}">${eng ? esc(eng.name) : 'none — faults bite harder'}</b></span>
@@ -143,7 +149,7 @@ export function openSystems() {
         <span>${faults ? `<b class="sys-faults">${faults} FAULT${faults > 1 ? 'S' : ''}</b>` : 'ALL SYSTEMS NOMINAL'}</span>
       </div>
       <div class="sys-grid">${shipSystems(s).map(id => systemCardHTML(s, id)).join('')}</div>
-      <p class="sys-legend">Machinery wears with use — hard burns most of all. Worn systems fault far more often. Engineers service them from spare parts; with no spares, repairs are jury-rigged and won't hold. The machine shop refurbishes scrap into spares. Docks sell parts and full overhauls.</p>`;
+      <p class="sys-legend">Machinery wears with use — hard burns most of all. Worn systems fault far more often. Engineers service them from spare parts; with no spares, repairs are jury-rigged and won't hold. The machine shop refurbishes scrap into spares. Docks sell parts; structure and heavy damage wait for a yard.</p>`;
   };
   const body = openDialog({
     title: 'Engineering — Ship Systems', cls: 'dialog-wide dialog-systems', html: render(),

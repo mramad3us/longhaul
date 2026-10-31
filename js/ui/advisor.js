@@ -84,6 +84,7 @@
 // map lookup is cached per game minute.
 // ============================================================
 
+import { refitPlan, refitKind, nearestYard, describeTime } from '../sim/refit.js';
 import { AU_M, DAY_MIN, MIN_S, G0 } from '../core/constants.js';
 import { formatDuration } from '../core/clock.js';
 import { fmtMeters, fmtG, fmtNum } from './dom.js';
@@ -99,7 +100,7 @@ import { zonesAt, zonePos, ZONE_KINDS } from '../sim/conflict.js';
 import { ReactorState, isReactorOnline } from '../sim/reactor.js';
 import { atmoStatus } from '../sim/life-support.js';
 import { shipGeometry, isSecureSeat } from '../sim/ship-layout.js';
-import { SYSTEMS, Status, shipSystems, partsFor, waterRecovery } from '../sim/systems.js';
+import { SYSTEMS, Status, shipSystems, partsFor, waterRecovery, hullSound, HULL_SAFE_PCT } from '../sim/systems.js';
 import { JobType } from '../sim/jobs.js';
 import { needsMedical, isAboard } from '../sim/crew.js';
 import { FUEL_PER_G_MIN } from '../sim/flight.js';
@@ -720,13 +721,14 @@ function ruleFlight(state, c, add) {
   }
 
   // Hull
-  const hull = state.hull.integrity;
-  if (hull < 50) {
+  const hull = state.hull.integrity, sound = hullSound(state);
+  if (sound < HULL_SAFE_PCT) {
+    const yard = nearestYard(state);
     add({
       key: 'hull', level: hull < 25 ? WARNING : CAUTION, rank: 55, sig: hull < 25 ? 'critical' : 'weak',
-      text: `Hull at ${Math.round(hull)}%: burns are limited to 3 G.`,
-      detail: 'Hull plating is a yard\'s work: a dockside overhaul restores it.',
-      actions: c.dockedSt && STATIONS[c.dockedSt.id]?.services.includes('repair') ? [A.station(c.dockedSt.id, 'services', 'OVERHAUL')] : resupplyActions(state, c),
+      text: `Hull at ${Math.round(hull)}%, ${Math.round(sound)}% of it sound: burns are limited to 3 G.`,
+      detail: `The crew can patch it, not mend it: patches soak a hit but carry no load. Structure is a yard's work, days to weeks${yard ? `: the nearest is ${yard.st.name}` : ''}.`,
+      actions: c.dockedSt && refitKind(c.dockedSt) ? [A.station(c.dockedSt.id, 'services', 'REPAIRS')] : resupplyActions(state, c),
     });
   }
 }
@@ -1355,13 +1357,11 @@ function rulePortCall(state, c, add) {
     }
   }
   // The yard
-  if (port.tags?.command || spec?.services.includes('repair')) {
-    const sick = shipSystems(state).filter(id => { const u = state.systems.units[id]; return u.status !== Status.NOMINAL || u.integrity < 50; });
-    const hull = state.hull.integrity;
-    if (hull < 90 || sick.length) {
-      const what = hull < 90 && sick.length ? `Hull at ${Math.round(hull)}% and ${plural(sick.length, 'system')} worn` : hull < 90 ? `Hull at ${Math.round(hull)}%` : `${plural(sick.length, 'system')} faulted or worn`;
-      add({ key: 'overhaul', level: ADVICE, rank: 40, sig: sick, text: `${what}: ${port.tags?.command ? 'field repairs are on offer' : 'the yard here can overhaul us'}.`, actions: [A.station(port.id, 'services', 'OVERHAUL')] });
-    }
+  const plan = !state.refit && refitPlan(state, port);
+  if (plan && plan.items.some(x => x.heavy || x.what === 'repaired') || plan?.hull) {
+    const yard = plan.kind === 'yard';
+    const days = describeTime(plan.minutes);
+    add({ key: 'overhaul', level: ADVICE, rank: 40, sig: [plan.kind, Math.round(plan.minutes / 720)], text: yard ? `The yard here can make her whole: ${days}, ${plan.cost.toLocaleString()} MCR.` : `${port.tags?.command ? 'Field repairs' : 'The repair dock'} can do ${days} of work here. Structure and heavy damage stay for a yard.`, actions: [A.station(port.id, 'services', 'REPAIRS')] });
   }
   // Shore leave for a worn-down crew
   if (spec?.services.includes('leave') && !c.crew.some(m => m.away?.ashore) && c.aboard.length) {

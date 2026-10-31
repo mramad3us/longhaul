@@ -20,6 +20,8 @@ import { maxSpeed } from '../sim/autopilot.js';
 import { targetStateAt, targetName } from '../sim/nav.js';
 import { dockedStation } from '../sim/contracts.js';
 import { leaseFor } from '../sim/leases.js';
+import { refitStatus } from '../sim/refit.js';
+import { hullSound, HULL_SAFE_PCT } from '../sim/systems.js';
 import { activeMissions } from '../sim/missions.js';
 import { iconFuel, iconOxygen, iconN2, iconWater, iconFood, iconPower, iconMedical, iconCrew, iconParts } from '../svg-icons.js';
 import { shipSystems, Status, waterRecovery } from '../sim/systems.js';
@@ -117,7 +119,8 @@ export function navStatus(state) {
   if (d && d.phase === 'docked') {
     const e = getWorld(state).get(d.target.id);
     const L = d.target.kind === 'station' ? leaseFor(state) : null;
-    const lease = L ? ` · ${L.left >= 0 ? `LEASE ${fmtLeft(L.left)}` : `${fmtLeft(-L.left)} OVER LEASE`}` : '';
+    const R = refitStatus(state);
+    const lease = R ? ` · ${R.kind === 'yard' ? 'IN DRY DOCK' : 'REPAIR DOCK'} ${fmtLeft(R.left)}` : L ? ` · ${L.left >= 0 ? `LEASE ${fmtLeft(L.left)}` : `${fmtLeft(-L.left)} OVER LEASE`}` : '';
     return { chip: `DOCKED · ${e?.name || ''} · ${d.target.kind === 'station' ? d.berth : 'collar to collar'}${lease}`, cls: L && L.left < 0 ? 'chip-warn' : 'chip-ok' };
   }
   if (d && DOCK_CHIP[d.phase]) {
@@ -261,8 +264,9 @@ export function updateHud(state) {
   }
   const cargoKg = state.cargo.reduce((s, c) => s + c.mass, 0);
   setText(el.mass, fmtMass(state.shipMass + cargoKg + state.resources.fuel.current));
-  setText(el.hull, `${Math.round(state.hull.integrity)}%${state.hull.integrity < 50 ? ' · burns limited to 3G' : ''}`);
-  toggleClass(el.hull, 'val-hot', state.hull.integrity < 50);
+  const sound = hullSound(state);
+  setText(el.hull, `${Math.round(state.hull.integrity)}%${state.hull.patched >= 0.5 ? ` · ${Math.round(sound)}% sound` : ''}${sound < HULL_SAFE_PCT ? ' · burns limited to 3G' : ''}`);
+  toggleClass(el.hull, 'val-hot', sound < HULL_SAFE_PCT);
   setText(el.cargo, `${fmtMass(cargoKg)} / ${fmtMass(state.cargoCapacity)}${aboardLabel(state)}`);
 
   updateResources(state);

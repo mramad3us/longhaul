@@ -1,4 +1,12 @@
 // Life aboard: watches, needs, machinery wear and repair, flying by hand.
+import { refitPlan, startRefit, callOffRefit, refitStatus, nearestYard } from '../js/sim/refit.js';
+import { leaseFor } from '../js/sim/leases.js';
+import { undock } from '../js/sim/docking.js';
+import { applyHit } from '../js/sim/damage.js';
+import { PLAYER } from '../js/sim/combatants.js';
+import { hullPoints } from '../js/sim/ship-classes.js';
+import { repairMode, workMinutes, driveLimitG, hullSound, hullPatchLimit, systemsJobs } from '../js/sim/systems.js';
+import { JobType } from '../js/sim/jobs.js';
 import { assert, fmt } from './helpers.mjs';
 import { DAY_MIN } from '../js/core/constants.js';
 import { seedRandom } from '../js/core/rng.js';
@@ -8,7 +16,7 @@ import { planRoutes } from '../js/sim/nav.js';
 import { engageRoute, crewPolicy, flipInterlock } from '../js/sim/autopilot.js';
 import { damageSystem, systemPerf, meteoroidStrike, partsFor, shipSystems } from '../js/sim/systems.js';
 import { CLASSES, TECH } from '../js/sim/ship-classes.js';
-import { overhaulQuote, priceOf } from '../js/sim/contracts.js';
+import { priceOf } from '../js/sim/contracts.js';
 import { setBreach } from '../js/sim/life-support.js';
 import { isInertiaActive, updateInertia } from '../js/sim/inertia.js';
 import { minuteTick } from '../js/sim/game.js';
@@ -32,7 +40,141 @@ const runUntil = (s, pred, max) => { let t = 0; while (t < max && !pred(s)) { ad
 const atHour = (s, h) => runUntil(s, st => minuteOfDay(st) === h * 60, DAY_MIN);
 const noRepairs = (s) => { for (const m of s.ship.crew) m.skills.engineering = 5; };
 
-export default [
+/** In port at `home`, docked, and hurt: the hull down to `sound`%, a heavy hit on the drive. */
+const run = (s, n) => { for (let i = 0; i < n; i++) advance(s, 1); };
+
+function hurtAt(home, sound = 40, seed = 3) {
+  seedRandom(seed);
+  bus.clear();
+  const s = createGame({ crewCount: 8, classId: 'light-freighter', traffic: 0, forces: false, home });
+  s.politics.quietUntil = Infinity;
+  s.missions.cooldown = 1e9;
+  s.hull.integrity = sound;
+  damageSystem(s, 'drive', { severity: 'major', loss: 40, cause: 'combat' });
+  return s;
+}
+
+export default [  {
+    name: 'heavy damage is a long job, and the crew can only rig it: jury-rigged in hours, a day to make it hold, half power from then on; only a yard makes it whole',
+    fn: () => {
+      const s = game(4, 8);
+      damageSystem(s, 'drive', { severity: 'major', loss: 40, cause: 'combat' });
+      const u = s.systems.units.drive, t0 = s.clock.minute;
+      assert(u.status === 'failed' && u.heavy?.loss === 40, 'hit hard');
+      s.resources.parts.current = 40;
+      assert(repairMode(s, 'drive') === 'jury', 'first, get it running');
+      runUntil(s, st => u.status === 'patched', DAY_MIN);
+      const jury = s.clock.minute - t0;
+      assert(u.status === 'patched' && driveLimitG(s) === 3, `running on a jury-rig (${u.status})`);
+      assert(repairMode(s, 'drive') === 'repair', 'then the long job');
+      assert(workMinutes(s, JobType.REPAIR, 'drive', 60, 1) >= 480, 'the better part of a day, hands on');
+      runUntil(s, st => u.status === 'rigged', 6 * DAY_MIN);
+      const rig = s.clock.minute - t0;
+      assert(u.status === 'rigged' && rig > 8 * 60, `rigged in ${fmt(rig / 60, 0)} h`);
+      assert(driveLimitG(s) === 3 && systemPerf(s, 'drive') === 0.5, 'half power');
+      // and that is as far as the crew can take it: no job for it, however long
+      runUntil(s, () => false, 3 * DAY_MIN);
+      assert(u.status === 'rigged' && u.heavy, 'a rig holds, and stays a rig');
+      assert(!s.jobs.list.some(j => j.data?.system === 'drive' && j.type === JobType.REPAIR), 'nothing more the crew can do');
+      console.log(`      a heavy hit on a drive: jury-rigged in ${fmt(jury / 60, 1)} h, rigged to hold in ${fmt(rig / 60, 0)} h, half power until a yard`);
+    },
+  },
+  {
+    name: 'a long job is picked up where the last hand left it, across watches',
+    fn: () => {
+      const s = game(5, 8);
+      damageSystem(s, 'sensors', { severity: 'major', loss: 60, cause: 'combat' });
+      const u = s.systems.units.sensors;
+      s.resources.parts.current = 40;
+      runUntil(s, () => u.status === 'patched', DAY_MIN);
+      let hands = new Set(), peak = 0;
+      for (let i = 0; i < 6 * DAY_MIN && u.status === 'patched'; i++) {
+        advance(s, 1);
+        const j = s.jobs.list.find(x => x.type === JobType.REPAIR && x.data.system === 'sensors');
+        if (j?.assignee != null) hands.add(j.assignee);
+        if (j) { assert((j.data.done || 0) >= peak - 1e-6, 'its progress never goes back'); peak = j.data.done || 0; }
+      }
+      assert(u.status === 'rigged', `done in the end (${u.status})`);
+      console.log(`      a long job, ${fmt(peak / 60, 0)} h of work, by ${hands.size} hand${hands.size > 1 ? 's' : ''}`);
+    },
+  },
+  {
+    name: 'the crew can patch the hull half way back, from scrap or spares, not under burn; patches go first in a hit and carry no load, so hard burns wait for a yard',
+    fn: () => {
+      const s = game(6, 8);
+      s.hull.integrity = 40;
+      s.resources.scrap.current = 30; s.resources.parts.current = 40;
+      assert(hullSound(s) === 40 && hullPatchLimit(s) === 70 && driveLimitG(s) === 3, 'half way back');
+      runUntil(s, st => st.hull.integrity >= 69.5, 12 * DAY_MIN);
+      assert(Math.abs(s.hull.integrity - 70) < 0.5 && Math.abs(s.hull.patched - 30) < 0.5 && hullSound(s) === 40, `patched to ${fmt(s.hull.integrity, 0)}%, ${fmt(hullSound(s), 0)}% sound`);
+      const took = s.clock.minute;
+      assert(driveLimitG(s) === 3, 'a patch carries no load');
+      assert(s.resources.scrap.current < 30, 'cut from scrap');
+      runUntil(s, () => false, DAY_MIN);
+      assert(s.hull.integrity < 70.5, 'and no further');
+      assert(!s.jobs.list.some(j => j.type === JobType.PATCH), 'no more patching to do');
+      // a hit takes the patches first
+      applyHit(s, PLAYER, { kind: 'hit', dp: hullPoints(CLASSES[s.ship.classId]) * 0.1, spread: true, from: null });
+      assert(hullSound(s) === 40 || Math.abs(hullSound(s) - 40) < 0.01, 'the structure is untouched');
+      // nothing to cut, no patching; under a burn, nobody out on the hull
+      const t = game(7, 8);
+      t.hull.integrity = 40; t.resources.scrap.current = 0; t.resources.parts.current = 0;
+      systemsJobs(t);
+      assert(!t.jobs.list.some(j => j.type === JobType.PATCH), 'nothing to cut a patch from');
+      t.resources.scrap.current = 30; t.flight.thrustG = 1;
+      systemsJobs(t);
+      assert(!t.jobs.list.some(j => j.type === JobType.PATCH), 'not under a burn');
+      console.log(`      30% of hull patched by minute ${took}`);
+    },
+  },
+  {
+    name: 'a yard makes her whole, in days to weeks: the bill up front, no leaving, no lease to pay; called off, the rest refunded; a port\'s dock only patches and rigs',
+    fn: () => {
+      // a yard: 60% of the hull gone and a heavy hit
+      const s = hurtAt('ganymede-station');
+      s.hull.scars = [{ s: 'all', k: 'hit', r: 0.1, m: 0 }];
+      const plan = refitPlan(s);
+      assert(plan.kind === 'yard', 'Ganymede has a yard');
+      assert(plan.minutes >= 7 * DAY_MIN && plan.minutes <= 40 * DAY_MIN, `days to weeks (${fmt(plan.minutes / DAY_MIN, 1)} days)`);
+      const cr = s.resources.credits.current = plan.cost + 1000;
+      const lease = leaseFor(s).until;
+      assert(startRefit(s).ok, 'signed for');
+      assert(s.resources.credits.current === cr - plan.cost, 'paid up front');
+      assert(!undock(s).ok && s.dock?.phase === 'docked', 'she stays in the yard');
+      run(s, 3 * DAY_MIN);
+      const k = refitStatus(s);
+      assert(k && k.share > 0 && s.hull.integrity > 40 && s.hull.integrity < 100, `coming back (${fmt(s.hull.integrity, 0)}%)`);
+      assert(leaseFor(s).until > lease && !(s.law.citations || []).length && s.dock?.phase === 'docked', 'the berth goes with the job');
+      run(s, plan.minutes - 3 * DAY_MIN + 2);
+      assert(!s.refit, 'done');
+      assert(s.hull.integrity === 100 && !s.hull.patched && hullSound(s) === 100 && !s.hull.scars.length, 'whole, its scars gone');
+      const d = s.systems.units.drive;
+      assert(d.status === 'nominal' && !d.heavy && d.integrity > 99.9 && driveLimitG(s) > 3, `its drive rebuilt (${d.status}, ${fmt(d.integrity, 2)}%, ${driveLimitG(s)} G)`);
+      console.log(`      a yard, a light freighter 60% holed with a heavy hit: ${fmt(plan.minutes / DAY_MIN, 1)} days, ${plan.cost.toLocaleString()} MCR`);
+
+      // called off: what was done stands, the rest refunded
+      const o = hurtAt('ganymede-station', 40, 4);
+      const q = refitPlan(o);
+      o.resources.credits.current = q.cost;
+      startRefit(o);
+      run(o, Math.round(q.minutes / 2));
+      const h = o.hull.integrity, r = callOffRefit(o);
+      assert(r.ok && !o.refit && o.hull.integrity === h, 'as she stands');
+      assert(Math.abs(o.resources.credits.current - q.cost / 2) < q.cost * 0.05, 'half back');
+
+      // a port with no yard: hands and stores, no more
+      const p = hurtAt('hygiea-ring', 40, 5);
+      const q2 = refitPlan(p);
+      assert(q2.kind === 'dock' && q2.leaves >= 2 && q2.minutes < 4 * DAY_MIN, `a dock, ${fmt(q2.minutes / 60, 0)} h`);
+      p.resources.credits.current = q2.cost;
+      startRefit(p);
+      run(p, q2.minutes + 2);
+      assert(!p.refit && Math.abs(p.hull.integrity - 70) < 0.6 && Math.abs(hullSound(p) - 40) < 0.6, `patched, not mended (${fmt(p.hull.integrity, 0)}%)`);
+      assert(p.systems.units.drive.status === 'rigged' && p.systems.units.drive.heavy, 'heavy damage rigged, not rebuilt');
+      assert(nearestYard(p)?.st, 'and a yard to go to');
+    },
+  },
+
   {
     name: 'a day aboard: everyone sleeps in a bunk, eats, washes and keeps their spirits up',
     fn: () => {
@@ -117,7 +259,7 @@ export default [
         s.hull.integrity = 70;
         const T = TECH[CLASSES[cls].tl];
         const spare = priceOf(s, 'parts');
-        rows[cls] = { faults: faults / seeds.length, parts: parts / seeds.length, spend: parts / seeds.length * spare, major: partsFor(s, 'major'), yard: overhaulQuote(s), spare, patch: T.patchHours };
+        rows[cls] = { faults: faults / seeds.length, parts: parts / seeds.length, spend: parts / seeds.length * spare, major: partsFor(s, 'major'), yard: refitPlan(s, getWorld(s).get('ceres-station')).cost, spare, patch: T.patchHours };
         const r = rows[cls];
         console.log(`      ${CLASSES[cls].name} (${T.label}): ${fmt(r.faults, 1)} faults in ${days} days, ${fmt(r.parts, 1)} parts (${fmt(r.spend, 0)} MCR) used; a major repair ${r.major} parts at ${r.spare} MCR, jury-rig holds ${r.patch[0]}–${r.patch[1]}h; yard bill ${r.yard.toLocaleString()} MCR`);
       }

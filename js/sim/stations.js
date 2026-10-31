@@ -225,7 +225,7 @@ const LAYOUTS = {
 export const STATIONS = {
   'ceres-station': {
     site: 'surface', body: 'Ceres', phase: 0.6, kind: 'Surface port', gateKm: 100, anchorKm: 400,
-    population: 1_800_000, services: ['fuel', 'market', 'repair', 'arms', 'hiring', 'leave'],
+    population: 1_800_000, services: ['fuel', 'market', 'repair', 'yard', 'arms', 'hiring', 'leave'],
     defense: { tl: 2, pdc: 16, tubes: 4, magazine: { he: 24, nuke: 0 }, railgun: 0, armor: 4, hp: 24_000 },
   },
   'pallas-station': {
@@ -260,7 +260,7 @@ export const STATIONS = {
   },
   'ganymede-station': {
     site: 'orbit', body: 'Ganymede', rKm: 10_000, phase: 4.2, kind: 'Transfer station', gateKm: 80, anchorKm: 500,
-    population: 210_000, services: ['fuel', 'market', 'repair', 'arms', 'hiring', 'leave'],
+    population: 210_000, services: ['fuel', 'market', 'repair', 'yard', 'arms', 'hiring', 'leave'],
     defense: { tl: 2, pdc: 10, tubes: 2, magazine: { he: 10, nuke: 0 }, railgun: 0, armor: 3, hp: 16_000 },
   },
 };

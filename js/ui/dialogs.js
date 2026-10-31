@@ -5,6 +5,8 @@
 // shows and hides them.
 // ============================================================
 
+import { refitPlan, refitStatus, refitKind, startRefit, callOffRefit, nearestYard, describeTime } from '../sim/refit.js';
+import { hullSound } from '../sim/systems.js';
 import { ui } from './context.js';
 import { $, esc, show, fmtNum, fmtMeters, fmtMass, fmtRewards } from './dom.js';
 import { toast } from './toast.js';
@@ -14,7 +16,7 @@ import { formatDuration } from '../core/clock.js';
 import { getWorld } from '../sim/world.js';
 import { hailDialogue, signalBars } from '../sim/comms.js';
 import { acceptMission, declineMission, activeMissions } from '../sim/missions.js';
-import { contractsAt, acceptContract, completeContract, deliverable, needsBerth, inPort, dockedStation, dockedPort, abandonContract, serviceQuote, buy, buyOverhaul, overhaulQuote, buyTorpedo, torpedoRefusal, torpedoPrice, buyDrones, droneQuote, dronePrice, priceOf, CONTRACT_LABEL, bountyHeads } from '../sim/contracts.js';
+import { contractsAt, acceptContract, completeContract, deliverable, needsBerth, inPort, dockedStation, dockedPort, abandonContract, serviceQuote, buy, buyTorpedo, torpedoRefusal, torpedoPrice, buyDrones, droneQuote, dronePrice, priceOf, CONTRACT_LABEL, bountyHeads } from '../sim/contracts.js';
 import { milRefusal } from '../sim/military.js';
 import { FACTIONS, SUBFACTIONS, factionColor } from '../sim/factions.js';
 import { rankName, supplyPriceFactor, openCallups } from '../sim/service.js';
@@ -319,6 +321,23 @@ let stationTab = 'board';
 /** What a station does only for a ship in one of its berths. */
 const DOCKED_TABS = new Set(['services', 'hire', 'leave', 'berth']);
 let currentStation = null;
+/** The services window's repair row: a yard's refit, a port's dock, or the work in hand. */
+function refitHTML(s, st, command) {
+  const R = refitStatus(s);
+  if (R) return `<div class="service-row"><span class="service-name">${R.kind === 'yard' ? 'In dry dock' : 'On the repair dock'}</span><span class="service-stock">${Math.round(R.share * 100)}% done · ${describeTime(R.left)} left · ${R.done}/${R.of} machines</span>
+    <button class="station-mission-accept" data-act="refit-off">CALL OFF</button></div>`;
+  const plan = refitPlan(s, st), name = command ? 'Field repairs' : plan?.kind === 'yard' ? 'Dry dock' : 'Repair dock';
+  if (!plan) return `<div class="service-row"><span class="service-name">${refitKind(st) === 'yard' ? 'Dry dock' : name}</span><span class="service-stock">Nothing for them to do: hull ${Math.round(hullSound(s))}% sound</span></div>`;
+  const sound = Math.round(hullSound(s)), heavy = plan.items.filter(x => x.heavy).length;
+  const what = [plan.hull && (plan.kind === 'yard' ? `hull ${sound}% sound to 100%` : `hull patched to ${Math.round(plan.hull.to)}%`), heavy && `${heavy} heavy`, plan.items.length - heavy > 0 && `${plan.items.length - heavy} to service`].filter(Boolean).join(' · ');
+  const yard = plan.leaves ? nearestYard(s) : null;
+  const short = plan.cost > s.resources.credits.current;
+  return `<div class="service-row"><span class="service-name">${name}</span><span class="service-stock">${what}</span><span class="service-price">${describeTime(plan.minutes)}</span>
+    <button class="station-mission-accept" data-act="refit" ${short ? 'disabled' : ''}>${plan.kind === 'yard' ? 'REFIT' : 'REPAIR'} · ${fmtNum(plan.cost)} MCR</button></div>
+    ${yard ? `<div class="station-mission-desc">Structure and heavy damage are a yard's work: the nearest is ${esc(yard.st.name)}.</div>` : ''}`;
+}
+
+
 
 export function openStation(station = dockedPort(ui.state), tab = null) {
   if (!station) { toast('Not in contact with a station', 'warn'); return; }
@@ -418,8 +437,7 @@ function renderStation() {
       const turn = turnOverHere(s);
       const turnRow = turn ? `<div class="service-row"><span class="service-name">Contraband aboard</span><span class="service-stock">${turn.items.map(c => `${(c.mass / 1000).toFixed(1)} t ${esc(c.name.toLowerCase())}`).join(', ')}: turned over, for reputation and standing</span><span class="service-price"></span><button class="station-mission-accept" data-act="mkt-turn">TURN IT OVER</button></div>` : '';
       content = `<div class="service-list">${cheap}${turnRow}${rows}${drones}${torps}
-        <div class="service-row"><span class="service-name">${command ? 'Field repairs' : 'Dockside overhaul'}</span><span class="service-stock">Hull ${Math.round(s.hull.integrity)}% · every system to spec, suits, containment</span><span class="service-price">${fmtNum(overhaulQuote(s))} MCR</span>
-        <button class="station-mission-accept" data-act="overhaul">OVERHAUL</button></div>
+        ${refitHTML(s, st, command)}
         <div class="service-credits">Credits: <b>${fmtNum(s.resources.credits.current)} MCR</b></div></div>`;
     }
   }
@@ -530,10 +548,16 @@ function onStationClick(e) {
       if (r.ok) logEntry(r.text, 'system');
       break;
     }
-    case 'overhaul': {
-      const r = buyOverhaul(s);
+    case 'refit': {
+      const r = startRefit(s);
       toast(r.text, r.ok ? 'ok' : 'warn');
       if (r.ok) logEntry(r.text, 'ok');
+      break;
+    }
+    case 'refit-off': {
+      const r = callOffRefit(s);
+      toast(r.text, r.ok ? 'info' : 'warn');
+      if (r.ok) logEntry(r.text, 'system');
       break;
     }
     case 'plot-dock': closeDialog('#dialog-station'); hooks.beginDocking(currentStation.id); return;

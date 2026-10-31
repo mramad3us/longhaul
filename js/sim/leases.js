@@ -118,6 +118,8 @@ const fmtHours = (min) => min >= 48 * 60 ? `${Math.round(min / 60 / 24 * 10) / 1
 export function leaseTick(state, emit = () => {}) {
   const b = berthed(state);
   if (!b) return;
+  // (the berth goes with the job while a yard has the ship: refit.js)
+  if (state.refit) { ensureLease(state); b.d.lease.until = Math.max(b.d.lease.until, state.clock.minute + FREE_LEASE_MIN); return; }
   ensureLease(state);
   const L = b.d.lease, st = b.st, now = state.clock.minute;
   const left = L.until - now;

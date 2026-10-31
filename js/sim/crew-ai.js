@@ -30,7 +30,7 @@ import { STATIONS, scheduleBlock, minutesLeftInBlock } from './duty.js';
 import { completeSeal } from './life-support.js';
 import {
   SYSTEMS, systemPerf, flightComputerState, workMinutes, completeRepair, completeMaintenance,
-  completeFabrication, autodocRate, repairMode,
+  completeFabrication, completeHullPatch, autodocRate, repairMode,
 } from './systems.js';
 
 export const WALK_TILES_PER_MIN = 0.8;
@@ -381,7 +381,7 @@ function pickJobFor(state, m, env, myLevel = taskLevel(m.task)) {
 /** Where a job's work is done. */
 function jobFixture(state, m, job) {
   if (job.type === JobType.REPAIR || job.type === JobType.MAINTAIN) return nearestFixture(state, m, SYSTEMS[job.data.system].fixture);
-  if (job.type === JobType.FABRICATE) return nearestFixture(state, m, 'workbench');
+  if (job.type === JobType.FABRICATE || job.type === JobType.PATCH) return nearestFixture(state, m, 'workbench');
   if (job.type === JobType.REACTOR) return nearestFixture(state, m, 'reactor');
   if (job.type === JobType.HELM) return nearestFixture(state, m, 'helm');
   if (job.type === JobType.SEAL) return breachSpot(state, job.data.deck);
@@ -1134,12 +1134,12 @@ function stepEat(state, m, t, speed, emit) {
 function stepWork(state, m, t, speed, emit) {
   const job = state.jobs.list.find(j => j.id === t.jobId);
   if (!job) { m.task = null; return; }
-  const label = t.kind === JobType.MAINTAIN ? 'maintaining' : t.kind === JobType.FABRICATE ? 'fabricating' : t.kind === JobType.SEAL ? 'sealing' : t.kind === JobType.FIRE ? 'firefighting' : 'repairing';
+  const label = t.kind === JobType.MAINTAIN ? 'maintaining' : t.kind === JobType.FABRICATE ? 'fabricating' : t.kind === JobType.PATCH ? 'patching' : t.kind === JobType.SEAL ? 'sealing' : t.kind === JobType.FIRE ? 'firefighting' : 'repairing';
   if (t.phase === 'goto') {
     m.activity = `to-${label}`;
     if (walk(m, speed)) {
       t.phase = 'work';
-      t.progress = 0;
+      t.progress = job.data.done || 0;          // (a long job is picked up where the last hand left it)
       // (a fire has no set time: it is fought until it is out)
       t.need = t.kind === JobType.FIRE ? Infinity : t.kind === JobType.SEAL ? Math.round(40 * Math.max(0.6, 1.6 - m.skills.engineering / 100))
         : workMinutes(state, t.kind, t.system, m.skills.engineering, 1);
@@ -1154,13 +1154,16 @@ function stepWork(state, m, t, speed, emit) {
     return;
   }
   t.progress += efficiency(m);
+  job.data.done = t.progress;
   practice(m, 'engineering');
   if (t.progress < t.need) return;
+  job.data.done = 0;
 
   let result;
   if (t.kind === JobType.REPAIR) result = completeRepair(state, t.system, m.skills.engineering);
   else if (t.kind === JobType.MAINTAIN) result = completeMaintenance(state, t.system);
   else if (t.kind === JobType.SEAL) { result = completeSeal(state, t.deck); m.suit.keep = !!state.suitsOn; }
+  else if (t.kind === JobType.PATCH) result = completeHullPatch(state);
   else result = completeFabrication(state);
   emit('crew-work-done', { member: m, kind: t.kind, system: t.system, result });
   if (result.success) { closeJob(state, job); m.xp = (m.xp || 0) + (t.kind === JobType.REPAIR ? 2 : 0.5); }   // (a job done: experience beyond the hours, careers.js)

@@ -269,6 +269,11 @@ function systems(add) {
         ['Minor faults', esc(s.faults.minor.join(' · '))], ['Major faults', esc(s.faults.major.join(' · '))],
       ] });
   }
+  add({ id: 'sys:yards', cat: 'systems', title: 'Damage, patches and yards', sub: 'What a crew can do, and what wants a slip',
+    text: ['Wear and ordinary faults are the crew\'s work: spares, and an hour or three at the machine.',
+      'A machine hit hard from outside (battle, a rock, a fire) is another thing. The crew jury-rig it to run, then put in the better part of a day to make the rig hold. It stays rigged at half power, and no amount of work aboard takes it further.',
+      'A hull can be patched with plate cut from scrap or spares, half way back to whole, but only when nobody is burning hard or shooting. Patches soak a hit and go first; they carry no load, so hard burns wait on what is still sound.',
+      'Only a yard makes her whole: Ceres, Tycho, Luna, Phobos or Ganymede, days to weeks on the slip, paid up front, the ship going nowhere unless the work is called off. A port\'s repair dock, or a command ship\'s gang, can only rig and patch: quicker, and it sends us on.'] });
   add({ id: 'sys:reactor', cat: 'systems', title: 'Fusion reactor', sub: 'Worked on at the reactor core',
     text: ['The power plant behind every system, the drive included. Shutting it down cleanly takes an engineer twelve hours at the core, and starting it again five, on battery power and a minimum of fuel.',
       'A containment failure gives the crew about an hour and a half to patch it or scram the core before the bottle lets go.'],

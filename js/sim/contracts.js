@@ -56,7 +56,7 @@
 // work in hand and the last 40 finished.
 //
 // SERVICES: a ship's stores in port (PRICES: reaction mass, water, rations,
-// air, med units, spares, PDC rounds; torpedoes, drones, an overhaul) are
+// air, med units, spares, PDC rounds; torpedoes, drones; a refit: refit.js) are
 // priced by the station's market (market.js storeFactor: each store by the
 // good it is made of: goods.js STORE_GOOD), and at a tenth at our command
 // ship in a fight (service.js).
@@ -69,8 +69,6 @@ import { inPortSpace, PORT_M } from './holding.js';
 import { createEntity, newSignature } from './entities.js';
 import { huntTick } from './hunts.js';
 import { rollIdentity, CLASSES, TECH, hullPoints, PLAYER_CLASS } from './ship-classes.js';
-import { restockSuits } from './life-support.js';
-import { overhaulSystems, shipSystems, unit } from './systems.js';
 import { FACTIONS, POWERS, SUBFACTIONS } from './factions.js';
 import { zonePos } from './conflict.js';
 import { spawnAgent, wake, makeHostile } from './agents.js';
@@ -1014,38 +1012,6 @@ export function buy(state, key, qty = Infinity) {
   state.resources.credits.current -= cost;
   r.current += amount;
   return { ok: true, amount, cost, text: `Bought ${Math.round(amount).toLocaleString()} ${key} for ${cost.toLocaleString()} MCR` };
-}
-
-/**
- * Dockyard price to bring every system back to factory condition: labour and
- * spares at the ship's tech level, hull plating by the tonne of structure.
- */
-export function overhaulQuote(state) {
-  let cost = 250;
-  for (const id of shipSystems(state)) {
-    const u = unit(state, id);
-    cost += (100 - u.integrity) * 8;
-    if (u.fault) cost += u.fault.severity === 'major' ? 450 : 150;
-  }
-  if (state.reactor.breach && state.reactor.status === 'offline') cost += 800;
-  const c = CLASSES[state.ship.classId || PLAYER_CLASS];
-  cost += (100 - state.hull.integrity) * HULL_REPAIR_PER_PCT * hullPoints(c) / 120;
-  return Math.round(cost * shipTech(state).price * supplyPriceFactor(state) / 10) * 10;
-}
-
-const HULL_REPAIR_PER_PCT = 30;                // per % of a 120-DP hull, at TL2
-
-export function buyOverhaul(state) {
-  if (!dockedPort(state)) return { ok: false, text: 'Not docked.' };
-  const cost = overhaulQuote(state);
-  if (state.resources.credits.current < cost) return { ok: false, text: 'Not enough credits.' };
-  state.resources.credits.current -= cost;
-  overhaulSystems(state);
-  restockSuits(state);
-  state.hull.integrity = 100;
-  state.ship.decks.forEach(d => { if (d.atmosphere) d.atmosphere.breached = false; });
-  if (state.reactor.breach && state.reactor.status === 'offline') state.reactor.breach = false;
-  return { ok: true, text: `Dockside overhaul complete — hull and every system back to spec, suits restocked (${cost.toLocaleString()} MCR)` };
 }
 
 // ---- ARMS ----

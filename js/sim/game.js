@@ -55,6 +55,7 @@ import { leaveTick, signOff } from './crew-services.js';
 import { careersTick, startCareer, careerDraw, remember, succession, note } from './careers.js';
 import { hostilesOfPlayer } from './agents.js';
 import { leaseTick } from './leases.js';
+import { refitTick } from './refit.js';
 import { setGravityEpoch } from './gravity.js';
 import { fireTick } from './fire.js';
 import { createDroneStores, dronesTick } from './drones.js';
@@ -120,7 +121,7 @@ export function createGame({ shipName = 'UNN Longhaul', captainName = 'J. Doe', 
       pdcRounds: { current: cls.pdc * PDC_ROUNDS_PER_MOUNT * 0.6, max: cls.pdc * PDC_ROUNDS_PER_MOUNT, unit: 'rds' },
       drones: createDroneStores(classId),
     },
-    hull: { integrity: 100 },
+    hull: { integrity: 100, patched: 0 },
     magazine: { ...createMagazine(classId), nuke: 0 },
     combat: createCombat(classId),
     law: createLaw(license),
@@ -480,6 +481,7 @@ export function minuteTick(state, { lite = false } = {}) {
   shuttlesTick(state, emit);
   npcShuttlesTick(state);
   leaveTick(state, emit);
+  refitTick(state, emit);
   leaseTick(state, emit);
   lawTick(state);
   politicsTick(state, emit);

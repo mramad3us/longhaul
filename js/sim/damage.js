@@ -180,7 +180,10 @@ function hitPlayer(state, hit, emit) {
   const p = profile(state, PLAYER);
   const dp = shed(hit.dp, p.armor, hit.spread);
   const hpMax = hullPoints(CLASSES[state.ship.classId || PLAYER_CLASS]);
-  state.hull.integrity = Math.max(0, state.hull.integrity - dp / hpMax * 100);
+  const lost = dp / hpMax * 100;
+  state.hull.integrity = Math.max(0, state.hull.integrity - lost);
+  // (the patches go first: plate over a hole, not structure; systems.js)
+  state.hull.patched = Math.min(state.hull.integrity, Math.max(0, (state.hull.patched || 0) - lost));
   const section = hit.spread ? 'all' : (hit.section || pickSection(hit.aim, hit.precision ?? 0.5));
   const decks = hit.spread ? state.ship.decks.map((_, i) => i) : (() => { const ds = decksFor(state, section); return [ds[randInt(0, ds.length - 1)]]; })();
   const local = hit.spread ? dp * 0.5 : dp;
